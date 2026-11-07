@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Convert to PDF results</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;position:relative}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5}
+.tb button,.tb input,.tb select{font:inherit;color:inherit}
+.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
+.btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn[disabled]{opacity:.45;cursor:default}
+.btn.ghost.link{color:var(--fg)}
+.kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
+.btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
+.nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
+.nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.field[aria-invalid=true]{border-color:var(--bad)}
+.lbl{font-size:12px;font-weight:600}
+.hint{font-size:12px;color:var(--mut)}
+.row{display:grid;grid-template-columns:20px minmax(0,1fr) 96px 52px 190px;gap:12px;align-items:center;padding:7px 20px;border-bottom:1px solid var(--line)}
+.rrow{display:grid;grid-template-columns:20px minmax(0,1fr) 120px 210px;gap:12px;align-items:center;padding:7px 20px;border-bottom:1px solid var(--line);min-height:34px}
+.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
+.tag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+a{color:inherit}a:hover{color:var(--mut)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.opt{display:flex;flex-direction:column;gap:6px}
+fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.chk{display:flex;gap:8px;align-items:center}
+.flag{display:flex;gap:10px;align-items:center;margin:0 20px 10px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.rh{padding:12px 10px 4px;font-size:11px;font-weight:600;color:var(--faint)}
+.drop{flex:1;margin:20px;border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:32px}
+.bar{height:6px;border-radius:3px;background:var(--seg-wait);overflow:hidden;display:flex}.bar span{background:var(--seg-ok)}
+.minibar{height:4px;border-radius:2px;background:var(--seg-wait);overflow:hidden;display:flex;margin-top:4px}.minibar span{background:var(--seg-ok)}
+.dest{border-top:1px solid var(--line);padding-top:18px;display:flex;flex-direction:column;gap:8px}
+.ex{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:8px;background:var(--raise)}
+.link{align-self:flex-start;padding:0;height:24px;color:var(--fg);text-decoration:underline;text-underline-offset:3px}
+.outs{grid-column:2 / -1;list-style:none;margin:0;padding:2px 0 2px 10px;display:flex;flex-direction:column;border-left:2px solid var(--line)}
+.outs li{display:flex;align-items:baseline;gap:8px;min-height:22px}
+.outs li .k{width:170px;flex:none;color:var(--mut);font-size:12px}
+.est{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin:0}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.err{font-size:12px;color:var(--bad);display:flex;gap:6px;align-items:center}
+.lang{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;background:var(--raise)}
+.pick{list-style:none;margin:0;padding:4px 20px 12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px;overflow:auto}
+.pick li{display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 6px;border-radius:10px;border:1px solid var(--line);background:var(--panel);cursor:pointer;position:relative}
+.sheet{width:56px;height:74px;background:#fff;border:1px solid var(--line2);border-radius:2px;box-shadow:0 1px 3px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:4px;padding:7px 6px;box-sizing:border-box}
+.sheet i{display:block;height:3px;border-radius:2px}
+footer .btn{flex:none}
+.tick{position:absolute;top:6px;right:6px;width:18px;height:18px;border-radius:999px;display:grid;place-items:center;background:var(--pri);color:var(--prifg)}
+.fam{border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.sec{display:grid;grid-template-columns:16px minmax(0,1fr) auto;column-gap:8px;row-gap:0;align-items:center;width:100%;padding:6px 8px;border:0;border-radius:8px;background:none;text-align:left;cursor:pointer;box-sizing:border-box}
+.sec .hint{grid-column:2 / -1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.secbody{padding:4px 12px 12px;display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pair label,.stack{display:flex;flex-direction:column;gap:4px;min-width:0}
+select.field{appearance:auto}
+.row.c2p{grid-template-columns:20px minmax(0,1fr) 128px 196px;padding:4px 20px;min-height:36px}
+.row.c2p[aria-selected=true]{background:var(--sel)}
+.fmt{display:flex;flex-direction:column;gap:3px;align-items:flex-start;min-width:0}
+.fams{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 20px;text-align:left;max-width:620px;margin:6px 0 0;padding:0;list-style:none}
+.fams li{display:flex;flex-direction:column;gap:1px}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow:hidden;border-radius:8px;border:1px solid var(--line2);background:var(--bg);padding:10px 12px;min-height:150px;box-sizing:border-box}
+.notadd{margin:0 20px 8px;padding:8px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise);display:flex;flex-direction:column;gap:3px}
+.notadd ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;border:1px solid var(--line2);background:transparent;font-size:12px;cursor:pointer;color:var(--mut)}
+.chip[aria-pressed="true"]{background:var(--sel);color:var(--fg);border-color:var(--line2);font-weight:500}
+.rrow.c2p{grid-template-columns:20px minmax(0,1fr) 100px 268px;padding:6px 20px;min-height:0}
+.sec{display:grid;grid-template-columns:16px minmax(0,1fr) auto;column-gap:8px;align-items:center;width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);text-align:left;cursor:pointer;box-sizing:border-box}
+.sec .hint{grid-column:2 / -1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+</helmet>
+<div class="{{themeClass}}" style="min-height: 800px; height: 800px; overflow: hidden; display: flex">
+<aside aria-label="PDF Conversion" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 2px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Conversion</div>
+<nav aria-label="PDF Conversion tools" style="display: flex; flex-direction: column; gap: 2px"><sc-for list="{{railGroups}}" as="g" hint-placeholder-count="3"><div role="group" aria-labelledby="{{g.id}}" style="display: flex; flex-direction: column; gap: 2px"><div id="{{g.id}}" class="rh">{{g.title}}</div><sc-for list="{{g.items}}" as="it" hint-placeholder-count="3"><button class="{{it.cls}}" aria-pressed="{{it.pressed}}" tabindex="{{it.tab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="{{it.d}}"></path></svg>{{it.name}}</button></sc-for></div></sc-for></nav>
+<div style="flex: 1"></div>
+<a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
+<p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
+</aside>
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
+<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Convert to PDF</h1>
+<span class="hint">Turn documents, spreadsheets, slides, eBooks and text into PDFs.</span>
+<div style="flex: 1"></div>
+<button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
+</header>
+<div style="flex: 1; display: flex; min-height: 0">
+<section aria-label="Results" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
+<div style="padding: 14px 20px 12px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line)">
+<div role="status" aria-live="polite" style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap"><strong style="font-size: 15px">{{resTitle}}</strong><span class="hint" style="color: {{resSubColor}}">{{resSub}}</span></div>
+<div aria-hidden="true" style="display: flex; gap: 2px; height: 6px"><sc-for list="{{segments}}" as="s" hint-placeholder-count="11"><span style="flex: 1; border-radius: 2px; background: {{s.bg}}"></span></sc-for></div>
+<div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center"><sc-for list="{{chips}}" as="c" hint-placeholder-count="3"><button class="chip" aria-pressed="{{c.on}}">{{c.label}}<span style="color: var(--mut)">{{c.n}}</span></button></sc-for><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{revealAll}}</button></div>
+</div>
+<ul aria-label="Results by item" style="list-style: none; margin: 0; padding: 0; overflow: auto"><sc-for list="{{rows}}" as="r" hint-placeholder-count="11"><li class="rrow c2p" aria-label="{{r.label}}" style="align-items: start">
+<span style="color: {{r.color}}; display: flex; padding-top: 1px"><sc-if value="{{r.isOk}}" hint-placeholder-val="{{ true }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></sc-if><sc-if value="{{r.isWarn}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{r.isNote}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg></sc-if><sc-if value="{{r.isSkip}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8.5 12h7"></path></svg></sc-if><sc-if value="{{r.isFail}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg></sc-if><sc-if value="{{r.isPack}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"></path><path d="M4 7.5l8 4.5 8-4.5M12 12v9"></path></svg></sc-if></span>
+<span style="min-width: 0; display: flex; flex-direction: column"><span style="display: flex; gap: 6px; align-items: center; min-width: 0"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{r.name}}</span><sc-if value="{{r.basic}}" hint-placeholder-val="{{ false }}"><span class="tag">Basic fidelity</span></sc-if><sc-if value="{{r.packDone}}" hint-placeholder-val="{{ false }}"><span class="tag">Pack installed</span></sc-if></span><span class="hint" style="color: {{r.detailColor}}">{{r.detail}}</span></span>
+<span style="color: {{r.color}}">{{r.state}}</span>
+<span style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap"><sc-if value="{{r.hasToggle}}" hint-placeholder-val="{{ false }}"><button class="btn sm ghost" aria-expanded="{{r.open}}" aria-controls="fl-{{r.id}}">{{r.toggle}}</button></sc-if><sc-if value="{{r.hasOut}}" hint-placeholder-val="{{ false }}"><button class="btn sm" aria-label="Open {{r.out}}">Open</button><button class="btn sm ghost" aria-label="{{reveal}}: {{r.out}}">{{revealShort}}</button></sc-if><sc-if value="{{r.hasPointer}}" hint-placeholder-val="{{ false }}"><button class="btn sm" aria-label="{{r.pointerLabel}}">{{r.pointer}}</button></sc-if></span>
+<sc-if value="{{r.isOpen}}" hint-placeholder-val="{{ false }}"><ul id="fl-{{r.id}}" class="outs" aria-label="Fonts used in {{r.name}}"><sc-for list="{{r.fonts}}" as="p" hint-placeholder-count="3"><li><span class="k">{{p.k}}</span><span>{{p.v}}</span><span class="hint">{{p.src}}</span></li></sc-for></ul></sc-if></li></sc-for></ul>
+</section>
+
+<section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
+<div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; overflow: auto">
+<div class="opt"><span class="lbl" id="famsl">Options</span>
+<div role="list" aria-labelledby="famsl" style="display: flex; flex-direction: column; gap: 6px"><sc-for list="{{fams}}" as="f" hint-placeholder-count="7"><div role="listitem"><button class="sec" aria-expanded="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M9 6l6 6-6 6"></path></svg><span style="font-weight: 500">{{f.title}}</span><span class="tag">{{f.count}}</span><span class="hint">{{f.summary}}</span></button></div></sc-for></div>
+<span class="hint">Change an option, then convert again. New PDFs get -1, -2 and so on, so nothing is replaced.</span></div>
+<div class="dest"><span class="lbl">Save to</span><div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div><button class="btn ghost link">Change for this run</button></div>
+</div>
+<footer style="padding: 12px 20px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px">
+<p id="est" class="est" role="status" aria-live="polite"><strong>{{estMain}}</strong><span class="hint">{{estSub}}</span></p>
+<div style="display: flex; align-items: center; gap: 10px; min-width: 0"><div style="flex: 1"></div><button class="btn pri" aria-describedby="est">{{runLabel}}<span class="kbd">{{runKey}}</span></button></div>
+</footer></section>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Results", "Needs attention", "Warnings and notes", "Script pack installed"], "default": "Results"}, "$preview": {"width": 1280, "height": 800}}'>
+class Component extends DCLogic {
+renderVals() {
+const win = (this.props.platform ?? 'macOS') === 'Windows';
+const light = (this.props.theme ?? 'dark') === 'light';
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
+const railFor = (active) => [['Combine and split', [['Merge PDFs', 'M7 3v5l5 4 5-4V3M12 12v9'], ['Split PDF', 'M12 3v7M12 10l-6 5v6M12 10l6 5v6'], ['Images to PDF', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4']]], ['From PDF', [['PDF to Images', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4'], ['Extract from PDF', 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5'], ['PDF to EPUB', 'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM9 8h6']]], ['Make PDFs', [['OCR', 'M4 20h4L19 9l-4-4L4 16zM13 7l4 4'], ['Formatted PDF', 'M5 6V4h14v2M12 4v16M9 20h6'], ['Convert to PDF', 'M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z']]]].map((g, gi) => ({ id: 'rg' + gi, title: g[0], items: g[1].map((it) => ({ name: it[0], d: it[1], cls: it[0] === active ? 'nav on' : 'nav', pressed: it[0] === active ? 'true' : 'false', tab: it[0] === active ? '0' : '-1' })) }));
+const S = this.props.state ?? 'Results';
+const installed = S === 'Script pack installed';
+const x = { railGroups: railFor('Convert to PDF'), revealShort: win ? 'Show in Explorer' : 'Show in Finder', revealAll: win ? 'Show all in File Explorer' : 'Show all in Finder' };
+const col = (k) => k === 'fail' ? 'var(--bad)' : k === 'warn' || k === 'pack' ? 'var(--warn)' : k === 'skip' ? 'var(--mut)' : 'var(--fg)';
+const mk = (o, k) => Object.assign({ id: 'r', isOk: k === 'ok' || k === 'ready', isWarn: k === 'warn', isNote: k === 'note', isSkip: k === 'skip', isFail: k === 'fail', isPack: k === 'pack', color: col(k), detailColor: k === 'warn' ? 'var(--warn)' : 'var(--mut)', hasToggle: false, hasOut: k === 'ok' || k === 'warn' || k === 'note', hasPointer: false, pointer: '', pointerLabel: '', isOpen: false, basic: false, packDone: false, fonts: [], out: o.name.replace(/\.[a-z]+$/, '') + '.pdf', k: k }, o, { label: o.name + ', ' + o.state + '. ' + o.detail });
+const all = [
+ mk({ id: 'docx', name: 'quarterly-report.docx', detail: '12 pages. 3 fonts, all embedded from the file.', state: 'Saved', hasToggle: true, toggle: 'Show fonts', open: 'false' }, 'ok'),
+ mk({ id: 'pptx', name: 'launch-deck.pptx', detail: 'Approximate layout: floating shapes on slides 4, 9 and 17 were placed as close as possible. 22 slides, 2 hidden left out.', state: 'Saved', hasToggle: true, toggle: 'Hide fonts', open: 'true', isOpen: true, fonts: [{ k: 'Aptos', v: 'Aptos', src: 'Embedded in the file' }, { k: 'Calibri', v: 'Carlito', src: 'Bundled fallback, same widths' }, { k: 'Segoe UI', v: 'Helvetica Neue', src: 'System font on this device' }] }, 'note'),
+ mk({ id: 'xlsx', name: 'budget-2027.xlsx', detail: 'Omitted content: the chart "Revenue by region" on Summary has no stored image, so it was left out. 3 sheets, 6 pages.', state: 'Saved' }, 'warn'),
+ mk({ id: 'doc', name: 'minutes-2009.doc', basic: true, detail: 'Text, tables and images kept. Spacing and some layout may differ from the original.', state: 'Saved' }, 'ok'),
+ mk({ id: 'paste', name: 'Spring menu', detail: 'Remote content left out: 2 images and 1 font from the internet weren\'t loaded. Saved as Spring menu-1.pdf in Documents.', state: 'Saved', out: 'Spring menu-1.pdf' }, 'note'),
+ mk({ id: 'pdf', name: 'contract-signed.pdf', detail: 'Already a PDF. Nothing was made.', state: 'Skipped' }, 'skip'),
+ mk({ id: 'enc', name: 'payroll-2026.xlsx', detail: 'It\'s password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.', state: 'Failed', hasPointer: true, pointer: 'Open Lock & Unlock', pointerLabel: 'Open Lock & Unlock for payroll-2026.xlsx' }, 'fail'),
+ mk({ id: 'drm', name: 'field-guide.epub', detail: 'It\'s copy-protected (DRM), so it can\'t be converted. Nothing was saved.', state: 'Failed' }, 'fail'),
+ mk({ id: 'mobi', name: 'old-novel.mobi', detail: 'MOBI eBooks aren\'t available yet. They come in a later update.', state: 'Unavailable' }, 'fail'),
+ installed
+  ? mk({ id: 'hi', name: 'circular-hindi.docx', packDone: true, detail: 'The script pack is installed. Convert again to make this PDF.', state: 'Ready to run' }, 'ready')
+  : mk({ id: 'hi', name: 'circular-hindi.docx', detail: 'Its Devanagari text needs the script pack, which isn\'t installed. Nothing was saved.', state: 'Needs a pack', hasPointer: true, pointer: 'Install script pack', pointerLabel: 'Install script pack, 38 MB download, for circular-hindi.docx' }, 'pack'),
+ mk({ id: 'big', name: 'sales-archive-2010-2026.csv', detail: 'It\'s over the size limit for one file. Nothing was saved. Split it into smaller files, then try again.', state: 'Over limit' }, 'fail')
+];
+all.forEach((r) => { if (r.k === 'ready') { r.hasOut = false; r.color = 'var(--fg)'; } });
+const attention = (r) => r.k === 'fail' || r.k === 'pack' || r.k === 'ready';
+const warned = (r) => r.k === 'warn' || r.k === 'note';
+const filter = S === 'Needs attention' || installed ? 'Needs attention' : S === 'Warnings and notes' ? 'Warnings and notes' : 'All';
+x.rows = all.filter((r) => filter === 'All' || (filter === 'Needs attention' ? attention(r) : warned(r)));
+x.chips = [['All', '11'], ['Needs attention', '5'], ['Warnings and notes', '3']].map((c) => ({ label: c[0], n: c[1], on: c[0] === filter ? 'true' : 'false' }));
+x.segments = all.map((r) => ({ bg: r.k === 'fail' ? 'var(--bad)' : r.k === 'skip' ? 'var(--mut)' : r.k === 'warn' || r.k === 'pack' ? 'var(--warn)' : r.k === 'ready' ? 'var(--seg-wait)' : 'var(--seg-ok)' }));
+x.resTitle = 'Done. Made 5 PDFs from 11 items';
+x.resSub = installed ? 'Script pack installed. 1 file is ready to run again.' : '1 skipped, 5 not converted. 3 PDFs have a warning or note.';
+x.resSubColor = installed ? 'var(--fg)' : 'var(--mut)';
+x.fams = [['Page defaults', 'All', 'A4, normal margins'], ['Spreadsheets', '2 files', 'All sheets, print areas, fit to page width'], ['Presentations', '1 file', 'No speaker notes, hidden slides left out'], ['Web pages', '1 pasted', 'Page defaults, background graphics on'], ['Tables', '1 file', 'Delimiter by file type, header row, landscape'], ['eBooks', '1 file', 'Page defaults, text at 100%']].map((f) => ({ title: f[0], count: f[1], summary: f[2] }));
+x.estMain = installed ? '1 file is ready to run again' : '5 PDFs made';
+x.estSub = installed ? 'Only circular-hindi.docx runs. The 5 PDFs already made are kept.' : 'Convert again after fixing the items that need attention.';
+x.runLabel = installed ? 'Convert 1 file again' : 'Convert again';
+return Object.assign(base, x);
+}
+}
+</script>
+</body>
+</html>

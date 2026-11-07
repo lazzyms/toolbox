@@ -22,7 +22,7 @@ import {
 } from "../registry";
 import type { AtomicToolId, ToolDefinition, WorkspaceId } from "../contracts";
 import { TablerIcon } from "../components/TablerIcon";
-import { RunStateContext, type WorkspaceSourceAction } from "../components/ToolScaffold";
+import { RunStateContext, type DiscardGuard, type WorkspaceSourceAction } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
 import { matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
@@ -35,9 +35,11 @@ import type { PdfEditorNavigation } from "./PDFEditorWorkspaceView";
 import { SecurityWorkspaceView } from "./SecurityWorkspaceView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
+import { ExtractFromPdfView } from "./ExtractFromPdfView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { CompressFilesWorkspaceView } from "./CompressFilesWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
+import { CropResizeView } from "./CropResizeView";
 import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { favoritesStorageKey, recentStorageKey } from "../savedToolIds";
@@ -65,6 +67,7 @@ export const MainPage = () => {
   const availability = useToolAvailability();
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
   const [initialPaths, setInitialPaths] = useState<readonly string[]>([]);
+  const [handoffs, setHandoffs] = useState(0);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const focusWorkspaceHeadingOnNavigation = useRef(false);
   const [fileActivation, setFileActivation] = useState<Extract<ShellEvent, { kind: "files" }> | null>(null);
@@ -117,24 +120,29 @@ export const MainPage = () => {
       }).filter(({ actions }) => actions.length > 0),
     [filter, normalizedSearch, favorites, availability],
   );
+  const leaveGuard = useRef<DiscardGuard | null>(null);
+  const registerLeaveGuard = useCallback((guard: DiscardGuard | null) => { leaveGuard.current = guard; }, []);
+  const guarded = useCallback((leave: () => void) => leaveGuard.current ? leaveGuard.current(leave) : leave(), []);
   const openTool = useCallback((tool: ToolDefinition, paths: readonly string[] = []) => {
     if (!availability.allows(tool.id)) return;
-    setFileActivation(null);
-    activationInFlight.current = null;
-    queuedActivations.current = [];
-    setOpenPaths(paths);
-    setWorkspaceSourceAction(null);
-    setInitialPaths([...paths]);
-    setSelectedTool(tool);
-    const recent: string[] = JSON.parse(localStorage.getItem(recentStorageKey) || "[]");
-    localStorage.setItem(recentStorageKey, JSON.stringify([tool.id, ...recent.filter((id) => id !== tool.id)].slice(0, 8)));
-  }, [availability]);
+    guarded(() => {
+      setFileActivation(null);
+      activationInFlight.current = null;
+      queuedActivations.current = [];
+      setOpenPaths(paths);
+      setWorkspaceSourceAction(null);
+      setInitialPaths([...paths]);
+      setSelectedTool(tool);
+      const recent: string[] = JSON.parse(localStorage.getItem(recentStorageKey) || "[]");
+      localStorage.setItem(recentStorageKey, JSON.stringify([tool.id, ...recent.filter((id) => id !== tool.id)].slice(0, 8)));
+    });
+  }, [availability, guarded]);
   /** Switches tools inside the open view and keeps its files open. */
   const selectViewTool = useCallback((id: AtomicToolId) => {
     const tool = UtilityRegistry.find((item) => item.id === id);
     if (tool && tool.id !== selectedTool?.id) openTool(tool, openPaths);
   }, [openPaths, openTool, selectedTool?.id]);
-  const goHome = useCallback(() => {
+  const goHome = useCallback(() => guarded(() => {
     setWorkspaceSourceAction(null);
     setSelectedTool(null);
     setInitialPaths([]);
@@ -142,7 +150,7 @@ export const MainPage = () => {
     setOpenPaths([]);
     activationInFlight.current = null;
     queuedActivations.current = [];
-  }, []);
+  }), [guarded]);
   const navigateToPdfUtility: PdfEditorNavigation = useCallback(({ utilityId, initialPaths: paths }) => {
     const tool = UtilityRegistry.find((item) => item.id === utilityId);
     if (tool && availability.allows(tool.id)) {
@@ -332,10 +340,10 @@ export const MainPage = () => {
     const onEditorKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || settingsSection || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
-      const command = key === "z" ? (event.shiftKey ? "redo" : "undo") : key === "e" ? "export" : null;
+      const command = key === "z" ? (event.shiftKey ? "redo" : "undo") : key === "y" && !event.shiftKey ? "redo" : key === "e" ? "export" : null;
       if (!command) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
-      if (key === "z" && target?.closest("input, textarea, [contenteditable='true']")) return;
+      if ((key === "z" || key === "y") && target?.closest("input, textarea, [contenteditable='true']")) return;
       event.preventDefault();
       dispatchEditorCommand(command);
     };
@@ -370,10 +378,12 @@ export const MainPage = () => {
   }, []);
   const findToolFromSettings = useCallback(() => {
     setSettingsSection(null);
-    setWorkspaceSourceAction(null);
-    setSelectedTool(null);
-    setFocusAfterSettings("search");
-  }, []);
+    guarded(() => {
+      setWorkspaceSourceAction(null);
+      setSelectedTool(null);
+      setFocusAfterSettings("search");
+    });
+  }, [guarded]);
   useEffect(() => {
     if (settingsSection || !focusAfterSettings) return;
     if (focusAfterSettings === "settings") settingsTriggerRef.current?.focus();
@@ -405,9 +415,13 @@ export const MainPage = () => {
   }, [settingsSection, selectedTool, findToolFromSettings, openFilesFromMenu]);
   useEffect(() => {
     const openFromCompatibilityNav = (event: Event) => {
-      const id = (event as CustomEvent<string>).detail;
+      const detail = (event as CustomEvent<string | { toolId: string; paths: readonly string[] }>).detail;
+      const id = typeof detail === "string" ? detail : detail.toolId;
       const tool = UtilityRegistry.find((item) => item.id === id);
-      if (tool) openTool(tool);
+      if (!tool) return;
+      if (typeof detail === "string") return openTool(tool);
+      setHandoffs((count) => count + 1);
+      openTool(tool, detail.paths);
     };
     window.addEventListener("toolbox:open", openFromCompatibilityNav);
     return () =>
@@ -564,6 +578,7 @@ export const MainPage = () => {
                     onActivationAccepted={acceptActivation}
                     onFilesChange={publishDocumentPath}
                     onNavigate={navigateToPdfUtility}
+                    onLeaveGuard={registerLeaveGuard}
                     onWorkspaceSourceAction={publishWorkspaceSourceAction} />
                 </CardContent>
               ) : (
@@ -582,6 +597,7 @@ export const MainPage = () => {
                   <CardContent className="tool-view">
                     <RunStateContext.Provider value={setRunning}>
                       <ViewFor
+                        key={handoffs}
                         utility={selectedTool}
                         initialPaths={initialPaths}
                         fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}
@@ -700,13 +716,14 @@ export const MainPage = () => {
   );
 };
 
-const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onSelectTool, onWorkspaceSourceAction }: {
+const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onLeaveGuard, onSelectTool, onWorkspaceSourceAction }: {
   utility: ToolDefinition;
   initialPaths?: readonly string[];
   fileActivation?: Extract<ShellEvent, { kind: "files" }>;
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
   onNavigate?: PdfEditorNavigation;
+  onLeaveGuard?: (guard: DiscardGuard | null) => void;
   onSelectTool?: (id: AtomicToolId) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
@@ -715,10 +732,15 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   }
   const workspace = workspaceForTool(utility.id);
   if (!workspace) return <PlannedToolView utility={utility} />;
-  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
-  if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
-  if (workspace.id === "image-editor" && utility.id !== "image-metadata") return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
-  if (utility.id === "image-metadata") return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
+  if (utility.id === "pdf-crop") return <CropResizeView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
+  if (utility.id === "pdf-extract") return <ExtractFromPdfView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onLeaveGuard={onLeaveGuard} onSelectTool={onSelectTool} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
+  if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
+  // Image Metadata and Convert Image Format run per file on their own screen, without an edit plan.
+  const runsWithoutEditPlan = utility.id === "image-metadata" || utility.id === "heic-convert";
+  if (workspace.id === "image-editor" && !runsWithoutEditPlan) return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
+  if (runsWithoutEditPlan) return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   const View = workspaceViews[workspace.id];
   return <View utility={utility} />;
 };
