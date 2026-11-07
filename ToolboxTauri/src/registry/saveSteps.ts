@@ -7,18 +7,27 @@ export interface ManyToOneSaveStep extends SaveDialog {
   runLabel: string;
   minimumInputs: number;
   summary: (inputCount: number) => string;
+  combined?: CombinedResult;
+}
+
+/** How a one-file result names its output and every input that went into it. */
+export interface CombinedResult {
+  output: string;
+  input: [one: string, many: string];
+  part: (position: number) => string;
 }
 
 const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`;
 
 const manyToOneSaveSteps: Record<string, ManyToOneSaveStep> = {
   merge_pdfs: { title: "Save the merged PDF", extension: "pdf", runLabel: "Merge…", minimumInputs: 1, summary: (n) => `${count(n, "file", "files")}, joined top to bottom.` },
-  images_to_pdf: { title: "Save the combined PDF", extension: "pdf", runLabel: "Make PDF…", minimumInputs: 1, summary: (n) => `${count(n, "image", "images")}, one per page.` },
+  images_to_pdf: { title: "Save the combined PDF", extension: "pdf", runLabel: "Make PDF…", minimumInputs: 1, summary: (n) => `${count(n, "image", "images")}, one per page.`, combined: { output: "PDF", input: ["image", "images"], part: (position) => `Page ${position}` } },
   // A comparison reads exactly two PDFs and writes one text report.
   compare_pdfs: { title: "Save the comparison report", extension: "txt", runLabel: "Compare…", minimumInputs: 2, summary: () => "2 PDFs, compared line by line." },
   create_gif: { title: "Save the GIF", extension: "gif", runLabel: "Make GIF…", minimumInputs: 1, summary: (n) => `${count(n, "frame", "frames")}, in the order shown.` },
-  // One TIFF splits into pages, so only a combine of two or more makes one file.
-  process_tiff_pages: { title: "Save the combined TIFF", extension: "tiff", runLabel: "Make TIFF…", minimumInputs: 2, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },
+  // The registry describes Combine mode, which always makes one file, even from one TIFF. Split mode runs as a
+  // per-file batch without this step.
+  process_tiff_pages: { title: "Save the combined TIFF", extension: "tiff", runLabel: "Make TIFF…", minimumInputs: 1, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },
 };
 
 export const saveStepFor = (tool: { command: string; capability: { manyToOne: boolean } }): ManyToOneSaveStep | null => {

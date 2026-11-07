@@ -87,6 +87,13 @@ function inspectNative(name, path, target) {
   return null;
 }
 
+// The bundled page renderer (pdftoppm) has no pinned version; it only has to be native to the target.
+export function inspectRenderer({ path, target }) {
+  const failure = inspectNative("page renderer", path, target);
+  if (failure) return failure;
+  return { cause: null, message: `page renderer is native ${TARGETS[target].architecture} for ${target}` };
+}
+
 export function runPdftotextVersion(path) {
   const result = spawnSync(path, ["-v"], { encoding: "utf8", timeout: 30_000 });
   if (result.error || result.status !== 0) return null;
