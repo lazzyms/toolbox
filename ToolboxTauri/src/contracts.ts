@@ -12,6 +12,7 @@ export type AtomicToolId =
   | "images-to-pdf"
   | "pdf-to-images"
   | "pdf-to-text"
+  | "convert-to-pdf"
   | "pdf-split"
   | "pdf-image-extract"
   | "pdf-sign"
@@ -24,6 +25,8 @@ export type AtomicToolId =
   | "pdf-repair"
   | "pdf-redact"
   | "pdf-compare"
+  | "pdf-privacy"
+  | "pdf-properties"
   | "heic-convert"
   | "compress"
   | "resize"
@@ -51,8 +54,16 @@ export type ToolInputCardinality = "single" | "multiple" | "ordered";
 
 export type NativeAvailability = "available" | "unavailable";
 
+export interface FormatFamily {
+  id: string;
+  extensions: readonly string[];
+  nativeAvailability: NativeAvailability;
+  basicFidelity: boolean;
+}
+
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
+  formatFamilies?: readonly FormatFamily[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;
@@ -79,17 +90,19 @@ export type ToolCommand =
   | "convert_images"
   | "inspect_pdf"
   | "crop_pdf"
+  | "resize_pdf"
   | "edit_pdf"
+  | "export_pdf_scene"
   | "sign_pdf"
-  | "organize_pdf"
   | "add_page_numbers"
   | "watermark_pdf"
   | "compress_pdf"
   | "rotate_pdf"
   | "repair_pdf"
+  | "inspect_pdf_privacy"
+  | "edit_pdf_properties"
   | "redact_pdf"
   | "compare_pdfs"
-  | "remove_pdf_pages"
   | "extract_pdf_pages"
   | "merge_pdfs"
   | "split_pdf"
@@ -97,6 +110,7 @@ export type ToolCommand =
   | "pdf_to_text"
   | "extract_pdf_images"
   | "images_to_pdf"
+  | "convert_to_pdf"
   | "ocr_pdf"
   | "blur_faces"
   | "remove_image_background"
@@ -114,8 +128,11 @@ export type ToolCommand =
 
 export type OutcomePointer =
   | { kind: "tool"; toolId: AtomicToolId }
-  | { kind: "pack"; packId: string }
+  | { kind: "pack"; packId: string; name: string; reason: PackNeed }
   | { kind: "outputFolder" };
+
+/** Why a file needs its pack: `PackNeed` in `src-tauri/src/kit/contracts.rs`. */
+export type PackNeed = "notInstalled" | "damaged" | "incompatible";
 
 export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
 
@@ -135,6 +152,7 @@ export type SkipCode =
   | "textAlreadyPresent"
   | "noEffectiveChange"
   | "unsupportedFormat"
+  | "needsOcr"
   | "cancelled";
 
 export interface SkipReason {
@@ -147,14 +165,40 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "omittedContent"; message: string }
+  | { code: "approximateLayout"; message: string };
 
 export type WarningCode = OutcomeWarning["code"];
+
+/** One labelled line of a result's breakdown, such as which pages were recognized. */
+export interface OutcomeDetail {
+  label: string;
+  value: string;
+}
+
+export type FontStyle = "regular" | "bold" | "italic" | "boldItalic";
+
+export type FontSource = "embedded" | "system" | "bundled fallback" | "bundled default";
+
+export interface FontUse {
+  requestedFamily: string;
+  requestedStyle: FontStyle;
+  fontUsed: string;
+  styleUsed: FontStyle;
+  source: FontSource;
+}
 
 interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  originalBytes?: number;
+  outputBytes?: number;
+  pageDetails?: OutcomeDetail[];
+  fonts?: FontUse[];
+  /** The input is in a format read in basic fidelity, so the output may differ from it more than usual. */
+  basicFidelity?: boolean;
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
@@ -193,14 +237,38 @@ export interface ImagePreview {
   dataUrl: string;
 }
 
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
+
 export interface ToolDefinition {
   id: AtomicToolId;
   title: string;
   shortTitle: string;
   resultVerb: string;
+  resultNoun?: string;
   runningVerb: string;
   runningDetail?: string;
+  /** The live run counts pages instead of files, as long scans take a while (OCR board). */
+  progressByPage?: boolean;
   lockedNote?: string;
+  /** The tool's own words for a result row whose copy lost its digital signature, when its board has them. */
+  signatureRemovedNote?: string;
   blurb: string;
   keywords?: readonly string[];
   symbol: string;
@@ -222,6 +290,8 @@ export interface ToolDefinition {
     | "pdf-repair"
     | "pdf-redact"
     | "pdf-compare"
+    | "pdf-privacy"
+    | "pdf-properties"
     | "pdf-remove-pages"
     | "pdf-extract-pages"
     | "pdf-merge"
@@ -230,6 +300,7 @@ export interface ToolDefinition {
     | "pdf-to-text"
     | "pdf-image-extract"
     | "images-to-pdf"
+    | "convert-to-pdf"
     | "pdf-ocr"
     | "image-blur-faces"
     | "image-remove-bg"
@@ -259,8 +330,8 @@ export interface ToolWorkspaceDefinition {
   toolIds: AtomicToolId[];
   /** Tools shown as one entry whose tabs or modes are those tools. The entry opens the first one. */
   editor?: { title: string; blurb: string; symbol: string; toolIds: AtomicToolId[] };
-  /** Tools listed after the main tools, under More. */
-  moreToolIds?: AtomicToolId[];
+  /** Labelled groups listed after the main tools, in this order, such as Details and More. */
+  groups?: { label: string; toolIds: AtomicToolId[] }[];
 }
 
 export interface ToolRequest {
@@ -281,9 +352,34 @@ export interface PasswordRequest extends ToolRequest {
   passwordOverrides: Record<string, string>;
 }
 
+export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number };
+
+// Mirrors kit::common::watermark::WatermarkOptions.
+export interface WatermarkOptions {
+  text?: string;
+  logoPath?: string;
+  size?: number;
+  opacity: number;
+  color?: string;
+  position?: WatermarkPosition;
+  rotation?: number;
+}
+
+export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
+
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
   lossless?: boolean;
+}
+
+export type OcrMode = "searchablePdf" | "text";
+
+export interface OcrRequest extends ToolRequest {
+  pageRange: string | null;
+  mode: OcrMode;
+  force: boolean;
+  languages: string[];
 }
 
 export interface ConvertImagesRequest extends ToolRequest {
