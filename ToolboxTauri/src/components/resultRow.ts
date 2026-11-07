@@ -1,4 +1,4 @@
-import type { ErrorKind, FontSource, JobOutcome, OutcomePointer, OutcomeWarning, PackNeed, ToolError } from "../contracts";
+import type { ErrorKind, FontSource, JobOutcome, JpegColour, OutcomePointer, OutcomeWarning, PackNeed, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
 /** A note is a warning that needs nothing from the user, such as a photo saved at a lower bit depth. */
@@ -76,6 +76,18 @@ export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: stri
         case "omittedContent":
         case "approximateLayout":
             return warning.message;
+        case "imageUnsupported":
+            return `${imagePlace(warning.details)} — ${warning.details.feature} isn't supported in this version. Not saved.`;
+        case "imageDamaged":
+            return `${imagePlace(warning.details)} — The image data is damaged. Not saved.`;
+        case "imageTooLarge":
+            return `${imagePlace(warning.details)} — Would be ${grouped(warning.details.width)} × ${grouped(warning.details.height)} px when decoded, over the size limit. Not saved.`;
+        case "jpegColourKept":
+            return jpegColourText(warning.details);
+        case "pagesWithoutText":
+            return warning.details.pages.length === 1
+                ? `${pageList(warning.details.pages)} has no selectable text. OCR can read it.`
+                : `${pageList(warning.details.pages)} have no selectable text. OCR can read them.`;
     }
 };
 
@@ -85,6 +97,39 @@ const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): 
     text: warningText(warning, signatureRemovedNote),
     tone: warning.code === "omittedContent" ? "warn" : null,
 });
+
+/** Pages without text tell what OCR can still do for a file; the row points at OCR, and the summary doesn't count them. */
+const pointsAtOcr = (warning: OutcomeWarning) => warning.code === "pagesWithoutText";
+
+const ocrPointer: OutcomePointer = { kind: "tool", toolId: "pdf-ocr" };
+
+const imagePlace = ({ page, image }: { page: number; image: number }) => `Page ${page}, image ${image}`;
+
+const grouped = (value: number) => value.toLocaleString("en-US");
+
+const pageList = (pages: number[]) => {
+    const runs: [number, number][] = [];
+    for (const page of pages) {
+        const last = runs[runs.length - 1];
+        if (last && last[1] + 1 === page) last[1] = page;
+        else runs.push([page, page]);
+    }
+    const label = runs.map(([first, last]) => (first === last ? `${first}` : `${first}-${last}`)).join(", ");
+    return `${pages.length === 1 ? "Page" : "Pages"} ${label}`;
+};
+
+const jpegColourText = ({ colour, pages, images }: { colour: JpegColour; pages: number[]; images: number }) => {
+    const one = images === 1;
+    const place = pageList(pages);
+    if (colour === "cmyk") {
+        return one
+            ? `${place} — 1 JPEG uses CMYK colour and was copied as it is. Some viewers show it with the wrong colours.`
+            : `${place} — ${images} JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours.`;
+    }
+    return one
+        ? `${place} — 1 inverted JPEG, copied as it is. Some viewers show it in negative.`
+        : `${place} — ${images} inverted JPEGs, copied as they are. Some viewers show them in negative.`;
+};
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
@@ -102,7 +147,7 @@ const outputSummary = (paths: string[]) =>
 const nonEmpty = (lines: (string | RowDetail)[]): RowDetail[] =>
     lines.map((line) => (typeof line === "string" ? { text: line, tone: null } : line)).filter((line) => line.text.trim().length > 0);
 
-const isNote = (warning: OutcomeWarning) => warning.code === "precisionReduced" || warning.code === "approximateLayout";
+const isNote = (warning: OutcomeWarning) => warning.code === "precisionReduced" || warning.code === "approximateLayout" || pointsAtOcr(warning);
 
 /** The pack a failed file needs before it can run, if that is why it failed. */
 export const neededPack = (outcome: JobOutcome): PackPointer | null =>
@@ -122,7 +167,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
             const first = outcome.outputPaths[0] ?? null;
             const warned = warnings.length > 0;
             const noted = warned && outcome.warnings.every(isNote);
-            // Precision notes read as one sentence ahead of the detail; layout notes keep their own line.
+            // Precision notes read as one sentence ahead of the detail; layout and page notes keep their own line.
             const joined = noted && outcome.warnings.every((warning) => warning.code === "precisionReduced");
             const flagged = noted ? (warnings.length === 1 ? "a note" : "notes") : warnings.length === 1 ? "a warning" : "warnings";
             const byOutput = namedByOutput && first !== null;
@@ -136,7 +181,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                     : warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
-                pointer: null,
+                pointer: outcome.warnings.some(pointsAtOcr) ? pointerView(ocrPointer) : null,
                 canRetry: false,
                 canRetryWithPassword: false,
                 packInstalled: false,
@@ -227,7 +272,7 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
 
 export const resultSummary = (results: JobOutcome[], resultVerb: string, resultNoun?: string): ResultSummary => {
     const verb = resultVerb.toLowerCase();
-    const flagged = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0);
+    const flagged = results.filter((result) => result.state === "succeeded" && result.warnings.some((warning) => !pointsAtOcr(warning)));
     const warned = flagged.length;
     const noted = flagged.some((result) => result.warnings.some(isNote));
     const files = resultNoun ? (warned === 1 ? resultNoun : `${resultNoun}s`) : `${verb} ${warned === 1 ? "file" : "files"}`;

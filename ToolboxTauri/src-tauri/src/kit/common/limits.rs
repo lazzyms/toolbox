@@ -57,7 +57,7 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
         | "add_page_numbers" | "watermark_pdf" | "compress_pdf"
-        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
+        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "convert_to_pdf" | "inspect_pdf_privacy"
         | "edit_pdf_properties" => PDF,
         "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"

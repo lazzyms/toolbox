@@ -54,6 +54,16 @@ pub(crate) struct Helper {
     bundled_dir: &'static str,
     probe: &'static str,
     unavailable: &'static str,
+    discovery: Discovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Discovery {
+    /// Development override, then the bundled locations, then the system PATH.
+    OverrideBundledOrPath,
+    /// The bundled locations, then the Development override in tests and development
+    /// builds only. The system PATH is never searched.
+    BundledOnly,
 }
 
 pub(crate) const PDF_RENDERER: Helper = Helper {
@@ -62,6 +72,7 @@ pub(crate) const PDF_RENDERER: Helper = Helper {
     bundled_dir: "pdf-bin",
     probe: "-h",
     unavailable: "pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.",
+    discovery: Discovery::OverrideBundledOrPath,
 };
 
 pub(crate) const PDF_TEXT: Helper = Helper {
@@ -70,6 +81,7 @@ pub(crate) const PDF_TEXT: Helper = Helper {
     bundled_dir: "pdf-bin",
     probe: "-v",
     unavailable: "The PDF text reader is missing. Reinstall Toolbox.",
+    discovery: Discovery::OverrideBundledOrPath,
 };
 
 pub(crate) const QPDF: Helper = Helper {
@@ -78,6 +90,16 @@ pub(crate) const QPDF: Helper = Helper {
     bundled_dir: "qpdf-bin",
     probe: "--version",
     unavailable: "This PDF tool is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it.",
+    discovery: Discovery::OverrideBundledOrPath,
+};
+
+pub(crate) const PDF_TEXT_EXTRACTOR: Helper = Helper {
+    name: "pdftotext",
+    override_var: "TOOLBOX_PDFTOTEXT_PATH",
+    bundled_dir: "pdf-bin",
+    probe: "-h",
+    unavailable: "PDF text extraction is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it.",
+    discovery: Discovery::BundledOnly,
 };
 
 struct HelperLocations {
@@ -89,11 +111,13 @@ struct HelperLocations {
 
 impl HelperLocations {
     fn of_process(helper: &Helper) -> Self {
+        let bundled_only = helper.discovery == Discovery::BundledOnly;
+        let override_allowed = !bundled_only || cfg!(debug_assertions);
         Self {
-            development_override: std::env::var_os(helper.override_var).filter(|path| !path.is_empty()).map(PathBuf::from),
+            development_override: std::env::var_os(helper.override_var).filter(|path| override_allowed && !path.is_empty()).map(PathBuf::from),
             executable_dir: std::env::current_exe().ok().and_then(|executable| executable.parent().map(Path::to_path_buf)),
             resource_root: application_resource_root(),
-            system_path: std::env::var_os("PATH"),
+            system_path: if bundled_only { None } else { std::env::var_os("PATH") },
         }
     }
 }
@@ -103,25 +127,36 @@ pub(crate) fn resolve_helper(helper: &Helper) -> Result<PathBuf, String> {
 }
 
 fn locate_helper(helper: &Helper, locations: &HelperLocations) -> Result<PathBuf, String> {
-    if let Some(path) = &locations.development_override {
-        if path.is_file() { return Ok(path.clone()); }
-        return Err(format!("{} does not point to a file.", helper.override_var));
+    let development_override = || match &locations.development_override {
+        Some(path) if path.is_file() => Some(Ok(path.clone())),
+        Some(_) => Some(Err(format!("{} does not point to a file.", helper.override_var))),
+        None => None,
+    };
+    if helper.discovery == Discovery::OverrideBundledOrPath {
+        if let Some(result) = development_override() { return result; }
     }
-    helper_candidates(helper, locations, std::env::consts::OS).into_iter()
+    let found = helper_candidates(helper, locations, std::env::consts::OS).into_iter()
         .find(|path| path.is_file() && {
             let mut command = Command::new(path);
             command.arg(helper.probe);
             crate::kit::pdf::helper_available(command)
-        })
-        .ok_or_else(|| helper.unavailable.to_string())
+        });
+    match (found, helper.discovery) {
+        (Some(path), _) => Ok(path),
+        (None, Discovery::BundledOnly) => development_override().unwrap_or_else(|| Err(helper.unavailable.to_string())),
+        (None, Discovery::OverrideBundledOrPath) => Err(helper.unavailable.to_string()),
+    }
 }
 
+/// The paths a helper is looked for at, in order, for one target operating system.
 fn helper_candidates(helper: &Helper, locations: &HelperLocations, target_os: &str) -> Vec<PathBuf> {
     let executable = if target_os == "windows" { format!("{}.exe", helper.name) } else { helper.name.to_string() };
     let beside_executable = locations.executable_dir.iter().map(|dir| dir.join(&executable));
     let bundled = locations.resource_root.iter()
         .flat_map(|root| [root.join(helper.bundled_dir).join(&executable), root.join("resources").join(&executable), root.join(&executable)]);
-    let on_path = locations.system_path.iter().flat_map(std::env::split_paths).map(|dir| dir.join(&executable));
+    let on_path = locations.system_path.iter()
+        .filter(|_| helper.discovery == Discovery::OverrideBundledOrPath)
+        .flat_map(std::env::split_paths).map(|dir| dir.join(&executable));
     beside_executable.chain(bundled).chain(on_path).collect()
 }
 
@@ -446,6 +481,80 @@ mod tests {
         let root = root();
         let locations = HelperLocations { development_override: Some(root.join("missing/qpdf")), executable_dir: None, resource_root: None, system_path: std::env::var_os("PATH") };
         assert!(locate_helper(&QPDF, &locations).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdftotext_lookup_finds_the_bundled_helper_with_an_empty_path() {
+        let root = root();
+        let bundled = fake_executable(&root.join("Resources/pdf-bin/pdftotext"));
+        let locations = HelperLocations { development_override: None, executable_dir: Some(root.join("app")), resource_root: Some(root.join("Resources")), system_path: Some(std::ffi::OsString::new()) };
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Ok(bundled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdftotext_lookup_prefers_the_bundled_helper_over_the_development_override() {
+        let root = root();
+        let bundled = fake_executable(&root.join("Resources/pdf-bin/pdftotext"));
+        let development_override = fake_executable(&root.join("override/pdftotext"));
+        let mut locations = HelperLocations { development_override: Some(development_override.clone()), executable_dir: None, resource_root: Some(root.join("Resources")), system_path: None };
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Ok(bundled.clone()));
+        fs::remove_file(&bundled).unwrap();
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Ok(development_override));
+        locations.development_override = Some(root.join("override/missing"));
+        assert!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdftotext_lookup_never_searches_the_system_path_and_reports_unavailable_in_plain_language() {
+        let root = root();
+        let on_path = fake_executable(&root.join("system/pdftotext"));
+        fs::create_dir_all(root.join("Resources")).unwrap();
+        let locations = HelperLocations {
+            development_override: None,
+            executable_dir: Some(root.join("app")),
+            resource_root: Some(root.join("Resources")),
+            system_path: Some(std::env::join_paths([root.join("system")]).unwrap()),
+        };
+        assert!(!helper_candidates(&PDF_TEXT_EXTRACTOR, &locations, std::env::consts::OS).contains(&on_path));
+        let missing = locate_helper(&PDF_TEXT_EXTRACTOR, &locations).unwrap_err();
+        assert_eq!(missing, PDF_TEXT_EXTRACTOR.unavailable);
+        for wording in ["TOOLBOX_", "PATH", "environment", "variable"] {
+            assert!(!missing.contains(wording), "{missing}");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdftotext_unavailable_without_any_location() {
+        let locations = HelperLocations { development_override: None, executable_dir: None, resource_root: None, system_path: std::env::var_os("PATH") };
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Err(PDF_TEXT_EXTRACTOR.unavailable.to_string()));
+    }
+
+    #[test]
+    fn pdftotext_candidates_use_the_platform_executable_name_for_each_supported_target() {
+        let locations = HelperLocations {
+            development_override: Some(PathBuf::from("override/pdftotext")),
+            executable_dir: Some(PathBuf::from("app")),
+            resource_root: Some(PathBuf::from("Resources")),
+            system_path: Some(std::env::join_paths([PathBuf::from("system")]).unwrap()),
+        };
+        for (target, target_os, executable) in [
+            ("aarch64-apple-darwin", "macos", "pdftotext"),
+            ("x86_64-pc-windows-msvc", "windows", "pdftotext.exe"),
+            ("aarch64-pc-windows-msvc", "windows", "pdftotext.exe"),
+        ] {
+            assert_eq!(helper_candidates(&PDF_TEXT_EXTRACTOR, &locations, target_os), [
+                PathBuf::from("app").join(executable),
+                PathBuf::from("Resources/pdf-bin").join(executable),
+                PathBuf::from("Resources/resources").join(executable),
+                PathBuf::from("Resources").join(executable),
+            ], "{target}");
+        }
     }
 
     fn parse_version(text: &str) -> Option<(u32, u32, u32)> {

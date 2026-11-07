@@ -67,7 +67,7 @@ const sent = (request: Record<string, unknown>) => ({ runId: expect.any(String),
 test.describe("PDF Conversion tools send their exact requests", () => {
     test.beforeEach(async ({ page }) => {
         await page.goto("/");
-        await openToolBySearch(page, "PDF to Text");
+        await openToolBySearch(page, "PDF to Images");
     });
 
     test("Images to PDF from the rail", async ({ page }) => {
@@ -96,24 +96,11 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         }));
     });
 
-    test("PDF to Text", async ({ page }) => {
-        await chooseFiles(page, "/local/report.three.pdf");
-        await page.getByRole("checkbox", { name: "Page 1" }).click();
-        expect(await exportAndCapture(page, "pdf_to_text")).toEqual(sent({ paths: ["/local/report.three.pdf"], pages: [1, 2], outputLocation }));
-    });
-
-    test("Extract Images from PDF", async ({ page }) => {
-        await selectFromRail(page, "PDF Conversion", "Extract Images from PDF");
-        await chooseFiles(page, "/local/report.three.pdf");
-        await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
-        expect(await exportAndCapture(page, "extract_pdf_images")).toEqual(sent({ paths: ["/local/report.three.pdf"], pages: [0, 1, 2], outputLocation }));
-    });
-
     test("options survive a switch to another tool and back", async ({ page }) => {
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await chooseFiles(page, "/local/report.three.pdf");
         await page.getByLabel("Render DPI").selectOption("72");
-        await selectFromRail(page, "PDF Conversion", "PDF to Text");
+        await selectFromRail(page, "PDF Conversion", "Images to PDF");
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await expect(page.getByRole("option", { name: "report.three.pdf" })).toBeVisible();
         await expect(page.getByLabel("Render DPI")).toHaveValue("72");

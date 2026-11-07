@@ -2168,5 +2168,110 @@
     "state": "pack-installed",
     "query": "pack=Installed",
     "screen": "PackResults--pack-installed.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "default",
+    "query": "",
+    "screen": "ExtractFromPdf--default.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ExtractFromPdf--state-empty.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-text-options",
+    "query": "state=Text%20options",
+    "screen": "ExtractFromPdf--state-text-options.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-images-options",
+    "query": "state=Images%20options",
+    "screen": "ExtractFromPdf--state-images-options.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-small-images-skipped",
+    "query": "state=Small%20images%20skipped",
+    "screen": "ExtractFromPdf--state-small-images-skipped.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-page-range",
+    "query": "state=Page%20range",
+    "screen": "ExtractFromPdf--state-page-range.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-range-error",
+    "query": "state=Range%20error",
+    "screen": "ExtractFromPdf--state-range-error.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-changed-save-location",
+    "query": "state=Changed%20save%20location",
+    "screen": "ExtractFromPdf--state-changed-save-location.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-extracting",
+    "query": "state=Extracting",
+    "screen": "ExtractFromPdf--state-extracting.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "default",
+    "query": "",
+    "screen": "ExtractFromPdfResults--default.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-text",
+    "query": "state=Text",
+    "screen": "ExtractFromPdfResults--state-text.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-images",
+    "query": "state=Images",
+    "screen": "ExtractFromPdfResults--state-images.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-needs-attention",
+    "query": "state=Needs%20attention",
+    "screen": "ExtractFromPdfResults--state-needs-attention.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-warnings-and-notes",
+    "query": "state=Warnings%20and%20notes",
+    "screen": "ExtractFromPdfResults--state-warnings-and-notes.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-helper-unavailable",
+    "query": "state=Helper%20unavailable",
+    "screen": "ExtractFromPdfResults--state-helper-unavailable.jpg"
   }
 ]

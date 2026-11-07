@@ -192,7 +192,7 @@ test('PostHog flags select tools per OS in search and PDF page actions', async (
   const mergeEnabled = targetPlatform === 'windows';
   const featureFlags: Record<string, boolean> = {};
   for (const { id } of UtilityRegistry) {
-    const available = id !== 'pdf-to-text';
+    const available = id !== 'pdf-extract';
     featureFlags[`tool-${id}-${targetPlatform}`] = available && (id !== 'pdf-merge' || mergeEnabled);
     featureFlags[`tool-${id}-${otherPlatform}`] = available && (id !== 'pdf-merge' || !mergeEnabled);
   }
@@ -220,9 +220,9 @@ test('PostHog flags select tools per OS in search and PDF page actions', async (
   await search.fill('Merge PDF');
   if (mergeEnabled) await expect(mergeTool).toBeVisible();
   else await expect(mergeTool).toHaveCount(0);
-  await search.fill('PDF to Text');
-  const pdfToTextTool = page.getByRole('button', { name: 'Open PDF to Text', exact: true });
-  await expect(pdfToTextTool).toHaveCount(0);
+  await search.fill('Extract from PDF');
+  const pdfExtractTool = page.getByRole('button', { name: 'Open Extract from PDF', exact: true });
+  await expect(pdfExtractTool).toHaveCount(0);
   await search.fill('');
 
   await openToolBySearch(page, "Edit PDF");
@@ -255,8 +255,8 @@ test('PostHog flags select tools per OS in search and PDF page actions', async (
   await expect(page.getByRole('heading', { name: 'Tool library', exact: true })).toBeVisible();
   if (mergeEnabled) await expect(mergeTool).toBeVisible();
   else await expect(mergeTool).toHaveCount(0);
-  await search.fill('PDF to Text');
-  await expect(pdfToTextTool).toHaveCount(0);
+  await search.fill('Extract from PDF');
+  await expect(pdfExtractTool).toHaveCount(0);
   expect(failedFlagRequestCount).toBe(1);
 });
 

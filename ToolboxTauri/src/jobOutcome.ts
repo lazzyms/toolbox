@@ -16,6 +16,7 @@ import type {
   ToolResult,
   WarningCode,
 } from "./contracts";
+import { jpegColours } from "./contracts";
 import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
@@ -40,15 +41,6 @@ const skipCodes: readonly SkipCode[] = [
   "needsOcr",
   "cancelled",
 ];
-
-const warningDetailKeys: Record<WarningCode, readonly string[] | null> = {
-  signatureRemoved: null,
-  fontSubstituted: ["requestedFamily", "actualFamily"],
-  renamedToAvoidReplacing: ["chosenName", "finalName"],
-  precisionReduced: null,
-  omittedContent: null,
-  approximateLayout: null,
-};
 
 const toolIds = new Set<string>(UtilityRegistry.map((utility) => utility.id));
 
@@ -92,6 +84,32 @@ const pageDetails = (outcome: Json, path: string): { pageDetails?: OutcomeDetail
   };
 };
 
+type DetailParser = (value: unknown, path: string) => unknown;
+
+const count = (value: unknown, path: string): number =>
+  Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(path, "a whole number");
+
+const counts = (value: unknown, path: string): number[] =>
+  Array.isArray(value) ? value.map((item, index) => count(item, `${path}[${index}]`)) : fail(path, "an array");
+
+const colour = (value: unknown, path: string) => member(value, jpegColours, path);
+
+const imagePlace = { page: count, image: count };
+
+const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> = {
+  signatureRemoved: null,
+  fontSubstituted: { requestedFamily: text, actualFamily: text },
+  renamedToAvoidReplacing: { chosenName: text, finalName: text },
+  precisionReduced: null,
+  omittedContent: null,
+  approximateLayout: null,
+  imageUnsupported: { ...imagePlace, feature: text },
+  imageDamaged: imagePlace,
+  imageTooLarge: { ...imagePlace, width: count, height: count },
+  jpegColourKept: { colour, pages: counts, images: count },
+  pagesWithoutText: { pages: counts },
+};
+
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
   if (value === null || value === undefined) return null;
   const pointer = record(value, path);
@@ -131,15 +149,15 @@ const parseSkipReason = (value: unknown, path: string): SkipReason => {
 
 const parseWarning = (value: unknown, path: string): OutcomeWarning => {
   const warning = record(value, path);
-  const code = member(warning.code, Object.keys(warningDetailKeys) as WarningCode[], `${path}.code`);
+  const code = member(warning.code, Object.keys(warningDetails) as WarningCode[], `${path}.code`);
   const message = text(warning.message, `${path}.message`);
-  const detailKeys = warningDetailKeys[code];
-  if (!detailKeys) return { code, message } as OutcomeWarning;
+  const parsers = warningDetails[code];
+  if (!parsers) return { code, message } as OutcomeWarning;
   const details = record(warning.details, `${path}.details`);
   return {
     code,
     message,
-    details: Object.fromEntries(detailKeys.map((key) => [key, text(details[key], `${path}.details.${key}`)])),
+    details: Object.fromEntries(Object.entries(parsers).map(([key, parse]) => [key, parse(details[key], `${path}.details.${key}`)])),
   } as OutcomeWarning;
 };
 

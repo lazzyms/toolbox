@@ -116,7 +116,10 @@ jobs:
         working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
-        run: brew install qpdf poppler tesseract
+        run: |
+          brew install qpdf poppler tesseract
+          # pdftotext is never found on PATH; native tests use the Development override.
+          echo "TOOLBOX_PDFTOTEXT_PATH=$(command -v pdftotext)" >> "$GITHUB_ENV"
       - name: Set up MSYS2 for the native Windows arm64 OCR helpers
         id: msys2
         if: matrix.target == 'aarch64-pc-windows-msvc'
