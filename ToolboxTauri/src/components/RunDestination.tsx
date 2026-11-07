@@ -11,7 +11,7 @@ export type BlockedDestination = { folder: string; check: Exclude<FolderCheck, '
 
 const ALONGSIDE_LABEL = 'Next to each original';
 
-const describe = (location: OutputLocation, home: string | null) =>
+export const describeLocation = (location: OutputLocation, home: string | null) =>
     location === 'alongsideInput' ? ALONGSIDE_LABEL : shortenHomePath(location.customFolder, home);
 
 const folderName = (folder: string) => folder.split(/[\\/]/).filter(Boolean).pop() ?? folder;
@@ -21,9 +21,7 @@ export const sameLocation = (a: OutputLocation, b: OutputLocation) =>
 
 // Commands that always write a different file type than they read, as named by the native output code.
 const FIXED_OUTPUT_EXTENSIONS: Partial<Record<ToolCommand, string>> = {
-    pdf_to_text: 'txt',
-    ocr_pdf: 'txt',
-    extract_pdf_images: 'jpg',
+    extract_from_pdf: 'txt',
     remove_image_background: 'png',
     blur_faces: 'png',
     generate_icon_set: 'png',
@@ -45,22 +43,26 @@ interface RunDestinationProps {
     toolTitle: string;
     exampleName: string | null;
     savesOneFile?: boolean;
+    /** Ends the per-run hint by saying the saved setting is unchanged, where the tool's board says so. */
+    mentionsSettingKept?: boolean;
+    label?: string;
+    note?: string;
     onChange: () => void;
     onReset: () => void;
 }
 
-export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, savesOneFile = false, onChange, onReset }: RunDestinationProps) => {
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, savesOneFile = false, mentionsSettingKept = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
     const home = useHomeDir();
     return (
     <section aria-label="Destination" className="run-destination">
         <div className="run-destination-heading">
-            <span className="run-destination-label">Save to</span>
+            <span className="run-destination-label">{label}</span>
             {overridden && <Badge variant="outline">This run only</Badge>}
         </div>
         {!savesOneFile && <>
         <div className="run-destination-path">
             <FolderIcon aria-hidden="true" />
-            <span data-testid="run-destination-path">{describe(location, home)}</span>
+            <span data-testid="run-destination-path">{describeLocation(location, home)}</span>
         </div>
         <div className="run-destination-actions">
             {overridden ? <>
@@ -70,10 +72,11 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
         </div>
         {overridden && (
             <p className="run-destination-hint">
-                Your default is {defaultLocation === 'alongsideInput' ? 'next to each original' : shortenHomePath(defaultLocation.customFolder, home)}. This change ends when you leave {toolTitle}.
+                Your default is {defaultLocation === 'alongsideInput' ? 'next to each original' : shortenHomePath(defaultLocation.customFolder, home)}. This change ends when you leave {toolTitle}{mentionsSettingKept ? ', and your setting stays as it is.' : '.'}
             </p>
         )}
         </>}
+        {note && <p className="run-destination-hint">{note}</p>}
         {savesOneFile && (
             <p className="run-destination-hint">You choose a name and folder when you start, because this makes one file.</p>
         )}

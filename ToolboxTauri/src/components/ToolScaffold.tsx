@@ -19,7 +19,9 @@ import { rowView } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
-import { chooseManyToOneSavePath } from './saveStep';
+import { chooseCreatedDocumentSavePath, chooseManyToOneSavePath } from './saveStep';
+import { PasteHtmlDialog } from './PasteHtmlDialog';
+import { addPastedHtml, choosePastedOutput, isPastedHtml, pastedHtml, pastedRowDetail } from './pastedHtml';
 import { saveStepAppliesTo, saveStepFor } from '../registry/saveSteps';
 import { ArrowDown, ArrowUp, FileIcon, FolderIcon, GripVertical, XIcon } from 'lucide-react';
 import {
@@ -47,6 +49,14 @@ export const RunStateContext = createContext<((running: boolean) => void) | null
 
 export type RunContext = { outputPath: string | null; runId: string };
 
+/** What a report can do after its run: retry one file, and save to this run's destination. */
+export interface ReportRun {
+    withPassword?: (inputPath: string, password: string) => Promise<void>;
+    destination: { location: OutputLocation; change: () => void };
+    /** Checks the destination folder first and offers another one when it can't be used. */
+    saveTo: (save: (location: OutputLocation) => Promise<void>) => Promise<void>;
+}
+
 export type RunHandler = (files: string[], outputLocation: OutputLocation, run: RunContext) => Promise<JobOutcome[]>;
 
 type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
@@ -60,6 +70,8 @@ interface ToolScaffoldProps {
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
+    /** A warning shown in place of a runnable file's folder, like a signature that saving removes. */
+    fileWarning?: (path: string) => string | null;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     intakeCopy?: IntakeCopy;
     initialPaths?: readonly string[];
@@ -68,6 +80,17 @@ interface ToolScaffoldProps {
     onFilesChange?: (paths: readonly string[]) => void;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string;
+    /** Offers Paste HTML: pasted markup joins the list and asks where to save when the run starts. */
+    pasteHtml?: boolean;
+    /**
+     * Marks a read-only tool: the run skips the output-folder check and the finished
+     * results show through this instead of the result list.
+     */
+    renderReport?: (results: JobOutcome[], run: ReportRun) => React.ReactNode;
+    /** Replaces the destination's label and example for a tool whose saves are not its run. */
+    destinationCopy?: (files: string[]) => { label: string; note: string };
+    /** Says in the per-run destination hint that the saved setting stays as it is. */
+    destinationMentionsSettingKept?: boolean;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -86,7 +109,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, pasteHtml = false, renderReport, destinationCopy, destinationMentionsSettingKept = false, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -104,9 +127,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
     const [retrying, setRetrying] = useState(false);
+    const [pasting, setPasting] = useState(false);
     const defaultLocation = useOutputLocation();
     const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
-    const [blocked, setBlocked] = useState<(BlockedDestination & { handler: RunHandler }) | null>(null);
+    const [blocked, setBlocked] = useState<(BlockedDestination & { retry: (location: OutputLocation) => void }) | null>(null);
     const outputLocation = runOverride ?? defaultLocation;
     const runGeneration = useRef(0);
     const browseRef = useRef<WorkspaceSourceAction>(() => undefined);
@@ -181,10 +205,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setResultsNamedByOutput(false);
         setPerFileRun(null);
         try {
-            if (location !== 'alongsideInput') {
+            if (!renderReport && location !== 'alongsideInput') {
                 const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
                 if (check !== 'ready') {
-                    if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, handler });
+                    if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, retry: (next) => void runWith(handler, next) });
                     return;
                 }
             }
@@ -214,6 +238,23 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 setLoading(false);
                 outputPath = await chooseManyToOneSavePath(saveStep, validPaths, location, inputPolicy.outputSuffix, saveStep.summary(validPaths.length));
                 if (!outputPath || generation !== runGeneration.current) return;
+                setLoading(true);
+            }
+            const pastedPaths = runs ? validPaths.filter(isPastedHtml) : [];
+            if (pastedPaths.length > 0) {
+                setLoading(false);
+                const others = validPaths.length - pastedPaths.length;
+                const elsewhere = others === 0 ? '' : `The other ${others === 1 ? 'file saves' : `${others} files save`} ${location === 'alongsideInput' ? 'next to each original' : 'in the folder chosen for this run'}. `;
+                for (const path of pastedPaths) {
+                    const item = pastedHtml(path);
+                    const chosen = item && await chooseCreatedDocumentSavePath(
+                        { title: 'Save the pasted HTML as a PDF', extension: 'pdf' },
+                        `${item.name}.pdf`,
+                        `Opens in the folder you last saved to, or Documents. ${elsewhere}Cancel goes back to the list without converting.`,
+                    );
+                    if (!chosen || generation !== runGeneration.current) return;
+                    choosePastedOutput(path, chosen);
+                }
                 setLoading(true);
             }
             const processed = runs ? await runStreamed(handler, validPaths, location, outputPath, generation) : [];
@@ -259,7 +300,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         if (!blocked) return;
         setBlocked(null);
         overrideWith('alongsideInput');
-        void runWith(blocked.handler, 'alongsideInput');
+        blocked.retry('alongsideInput');
     };
 
     const chooseBlockedFolder = async () => {
@@ -276,7 +317,18 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         const location = { customFolder: folder };
         setBlocked(null);
         overrideWith(location);
-        void runWith(blocked.handler, location);
+        blocked.retry(location);
+    };
+
+    const saveTo = async (save: (location: OutputLocation) => Promise<void>, location: OutputLocation = outputLocation) => {
+        if (location !== 'alongsideInput') {
+            const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
+            if (check !== 'ready') {
+                setBlocked({ folder: location.customFolder, check, retry: (next) => void saveTo(save, next) });
+                return;
+            }
+        }
+        await save(location);
     };
 
     const rerun = async (paths: string[], handler = perFileRun?.handler) => {
@@ -313,6 +365,21 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setSelection(new Set(key ? [key] : []));
         setAnchor(key);
     };
+
+    const addPasted = (name: string, markup: string) => {
+        setPasting(false);
+        const [entry] = newEntries([addPastedHtml(name, markup)]);
+        setNotAdded([]);
+        setEntries((current) => [...current, entry]);
+        selectOnly(entry.key);
+    };
+
+    const pasteButton = pasteHtml && (
+        <Button variant="outline" size="sm" disabled={loading} onClick={() => setPasting(true)}>
+            Paste HTML…
+        </Button>
+    );
+    const hasPasted = entries.some((entry) => isPastedHtml(entry.path));
 
     const intake = (incoming: InspectedPath[], replaceSingle = false) => {
         if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
@@ -546,14 +613,18 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         onKeyDown={listKeyDown}
                     >
                         {statuses.map(({ entry, occurrence, flag }, index) => {
-                            const name = fileName(entry.path);
+                            const pasted = pastedHtml(entry.path);
+                            const name = pasted?.name ?? fileName(entry.path);
                             const isSelected = selection.has(entry.key);
+                            const mark = flag ? null : intakeCopy?.mark?.(entry.path) ?? null;
+                            const label = mark ? `${name}, ${mark.toLowerCase()}` : name;
+                            const warning = flag ? null : fileWarning?.(entry.path) ?? null;
                             return (
                                 <li
                                     key={entry.key}
                                     role="option"
                                     aria-selected={isSelected}
-                                    aria-label={ordered ? `${index + 1} of ${entries.length}, ${name}` : name}
+                                    aria-label={ordered ? `${index + 1} of ${entries.length}, ${label}` : label}
                                     data-intake-key={entry.key}
                                     data-flag={flag?.kind}
                                     data-dragging={dragKey === entry.key ? 'true' : undefined}
@@ -601,9 +672,10 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         }}
                                     >
                                         <span className="file-selection-name">{name}</span>
-                                        <span className="file-selection-detail">{flag?.message ?? shortenHomePath(parentFolder(entry.path), home)}</span>
+                                        <span className="file-selection-detail" data-tone={warning ? 'warning' : undefined}>{flag?.message ?? warning ?? (pasted ? pastedRowDetail(pasted) : shortenHomePath(parentFolder(entry.path), home))}</span>
                                     </Button>
-                                    {flag && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? "Won't run"}</Badge>}
+                                    {mark && <Badge variant="outline" className="file-selection-badge">{mark}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (
@@ -655,7 +727,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             <div className="workspace-source-copy">
                 <span className="workspace-source-kicker">Source</span>
                 <strong>{entries.length ? `${entries.length} ${entries.length === 1 ? 'file' : 'files'} open` : 'Open a file to begin'}</strong>
-                <span>{entries.length ? 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
+                <span>{entries.length ? renderReport ? 'Nothing is changed or saved. Your original stays unchanged.' : 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
             </div>
             <div className="workspace-source-actions">
                 <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
@@ -663,6 +735,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                     {entries.length ? inputPolicy.inputCardinality === 'single' ? 'Replace file' : 'Add files' : 'Open files'}
                     <ShortcutHint id="open" />
                 </Button>
+                {pasteButton}
                 {entries.length > 0 && <Button variant="ghost" size="sm" className="workspace-source-clear" disabled={loading} onClick={clearFiles}>Clear list</Button>}
             </div>
             {entries.length > 0 && fileSelection}
@@ -691,6 +764,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             <TablerIcon name="folder-open" /> Browse files
                             <ShortcutHint id="open" />
                         </Button>
+                        {pasteButton}
                     </div>
 
                     {entries.length > 0 && fileSelection}
@@ -711,18 +785,24 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 selectedFileIndex,
                 selectFile,
                 destination: (
+                    <>
                     <RunDestination
                         location={outputLocation}
                         defaultLocation={defaultLocation}
                         overridden={runOverride !== null}
                         toolTitle={utility.title}
-                        exampleName={files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
+                        label={destinationCopy?.(files).label}
+                        note={destinationCopy?.(files).note}
+                        exampleName={destinationCopy ? null : files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
                         savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
+                        mentionsSettingKept={destinationMentionsSettingKept}
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
                     />
+                    {hasPasted && <p className="workspace-note">Pasted HTML has no original, so it asks where to save when you start.</p>}
+                    </>
                 ),
-                runLabel: savesOneFile ? saveStep.runLabel : null,
+                runLabel: savesOneFile ? saveStep.runLabel : hasPasted ? `Export ${utility.shortTitle}…` : null,
                 failedFiles,
                 retryFailed,
                 retrying,
@@ -731,18 +811,27 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
             {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} lockedNote={utility.lockedNote} />}
 
-            <ResultList
+            {renderReport && !loading && results.length > 0 ? renderReport(results, {
+                withPassword: perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined,
+                destination: { location: outputLocation, change: () => void changeForRun() },
+                saveTo,
+            }) : <ResultList
                 results={results}
                 progress={progress}
                 loading={loading}
                 resultVerb={utility.resultVerb}
+                resultNoun={utility.resultNoun}
                 runningVerb={utility.runningVerb}
                 runningDetail={utility.runningDetail}
+                progressByPage={utility.progressByPage}
+                signatureRemovedNote={utility.signatureRemovedNote}
                 live={live}
                 namedByOutput={resultsNamedByOutput}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
-            />
+            />}
+
+            {pasteHtml && <PasteHtmlDialog open={pasting} onAdd={addPasted} onClose={() => setPasting(false)} />}
 
             <BlockedDestinationDialog
                 blocked={blocked}
