@@ -8,7 +8,8 @@
 # we copy qpdf plus its non-system dylib closure into Contents/Resources/qpdf-bin/
 # and rebase every install name to @loader_path so the whole set travels inside
 # the bundle with no host libraries required (macOS /usr/lib & /System are exempt).
-# A qpdf below the minimum in qpdf-pin.json, or not native to TOOLBOX_TARGET, is refused.
+# A qpdf below the minimum in qpdf-pin.json, or not native to TOOLBOX_TARGET, is refused,
+# and so is a pdftotext that is not native to TOOLBOX_TARGET.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +35,12 @@ check_qpdf() {
   }
 }
 check_qpdf "$QPDF_BIN"
+check_pdftotext() {
+  node "$SCRIPT_DIR/check-release-readiness.mjs" --pdftotext "$1" --target "$TARGET" >&2 || {
+    echo "bundle-qpdf: refusing pdftotext at $1" >&2
+    exit 1
+  }
+}
 if [[ -z "$PDFTOPPM_BIN" ]]; then
   echo "bundle-qpdf: pdftoppm not found; install it (brew install poppler) or set PDFTOPPM" >&2
   exit 1
@@ -42,6 +49,7 @@ if [[ -z "$PDFTOTEXT_BIN" ]]; then
   echo "bundle-qpdf: pdftotext not found; install it (brew install poppler) or set PDFTOTEXT" >&2
   exit 1
 fi
+check_pdftotext "$PDFTOTEXT_BIN"
 if [[ -z "$TESSERACT_BIN" ]]; then
   echo "bundle-qpdf: tesseract not found; install it (brew install tesseract) or set TESSERACT" >&2
   exit 1
@@ -165,7 +173,7 @@ codesign --verify --deep --strict "$APP"
 echo "bundle-qpdf: embedded self-contained PDF/OCR helpers -> $RES/{qpdf-bin,pdf-bin,resources/ocr/bin}"
 check_qpdf "$RES/qpdf-bin/qpdf"
 "$RES/pdf-bin/pdftoppm" -h >/dev/null
-"$RES/pdf-bin/pdftotext" -h >/dev/null
+check_pdftotext "$RES/pdf-bin/pdftotext"
 "$RES/resources/ocr/bin/tesseract" --version >/dev/null
 node "$SCRIPT_DIR/third-party-notices.mjs" --binaries "$APP"
 

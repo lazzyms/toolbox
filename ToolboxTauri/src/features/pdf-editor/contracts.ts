@@ -1,5 +1,6 @@
 import type { OutputLocation } from "../../contracts";
 import type { PdfScene } from "./scene";
+import type { RedactionMark } from "./subtools";
 
 export type EditorLayout = "vertical" | "horizontal";
 export type EditorDensity = "compact" | "comfortable";
@@ -18,6 +19,7 @@ export interface PdfPage {
     pageBox?: [number, number, number, number];
     preview?: string | null;
     textRuns?: PdfTextRun[] | null;
+    editRuns?: PdfEditRun[] | null;
 }
 
 export interface PdfTextRun {
@@ -28,9 +30,27 @@ export interface PdfTextRun {
     height: number;
 }
 
+export type PdfEditRunReason = "picture" | "encoding" | "tagged" | "unsupported";
+
+export interface PdfEditRun extends PdfTextRun {
+    index: number;
+    fontName: string;
+    fontSize: number;
+    reason: PdfEditRunReason | null;
+}
+
+export interface PdfTextEdit {
+    pageIndex: number;
+    run: number;
+    original: string;
+    replacement: string;
+}
+
 export interface PdfDocument {
     path: string;
     pages: PdfPage[];
+    /** True when a signature field holds a signature value. An exported copy is no longer signed. */
+    signed?: boolean;
 }
 
 export interface PdfEditorState {
@@ -70,15 +90,6 @@ export interface SignPdfRequest extends CropPdfRequest {
     page: number;
     text: string;
     signaturePath: string | null;
-}
-
-export interface OrganizePdfRequest {
-    paths: string[];
-    pageOrder: number[];
-    deletePages: number[];
-    rotatePages: { page: number; degrees: number }[];
-    scope: PdfPageScope;
-    outputLocation: OutputLocation;
 }
 
 export type PdfOverlay =
@@ -141,8 +152,10 @@ export interface PdfSceneExportRequest {
     paths: string[];
     scene: PdfScene;
     outputLocation: OutputLocation;
+    /** Export As: the chosen file. Never replaced; a taken name is numbered. */
+    outputPath?: string;
     formValues?: PdfFormValue[];
-    textEdits?: unknown[];
+    textEdits?: PdfTextEdit[];
     flatten?: boolean;
-    redactions?: unknown[];
+    redactions?: RedactionMark[];
 }

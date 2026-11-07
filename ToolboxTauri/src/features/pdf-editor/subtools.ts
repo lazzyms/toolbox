@@ -1,8 +1,8 @@
 import type { OutputLocation } from '../../contracts';
-import type { PdfFormValue as FormValue } from './contracts';
-import type { PdfScene, SceneObject } from './scene';
+import type { PdfFormValue as FormValue, PdfTextEdit } from './contracts';
+import type { PdfScene, SceneObject, SceneRect } from './scene';
 
-export type SubToolId = 'form' | SceneObject['kind'] | 'crop' | 'organize';
+export type SubToolId = 'form' | SceneObject['kind'] | 'edit-text' | 'crop' | 'organize' | 'redact';
 export interface SubTool {
   id: SubToolId;
   label: string;
@@ -10,7 +10,9 @@ export interface SubTool {
   suffix: string;
   contributes: (scene: PdfScene, baseline: PdfScene, formValues: readonly FormValue[]) => boolean;
 }
-export interface SceneExportRequest { paths: string[]; scene: PdfScene; outputLocation: OutputLocation; formValues?: FormValue[] }
+export interface RedactionMark { pageIndex: number; rect: SceneRect; color: string }
+export interface SceneSections { scene: Pick<PdfScene, 'pages'>; formValues?: FormValue[]; textEdits?: PdfTextEdit[]; redactions?: RedactionMark[] }
+export interface SceneExportRequest extends SceneSections { paths: string[]; outputLocation: OutputLocation; outputPath?: string }
 export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; suffix: string | null }
 
 export const combinedSuffix = '-edited';
@@ -24,6 +26,8 @@ const pageLayout = (scene: PdfScene) => JSON.stringify(scene.pages.map((page) =>
 export const subTools: readonly SubTool[] = [
   { id: 'form', label: 'Fill form', group: 'document', suffix: '-filled',
     contributes: (_scene, _baseline, formValues) => formValues.length > 0 },
+  { id: 'edit-text', label: 'Edit text', group: 'document', suffix: '-edited',
+    contributes: (scene) => Boolean(scene.textEdits?.length) },
   overlay('text', 'Text'),
   overlay('highlight', 'Highlight'),
   overlay('shape', 'Shape'),
@@ -33,7 +37,17 @@ export const subTools: readonly SubTool[] = [
     contributes: (scene) => scene.pages.some((page) => page.crop !== null) },
   { id: 'organize', label: 'Organize pages', group: 'document', suffix: '-edited',
     contributes: (scene, baseline) => pageLayout(scene) !== pageLayout(baseline) },
+  { id: 'redact', label: 'Redact', group: 'document', suffix: '-redacted',
+    contributes: (scene) => scene.pages.some((page) => page.redactions?.length) },
 ];
+
+// Native requests carry form values, text edits and redaction marks as their own stage sections, beside the scene;
+// marks leave the pages and travel in output page order.
+export const sceneSections = ({ pages, textEdits }: PdfScene, formValues: FormValue[] = []): SceneSections => {
+  const redactions = pages.flatMap((page, pageIndex) => (page.redactions ?? []).map(({ rect, color }) => ({ pageIndex, rect, color })));
+  const scene = { pages: redactions.length ? pages.map(({ redactions: _marks, ...page }) => page) : pages };
+  return { scene, ...(formValues.length ? { formValues } : {}), ...(textEdits?.length ? { textEdits } : {}), ...(redactions.length ? { redactions } : {}) };
+};
 
 export const sceneContributors = (scene: PdfScene, baseline: PdfScene, formValues: readonly FormValue[] = []): SubTool[] =>
   subTools.filter((tool) => tool.contributes(scene, baseline, formValues));
@@ -41,10 +55,15 @@ export const sceneContributors = (scene: PdfScene, baseline: PdfScene, formValue
 export const exportSuffix = (contributors: readonly Pick<SubTool, 'suffix'>[]): string | null =>
   contributors.length === 0 ? null : contributors.length === 1 ? contributors[0].suffix : combinedSuffix;
 
-export function planSceneExport({ paths, scene, baseline, outputLocation, formValues = [] }: {
-  paths: string[]; scene: PdfScene; baseline: PdfScene; outputLocation: OutputLocation; formValues?: FormValue[];
+/** Plans one export. `outputPath` is the Export As file chosen in the save step; without it the export takes the
+ * default name (original stem + suffix, then -1, -2) in `outputLocation`. */
+export function planSceneExport({ paths, scene, baseline, outputLocation, outputPath = null, formValues = [] }: {
+  paths: string[]; scene: PdfScene; baseline: PdfScene; outputLocation: OutputLocation; outputPath?: string | null; formValues?: FormValue[];
 }): SceneExportPlan {
   const contributors = sceneContributors(scene, baseline, formValues);
-  const request: SceneExportRequest = formValues.length ? { paths, scene, outputLocation, formValues } : { paths, scene, outputLocation };
-  return { request, contributors: contributors.map((tool) => tool.id), suffix: exportSuffix(contributors) };
+  return {
+    request: { paths, ...sceneSections(scene, formValues), outputLocation, ...(outputPath ? { outputPath } : {}) },
+    contributors: contributors.map((tool) => tool.id),
+    suffix: exportSuffix(contributors),
+  };
 }
