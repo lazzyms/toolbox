@@ -2104,6 +2104,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hayro-ccitt"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adbed896e99325bc312778bb9c9c289d795d51c12775c44dd5e4352f679c7e46"
+
+[[package]]
+name = "hayro-jbig2"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb5c7f3a4eb551c2bb7fa16e268f728d4bc2a5c9b090554b8dc0ee2503fb5840"
+dependencies = [
+ "hayro-ccitt",
+]
+
+[[package]]
 name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3996,6 +4011,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
+dependencies = [
+ "bitflags 2.13.1",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "pulp"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5081,6 +5107,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "subsetter"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38803281d1c23166c5ebcb455439a5d2afe711cc909cf88af72448c297756ad6"
+dependencies = [
+ "rustc-hash",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5895,9 +5930,13 @@ dependencies = [
  "base64 0.22.1",
  "cbc 0.1.2",
  "cfb",
+ "encoding_rs",
+ "fax",
  "flate2",
  "fontdue",
  "getrandom 0.3.4",
+ "gif",
+ "hayro-jbig2",
  "heif-rs",
  "hmac",
  "image",
@@ -5905,6 +5944,7 @@ dependencies = [
  "md-5 0.10.6",
  "notify-rust",
  "office-crypto",
+ "pulldown-cmark",
  "quick-xml 0.41.0",
  "rayon",
  "rustybuzz",
@@ -5912,6 +5952,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2 0.11.0",
+ "subsetter",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -6324,6 +6365,12 @@ checksum = "96bd2f2237fe450fcd0a1d2f5f4e91711124f7857ba2e964247776ebeeb7b0c4"
 dependencies = [
  "unic-common",
 ]
+
+[[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-bidi"

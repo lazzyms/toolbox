@@ -1,0 +1,196 @@
+import type { ToolDefinition } from "../contracts";
+import type { IntakeCopy } from "../components/intake";
+import { extensionOf } from "../components/intake";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+
+export type PlainTextOptions = {
+  pageSize: "a4" | "letter" | "legal";
+  margins: "narrow" | "normal" | "wide";
+  font: "monospace" | "sans" | "serif";
+  encoding: "detect" | "utf8" | "utf16le" | "utf16be" | "windows1252";
+  wrapLines: boolean;
+};
+
+export const defaultPlainTextOptions: PlainTextOptions = { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true };
+
+export type MarkdownOptions = {
+  pageSize: "a4" | "letter" | "legal";
+  margins: "narrow" | "normal" | "wide";
+  bodyFont: "sans" | "serif" | "monospace";
+  codeStyle: "shaded" | "plain";
+  tableOfContents: boolean;
+};
+
+export const defaultMarkdownOptions: MarkdownOptions = { pageSize: "a4", margins: "normal", bodyFont: "sans", codeStyle: "shaded", tableOfContents: false };
+
+export const isPlainText = (path: string) => extensionOf(path) === ".txt";
+
+export const isMarkdown = (path: string) => [".md", ".markdown"].includes(extensionOf(path));
+
+export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions };
+
+export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions };
+
+export const convertToPdfRequest = (paths: string[], outputLocation: unknown, options: ConvertToPdfOptions) => ({
+  paths,
+  outputLocation,
+  ...(paths.some(isPlainText) ? { plainText: options.plainText } : {}),
+  ...(paths.some(isMarkdown) ? { markdown: options.markdown } : {}),
+});
+
+const unavailableFamily = (tool: ToolDefinition, path: string) =>
+  tool.capability.formatFamilies?.find((family) => family.nativeAvailability === "unavailable" && family.extensions.includes(extensionOf(path)));
+
+const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
+
+export const convertToPdfIntakeCopy = (tool: ToolDefinition): IntakeCopy => ({
+  notAccepted: "This file type can't become a PDF here.",
+  unsupported: () => "This file type can't become a PDF here.",
+  willFail: (path) => {
+    if (extensionOf(path) === ".pdf") return "Already a PDF";
+    return unavailableFamily(tool, path) ? `${extensionOf(path).slice(1).toUpperCase()} comes in a later update` : null;
+  },
+  flagLabel: (path) => (extensionOf(path) === ".pdf" ? "Will be skipped" : "Not available yet"),
+  flaggedNotice: (count) => `${fileCount(count)} won't become ${count === 1 ? "a PDF" : "PDFs"}. Each one says why on its row.`,
+  countHint: (flagged, total) => {
+    const runnable = total - flagged;
+    return flagged > 0 ? `This will make ${runnable} ${runnable === 1 ? "PDF" : "PDFs"}, ${flagged} skipped` : `This will make ${total} ${total === 1 ? "PDF" : "PDFs"}`;
+  },
+});
+
+const appliesTo = (files: string[], plural: string) => `Applies to ${files.length === 1 ? files[0].split(/[\\/]/).pop() : `${files.length} ${plural}`}`;
+
+type PanelProps<T> = { files: string[]; options: T; onChange: (options: T) => void; disabled: boolean };
+
+export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<ConvertToPdfOptions>) => {
+  if (!files.some(isPlainText) && !files.some(isMarkdown)) {
+    return <p className="workspace-note">Options for each format appear here when a file of that format is in the list.</p>;
+  }
+  return (
+    <>
+      <MarkdownOptionsPanel files={files} options={options.markdown} onChange={(markdown) => onChange({ ...options, markdown })} disabled={disabled} />
+      <PlainTextOptionsPanel files={files} options={options.plainText} onChange={(plainText) => onChange({ ...options, plainText })} disabled={disabled} />
+    </>
+  );
+};
+
+const MarkdownOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<MarkdownOptions>) => {
+  const markdownFiles = files.filter(isMarkdown);
+  if (markdownFiles.length === 0) return null;
+  const set = <K extends keyof MarkdownOptions>(key: K, value: MarkdownOptions[K]) => onChange({ ...options, [key]: value });
+  return (
+    <fieldset role="region" aria-label="Markdown options" className="grid gap-3" disabled={disabled}>
+      <div className="workspace-panel-intro">
+        <p className="workspace-panel-label">Markdown</p>
+        <p className="workspace-panel-copy">{appliesTo(markdownFiles, "Markdown files")}</p>
+      </div>
+      <div className="workspace-field-grid">
+        <div className="workspace-field">
+          <Label htmlFor="markdown-page-size">Page size</Label>
+          <NativeSelect id="markdown-page-size" value={options.pageSize} onChange={(event) => set("pageSize", event.target.value as MarkdownOptions["pageSize"])}>
+            <option value="a4">A4 (default)</option>
+            <option value="letter">Letter</option>
+            <option value="legal">Legal</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="markdown-margins">Margins</Label>
+          <NativeSelect id="markdown-margins" value={options.margins} onChange={(event) => set("margins", event.target.value as MarkdownOptions["margins"])}>
+            <option value="normal">Default</option>
+            <option value="narrow">Narrow</option>
+            <option value="wide">Wide</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="markdown-body-font">Body font</Label>
+          <NativeSelect id="markdown-body-font" value={options.bodyFont} onChange={(event) => set("bodyFont", event.target.value as MarkdownOptions["bodyFont"])}>
+            <option value="sans">System sans-serif</option>
+            <option value="serif">System serif</option>
+            <option value="monospace">Monospace</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label id="markdown-code-style-label">Code blocks</Label>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            aria-labelledby="markdown-code-style-label"
+            value={options.codeStyle}
+            onValueChange={(value) => {
+              if (value) set("codeStyle", value as MarkdownOptions["codeStyle"]);
+            }}
+          >
+            <ToggleGroupItem value="shaded">Shaded</ToggleGroupItem>
+            <ToggleGroupItem value="plain">Plain</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor="markdown-table-of-contents" className="cursor-pointer">
+          <Checkbox id="markdown-table-of-contents" aria-describedby="markdown-table-of-contents-hint" checked={options.tableOfContents} onCheckedChange={(checked) => set("tableOfContents", checked === true)} />
+          Add a table of contents
+        </Label>
+        <p id="markdown-table-of-contents-hint" className="workspace-note">Built from the headings, with links to each section.</p>
+      </div>
+    </fieldset>
+  );
+};
+
+const PlainTextOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<PlainTextOptions>) => {
+  const textFiles = files.filter(isPlainText);
+  if (textFiles.length === 0) return null;
+  const set = <K extends keyof PlainTextOptions>(key: K, value: PlainTextOptions[K]) => onChange({ ...options, [key]: value });
+  return (
+    <fieldset role="region" aria-label="Plain text options" className="grid gap-3" disabled={disabled}>
+      <div className="workspace-panel-intro">
+        <p className="workspace-panel-label">Plain text</p>
+        <p className="workspace-panel-copy">{appliesTo(textFiles, "text files")}</p>
+      </div>
+      <div className="workspace-field-grid">
+        <div className="workspace-field">
+          <Label htmlFor="plain-text-page-size">Page size</Label>
+          <NativeSelect id="plain-text-page-size" value={options.pageSize} onChange={(event) => set("pageSize", event.target.value as PlainTextOptions["pageSize"])}>
+            <option value="a4">A4 (default)</option>
+            <option value="letter">Letter</option>
+            <option value="legal">Legal</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="plain-text-margins">Margins</Label>
+          <NativeSelect id="plain-text-margins" value={options.margins} onChange={(event) => set("margins", event.target.value as PlainTextOptions["margins"])}>
+            <option value="narrow">Narrow</option>
+            <option value="normal">Normal</option>
+            <option value="wide">Wide</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="plain-text-font">Font</Label>
+          <NativeSelect id="plain-text-font" value={options.font} onChange={(event) => set("font", event.target.value as PlainTextOptions["font"])}>
+            <option value="monospace">Monospace</option>
+            <option value="sans">Sans-serif</option>
+            <option value="serif">Serif</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="plain-text-encoding">Encoding</Label>
+          <NativeSelect id="plain-text-encoding" aria-describedby="plain-text-encoding-hint" value={options.encoding} onChange={(event) => set("encoding", event.target.value as PlainTextOptions["encoding"])}>
+            <option value="detect">Detect</option>
+            <option value="utf8">UTF-8</option>
+            <option value="utf16le">UTF-16 LE</option>
+            <option value="utf16be">UTF-16 BE</option>
+            <option value="windows1252">Windows-1252</option>
+          </NativeSelect>
+          <p id="plain-text-encoding-hint" className="workspace-note">Pick one if characters look wrong.</p>
+        </div>
+      </div>
+      <Label htmlFor="plain-text-wrap" className="cursor-pointer">
+        <Checkbox id="plain-text-wrap" checked={options.wrapLines} onCheckedChange={(checked) => set("wrapLines", checked === true)} />
+        Wrap long lines
+      </Label>
+    </fieldset>
+  );
+};
