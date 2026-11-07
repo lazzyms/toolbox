@@ -3,14 +3,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { saveStepAppliesTo, saveStepCommands, saveStepFor } from "../src/registry/saveSteps.ts";
 import {
+  capabilityFor,
   parseCapabilityRegistry,
   SharedCapabilityRegistry,
 } from "../src/registry/capabilities.ts";
 import {
   ToolWorkspaceRegistry,
   UtilityRegistry,
+  isPdfSceneTool,
   toolsForWorkspace,
   workspaceEntries,
+  workspaceForTool,
 } from "../src/registry/index.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
@@ -30,6 +33,7 @@ test("UI capabilities are the shared native contract facts", () => {
       nativeAvailability: shared.nativeAvailability,
       outputSuffix: shared.outputSuffix,
       manyToOne: shared.manyToOne,
+      ...(shared.formatFamilies ? { formatFamilies: shared.formatFamilies } : {}),
     });
     assert.equal(
       utility.status,
@@ -56,14 +60,17 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("create_gif")?.inputCardinality, "ordered");
   assert.equal(capabilitiesByCommand.get("create_gif")?.supportsPreview, true);
   assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.supportsPreview, false);
-  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "unavailable");
+  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "available");
+  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.inputCardinality, "multiple");
+  assert.equal(capabilitiesByCommand.get("ocr_pdf")?.outputSuffix, "-ocr");
+  assert.deepEqual(capabilitiesByCommand.get("ocr_pdf")?.acceptedExtensions, [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".heic", ".tif", ".tiff"]);
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");
 });
 
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
   for (const capability of SharedCapabilityRegistry) {
-    assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
+    assert.match(capability.outputSuffix, capability.formatFamilies ? /^$/ : /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.equal(
       capability.manyToOne,
       capability.inputCardinality === "ordered",
@@ -82,14 +89,17 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
   assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-images");
+  assert.equal(suffixes.get("convert_to_pdf"), "");
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
-  const viewSources = readdirSync(new URL("../src/views/", import.meta.url))
-    .filter((name) => name.endsWith(".tsx"))
-    .map((name) => readFileSync(new URL(`../src/views/${name}`, import.meta.url), "utf8"));
+  const requestSources = ["views", "features"].flatMap((folder) =>
+    readdirSync(new URL(`../src/${folder}/`, import.meta.url), { recursive: true, encoding: "utf8" })
+      .filter((name) => /\.tsx?$/.test(name))
+      .map((name) => readFileSync(new URL(`../src/${folder}/${name}`, import.meta.url), "utf8")),
+  );
   const requestFor = (command: string) => {
-    for (const source of viewSources) {
+    for (const source of requestSources) {
       const start = source.indexOf(`invoke<ToolResult>("${command}"`);
       if (start === -1) continue;
       const open = source.indexOf("request: {", start) + "request: ".length;
@@ -153,6 +163,19 @@ test("workspace entries group editor tools into one entry and list More tools la
   assert.equal(editEntry.tools[0].id, "pdf-watermark", "a hidden tool leaves the group led by the next one");
 });
 
+test("Crop and Resize PDF is a PDF Editor batch tool that takes many PDFs", () => {
+  const crop = UtilityRegistry.find(({ id }) => id === "pdf-crop")!;
+  assert.equal(crop.title, "Crop and Resize PDF");
+  assert.equal(crop.command, "crop_pdf");
+  assert.equal(workspaceForTool("pdf-crop")?.id, "pdf-editor");
+  assert.equal(isPdfSceneTool("pdf-crop"), false, "the rail entry opens the batch view, not the page editor");
+  assert.equal(crop.capability.inputCardinality, "multiple");
+  assert.deepEqual(crop.capability.acceptedExtensions, [".pdf"]);
+  const resize = capabilityFor("resize_pdf");
+  assert.equal(resize.outputSuffix, "-resized");
+  assert.deepEqual({ ...resize, outputSuffix: "-cropped" }, capabilityFor("crop_pdf"), "Resize shares every input rule with Crop");
+});
+
 test("shared capability parsing rejects drift-prone shapes", () => {
   const valid = SharedCapabilityRegistry[0];
   assert.throws(
@@ -183,4 +206,34 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     () => parseCapabilityRegistry([{ ...valid, manyToOne: "yes" }]),
     /invalid many-to-one flag/,
   );
+});
+
+const familySamples = JSON.parse(
+  readFileSync(new URL("../shared/capability-family-samples.json", import.meta.url), "utf8"),
+);
+
+test("format families derive accepted extensions and per-family flags like the native parser", () => {
+  const { row, acceptedExtensions, families } = familySamples.valid;
+  const [capability] = parseCapabilityRegistry([row]);
+
+  assert.deepEqual(capability.acceptedExtensions, acceptedExtensions);
+  assert.deepEqual(
+    capability.formatFamilies?.map(({ id, nativeAvailability, basicFidelity }) => ({ id, nativeAvailability, basicFidelity })),
+    families,
+  );
+  assert.deepEqual(SharedCapabilityRegistry.filter((shared) => shared.formatFamilies).map(({ command }) => command), ["convert_to_pdf"]);
+  const convert = SharedCapabilityRegistry.find(({ command }) => command === "convert_to_pdf")!;
+  assert.deepEqual(convert.acceptedExtensions, convert.formatFamilies!.flatMap(({ extensions }) => extensions));
+  assert.deepEqual(
+    convert.formatFamilies!.filter(({ nativeAvailability }) => nativeAvailability === "available").map(({ id }) => id),
+    ["plain-text", "pdf", "word", "rich-text", "spreadsheets", "presentations", "markdown", "web-pages", "tables", "ebooks", "legacy-office", "mobi"],
+  );
+});
+
+test("format families reject shared extensions, empty families and mixed extension shapes", () => {
+  const { formatFamilies: _families, ...base } = familySamples.valid.row;
+  for (const [name, shape] of Object.entries(familySamples.invalid)) {
+    assert.throws(() => parseCapabilityRegistry([{ ...base, ...(shape as object) }]), Error, `${name} must be rejected`);
+  }
+  assert.throws(() => parseCapabilityRegistry([base]), /either accepted extensions or format families/);
 });

@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 use crate::kit::common::limits::{self, CancelFlag, ToolLimits};
 use crate::kit::common::JobOutcome;
-use crate::kit::contracts::{partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{is_basic_fidelity, partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io;
@@ -15,14 +15,39 @@ pub struct BatchRunner;
 #[serde(tag = "phase", rename_all = "camelCase")]
 pub enum FileEvent {
     Started { index: usize },
+    /// Pages of a multi-page file finished so far, for tools that report them.
+    Pages { index: usize, done: usize, total: usize },
     Finished { index: usize, outcome: JobOutcome },
 }
 
 /// A run's link to the view that started it. Progress goes out through the sink and a cancel comes back in by run id.
 pub struct RunEvents {
-    sink: Option<Box<dyn Fn(FileEvent) + Send + Sync>>,
-    cancel: CancelFlag,
+    sink: Option<Arc<dyn Fn(FileEvent) + Send + Sync>>,
+    cancel: RunCancel,
+}
+
+/// A cancel flag that [`cancel_run`] reaches by run id for as long as it lives.
+pub struct RunCancel {
+    flag: CancelFlag,
     run_id: Option<String>,
+}
+
+impl RunCancel {
+    pub fn unregistered() -> Self { Self { flag: CancelFlag::default(), run_id: None } }
+    pub fn register(run_id: String) -> Self {
+        let flag = CancelFlag::default();
+        running().insert(run_id.clone(), flag.clone());
+        Self { flag, run_id: Some(run_id) }
+    }
+    pub fn flag(&self) -> &CancelFlag { &self.flag }
+}
+
+impl Drop for RunCancel {
+    fn drop(&mut self) {
+        let Some(run_id) = &self.run_id else { return };
+        let mut running = running();
+        if running.get(run_id).is_some_and(|flag| flag.same_as(&self.flag)) { running.remove(run_id); }
+    }
 }
 
 static RUNNING: LazyLock<Mutex<HashMap<String, CancelFlag>>> = LazyLock::new(Default::default);
@@ -39,27 +64,21 @@ pub fn cancel_run(run_id: &str) -> bool {
 pub const CANCELLED_BEFORE_START: &str = "Cancelled before it started";
 
 impl RunEvents {
-    pub fn silent() -> Self { Self { sink: None, cancel: CancelFlag::default(), run_id: None } }
+    pub fn silent() -> Self { Self { sink: None, cancel: RunCancel::unregistered() } }
     pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        Self { sink: Some(Box::new(sink)), cancel: CancelFlag::default(), run_id: None }
+        Self { sink: Some(Arc::new(sink)), cancel: RunCancel::unregistered() }
     }
     pub fn for_run(run_id: String, sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        let cancel = CancelFlag::default();
-        running().insert(run_id.clone(), cancel.clone());
-        Self { sink: Some(Box::new(sink)), cancel, run_id: Some(run_id) }
+        Self { sink: Some(Arc::new(sink)), cancel: RunCancel::register(run_id) }
     }
     fn emit(&self, event: FileEvent) { if let Some(sink) = &self.sink { sink(event) } }
+    fn page_sink(&self, index: usize) -> Option<limits::PageSink> {
+        let sink = Arc::clone(self.sink.as_ref()?);
+        Some(Arc::new(move |done, total| sink(FileEvent::Pages { index, done, total })))
+    }
     fn settled(&self, index: usize, outcome: &JobOutcome) {
         self.emit(FileEvent::Started { index });
         self.emit(FileEvent::Finished { index, outcome: outcome.clone() });
-    }
-}
-
-impl Drop for RunEvents {
-    fn drop(&mut self) {
-        let Some(run_id) = &self.run_id else { return };
-        let mut running = running();
-        if running.get(run_id).is_some_and(|flag| flag.same_as(&self.cancel)) { running.remove(run_id); }
     }
 }
 
@@ -94,12 +113,34 @@ impl BatchRunner {
         R: Send + Sync + 'static,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
+        Self::run_limited(events, command, inputs, location, move |_| limits, request, job)
+    }
+
+    /// For a command whose limits depend on the input, such as Convert to PDF, which takes many formats.
+    pub fn run_limited<R, L, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: &OutputLocation,
+        limits_for: L,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        L: Fn(&Path) -> Option<ToolLimits> + Sync,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        // Every result for a file read in basic fidelity says so, whichever way the file settled.
+        let label = |outcome: JobOutcome| {
+            if is_basic_fidelity(command, &outcome.input_path) { outcome.with_basic_fidelity() } else { outcome }
+        };
         // rayon::into_par_iter automatically uses the system core count for the thread pool,
         // matching the original Swift `ProcessInfo.processInfo.activeProcessorCount` behavior.
         match partition_command_inputs(command, &inputs) {
             Ok(validation) => {
                 let mut outcomes = vec![None; inputs.len()];
-                for (index, outcome) in validation.rejected { outcomes[index] = Some(outcome); }
+                for (index, outcome) in validation.rejected { outcomes[index] = Some(label(outcome)); }
                 let mut writable = HashMap::new();
                 let mut runnable = Vec::with_capacity(validation.accepted.len());
                 for (index, path) in validation.accepted {
@@ -108,10 +149,10 @@ impl BatchRunner {
                     if is_writable {
                         runnable.push((index, path));
                     } else {
-                        outcomes[index] = Some(JobOutcome::failure(
+                        outcomes[index] = Some(label(JobOutcome::failure(
                             path,
                             ToolError::processing(READ_ONLY_OUTPUT_MESSAGE).with_pointer(OutcomePointer::OutputFolder),
-                        ));
+                        )));
                     }
                 }
                 for (index, outcome) in outcomes.iter().enumerate() {
@@ -119,26 +160,26 @@ impl BatchRunner {
                 }
                 let job = Arc::new(job);
                 let processed = runnable.into_par_iter().map(|(index, path)| {
-                    if events.cancel.is_cancelled() {
-                        let outcome = JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START));
+                    if events.cancel.flag().is_cancelled() {
+                        let outcome = label(JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START)));
                         events.settled(index, &outcome);
                         return (index, outcome);
                     }
                     events.emit(FileEvent::Started { index });
-                    let outcome = match limits {
+                    let outcome = label(match limits_for(&path) {
                         Some(limits) => {
                             let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                            limits.run_each(path, &events.cancel, move |path| job(&request, path))
+                            limits.run_each(path, events.cancel.flag(), events.page_sink(index), move |path| job(&request, path))
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
-                    };
+                    });
                     events.emit(FileEvent::Finished { index, outcome: outcome.clone() });
                     (index, outcome)
                 }).collect::<Vec<_>>();
                 for (index, outcome) in processed { outcomes[index] = Some(outcome); }
                 outcomes.into_iter().map(Option::unwrap).collect()
             }
-            Err(outcomes) => outcomes,
+            Err(outcomes) => outcomes.into_iter().map(label).collect(),
         }
     }
 }
@@ -190,6 +231,10 @@ mod tests {
         assert_eq!(finished["phase"], "finished");
         assert_eq!(finished["index"], 0);
         assert_eq!(finished["outcome"], serde_json::to_value(&outcome).unwrap());
+        assert_eq!(
+            serde_json::to_value(FileEvent::Pages { index: 1, done: 3, total: 9 }).unwrap(),
+            serde_json::json!({ "phase": "pages", "index": 1, "done": 3, "total": 9 }),
+        );
     }
 
     #[test]
