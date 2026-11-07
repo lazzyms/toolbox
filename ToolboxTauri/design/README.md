@@ -111,6 +111,20 @@ the board changed first.
 | [ExtractGif](boards/ExtractGif.dc.html) | Extract GIF frames | [default](screens/ExtractGif--default.jpg) |
 | [TiffPages](boards/TiffPages.dc.html) | TIFF Pages: split or combine | [default](screens/TiffPages--default.jpg), [mode-combine](screens/TiffPages--mode-combine.jpg) |
 
+### Media creation tools
+
+These boards replace AppIcons, CreateGif, ExtractGif and TiffPages above. The canvas notes beside them answer the design questions in #634.
+
+| Board | What it shows | States |
+|---|---|---|
+| [MediaEmpty](boards/MediaEmpty.dc.html) | Media creation: empty drop target per tool, backlog tools hidden | [default](screens/MediaEmpty--default.jpg), [tool-create-gif](screens/MediaEmpty--tool-create-gif.jpg), [tool-extract-gif-frames](screens/MediaEmpty--tool-extract-gif-frames.jpg), [tool-tiff-pages](screens/MediaEmpty--tool-tiff-pages.jpg), [dragging-true](screens/MediaEmpty--dragging-true.jpg) |
+| [MediaIcons](boards/MediaIcons.dc.html) | App Icon Set: masters, presets, sizes, pad or crop, contact sheet | [default](screens/MediaIcons--default.jpg), [preset-iphone-and-ipad](screens/MediaIcons--preset-iphone-and-ipad.jpg), [preset-android](screens/MediaIcons--preset-android.jpg), [preset-website](screens/MediaIcons--preset-website.jpg), [preset-custom-sizes](screens/MediaIcons--preset-custom-sizes.jpg), [square-crop-to-centre](screens/MediaIcons--square-crop-to-centre.jpg), [sizeOff-true](screens/MediaIcons--sizeOff-true.jpg) |
+| [MediaGif](boards/MediaGif.dc.html) | Create GIF: frame strip, delays, reorder, preview, save dialog | [default](screens/MediaGif--default.jpg), [step-own-delay](screens/MediaGif--step-own-delay.jpg), [step-dragging](screens/MediaGif--step-dragging.jpg), [step-save-dialog](screens/MediaGif--step-save-dialog.jpg), [largeGif-true](screens/MediaGif--largeGif-true.jpg) |
+| [MediaExtract](boards/MediaExtract.dc.html) | Extract GIF Frames: GIFs added, frames, timings, not added | [default](screens/MediaExtract--default.jpg), [notAdded-true](screens/MediaExtract--notAdded-true.jpg) |
+| [MediaTiff](boards/MediaTiff.dc.html) | TIFF Pages: Split files, Combine page grid, save dialog | [default](screens/MediaTiff--default.jpg), [step-combine](screens/MediaTiff--step-combine.jpg), [step-combine-save-dialog](screens/MediaTiff--step-combine-save-dialog.jpg) |
+| [MediaRunning](boards/MediaRunning.dc.html) | Running: per-file progress, locked options, Cancel | [default](screens/MediaRunning--default.jpg), [tool-create-gif](screens/MediaRunning--tool-create-gif.jpg), [tool-extract-gif-frames](screens/MediaRunning--tool-extract-gif-frames.jpg), [tool-tiff-pages](screens/MediaRunning--tool-tiff-pages.jpg) |
+| [MediaResults](boards/MediaResults.dc.html) | Results: grouped outputs, Succeeded, Skipped and Failed | [default](screens/MediaResults--default.jpg), [tool-create-gif](screens/MediaResults--tool-create-gif.jpg), [tool-create-gif-failed](screens/MediaResults--tool-create-gif-failed.jpg), [tool-extract-gif-frames](screens/MediaResults--tool-extract-gif-frames.jpg), [tool-tiff-split](screens/MediaResults--tool-tiff-split.jpg), [tool-tiff-combine](screens/MediaResults--tool-tiff-combine.jpg) |
+
 ### File Security
 
 | Board | What it shows | States |
