@@ -32,7 +32,14 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                 if (command === "check_output_folder") return "ready";
                 if (command === "plugin:dialog|open") return win.__dialogResults.shift() ?? null;
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
-                if (command === "inspect_image_preview") return { width: 640, height: 480, dataUrl: blankImage };
+                if (command === "inspect_image_preview") {
+                    // Icon masters say their shape in their name, so the square preview has real dimensions to work with.
+                    const { path } = (args as { request: { path: string } }).request;
+                    if (path.includes("wide")) return { width: 1600, height: 900, dataUrl: blankImage };
+                    if (path.includes("tall")) return { width: 300, height: 1400, dataUrl: blankImage };
+                    if (path.includes("square")) return { width: 1024, height: 1024, dataUrl: blankImage };
+                    return { width: 640, height: 480, dataUrl: blankImage };
+                }
                 if (command === "inspect_tiff_pages") {
                     const { path } = (args as { request: { path: string } }).request;
                     return Array.from({ length: path.endsWith("two-page.tiff") ? 2 : 1 }, () => ({ width: 640, height: 480, dataUrl: blankImage }));
@@ -98,6 +105,7 @@ test.describe("Media requests", () => {
             paths: ["/local/art/logo.png"],
             preset: "macos",
             sizes: [16, 32, 128, 256, 512, 1024],
+            squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
 
@@ -106,6 +114,7 @@ test.describe("Media requests", () => {
             paths: ["/local/art/logo.png"],
             preset: "ios",
             sizes: [20, 29, 40, 60, 76, 83, 1024],
+            squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
 
@@ -117,6 +126,7 @@ test.describe("Media requests", () => {
             paths: ["/local/art/logo.png"],
             preset: "favicon",
             sizes: [16, 32, 64, 128, 256],
+            squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
     });
@@ -136,8 +146,71 @@ test.describe("Media requests", () => {
             paths: ["/local/art/app-icon.png", "/local/art/brand-mark.png", "/local/art/launcher.webp"],
             preset: "macos",
             sizes: [16, 32, 128, 256, 512, 1024],
+            squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
+    });
+
+    test("App Icon Set previews the square rule on the focused master and sends the rule", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, ["/local/art/brand-mark-wide.png", "/local/art/poster-tall.png", "/local/art/app-icon-square.png"]);
+
+        const preview = page.getByRole("region", { name: "Preview" });
+        const rule = page.getByRole("radiogroup", { name: "Non-square images" });
+        const pad = rule.getByRole("radio", { name: "Pad with transparency" });
+        const crop = rule.getByRole("radio", { name: "Crop to centre" });
+        const square = preview.getByRole("img", { name: /brand-mark-wide\.png/ });
+        await expect(preview).toContainText("brand-mark-wide.png");
+        await expect(pad).toHaveAttribute("aria-checked", "true");
+        await expect(square).toHaveAccessibleName("brand-mark-wide.png padded to a transparent 1600-pixel square");
+        await expect(square).toHaveAttribute("data-square-rule", "pad");
+        await expect(square.locator("img")).toHaveCSS("object-fit", "contain");
+        await expect(rule).toHaveAccessibleDescription("The whole image is centred on a transparent square of 1600 pixels. Applies to every non-square image in this run. Images are never stretched.");
+        await expect(preview.getByRole("status")).toHaveCount(0);
+        expect(await runOnce(page, "generate_icon_set")).toMatchObject({ request: { squareRule: "pad" } });
+
+        await crop.click();
+        await expect(crop).toHaveAttribute("aria-checked", "true");
+        await expect(pad).toHaveAttribute("aria-checked", "false");
+        await expect(square).toHaveAccessibleName("brand-mark-wide.png cropped to its centred 900-pixel square");
+        await expect(square).toHaveAttribute("data-square-rule", "crop");
+        await expect(square.locator("img")).toHaveCSS("object-fit", "cover");
+        await expect(rule).toHaveAccessibleDescription("The centred 900-pixel square is kept. The left and right edges are cut off. Applies to every non-square image in this run. Images are never stretched.");
+        await expect(preview.getByRole("status")).toHaveText("The crop is 900 pixels, so the 1024 size will be upscaled.");
+        expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
+            paths: ["/local/art/brand-mark-wide.png", "/local/art/poster-tall.png", "/local/art/app-icon-square.png"],
+            preset: "macos",
+            sizes: [16, 32, 128, 256, 512, 1024],
+            squareRule: "crop",
+            outputLocation: "alongsideInput",
+        } });
+
+        // Focusing another master previews the same rule on it.
+        await page.getByRole("listbox").getByRole("option", { name: /poster-tall\.png/ }).click();
+        const tall = preview.getByRole("img", { name: /poster-tall\.png/ });
+        await expect(tall).toHaveAccessibleName("poster-tall.png cropped to its centred 300-pixel square");
+        await expect(rule).toHaveAccessibleDescription("The centred 300-pixel square is kept. The top and bottom edges are cut off. Applies to every non-square image in this run. Images are never stretched.");
+        await expect(preview.getByRole("status")).toHaveText("The crop is 300 pixels, so sizes above 300 will be upscaled.");
+        await pad.click();
+        await expect(tall).toHaveAccessibleName("poster-tall.png padded to a transparent 1400-pixel square");
+        await expect(tall.locator("img")).toHaveCSS("object-fit", "contain");
+        await expect(preview.getByRole("status")).toHaveCount(0);
+
+        // A square master is used as it is, whichever rule is chosen.
+        await page.getByRole("listbox").getByRole("option", { name: /app-icon-square\.png/ }).click();
+        const already = preview.getByRole("img", { name: /app-icon-square\.png/ });
+        await expect(already).toHaveAccessibleName("app-icon-square.png, already square");
+        await crop.click();
+        await expect(already).toHaveAccessibleName("app-icon-square.png, already square");
+        await expect(rule).toHaveAccessibleDescription("app-icon-square.png is already square, so it is used as it is. The rule applies to every non-square image in this run. Images are never stretched.");
+        await expect(preview.getByRole("status")).toHaveCount(0);
+
+        expect(await invocationsOf(page, "inspect_image_preview")).toEqual(expect.arrayContaining([
+            { request: { path: "/local/art/brand-mark-wide.png" } },
+            { request: { path: "/local/art/poster-tall.png" } },
+            { request: { path: "/local/art/app-icon-square.png" } },
+        ]));
     });
 
     test("App Icon Set shows each master's own result, with its folder or the size that failed", async ({ page }) => {

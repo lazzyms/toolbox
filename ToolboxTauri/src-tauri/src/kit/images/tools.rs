@@ -361,7 +361,18 @@ pub struct IconSetRequest {
     pub paths: Vec<PathBuf>,
     #[serde(default = "default_icon_preset")] pub preset: String,
     #[serde(default)] pub sizes: Vec<u32>,
+    #[serde(default)] pub square_rule: SquareRule,
     pub output_location: OutputLocation,
+}
+/// How a non-square master becomes square before its sizes are made. A master is never stretched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SquareRule {
+    /// Centre the whole image on a transparent square of its longer side.
+    #[default]
+    Pad,
+    /// Keep the largest centred square.
+    Crop,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -653,7 +664,7 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
 fn icon_set_with(request: &IconSetRequest, input: PathBuf, mut save: impl FnMut(&DynamicImage, &Path) -> Result<(), String>) -> JobOutcome {
     let plan = match icon_plan(&request.preset, &request.sizes) { Ok(plan) => plan, Err(error) => return failure(input, error) };
     let master = match crate::kit::images::decode(&input) {
-        Ok(source) => DynamicImage::ImageRgba8(source.into_first_page().to_rgba8()),
+        Ok(source) => square_master(source.into_first_page().to_rgba8(), request.square_rule),
         Err(_) => return failure(input.clone(), format!("Not a readable {} image. The file may be damaged. Nothing was saved.", image_kind(&input))),
     };
     let folder = match OutputNaming::reserve_staged_folder(&input, &request.output_location, ICON_SET_SUFFIX) {
@@ -688,6 +699,25 @@ fn icon_set_with(request: &IconSetRequest, input: PathBuf, mut save: impl FnMut(
 }
 
 const ICON_SET_SUFFIX: &str = "-icons";
+
+/// Makes the master square by the run's rule, so every size keeps the master's pixel aspect.
+/// A square master is returned as it is.
+fn square_master(master: image::RgbaImage, rule: SquareRule) -> DynamicImage {
+    let (width, height) = master.dimensions();
+    if width == height { return DynamicImage::ImageRgba8(master); }
+    match rule {
+        SquareRule::Pad => {
+            let side = width.max(height);
+            let mut square = image::RgbaImage::from_pixel(side, side, Rgba([0, 0, 0, 0]));
+            image::imageops::replace(&mut square, &master, i64::from((side - width) / 2), i64::from((side - height) / 2));
+            DynamicImage::ImageRgba8(square)
+        }
+        SquareRule::Crop => {
+            let side = width.min(height);
+            DynamicImage::ImageRgba8(image::imageops::crop_imm(&master, (width - side) / 2, (height - side) / 2, side, side).to_image())
+        }
+    }
+}
 
 fn image_kind(path: &Path) -> &'static str {
     match crate::kit::images::ImageFamily::of(path) {
@@ -1290,7 +1320,7 @@ mod tests {
     }
 
     fn icon_request(paths: &[PathBuf], preset: &str, sizes: Vec<u32>) -> IconSetRequest {
-        IconSetRequest { paths: paths.to_vec(), preset: preset.to_string(), sizes, output_location: OutputLocation::AlongsideInput }
+        IconSetRequest { paths: paths.to_vec(), preset: preset.to_string(), sizes, square_rule: SquareRule::Pad, output_location: OutputLocation::AlongsideInput }
     }
 
     fn entry_names(folder: &Path) -> BTreeSet<String> {
@@ -1406,6 +1436,127 @@ mod tests {
         assert_eq!(entry_names(&root), BTreeSet::from(["good.png", "damaged.webp", "good-icons"].map(String::from)));
         assert_eq!(std::fs::read(&corrupt).unwrap(), b"RIFF\x10\0\0\0WEBPnot really an image");
         assert_eq!(std::fs::read(&good).unwrap(), original);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Orientation { Wide, Tall }
+
+    const STRIP_RED: [u8; 3] = [220, 40, 40];
+    const STRIP_BLUE: [u8; 3] = [40, 60, 220];
+    const STRIP_GREEN: [u8; 3] = [40, 200, 80];
+
+    /// A 2:1 master, 128 by 64 (wide) or 64 by 128 (tall). Along its long side it has a
+    /// transparent strip, then red, blue and green strips, 32 pixels each.
+    fn write_non_square_master(path: &Path, orientation: Orientation) -> Vec<u8> {
+        let strip = |along: u32| match along / 32 {
+            0 => image::Rgba([0, 0, 0, 0]),
+            1 => image::Rgba([STRIP_RED[0], STRIP_RED[1], STRIP_RED[2], 255]),
+            2 => image::Rgba([STRIP_BLUE[0], STRIP_BLUE[1], STRIP_BLUE[2], 255]),
+            _ => image::Rgba([STRIP_GREEN[0], STRIP_GREEN[1], STRIP_GREEN[2], 255]),
+        };
+        let master = match orientation {
+            Orientation::Wide => image::RgbaImage::from_fn(128, 64, |x, _| strip(x)),
+            Orientation::Tall => image::RgbaImage::from_fn(64, 128, |_, y| strip(y)),
+        };
+        master.save(path).unwrap();
+        std::fs::read(path).unwrap()
+    }
+
+    /// The pixel `along` the master's long axis and `across` it, so one check fits both orientations.
+    fn pixel_at(icon: &image::RgbaImage, orientation: Orientation, along: u32, across: u32) -> image::Rgba<u8> {
+        match orientation { Orientation::Wide => *icon.get_pixel(along, across), Orientation::Tall => *icon.get_pixel(across, along) }
+    }
+
+    fn is_colour(pixel: image::Rgba<u8>, colour: [u8; 3]) -> bool {
+        pixel[3] == 255 && pixel.0[..3].iter().zip(colour).all(|(channel, expected)| channel.abs_diff(expected) <= 12)
+    }
+
+    fn square_icon(root: &Path, orientation: Orientation, rule: SquareRule, size: u32) -> (image::RgbaImage, Vec<u8>, PathBuf) {
+        let name = format!("{orientation:?}-{rule:?}").to_lowercase();
+        let input = root.join(format!("{name}.png"));
+        let original = write_non_square_master(&input, orientation);
+        let request = IconSetRequest { square_rule: rule, ..icon_request(std::slice::from_ref(&input), "custom", vec![size]) };
+        let outcome = icon_set(&request, input.clone());
+        assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+        let icon = image::open(root.join(format!("{name}-icons/custom/custom-{size}.png"))).unwrap();
+        assert_eq!(icon.color(), image::ColorType::Rgba8, "{name}");
+        (icon.to_rgba8(), original, input)
+    }
+
+    #[test]
+    fn the_square_rule_defaults_to_pad_when_the_request_leaves_it_out() {
+        let request: IconSetRequest = serde_json::from_value(serde_json::json!({ "paths": ["/m.png"], "preset": "macos", "outputLocation": "alongsideInput" })).unwrap();
+        assert_eq!(request.square_rule, SquareRule::Pad);
+        let request: IconSetRequest = serde_json::from_value(serde_json::json!({ "paths": ["/m.png"], "squareRule": "crop", "outputLocation": "alongsideInput" })).unwrap();
+        assert_eq!(request.square_rule, SquareRule::Crop);
+        assert!(serde_json::from_value::<IconSetRequest>(serde_json::json!({ "paths": ["/m.png"], "squareRule": "stretch", "outputLocation": "alongsideInput" })).is_err());
+    }
+
+    #[test]
+    fn pad_centres_the_whole_non_square_master_on_a_transparent_square_without_stretching() {
+        let root = icon_root("square_pad");
+        for orientation in [Orientation::Wide, Orientation::Tall] {
+            // The 128 px square is halved to 64, so the 64 px tall band becomes rows 16 to 47.
+            let (icon, original, input) = square_icon(&root, orientation, SquareRule::Pad, 64);
+            assert_eq!(icon.dimensions(), (64, 64), "{orientation:?}");
+            for along in [4, 24, 40, 60] {
+                assert_eq!(pixel_at(&icon, orientation, along, 2)[3], 0, "{orientation:?}: padding before the image at {along}");
+                assert_eq!(pixel_at(&icon, orientation, along, 61)[3], 0, "{orientation:?}: padding after the image at {along}");
+            }
+            assert_eq!(pixel_at(&icon, orientation, 4, 32)[3], 0, "{orientation:?}: the master's own transparent strip is kept");
+            assert!(is_colour(pixel_at(&icon, orientation, 24, 32), STRIP_RED), "{orientation:?}: red strip");
+            assert!(is_colour(pixel_at(&icon, orientation, 40, 32), STRIP_BLUE), "{orientation:?}: blue strip");
+            assert!(is_colour(pixel_at(&icon, orientation, 60, 32), STRIP_GREEN), "{orientation:?}: the far edge is kept");
+            // Aspect: the image is twice as long as it is deep. A stretched master would fill all 64 pixels.
+            let depth = (0..64).filter(|across| pixel_at(&icon, orientation, 40, *across)[3] > 127).count();
+            assert!((31..=33).contains(&depth), "{orientation:?}: the image is {depth} pixels deep, not 32");
+            let length = (0..64).filter(|along| pixel_at(&icon, orientation, *along, 32)[3] > 127).count();
+            assert!((47..=49).contains(&length), "{orientation:?}: the opaque strips are {length} pixels long, not 48");
+            assert_eq!(std::fs::read(&input).unwrap(), original, "{orientation:?}: the original is unchanged");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn centre_crop_keeps_the_largest_centred_square_without_stretching() {
+        let root = icon_root("square_crop");
+        for orientation in [Orientation::Wide, Orientation::Tall] {
+            // The centred 64 px square holds the red and blue strips only.
+            let (icon, original, input) = square_icon(&root, orientation, SquareRule::Crop, 64);
+            assert_eq!(icon.dimensions(), (64, 64), "{orientation:?}");
+            for across in [0, 32, 63] {
+                assert!(is_colour(pixel_at(&icon, orientation, 1, across), STRIP_RED), "{orientation:?}: red reaches the near edge at {across}");
+                assert!(is_colour(pixel_at(&icon, orientation, 62, across), STRIP_BLUE), "{orientation:?}: blue reaches the far edge at {across}");
+            }
+            // Aspect: each strip keeps its 32 px length. A stretched master would squeeze them to 16 and show green.
+            let red = (0..64).filter(|along| is_colour(pixel_at(&icon, orientation, *along, 32), STRIP_RED)).count();
+            assert!((31..=33).contains(&red), "{orientation:?}: the red strip is {red} pixels long, not 32");
+            assert!(icon.pixels().all(|pixel| pixel[3] == 255), "{orientation:?}: the transparent strip is cut off");
+            assert!(!icon.pixels().any(|pixel| is_colour(*pixel, STRIP_GREEN)), "{orientation:?}: the green strip is cut off");
+            assert_eq!(std::fs::read(&input).unwrap(), original, "{orientation:?}: the original is unchanged");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_square_master_is_unaffected_by_the_square_rule() {
+        let root = icon_root("square_master");
+        let input = root.join("square.png");
+        let original = write_master(&input);
+        let mut saved = Vec::new();
+        for rule in [SquareRule::Pad, SquareRule::Crop] {
+            let request = IconSetRequest { square_rule: rule, ..icon_request(std::slice::from_ref(&input), "custom", vec![32, 64]) };
+            let outcome = icon_set(&request, input.clone());
+            assert!(outcome.error().is_none(), "{rule:?}");
+            let set = outcome.output_paths()[0].clone();
+            saved.push([32, 64].map(|size| std::fs::read(set.join(format!("custom/custom-{size}.png"))).unwrap()));
+            std::fs::remove_dir_all(set).unwrap();
+        }
+        assert_eq!(saved[0], saved[1], "pad and centre-crop make the same icons from a square master");
+        let full = image::load_from_memory(&saved[0][1]).unwrap().to_rgba8();
+        assert_eq!(full, image::open(&input).unwrap().to_rgba8(), "the 64 px icon of a 64 px square master is the master itself");
+        assert_eq!(std::fs::read(&input).unwrap(), original);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -687,7 +687,7 @@ mod command_tests {
     use crate::kit::common::OutputLocation;
     use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
     use crate::kit::contracts::{ErrorKind, LimitKind};
-    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::images::tools::{CropRequest, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, SquareRule, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, EditPdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RangedPageScope, RedactPdfRequest, ResizeOrientation, ResizePdfRequest, ResizePlacement, RotatePage, SignPdfRequest, TargetSize};
     use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfWatermarkRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode};
@@ -3897,14 +3897,14 @@ mod command_tests {
         outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into(), output_location: location(&root, "crop image") }))));
-        let icon_outputs = named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") })));
+        let icon_outputs = named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], square_rule: SquareRule::Pad, output_location: location(&root, "icons") })));
         assert_eq!(icon_outputs.len(), 1, "an icon set is one folder per master");
         assert_eq!(std::fs::read_dir(&icon_outputs[0]).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>(), ["web"]);
         assert_eq!(std::fs::read_dir(icon_outputs[0].join("web")).unwrap().count(), 6, "the Website preset saves its six sizes");
         outputs.extend(icon_outputs);
         // Several masters run as one batch: each gets its own folder, and a damaged one fails alone.
         let damaged_master = root.join("damaged-master.png"); std::fs::write(&damaged_master, b"\x89PNG\r\n\x1a\nnot an image").unwrap();
-        let icon_batch = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone(), damaged_master.clone(), image_two.clone()], preset: "macos".into(), sizes: vec![], output_location: location(&root, "icon batch") }));
+        let icon_batch = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone(), damaged_master.clone(), image_two.clone()], preset: "macos".into(), sizes: vec![], square_rule: SquareRule::Crop, output_location: location(&root, "icon batch") }));
         let icon_batch_folder = root.join("icon batch");
         assert_eq!(icon_batch.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [image.clone(), damaged_master.clone(), image_two.clone()]);
         assert_eq!(icon_batch[0].output_paths(), [icon_batch_folder.join("image-icons")]);
@@ -3915,6 +3915,15 @@ mod command_tests {
         assert_eq!(batch_entries, ["image-icons", "image-two-icons"], "a failed master leaves nothing behind");
         for set in ["image-icons", "image-two-icons"] { assert_eq!(std::fs::read_dir(icon_batch_folder.join(set).join("macos")).unwrap().count(), 7, "six macOS sizes and the ICNS"); }
         assert_eq!(std::fs::read(&damaged_master).unwrap(), b"\x89PNG\r\n\x1a\nnot an image");
+        // A wide master is never stretched: centre-crop keeps its centred square, pixel for pixel.
+        let wide_master = root.join("wide-master.png");
+        let wide = image::RgbaImage::from_fn(96, 48, |x, y| Rgba([(x * 2) as u8, (y * 4) as u8, 90, 255]));
+        wide.save(&wide_master).unwrap();
+        let wide_bytes = std::fs::read(&wide_master).unwrap();
+        let cropped = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![wide_master.clone()], preset: "custom".into(), sizes: vec![48], square_rule: SquareRule::Crop, output_location: location(&root, "icon crop") }));
+        let cropped_icon = image::open(cropped[0].output_paths()[0].join("custom/custom-48.png")).unwrap().to_rgba8();
+        assert_eq!(cropped_icon, image::imageops::crop_imm(&wide, 24, 0, 48, 48).to_image(), "centre-crop keeps the centred 48 px square");
+        assert_eq!(std::fs::read(&wide_master).unwrap(), wide_bytes);
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
         outputs.extend(named(&mut naming, "watermark_images", image.clone(), assert_success("watermark image", watermark_images(RunEvents::silent(), WatermarkRequest { paths: vec![image.clone()], options: WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: None, opacity: 70, color: None, position: Some(WatermarkPosition::Offset { x: 16, y: 16 }), rotation: 0.0 }, output_location: location(&root, "watermark image") }))));
