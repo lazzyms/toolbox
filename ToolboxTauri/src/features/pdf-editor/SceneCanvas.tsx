@@ -1,9 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from 'react';
+import { Checkbox } from '../../components/ui/checkbox';
 import { Input } from '../../components/ui/input';
+import { NativeSelect, NativeSelectOption } from '../../components/ui/native-select';
+import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { Textarea } from '../../components/ui/textarea';
-import { notEditableReasons, overflowMessage, textOverflowWords, visibleBounds } from './scene';
-import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneShape, WatermarkPattern } from './scene';
+import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
+import type { PdfFormField, PdfFormWidget } from './contracts';
+import { headerFooterBands, isRangedKind, notEditableReasons, overflowMessage, textOverflowWords, visibleBounds, watermarkBounds, watermarkMarks } from './scene';
+import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneShape } from './scene';
 import './scene-canvas.css';
 
 export function sceneTransform(page: ScenePage) {
@@ -20,16 +25,22 @@ export function sceneTransform(page: ScenePage) {
 }
 
 type Gesture = { pointerId: number; start: ScenePoint; base: ScenePage; next: ScenePage;
-  mode: 'create' | 'move' | 'resize' | 'crop' | 'text-selection' | 'pan'; id?: string; corner?: string; points: ScenePoint[]; changed: boolean;
+  mode: 'create' | 'move' | 'resize' | 'crop' | 'text-selection' | 'pan' | 'redact'; id?: string; corner?: string; points: ScenePoint[]; changed: boolean;
   clientStart?: ScenePoint; scrollStart?: ScenePoint };
 const rectangle = (a: ScenePoint, b: ScenePoint): SceneRect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.max(1, Math.abs(a.x - b.x)), height: Math.max(1, Math.abs(a.y - b.y)) });
+// Drags a corner to p while the opposite corner stays put; signatures keep their proportions.
+function cornerRect(r: SceneRect, corner: string, p: ScenePoint, keepRatio: boolean): SceneRect {
+  const anchor = { x: corner.includes('w') ? r.x + r.width : r.x, y: corner.includes('n') ? r.y + r.height : r.y };
+  if (!keepRatio) return rectangle(anchor, p);
+  const sx = Math.abs(p.x - anchor.x) / r.width, sy = Math.abs(p.y - anchor.y) / r.height;
+  const scale = Math.abs(sx - 1) >= Math.abs(sy - 1) ? sx : sy;
+  const width = Math.max(1, r.width * scale), height = Math.max(1, r.height * scale);
+  return { x: p.x < anchor.x ? anchor.x - width : anchor.x, y: p.y < anchor.y ? anchor.y - height : anchor.y, width, height };
+}
 
 const cssFont = (font?: string) => font?.startsWith('Noto') ? `"Toolbox ${font}", ${font.endsWith('Mono') ? 'monospace' : font.endsWith('Serif') ? 'serif' : 'sans-serif'}`
-  : font === 'Satisfy' ? 'Toolbox Satisfy, cursive'
   : font === 'Pacifico' ? 'Toolbox Pacifico, cursive'
     : font?.startsWith('Times') ? 'Times New Roman, serif' : font?.startsWith('Courier') ? 'Courier New, monospace' : 'Helvetica, Arial, sans-serif';
-const fontWeight = (font?: string) => font?.includes('Bold') ? 700 : 400;
-const fontStyle = (font?: string) => font?.includes('Oblique') || font?.includes('Italic') ? 'italic' : 'normal';
 
 function shapeArtwork(shape: SceneShape | undefined, r: SceneRect, color: string, opacity: number) {
   const selected = shape ?? 'square';
@@ -59,30 +70,43 @@ function shapeArtwork(shape: SceneShape | undefined, r: SceneRect, color: string
   return <rect {...r} {...common} />;
 }
 
-function watermarkPlacements(page: ScenePage, object: SceneObject): { x: number; y: number; angle: number }[] {
-  const area = visibleBounds(page);
-  const anchor = object.rect;
-  const pattern: WatermarkPattern = object.watermarkPattern ?? 'across-page';
-  const textWidth = Math.max(1, object.text.length) * object.fontSize * 0.6;
-  const centerX = anchor.x + anchor.width / 2, centerY = anchor.y + anchor.height / 2;
-  if (pattern === 'bottom-right-to-top-left') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: -45 }];
-  if (pattern === 'top-right-to-bottom-left') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: 45 }];
-  if (pattern === 'center-horizontal') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: 0 }];
-  if (pattern === 'center-vertical') return [{ x: centerX - textWidth / 2, y: centerY + object.fontSize / 2, angle: 90 }];
-  const stepX = Math.max(100, textWidth + object.fontSize * 2), stepY = Math.max(80, object.fontSize * 4);
-  const placements: { x: number; y: number; angle: number }[] = [];
-  const offsetX = anchor.x - (area.x + area.width * 0.14);
-  const offsetY = anchor.y - (area.y + area.height * 0.33);
-  for (let y = area.y - area.height + offsetY; y <= area.y + area.height * 2 + offsetY; y += stepY) {
-    const offset = Math.round((y - (area.y + offsetY)) / stepY) * stepX * 0.45;
-    for (let x = area.x - area.width + offsetX + offset; x <= area.x + area.width * 2 + offsetX; x += stepX) placements.push({ x, y, angle: -35 });
-  }
-  return placements;
+function WatermarkArtwork({ page, object }: { page: ScenePage; object: SceneObject }) {
+  const options = object.watermark;
+  if (!options) return null;
+  const { width, height, rotation, centers } = watermarkMarks(visibleBounds(page), object);
+  const opacity = options.opacity / 100;
+  if (options.logoPath) return object.watermarkPreview ? <g opacity={opacity}>
+    {centers.map(({ x, y }, index) => <image key={index} href={object.watermarkPreview ?? undefined} x={x - width / 2} y={y - height / 2} width={width} height={height}
+      transform={`rotate(${rotation} ${x} ${y})`} preserveAspectRatio="none" />)}
+  </g> : null;
+  const lines = (options.text ?? '').split('\n');
+  const fontSize = height / lines.length / 1.2;
+  return <g fill={options.color ?? '#000000'} opacity={opacity} fontSize={fontSize} fontFamily={cssFont(object.fontFamily ?? 'Noto Sans')} fontWeight={object.bold ? 700 : 400} textAnchor="middle">
+    {centers.map(({ x, y }, index) => <text key={index} transform={`rotate(${rotation} ${x} ${y})`} x={x} y={y - height / 2} dominantBaseline="hanging">
+      {lines.map((line, i) => <tspan key={i} x={x} dy={i ? fontSize * 1.2 : 0}>{line}</tspan>)}
+    </text>)}
+  </g>;
 }
 
 function resizedObject(object: SceneObject, rect: SceneRect, original: SceneObject): SceneObject {
   if (object.kind === 'watermark') return original;
   return { ...object, rect };
+}
+
+// Mirrors the exporter: the name is drawn at 96 pt with 8 pt padding and fitted inside the box.
+export function TypedSignature({ text, color, ...box }: { text: string; color: string; x?: number; y?: number; width: number | string; height: number | string; opacity?: number }) {
+  const lines = text.split('\n');
+  const context = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d');
+  if (context) context.font = '96px "Toolbox Pacifico", cursive';
+  const measure = (line: string) => context?.measureText(line);
+  const ascent = measure('Ag')?.fontBoundingBoxAscent || 125, descent = measure('Ag')?.fontBoundingBoxDescent || 36;
+  const lineHeight = Math.max(ascent + descent, 105.6);
+  const width = Math.max(...lines.map(line => measure(line)?.width ?? line.length * 48)) + 16;
+  return <svg {...box} viewBox={`0 0 ${Math.max(1, width)} ${lineHeight * lines.length + 16}`} preserveAspectRatio="xMidYMid meet" overflow="hidden">
+    <text fill={color} fontSize={96} fontFamily={cssFont('Pacifico')}>
+      {lines.map((line, i) => <tspan key={i} x={8} y={8 + ascent + i * lineHeight}>{line}</tspan>)}
+    </text>
+  </svg>;
 }
 
 function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
@@ -91,29 +115,28 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
     if (object.signatureMode === 'image') return object.signaturePreview
       ? <image href={object.signaturePreview} x={r.x} y={r.y} width={r.width} height={r.height} preserveAspectRatio="xMidYMid meet" opacity={object.opacity} />
       : <rect {...r} fill="var(--pdf-scene-placeholder)" stroke={object.color} strokeDasharray="5 4" opacity={object.opacity} />;
-    if (object.signatureMode === 'text') return <svg x={r.x} y={r.y} width={r.width} height={r.height} overflow="hidden">
-      <text fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily)} fontWeight={fontWeight(object.fontFamily)} fontStyle={fontStyle(object.fontFamily)} dominantBaseline="hanging">
-        {object.text.split('\n').map((line, i) => <tspan key={i} x={0} y={i * object.fontSize * 1.2}>{line}</tspan>)}
-      </text>
-    </svg>;
-    return <g fill="none" stroke={object.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" opacity={object.opacity}>
-      {object.strokes.map((stroke, i) => <polyline key={i} points={stroke.map(p => `${r.x + p.x * r.width},${r.y + p.y * r.height}`).join(' ')} />)}
-    </g>;
+    return <TypedSignature text={object.text} color={object.color} opacity={object.opacity} x={r.x} y={r.y} width={r.width} height={r.height} />;
   }
   // While drafting, wrap like the native exporter; the rendered preview replaces this once it is ready.
   if (object.kind === 'text') return <foreignObject {...r}>
     <div className="scene-text-draft" style={{ color: object.color, opacity: object.opacity, fontSize: object.fontSize, fontFamily: cssFont(object.fontFamily ?? 'Noto Sans'),
       fontWeight: object.bold ? 700 : 400, fontStyle: object.italic ? 'italic' : 'normal', textAlign: object.align ?? 'left' }}>{object.text}</div>
   </foreignObject>;
-  if (object.kind === 'watermark') return <g fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily)} fontWeight={fontWeight(object.fontFamily)} fontStyle={fontStyle(object.fontFamily)}>
-    {watermarkPlacements(page, object).map(({ x, y, angle }, index) => <text key={index} transform={`rotate(${angle} ${x} ${y})`} x={x} y={y} dominantBaseline="alphabetic">{object.text}</text>)}
+  if (object.kind === 'watermark') return <WatermarkArtwork page={page} object={object} />;
+  if (object.kind === 'pageNumbers') return <text x={r.x} y={r.y} fill={object.color} opacity={object.opacity} fontSize={object.fontSize}
+    fontFamily={cssFont(object.fontFamily ?? 'Noto Sans')} dominantBaseline="hanging" xmlSpace="preserve">{object.text}</text>;
+  if (object.kind === 'headerFooter') return <g fill={object.color} opacity={object.opacity} fontSize={object.fontSize} fontFamily={cssFont(object.fontFamily ?? 'Noto Sans')}>
+    {(object.headerFooterParts ?? []).filter(part => part.text).map(({ band, slot, text, rect }) => <svg key={`${band}-${slot}`} {...rect} overflow="hidden">
+      <text x={slot === 'left' ? 0 : slot === 'right' ? rect.width : rect.width / 2} y={0} textAnchor={slot === 'left' ? 'start' : slot === 'right' ? 'end' : 'middle'}
+        dominantBaseline="hanging" xmlSpace="preserve" data-header-footer-part={`${band}-${slot}`}>{text}</text>
+    </svg>)}
   </g>;
   if (object.kind === 'highlight') return <rect {...r} fill={object.color} stroke="none" opacity={object.opacity} />;
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject,
-  editRuns, textEdits, selectedRun, onSelectRun, onEditRun }: SceneCanvasProps) {
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, formFields = [], formValue, onFormValue, formFlag, onFormFocus, onFormLeave,
+  redactionFill = '#000000', redactionPreview = false, editRuns, textEdits, selectedRun, onSelectRun, onEditRun, rangedObjects = [], onRangedChange }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -144,7 +167,11 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     observer.observe(host.current);
     return () => observer.disconnect();
   }, []);
-  useEffect(() => { gesture.current = null; setDraft(null); setEditingId(null); setEditingRun(null); setPanning(false); window.getSelection()?.removeAllRanges(); }, [page]);
+  useEffect(() => {
+    gesture.current = null; setDraft(null); setEditingId(null); setEditingRun(null); setPanning(false);
+    const selection = window.getSelection();
+    if (selection?.anchorNode && host.current?.contains(selection.anchorNode)) selection.removeAllRanges();
+  }, [page]);
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape' && gesture.current) {
@@ -185,6 +212,54 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     };
   }, []);
   const shown = draft ?? page;
+  const formControl = (field: PdfFormField, area: PdfFormWidget[], id: string) => {
+    const value = formValue!(field);
+    const set = onFormValue!;
+    const label = field.label || field.name;
+    const flag = formFlag?.(field) ?? null;
+    const errorId = `${id}-error`;
+    const invalid = flag ? { 'aria-invalid': true, 'aria-describedby': errorId } : {};
+    const x = Math.min(...area.map(widget => widget.x)); const y = Math.min(...area.map(widget => widget.y));
+    const width = Math.max(...area.map(widget => widget.x + widget.width)) - x; const height = Math.max(...area.map(widget => widget.y + widget.height)) - y;
+    const fontSize = Math.max(6, Math.min(12, area[0].height * 0.6));
+    const options = field.options.map((option, at) => ({ option, label: field.optionLabels[at] ?? option }));
+    let control;
+    if (field.type === 'checkbox') {
+      control = <Checkbox aria-label={label} checked={value === true} disabled={field.readOnly} aria-required={field.required} {...invalid} style={{ width: Math.min(width, height), height: Math.min(width, height) }}
+        onCheckedChange={checked => set(field, checked === true)} />;
+    } else if (field.type === 'radio') {
+      control = <RadioGroup aria-label={label} value={String(value)} disabled={field.readOnly} aria-required={field.required} {...invalid} className="relative block h-full w-full" onValueChange={choice => set(field, choice)}>
+        {area.map(widget => <RadioGroupItem key={widget.option} value={widget.option!} aria-label={options.find(item => item.option === widget.option)?.label ?? widget.option} {...invalid}
+          className="absolute" style={{ left: widget.x - x, top: widget.y - y, width: Math.min(widget.width, widget.height), height: Math.min(widget.width, widget.height) }} />)}
+      </RadioGroup>;
+    } else if (field.type === 'dropdown' && field.editable) {
+      control = <>
+        <Input aria-label={label} list={`${id}-options`} value={String(value)} disabled={field.readOnly} required={field.required} {...invalid} className="h-full w-full min-h-0 rounded-none px-1 py-0" style={{ fontSize }} onChange={event => set(field, event.target.value)} />
+        <datalist id={`${id}-options`}>{options.map(item => <option key={item.option} value={item.option}>{item.label}</option>)}</datalist>
+      </>;
+    } else if (field.type === 'dropdown') {
+      control = <NativeSelect aria-label={label} value={String(value)} disabled={field.readOnly} required={field.required} {...invalid} className="min-h-0 rounded-none py-0 pr-6 pl-1" style={{ fontSize, width, height }} onChange={event => set(field, event.target.value)}>
+        {(!field.required || value === '' || !field.options.includes(String(value))) && <NativeSelectOption value="">{''}</NativeSelectOption>}
+        {options.map(item => <NativeSelectOption key={item.option} value={item.option}>{item.label}</NativeSelectOption>)}
+      </NativeSelect>;
+    } else if (field.type === 'listbox') {
+      const chosen = Array.isArray(value) ? value : [];
+      const items = options.map(item => <ToggleGroupItem key={item.option} value={item.option} size="sm" className="h-auto min-h-0 w-full justify-start rounded-none px-1 py-0" style={{ fontSize }}>{item.label}</ToggleGroupItem>);
+      const group = { 'aria-label': label, disabled: field.readOnly, orientation: 'vertical' as const, className: 'h-full w-full flex-col items-stretch overflow-auto', ...invalid };
+      control = field.multiSelect
+        ? <ToggleGroup type="multiple" {...group} value={chosen} onValueChange={next => set(field, field.options.filter(option => next.includes(option)))}>{items}</ToggleGroup>
+        : <ToggleGroup type="single" {...group} value={chosen[0] ?? ''} onValueChange={next => set(field, next ? [next] : [])}>{items}</ToggleGroup>;
+    } else if (field.multiline) {
+      control = <Textarea aria-label={label} value={String(value)} disabled={field.readOnly} required={field.required} maxLength={field.maxLen ?? undefined} {...invalid} className="h-full w-full min-h-0 resize-none rounded-none px-1 py-0" style={{ fontSize }} onChange={event => set(field, event.target.value)} />;
+    } else {
+      control = <Input aria-label={label} value={String(value)} disabled={field.readOnly} required={field.required} maxLength={field.maxLen ?? undefined} {...invalid} className="h-full w-full min-h-0 rounded-none px-1 py-0" style={{ fontSize }} onChange={event => set(field, event.target.value)} />;
+    }
+    return <foreignObject key={id} x={x} y={y} width={width} height={height} className="scene-form-field" data-form-field={field.name}
+      onFocus={() => onFormFocus?.(field)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onFormLeave?.(field); }}>
+      {control}
+      {flag && <p id={errorId} className="scene-form-error">{flag}</p>}
+    </foreignObject>;
+  };
   const transform = sceneTransform(page);
   const scale = Math.max(0.01, Math.min((size.width - 24) / transform.width, (size.height - 24) / transform.height)) * Math.max(0.1, zoom);
   const b = visibleBounds(page);
@@ -195,6 +270,20 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     return { x: Math.max(b.x, Math.min(b.x + b.width, p.x)), y: Math.max(b.y, Math.min(b.y + b.height, p.y)) };
   };
   const point = (event: PointerEvent): ScenePoint => pointFromClient(event.clientX, event.clientY);
+  // Ranged objects are stored once and drawn on every page in their range, so the page's own copy is not drawn here.
+  const ranged = (object: SceneObject) => isRangedKind(object.kind);
+  const drawn = [...rangedObjects.filter(object => object.layer === 'behind'), ...shown.objects.filter(object => !ranged(object)),
+    ...rangedObjects.filter(object => object.layer !== 'behind')];
+  const hitRects = (object: SceneObject): { rect: SceneRect; label?: string }[] => {
+    if (object.kind === 'watermark') return [{ rect: watermarkBounds(b, object) }];
+    if (object.kind !== 'headerFooter') return [{ rect: object.rect }];
+    return headerFooterBands.flatMap(band => {
+      const slots = (object.headerFooterParts ?? []).filter(part => part.band === band);
+      if (!slots.length) return [];
+      const left = slots[0].rect, right = slots[slots.length - 1].rect;
+      return [{ rect: { x: left.x, y: left.y, width: right.x + right.width - left.x, height: left.height }, label: band === 'header' ? 'Header' : 'Footer' }];
+    });
+  };
 
   function finishTextEdit(save: boolean) {
     if (!editingId) return;
@@ -247,6 +336,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (event.button !== 0 || gesture.current) return;
     const target = event.target as Element;
     if (target.closest('[data-text-editor]')) return;
+    if (tool === 'form') { if (!target.closest('[data-form-field]')) onSelect(null); return; }
     if (tool === 'edit-text') {
       const index = target.closest('[data-edit-run]')?.getAttribute('data-edit-run');
       if (index == null) { onSelectRun(null); setEditingRun(null); } else { event.preventDefault(); openRun(Number(index)); }
@@ -261,13 +351,25 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       surface.current?.setPointerCapture(event.pointerId);
       return;
     }
+    if (tool === 'redact') {
+      const markId = target.closest('[data-redaction]')?.getAttribute('data-redaction');
+      if (markId) { onSelect(markId); return; }
+      const mark = { id: crypto.randomUUID(), rect: { x: start.x, y: start.y, width: 1, height: 1 }, color: redactionFill };
+      const next = { ...page, redactions: [...(page.redactions ?? []), mark] };
+      event.preventDefault();
+      surface.current?.setPointerCapture(event.pointerId);
+      onSelect(mark.id);
+      gesture.current = { pointerId: event.pointerId, start, base: page, next, mode: 'redact', id: mark.id, points: [start], changed: false };
+      setDraft(next);
+      return;
+    }
     const id = target.closest('[data-object]')?.getAttribute('data-object') ?? undefined;
     const corner = target.getAttribute('data-corner') ?? undefined;
     let next = page;
     let mode: Gesture['mode'];
     let objectId = id;
-    const hitObject = id ? page.objects.find(object => object.id === id) : undefined;
-    if (hitObject?.kind === 'watermark' && tool !== 'crop') {
+    const hitObject = id ? drawn.find(object => object.id === id) : undefined;
+    if (hitObject && ranged(hitObject) && tool !== 'crop') {
       lastObjectId.current = id ?? null;
       onSelect(id ?? null);
       return;
@@ -275,7 +377,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (id && tool !== 'crop' && (tool === 'select' || selectedId === id || corner)) { mode = corner ? 'resize' : 'move'; lastObjectId.current = id; onSelect(id); }
     else if (tool === 'select') { lastObjectId.current = null; onSelect(null); return; }
     else if (tool === 'crop') { mode = 'crop'; onSelect(null); }
-    else if (tool === 'watermark') { lastObjectId.current = null; onSelect(null); return; }
+    else if (tool === 'watermark' || tool === 'pageNumbers' || tool === 'headerFooter') { lastObjectId.current = null; onSelect(null); return; }
     else {
       mode = 'create';
       const object = makeObject(tool, { x: start.x, y: start.y, width: 1, height: 1 });
@@ -304,6 +406,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const dx = p.x - g.start.x, dy = p.y - g.start.y;
     g.changed ||= Math.abs(dx) + Math.abs(dy) > 0.5;
     if (g.mode === 'crop') g.next = { ...g.base, crop: rectangle(g.start, p) };
+    else if (g.mode === 'redact') g.next = { ...g.next, redactions: g.next.redactions?.map(mark => mark.id === g.id ? { ...mark, rect: rectangle(g.start, p) } : mark) };
     else g.next = { ...g.next, objects: g.next.objects.map(object => {
       if (object.id !== g.id) return object;
       const original = g.base.objects.find(o => o.id === g.id) ?? object;
@@ -311,16 +414,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       if (g.mode === 'move') rect = { ...original.rect,
         x: Math.max(b.x, Math.min(b.x + b.width - original.rect.width, original.rect.x + dx)),
         y: Math.max(b.y, Math.min(b.y + b.height - original.rect.height, original.rect.y + dy)) };
-      if (g.mode === 'resize') {
-        const r = original.rect;
-        rect = rectangle({ x: g.corner?.includes('w') ? r.x + r.width : r.x, y: g.corner?.includes('n') ? r.y + r.height : r.y }, p);
-      }
-      if (g.mode === 'create' && object.kind === 'signature' && !object.signatureMode) {
-        g.points.push(p);
-        const xs = g.points.map(v => v.x), ys = g.points.map(v => v.y);
-        rect = rectangle({ x: Math.min(...xs), y: Math.min(...ys) }, { x: Math.max(...xs), y: Math.max(...ys) });
-        return { ...object, rect, strokes: [g.points.map(v => ({ x: (v.x - rect.x) / rect.width, y: (v.y - rect.y) / rect.height }))] };
-      }
+      if (g.mode === 'resize') rect = cornerRect(original.rect, g.corner ?? 'se', p, object.kind === 'signature');
       return g.mode === 'resize' ? resizedObject(object, rect, original) : { ...object, rect };
     }) };
     setDraft(g.next);
@@ -341,8 +435,20 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       return;
     }
     setDraft(null);
+    const created = g.mode === 'create' ? g.next.objects.find(o => o.id === g.id) : undefined;
     if (!cancel && g.changed) onCommit(g.next);
-    else if (g.mode === 'create') onSelect(null);
+    else if (!cancel && created?.kind === 'signature') {
+      // A click places a signature at a default size, centred on the click.
+      const width = Math.min(160, b.width), height = Math.min(56, b.height);
+      const rect = { x: Math.max(b.x, Math.min(b.x + b.width - width, g.start.x - width / 2)), y: Math.max(b.y, Math.min(b.y + b.height - height, g.start.y - height / 2)), width, height };
+      onCommit({ ...g.next, objects: g.next.objects.map(o => o.id === created.id ? { ...o, rect } : o) });
+    }
+    else if (g.mode === 'create' || g.mode === 'redact') onSelect(null);
+  }
+  function markKey(event: KeyboardEvent<SVGElement>, id: string) {
+    if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+    event.preventDefault(); event.stopPropagation(); onSelect(null);
+    onCommit({ ...page, redactions: page.redactions?.filter(mark => mark.id !== id) });
   }
   function key(event: KeyboardEvent<SVGElement>, object: SceneObject, corner?: string) {
     if (event.key === 'Escape') { cancelGesture(); onSelect(null); return; }
@@ -351,15 +457,23 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     const steps: Record<string, ScenePoint> = { ArrowLeft: { x: -1, y: 0 }, ArrowRight: { x: 1, y: 0 }, ArrowUp: { x: 0, y: -1 }, ArrowDown: { x: 0, y: 1 } };
     const step = steps[event.key];
     if (!step && event.key !== 'Delete' && event.key !== 'Backspace') return;
-    if (object.kind === 'watermark' && step) { event.preventDefault(); event.stopPropagation(); return; }
     event.preventDefault(); event.stopPropagation(); onSelect(object.id);
     const angle = page.rotation * Math.PI / 180, amount = event.shiftKey ? 10 : 1;
     const dx = step ? Math.round((step.x * Math.cos(angle) + step.y * Math.sin(angle)) * amount) : 0;
     const dy = step ? Math.round((-step.x * Math.sin(angle) + step.y * Math.cos(angle)) * amount) : 0;
+    if (!step && ranged(object)) { onSelect(null); onRangedChange?.(object.id, null); return; }
+    if (object.kind === 'pageNumbers' || object.kind === 'headerFooter') return;
+    if (object.kind === 'watermark') {
+      if (!object.watermark) return;
+      const r = watermarkBounds(b, object);
+      const position = { x: Math.round(Math.max(0, Math.min(b.width - r.width, r.x - b.x + dx))), y: Math.round(Math.max(0, Math.min(b.height - r.height, r.y - b.y + dy))) };
+      onRangedChange?.(object.id, { watermark: { ...object.watermark, position } });
+      return;
+    }
     if (!step) { onSelect(null); onCommit({ ...page, objects: page.objects.filter(o => o.id !== object.id) }); return; }
     const r = object.rect;
-    const rect = corner ? rectangle({ x: corner.includes('w') ? r.x + r.width : r.x, y: corner.includes('n') ? r.y + r.height : r.y },
-      { x: Math.max(b.x, Math.min(b.x + b.width, (corner.includes('w') ? r.x : r.x + r.width) + dx)), y: Math.max(b.y, Math.min(b.y + b.height, (corner.includes('n') ? r.y : r.y + r.height) + dy)) })
+    const rect = corner ? cornerRect(r, corner,
+      { x: Math.max(b.x, Math.min(b.x + b.width, (corner.includes('w') ? r.x : r.x + r.width) + dx)), y: Math.max(b.y, Math.min(b.y + b.height, (corner.includes('n') ? r.y : r.y + r.height) + dy)) }, object.kind === 'signature')
       : { ...r, x: Math.max(b.x, Math.min(b.x + b.width - r.width, r.x + dx)), y: Math.max(b.y, Math.min(b.y + b.height - r.height, r.y + dy)) };
     onCommit({ ...page, objects: page.objects.map(o => o.id === object.id ? (corner ? resizedObject(o, rect, o) : { ...o, rect }) : o) });
   }
@@ -374,21 +488,25 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       <g ref={coordinates} transform={transform.matrix}>
         {!exact && <g pointerEvents="none">
           {sourcePreview && <image href={sourcePreview} x={0} y={0} width={page.width} height={page.height} preserveAspectRatio="none" />}
-          {shown.objects.map(object => <Artwork key={object.id} page={page} object={object} />)}
+          {drawn.map(object => <Artwork key={object.id} page={page} object={object} />)}
         </g>}
         {tool === 'highlight' && textRuns.length > 0 && <g className="scene-text-layer" aria-label="Selectable PDF text">
           {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run="true" x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
         </g>}
-        {shown.objects.map((object, index) => <g key={object.id}>
-          <rect {...object.rect} data-object={object.id} tabIndex={0} role="button" aria-label={`${object.kind} object ${index + 1}`} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />
+        {drawn.map(object => <g key={object.id}>
+          {hitRects(object).map(({ rect, label }, index) => <rect key={index} {...rect} data-object={object.id} tabIndex={0} role="button" aria-label={label ?? (object.kind === 'watermark' ? `Watermark ${object.watermark?.logoPath ? 'picture' : object.watermark?.text ?? ''}. Arrow keys move it, Shift+arrow moves it further.` : object.kind === 'pageNumbers' ? `Page number ${object.text}` : `${object.kind} object ${shown.objects.indexOf(object) + 1}`)} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />)}
           {selectedId === object.id && object.kind === 'text' && editingId === object.id && <foreignObject {...object.rect} data-text-editor="true" className="scene-inline-text-editor">
             <Textarea autoFocus onFocus={event => event.currentTarget.select()} className="h-full w-full min-h-0 resize-none" aria-label="Text box text" style={{ fontFamily: cssFont(object.fontFamily ?? 'Noto Sans'), fontWeight: object.bold ? 700 : 400, fontStyle: object.italic ? 'italic' : 'normal', textAlign: object.align ?? 'left' }} value={editingText} onChange={event => setEditingText(event.target.value)} onBlur={() => finishTextEdit(true)} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); finishTextEdit(false); } else if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); finishTextEdit(true); } }} />
           </foreignObject>}
           {selectedId === object.id && editingId !== object.id && <g className="scene-selection">
-            <rect {...object.rect} fill="none" stroke="var(--pdf-scene-selection)" strokeWidth={1.5 / scale} pointerEvents="none" />
-            {object.kind !== 'watermark' && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
+            {hitRects(object).map(({ rect }, index) => <rect key={index} {...rect} fill="none" stroke="var(--pdf-scene-selection)" strokeWidth={1.5 / scale} pointerEvents="none" />)}
+            {!ranged(object) && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
+        {shown.redactions?.map((mark, index) => <rect key={mark.id} {...mark.rect} data-redaction={mark.id} data-preview={redactionPreview}
+          className="scene-redaction" style={redactionPreview ? { fill: mark.color } : undefined}
+          tabIndex={tool === 'redact' ? 0 : -1} role="button" aria-label={`Redaction mark ${index + 1}`} aria-pressed={selectedId === mark.id}
+          onFocus={() => { if (tool === 'redact') onSelect(mark.id); }} onKeyDown={e => markKey(e, mark.id)} />)}
         {tool === 'edit-text' && <g className="scene-edit-layer" aria-label="PDF text you can edit">
           {editRuns.map((run) => {
             const edited = replacementOf(run.index);
@@ -411,6 +529,12 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           })()}
           {overflowRun && overflowWords > 0 && <text className="scene-edit-overflow" x={overflowRun.x} y={overflowRun.y + overflowRun.height + 10} fontSize={8}>{overflowMessage(overflowWords)}</text>}
         </g>}
+        {tool === 'form' && formValue && onFormValue && formFields.flatMap(field => {
+          const widgets = field.widgets.filter(widget => widget.page === page.sourceIndex);
+          // A radio group is one control over all of its buttons on the page, so arrow keys move between them.
+          const areas: PdfFormWidget[][] = field.type === 'radio' ? (widgets.length ? [widgets.filter(widget => widget.option !== undefined)] : []) : widgets.map(widget => [widget]);
+          return areas.filter(area => area.length).map((area, index) => formControl(field, area, `scene-form-${formFields.indexOf(field)}-${index}`));
+        })}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}
       </g>
     </svg>
