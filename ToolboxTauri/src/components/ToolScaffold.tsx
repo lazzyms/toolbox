@@ -89,6 +89,8 @@ interface ToolScaffoldProps {
     renderReport?: (results: JobOutcome[], run: ReportRun) => React.ReactNode;
     /** Replaces the destination's label and example for a tool whose saves are not its run. */
     destinationCopy?: (files: string[]) => { label: string; note: string };
+    /** Says in the per-run destination hint that the saved setting stays as it is. */
+    destinationMentionsSettingKept?: boolean;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -107,7 +109,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, pasteHtml = false, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, pasteHtml = false, renderReport, destinationCopy, destinationMentionsSettingKept = false, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -793,6 +795,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         note={destinationCopy?.(files).note}
                         exampleName={destinationCopy ? null : files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
                         savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
+                        mentionsSettingKept={destinationMentionsSettingKept}
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
                     />
