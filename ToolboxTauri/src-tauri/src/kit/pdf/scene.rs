@@ -1,10 +1,12 @@
-use std::{collections::{HashMap, HashSet}, fs::{self, OpenOptions}, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
+use std::{collections::{BTreeSet, HashMap, HashSet}, fs::OpenOptions, io::Write, path::{Path, PathBuf}, process::Command, time::{Instant}};
 use base64::Engine;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::kit::{common::{JobOutcome, OutputLocation, OutputNaming, TempDir}, contracts::ToolError};
+use crate::packs::uninstall::RunPacks;
+use super::script_text::{self, ScriptFonts, UsedGlyphs};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
@@ -56,9 +58,17 @@ pub struct PreviewRequest { pub path: PathBuf, pub scene: PdfScene, pub page_ind
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct PreviewPagesRequest { pub path: PathBuf, pub scene: PdfScene, pub page_indices: Vec<usize> }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all="camelCase")]
-pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub output_location: OutputLocation }
+pub struct ExportRequest { pub paths: Vec<PathBuf>, pub scene: PdfScene, pub output_location: OutputLocation, #[serde(flatten)] pub sections: StageSections }
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all="camelCase")]
+pub struct StageSections {
+    pub form_values: Option<Vec<serde_json::Value>>,
+    pub text_edits: Option<Vec<serde_json::Value>>,
+    pub flatten: Option<bool>,
+    pub redactions: Option<Vec<serde_json::Value>>,
+}
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct ScenePreview { pub data_url: String, pub width: u32, pub height: u32 }
@@ -75,7 +85,7 @@ fn bounds(doc: &Document, v: &Object) -> Result<[f32;4], String> {
     if b.iter().any(|n| !n.is_finite()) || b[2]<=b[0] || b[3]<=b[1] { return Err("Invalid page box".into()); }
     Ok(b)
 }
-struct Geometry { bbox: [f32;4], matrix: [f32;6], width: f32, height: f32 }
+struct Geometry { bbox: [f32;4], matrix: [f32;6], width: f32, height: f32, rotation: i64 }
 fn geometry(doc: &Document, id: ObjectId) -> Result<Geometry,String> {
     let media = bounds(doc,&inherited(doc,id,b"MediaBox")?.ok_or("Missing MediaBox")?)?;
     let mut b = match inherited(doc,id,b"CropBox")? { Some(v)=>bounds(doc,&v)?, None=>media };
@@ -85,7 +95,8 @@ fn geometry(doc: &Document, id: ObjectId) -> Result<Geometry,String> {
     let rotate = inherited(doc,id,b"Rotate")?.map(|v| v.as_i64().map_err(err)).transpose()?.unwrap_or(0);
     if rotate%90!=0 { return Err("Source rotation must be a multiple of 90".into()); }
     // Source PDF bottom-left coordinates to visible, top-left scene coordinates.
-    let (matrix,width,height)=match rotate.rem_euclid(360) {
+    let rotation=rotate.rem_euclid(360);
+    let (matrix,width,height)=match rotation {
         0=>([1.,0.,0.,-1.,-b[0],b[3]],w,h),
         90=>([0.,1.,1.,0.,-b[1],-b[0]],h,w),
         180=>([-1.,0.,0.,1.,b[2],-b[1]],w,h),
@@ -94,7 +105,7 @@ fn geometry(doc: &Document, id: ObjectId) -> Result<Geometry,String> {
     if let Some(unit)=doc.get_dictionary(id).map_err(err)?.get(b"UserUnit").ok() {
         if super::metadata::number(resolve(doc,unit)?)? != 1. { return Err("PDF UserUnit other than 1 is not supported".into()); }
     }
-    Ok(Geometry{bbox:b,matrix,width,height})
+    Ok(Geometry{bbox:b,matrix,width,height,rotation})
 }
 fn dimensions(w:f32,h:f32)->Result<(),String> {
     if !w.is_finite() || !h.is_finite() || w<=0. || h<=0. || w>14400. || h>14400. { Err("Page dimensions must be within 0–14400 points".into()) } else { Ok(()) }
@@ -145,6 +156,38 @@ fn signature_font_bytes(font_family: &str) -> Result<&'static [u8], String> {
         "Pacifico" => Ok(INCLUDED_SIGNATURE_PACIFICO_FONT),
         _ => Err("Unsupported cursive signature font".into()),
     }
+}
+
+fn is_cursive(font_family: Option<&str>) -> bool {
+    matches!(font_family, Some("Satisfy" | "Pacifico"))
+}
+
+/// The text a scene writes with fonts: text boxes, watermarks, and typed signatures that are not
+/// drawn in a cursive font.
+pub fn written_texts(scene: &PdfScene) -> impl Iterator<Item = &str> {
+    scene.pages.iter().flat_map(|page| page.objects.iter()).filter(|o| match o.kind {
+        Kind::Text | Kind::Watermark => true,
+        Kind::Signature => matches!(o.signature_mode, Some(SignatureMode::Text)) && !is_cursive(o.font_family.as_deref()),
+        Kind::Highlight | Kind::Shape => false,
+    }).map(|o| o.text.as_str())
+}
+
+/// The resource names a page gives the scene's Unicode fonts, and the fonts its text used.
+struct PageUnicodeFonts { names: Vec<String>, used: BTreeSet<usize> }
+
+/// Writes one line of text along the text matrix `m`. Latin-1 text keeps the chosen standard font;
+/// any other text is shaped and written with the scene's embedded Unicode fonts.
+fn write_text(content: &mut String, text: &str, resource: &str, size: f32, m: [f32; 6], fonts: &ScriptFonts, page: &mut PageUnicodeFonts, used: &mut UsedGlyphs) -> Result<(), String> {
+    if text.len() > 100_000 { return Err("Text is too long".into()); }
+    let [a, b, c, d, e, f] = m;
+    if let Ok(encoded) = encode_text(text) {
+        content.push_str(&format!("BT /{resource} {size} Tf {a} {b} {c} {d} {e} {f} Tm <{encoded}> Tj ET\n"));
+        return Ok(());
+    }
+    let (glyphs, _) = fonts.shape_line(text)?;
+    page.used.extend(glyphs.iter().map(|glyph| glyph.font));
+    content.push_str(&script_text::draw_line(&glyphs, text, size, m, &|font| page.names[font].clone(), used));
+    Ok(())
 }
 
 fn encode_text(text: &str) -> Result<String, String> {
@@ -378,18 +421,19 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
                 let baseline = [baseline_box.x, baseline_box.y, baseline_box.x + baseline_box.width, baseline_box.y + baseline_box.height];
                 if !same_box(geometry.bbox, baseline) { return Err("Scene source page-box baseline does not match the source PDF".into()); }
             }
-            let changes_page_coordinates = page_geometry_changed(page, &geometry);
+            // A crop only sets the crop box, so annotations, widgets and destinations keep their coordinates.
+            let changes_page_coordinates = page_rebuilt(page, &geometry);
             navigation_geometry_edit |= changes_page_coordinates;
             if has_annotations && changes_page_coordinates {
-                return Err("This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output".into());
+                return Err("This PDF page has annotations or form widgets and the requested rotation would change their coordinates; scene export was rejected before output".into());
             }
-            if (page.crop.is_some() || changes_page_coordinates) && has_widget {
-                return Err("Cropping or rotating a PDF with form widgets is unsupported; remove the page operation or edit the source PDF first".into());
+            if changes_page_coordinates && has_widget {
+                return Err("Rotating a PDF with form widgets is unsupported; remove the page operation or edit the source PDF first".into());
             }
         }
     }
     if has_navigation && navigation_geometry_edit {
-        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after crop or rotation; scene export was rejected before output".into());
+        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after rotation; scene export was rejected before output".into());
     }
     Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
 }
@@ -397,11 +441,35 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
 fn same_box(left: [f32; 4], right: [f32; 4]) -> bool { left.iter().zip(right).all(|(left, right)| (*left - right).abs() <= 0.1) }
 fn same_rect(left: &Rect, right: &Rect) -> bool { same_box([left.x, left.y, left.x + left.width, left.y + left.height], [right.x, right.y, right.x + right.width, right.y + right.height]) }
 fn page_geometry_changed(page: &ScenePage, geometry: &Geometry) -> bool {
-    let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
-    page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page))
-        || (page.width - geometry.width).abs() > 0.1
+    scene_crop(page).is_some() || page_rebuilt(page, geometry)
+}
+/// Whether the page's content must be redrawn into a new page space: only a scene rotation or size change does.
+fn page_rebuilt(page: &ScenePage, geometry: &Geometry) -> bool {
+    (page.width - geometry.width).abs() > 0.1
         || (page.height - geometry.height).abs() > 0.1
         || page.rotation.rem_euclid(360) != 0
+}
+/// The page's crop, unless it keeps the whole page.
+fn scene_crop(page: &ScenePage) -> Option<&Rect> {
+    let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
+    page.crop.as_ref().filter(|crop| !same_rect(crop, &full_page))
+}
+/// The crop box for a scene crop, by the batch Crop rule: the crop is a rectangle of the displayed page, so
+/// `bounds` and `rotation` are the visible user-space area and /Rotate the crop was drawn against.
+fn scene_crop_box(page: &ScenePage, bounds: [f32; 4], rotation: i64, page_index: usize) -> Result<Option<[f32; 4]>, String> {
+    let Some(crop) = scene_crop(page) else { return Ok(None); };
+    let spec = super::editor::CropSpec::Rectangle {
+        left: crop.x / page.width, top: crop.y / page.height,
+        width: crop.width / page.width, height: crop.height / page.height,
+    };
+    spec.validate().map_err(|error| error.message)?;
+    super::editor::crop_box_within(bounds, rotation, 1., page_index, &spec).map(Some).map_err(|error| error.message)
+}
+fn set_crop_box(doc: &mut Document, id: ObjectId, crop_box: Option<[f32; 4]>) -> Result<(), String> {
+    if let Some(crop_box) = crop_box {
+        doc.get_dictionary_mut(id).map_err(err)?.set("CropBox", crop_box.iter().copied().map(Object::Real).collect::<Vec<_>>());
+    }
+    Ok(())
 }
 fn inverse_matrix([a, b, c, d, e, f]: [f32; 6]) -> [f32; 6] {
     let determinant = a * d - b * c;
@@ -517,14 +585,56 @@ fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dict
     Ok(resources)
 }
 
-pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage { FillForms, EditText, Overlays, Flatten, Redact }
+pub const STAGES: [Stage; 5] = [Stage::FillForms, Stage::EditText, Stage::Overlays, Stage::Flatten, Stage::Redact];
+
+struct OverlayPlan { preflight: ScenePreflight, identity: bool, pure_reorder: bool }
+enum StagePlan { Skip, Overlays(OverlayPlan) }
+
+fn unsupported_section(present: bool, name: &str) -> Result<StagePlan, String> {
+    if present { return Err(format!("{name} is not supported yet; scene export was rejected before output")); }
+    Ok(StagePlan::Skip)
+}
+
+fn overlay_preflight(doc: &Document, scene: &PdfScene) -> Result<StagePlan, String> {
     if scene.pages.is_empty() || scene.pages.len()>2000 { return Err("Scene must contain 1–2000 pages".into()); }
-    let mut doc=load(path)?;
     let sources:Vec<_>=doc.get_pages().values().copied().collect();
-    let identity = is_identity_scene(&doc, scene, &sources)?;
-    let pure_reorder = is_pure_page_reorder(&doc, scene, &sources)?;
-    let preflight = scene_preflight(&doc, scene, &sources, identity, pure_reorder)?;
-    if identity { return Ok(doc); }
+    let identity = is_identity_scene(doc, scene, &sources)?;
+    let pure_reorder = is_pure_page_reorder(doc, scene, &sources)?;
+    let preflight = scene_preflight(doc, scene, &sources, identity, pure_reorder)?;
+    Ok(StagePlan::Overlays(OverlayPlan { preflight, identity, pure_reorder }))
+}
+
+fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &StageSections) -> Result<StagePlan, String> {
+    match stage {
+        Stage::FillForms => unsupported_section(sections.form_values.is_some(), "Filling form fields"),
+        Stage::EditText => unsupported_section(sections.text_edits.is_some(), "Editing existing text"),
+        Stage::Overlays => overlay_preflight(doc, scene),
+        Stage::Flatten => unsupported_section(sections.flatten.is_some(), "Flattening"),
+        Stage::Redact => unsupported_section(sections.redactions.is_some(), "Redaction"),
+    }
+}
+
+fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene, script_fonts: &ScriptFonts) -> Result<(), String> {
+    match plan {
+        StagePlan::Skip => Ok(()),
+        StagePlan::Overlays(plan) => apply_overlays(doc, scene, plan, script_fonts),
+    }
+}
+
+fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections, script_fonts:&ScriptFonts)->Result<Document,String> {
+    let mut doc=load(path)?;
+    let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,String>>()?;
+    for plan in plans { stage_apply(plan, &mut doc, scene, script_fonts)?; }
+    Ok(doc)
+}
+
+pub fn compose(path:&Path, scene:&PdfScene, script_fonts:&ScriptFonts)->Result<Document,String> { run_stages(path, scene, &StageSections::default(), script_fonts) }
+
+fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, identity, pure_reorder }: OverlayPlan, script_fonts:&ScriptFonts)->Result<(),String> {
+    let sources=&preflight.source_pages;
+    if identity { return Ok(()); }
     if pure_reorder {
         let order = scene.pages.iter().map(|page| {
             let index = page.source_index.ok_or_else(|| "Pure page reorder is missing a source page".to_string())?;
@@ -533,7 +643,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
         let root = doc.get_dictionary_mut(preflight.pages_root).map_err(err)?;
         root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
         root.set("Count", order.len() as i64);
-        return Ok(doc);
+        return Ok(());
     }
     let font_specs: [(&str, &str); 9] = [
         ("Helvetica", "SceneFont"), ("Helvetica-Bold", "SceneFontHelveticaBold"),
@@ -545,6 +655,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
     let fonts: HashMap<&'static str, ObjectId> = font_specs.iter().map(|(base, resource)| (*resource, doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => "Type1", "BaseFont" => *base, "Encoding" => "WinAnsiEncoding"
     }))).collect();
+    let mut used_glyphs=UsedGlyphs::default();
     let mut kids=Vec::new();
     for page in &scene.pages {
         dimensions(page.width,page.height)?;
@@ -557,9 +668,17 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             let id = *sources.get(index).ok_or("Source page index outside document")?;
             geometry(&doc, id)
         }).transpose()?;
-        let preserve_source_page = source_geometry.as_ref().is_some_and(|geometry| !page_geometry_changed(page, geometry));
+        let preserve_source_page = source_geometry.as_ref().is_some_and(|geometry| !page_rebuilt(page, geometry));
+        // Preserved pages crop against their own visible area and /Rotate; rebuilt and new pages are drawn
+        // upright in a page space the size of the scene page, before any scene rotation.
+        let crop_box = match source_geometry.as_ref().filter(|_| preserve_source_page) {
+            Some(g) => scene_crop_box(page, g.bbox, g.rotation, kids.len())?,
+            None => scene_crop_box(page, [0., 0., page.width, page.height], 0, kids.len())?,
+        };
         if preserve_source_page && page.objects.is_empty() {
-            kids.push(Object::Reference(sources[page.source_index.unwrap()]));
+            let id = sources[page.source_index.unwrap()];
+            set_crop_box(doc, id, crop_box)?;
+            kids.push(Object::Reference(id));
             continue;
         }
         let mut effective_fonts = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"Font")).transpose()?.unwrap_or_default();
@@ -572,6 +691,12 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             font_resources.set(name.as_str(), Object::Reference(id));
             font_names.insert(*resource, name);
         }
+        let mut unicode_fonts = PageUnicodeFonts { names: Vec::new(), used: BTreeSet::new() };
+        for font in 0..script_fonts.len() {
+            let name = next_resource_name(&effective_fonts, "Font", &format!("SceneUnicode{font}"))?;
+            effective_fonts.set(name.as_str(), Object::Null);
+            unicode_fonts.names.push(name);
+        }
         let mut effective_xobjects = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"XObject")).transpose()?.unwrap_or_default();
         let mut effective_states = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"ExtGState")).transpose()?.unwrap_or_default();
         let mut xobjects=lopdf::Dictionary::new();
@@ -579,7 +704,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
             let g = source_geometry.as_ref().unwrap();
             format!("q\n{}0 0 {} {} re W n\n", cm(inverse_matrix(g.matrix)), page.width, page.height)
         } else {
-            format!("q\n1 0 0 -1 {} {} cm\n0 0 {} {} re W n\n",-crop.x,crop.y+crop.height,page.width,page.height)
+            format!("q\n1 0 0 -1 0 {} cm\n0 0 {} {} re W n\n",page.height,page.width,page.height)
         };
         if let (Some(index), Some(g)) = (source_index, source_geometry.as_ref()) {
             let id=sources[index];
@@ -621,7 +746,7 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                             let name_base = format!("Sig{i}");
                             let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
                             effective_xobjects.set(name.as_str(), Object::Null);
-                            add_signature_image(&mut doc, &mut xobjects, &name, signature_image(path)?);
+                            add_signature_image(doc, &mut xobjects, &name, signature_image(path)?);
                             content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
                         }
                         Some(SignatureMode::Text) => {
@@ -629,13 +754,12 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                                 let name_base = format!("Sig{i}");
                                 let name = next_resource_name(&effective_xobjects, "XObject", &name_base)?;
                                 effective_xobjects.set(name.as_str(), Object::Null);
-                                add_signature_image(&mut doc, &mut xobjects, &name, signature_text_image(&o.text, font_family, o.font_size, rgb)?);
+                                add_signature_image(doc, &mut xobjects, &name, signature_text_image(&o.text, font_family, o.font_size, rgb)?);
                                 content.push_str(&format!("q {} 0 0 {} {} {} /{name} Do Q\n",r.width,r.height,r.x,r.y));
                             } else {
                                 let (_, resource)=font_spec(o.font_family.as_deref())?;
                                 let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                                let encoded=encode_text(&o.text)?;
-                                content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{encoded}> Tj ET\n",o.font_size,r.x,r.y+o.font_size));
+                                write_text(&mut content,&o.text,resource,o.font_size,[1.,0.,0.,-1.,r.x,r.y+o.font_size],script_fonts,&mut unicode_fonts,&mut used_glyphs)?;
                             }
                         }
                         None => {
@@ -654,26 +778,29 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 Kind::Text=>{
                     let (_, resource)=font_spec(o.font_family.as_deref())?;
                     let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                    let encoded_lines=o.text.lines().map(encode_text).collect::<Result<Vec<_>,_>>()?;
-                    content.push_str(&format!("{} {} {} {} re W n\n",r.x,r.y,r.width,r.height));
-                    for (line,encoded) in encoded_lines.iter().enumerate() {
-                        content.push_str(&format!("BT /{resource} {} Tf 1 0 0 -1 {} {} Tm <{}> Tj ET\n",o.font_size,r.x,r.y+o.font_size*(1.+line as f32*1.2),encoded));
+                    let mut lines=String::new();
+                    for (line,text) in o.text.lines().enumerate() {
+                        write_text(&mut lines,text,resource,o.font_size,[1.,0.,0.,-1.,r.x,r.y+o.font_size*(1.+line as f32*1.2)],script_fonts,&mut unicode_fonts,&mut used_glyphs)?;
                     }
+                    content.push_str(&format!("{} {} {} {} re W n\n",r.x,r.y,r.width,r.height));
+                    content.push_str(&lines);
                 },
                 Kind::Watermark=>{
                     let (_, resource)=font_spec(o.font_family.as_deref())?;
                     let resource = font_names.get(resource).ok_or("Scene font resource disappeared")?;
-                    let encoded=encode_text(&o.text)?;
                     let area=page.crop.as_ref().cloned().unwrap_or(Rect{x:0.,y:0.,width:page.width,height:page.height});
                     for (x,y,angle) in watermark_placements(&area,&o.rect,o.font_size,&o.text,o.watermark_pattern.as_ref()) {
                         let [a, b, c, d] = scene_angle_to_pdf_text_matrix(angle);
-                        content.push_str(&format!("BT /{resource} {} Tf {} {} {} {} {} {} Tm <{encoded}> Tj ET\n",o.font_size,a,b,c,d,x,y));
+                        write_text(&mut content,&o.text,resource,o.font_size,[a,b,c,d,x,y],script_fonts,&mut unicode_fonts,&mut used_glyphs)?;
                     }
                 },
             }
             content.push_str("Q\n");
         }
         content.push_str("Q\n");
+        for font in &unicode_fonts.used {
+            font_resources.set(unicode_fonts.names[*font].as_str(), Object::Reference(used_glyphs.font_object(doc, *font)));
+        }
         let stream=doc.add_object(Stream::new(dictionary!{},content.into_bytes()));
         if let Some(index) = source_index {
             let id = preflight.source_pages[index];
@@ -684,51 +811,32 @@ pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> {
                 page_dict.set("Resources",resources);
                 page_dict.set("Contents",append_contents(original_contents,Object::Reference(stream)));
             } else {
-                super::set_page_box_family(&mut doc, id, [0., 0., crop.width, crop.height], false)?;
+                super::set_page_box_family(doc, id, [0., 0., page.width, page.height], false)?;
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
                 page_dict.set("Rotate",page.rotation.rem_euclid(360));
                 page_dict.set("Resources",resources);
                 page_dict.set("Contents",stream);
             }
+            set_crop_box(doc, id, crop_box)?;
             kids.push(Object::Reference(id));
         } else {
-            let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,crop.width,crop.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>font_resources,"ExtGState"=>states},"Contents"=>stream});
+            let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,page.width,page.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>font_resources,"ExtGState"=>states},"Contents"=>stream});
+            set_crop_box(doc, id, crop_box)?;
             kids.push(Object::Reference(id));
         }
     }
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Kids",kids);
     doc.objects.get_mut(&preflight.pages_root).ok_or("PDF page-tree root disappeared during scene export")?.as_dict_mut().map_err(err)?.set("Count",scene.pages.len() as i64);
-    Ok(doc)
+    script_fonts.write_fonts(doc, used_glyphs)?;
+    Ok(())
 }
 
-static NONCE:AtomicU64=AtomicU64::new(0);
-struct TempDir(PathBuf);
-impl TempDir {
-    fn new()->Result<Self,String> {
-        for _ in 0..1000 {
-            let path=std::env::temp_dir().join(format!("toolbox-scene-{}-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(err)?.as_nanos(),NONCE.fetch_add(1,Ordering::Relaxed)));
-            let mut builder = fs::DirBuilder::new();
-            #[cfg(unix)] {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&path) { Ok(())=>return Ok(Self(path)),Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,Err(e)=>return Err(err(e)) }
-        } Err("Could not reserve preview directory".into())
-    }
-}
-impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
     crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)
 }
 
 fn text_extractor()->Option<PathBuf> {
-    std::env::var_os("TOOLBOX_PDFTOTEXT_PATH").map(PathBuf::from).filter(|path|path.is_file())
-        .or_else(|| crate::kit::resources::application_resource_root().and_then(|root| [root.join("pdf-bin").join("pdftotext"), root.join("resources").join("pdftotext"), root.join("pdftotext")].into_iter().find(|path|path.is_file())))
-        .or_else(|| {
-            let mut command = Command::new("pdftotext");
-            command.arg("-h");
-            super::helper_available(command).then(|| PathBuf::from("pdftotext"))
-        })
+    crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_TEXT_EXTRACTOR).ok()
 }
 
 fn xml_attribute(element: &quick_xml::events::BytesStart<'_>, name: &[u8]) -> Option<String> {
@@ -787,19 +895,20 @@ fn render(path:&Path,index:usize,renderer:&Path,temp:&TempDir)->Result<ScenePrev
     let prefix=temp.0.join("render");
     let output=super::run_bounded_helper({
         let mut command = Command::new(renderer);
-        command.args(["-png","-singlefile","-scale-to"]).arg(super::PDF_PREVIEW_MAX_DIMENSION.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
+        command.args(["-png","-singlefile","-cropbox","-scale-to"]).arg(super::PDF_PREVIEW_MAX_DIMENSION.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
         command
     }, Instant::now() + super::PDF_PREVIEW_TIMEOUT, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
     if !output.status.success() { return Err("pdftoppm could not render this PDF".into()); }
     let (bytes,width,height)=super::read_preview_png(&prefix.with_extension("png")).map_err(err)?;
     Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width,height})
 }
-pub fn preview(request:&PreviewRequest)->Result<ScenePreview,String> {
+pub fn preview(request:&PreviewRequest, packs:&RunPacks)->Result<ScenePreview,String> {
     if request.page_index>=request.scene.pages.len() { return Err("Preview page outside scene".into()); }
+    let fonts=ScriptFonts::resolve(written_texts(&request.scene),packs).map_err(|error| error.message)?;
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose(&request.path,&request.scene,&fonts)?.save(&path).map_err(err)?;
     render(&path,request.page_index,&renderer,&temp)
 }
 fn validate_preview_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
@@ -811,12 +920,13 @@ fn validate_preview_page_indices(page_indices:&[usize], page_count:usize)->Resul
     }
     Ok(())
 }
-pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePreview>,String> {
+pub fn preview_pages(request:&PreviewPagesRequest, packs:&RunPacks)->Result<Vec<IndexedScenePreview>,String> {
     validate_preview_page_indices(&request.page_indices,request.scene.pages.len())?;
+    let fonts=ScriptFonts::resolve(written_texts(&request.scene),packs).map_err(|error| error.message)?;
     let renderer=renderer()?;
     let temp=TempDir::new()?;
     let path=temp.0.join("scene.pdf");
-    compose(&request.path,&request.scene)?.save(&path).map_err(err)?;
+    compose(&request.path,&request.scene,&fonts)?.save(&path).map_err(err)?;
     request.page_indices.iter().copied().map(|page_index| {
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
@@ -842,11 +952,21 @@ pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String>
     let preview = super::metadata::render_preview(path, page_index + 1, g.width, g.height);
     Ok(PdfPageMetadata{index:page_index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview,text_runs:Some(text_runs)})
 }
-pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
+/// A scene export: the request and the packs its text may need.
+pub struct SceneRun { pub request: ExportRequest, pub packs: RunPacks }
+
+pub fn export(run:&SceneRun,input:PathBuf)->JobOutcome {
+    let request=&run.request;
+    // Fonts for scripts the app does not write itself come from their pack. Without it nothing is
+    // written, and the outcome points at the pack.
+    let fonts=match ScriptFonts::resolve(written_texts(&request.scene),&run.packs) {
+        Ok(fonts)=>fonts,
+        Err(error)=>return JobOutcome::failure(input,error),
+    };
     let result=(|| {
         if !matches!(request.output_location,OutputLocation::AlongsideInput) { return Err("Scene exports must be alongside the input".into()); }
         let mut bytes=Vec::new();
-        compose(&input,&request.scene)?.save_to(&mut bytes).map_err(err)?;
+        run_stages(&input,&request.scene,&request.sections,&fonts)?.save_to(&mut bytes).map_err(err)?;
         let parent=input.parent().ok_or("Input has no parent directory")?;
         let stem=input.file_stem().ok_or("Input has no filename")?.to_string_lossy();
         for n in 1..=10000 {
@@ -867,6 +987,13 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
 mod tests {
     use super::*;
     use crate::kit::common::OutputNaming;
+    use std::fs;
+
+    fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }
+    fn compose(path: &Path, scene: &PdfScene) -> Result<Document, String> { super::compose(path, scene, &ScriptFonts::base()) }
+    fn preview(request: &PreviewRequest) -> Result<ScenePreview, String> { super::preview(request, &no_packs()) }
+    fn preview_pages(request: &PreviewPagesRequest) -> Result<Vec<IndexedScenePreview>, String> { super::preview_pages(request, &no_packs()) }
+    fn export(request: &ExportRequest, input: PathBuf) -> JobOutcome { super::export(&SceneRun { request: request.clone(), packs: no_packs() }, input) }
 
     fn fixture(path: &Path) {
         let mut d = Document::with_version("1.7");
@@ -896,6 +1023,24 @@ mod tests {
         let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
         d.trailer.set("Root",catalog);
         d.save(path).unwrap();
+    }
+    fn labelled_pages_fixture(path: &Path, labels: &[&str]) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let resources = d.add_object(dictionary! {"Font"=>dictionary! {"OriginalFont"=>font}});
+        let kids = labels.iter().map(|label| {
+            let content = d.add_object(Stream::new(dictionary!{}, format!("BT /OriginalFont 18 Tf 40 700 Td ({label}) Tj ET").into_bytes()));
+            Object::Reference(d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>content}))
+        }).collect::<Vec<_>>();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>kids, "Count"=>labels.len() as i64}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+    fn page_labels(path: &Path) -> Vec<String> {
+        let d = Document::load(path).unwrap();
+        d.get_pages().values().map(|page| String::from_utf8_lossy(&d.get_page_content(*page)).into_owned()).collect()
     }
     fn nested_fixture(path: &Path) {
         let mut d = Document::with_version("1.7");
@@ -1081,7 +1226,9 @@ mod tests {
         let composed=compose(&input,&scene()).unwrap();
         let pages:Vec<_>=composed.get_pages().values().copied().collect();
         assert_eq!(pages.len(),3);
-        assert_eq!(bounds(&composed,composed.get_dictionary(pages[0]).unwrap().get(b"MediaBox").unwrap()).unwrap(),[0.,0.,500.,600.]);
+        // A rotated page is redrawn upright at its scene size; its crop only sets the crop box.
+        assert_eq!(bounds(&composed,composed.get_dictionary(pages[0]).unwrap().get(b"MediaBox").unwrap()).unwrap(),[0.,0.,612.,792.]);
+        assert!(same_box(bounds(&composed,composed.get_dictionary(pages[0]).unwrap().get(b"CropBox").unwrap()).unwrap(),[10.,172.,510.,772.]));
         assert_eq!(composed.get_dictionary(pages[1]).unwrap().get(b"Rotate").unwrap().as_i64().unwrap(),90);
         let bytes=composed.get_page_content(pages[0]); let content=String::from_utf8_lossy(&bytes);
         assert!(content.contains("/S4 gs")); assert!(content.contains("re W n")); assert!(content.contains("<4C4F43414C>"));
@@ -1161,7 +1308,7 @@ mod tests {
             source_box: Some(Rect { x: page.page_box[0], y: page.page_box[1], width: page.page_box[2] - page.page_box[0], height: page.page_box[3] - page.page_box[1] }),
             objects: vec![],
         }).collect() };
-        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }, input.clone());
         assert!(outcome.error().is_none(), "no-op export failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap();
         let output_document = Document::load(output).unwrap();
@@ -1191,7 +1338,7 @@ mod tests {
             source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }),
             objects: vec![object(Kind::Text)],
         }] };
-        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }, input.clone());
         assert!(outcome.error().is_none(), "overlay export failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap();
         let output_document = Document::load(output).unwrap();
@@ -1222,12 +1369,55 @@ mod tests {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let original=fs::read(&input).unwrap();
         let occupied=temp.0.join("source-edited-1.pdf"); fs::write(&occupied,b"existing output").unwrap();
-        let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
+        let request=ExportRequest {paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput, sections: Default::default()};
         let a=export(&request,input.clone()); let b=export(&request,input.clone());
         assert!(a.error().is_none(),"{:?}",a.error()); assert!(b.error().is_none());
         assert_ne!(a.output_paths(),b.output_paths()); assert_ne!(a.output_paths()[0],input);
         assert_eq!(fs::read(&input).unwrap(),original); assert_eq!(fs::read(occupied).unwrap(),b"existing output");
         assert_eq!(Document::load(&a.output_paths()[0]).unwrap().get_pages().len(),3);
+    }
+    #[test]
+    fn export_drops_pages_omitted_from_the_scene_and_keeps_the_remaining_order() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("labelled.pdf"); labelled_pages_fixture(&input,&["Page A","Page B","Page C","Page D"]);
+        let original=fs::read(&input).unwrap();
+        let keep=|index| ScenePage{source_index:Some(index),width:612.,height:792.,rotation:0,crop:None,source_rotation:Some(0),source_box:None,objects:vec![]};
+        let outcome=export(&ExportRequest{paths:vec![input.clone()],scene:PdfScene{pages:[0,2,3].map(keep).to_vec()},output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        let labels=page_labels(&outcome.output_paths()[0]);
+        assert_eq!(labels.len(),3);
+        for (content,label) in labels.iter().zip(["Page A","Page C","Page D"]) { assert!(content.contains(&format!("({label})")),"{content}"); }
+        assert!(labels.iter().all(|content| !content.contains("(Page B)")));
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+    #[test]
+    fn export_sets_absolute_scene_rotation_and_bakes_source_rotation_into_content() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let scene=PdfScene{pages:vec![
+            ScenePage{source_index:Some(1),width:612.,height:792.,rotation:90,crop:None,source_rotation:Some(0),source_box:None,objects:vec![]},
+            ScenePage{source_index:Some(0),width:300.,height:200.,rotation:180,crop:None,source_rotation:Some(90),source_box:None,objects:vec![]},
+        ]};
+        let outcome=export(&ExportRequest{paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        let output=Document::load(&outcome.output_paths()[0]).unwrap();
+        let pages:Vec<_>=output.get_pages().values().copied().collect();
+        assert_eq!(pages.len(),2);
+        assert_eq!(inherited(&output,pages[0],b"Rotate").unwrap().unwrap().as_i64().unwrap(),90);
+        assert_eq!(bounds(&output,&inherited(&output,pages[0],b"MediaBox").unwrap().unwrap()).unwrap(),[0.,0.,612.,792.]);
+        assert_eq!(inherited(&output,pages[1],b"Rotate").unwrap().unwrap().as_i64().unwrap(),180);
+        assert_eq!(bounds(&output,&inherited(&output,pages[1],b"MediaBox").unwrap().unwrap()).unwrap(),[0.,0.,300.,200.]);
+        assert!(String::from_utf8_lossy(&output.get_page_content(pages[1])).contains("0 1 1 0 -30 -20 cm"));
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+    #[test]
+    fn export_rejects_a_scene_without_pages_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let outcome=export(&ExportRequest{paths:vec![input.clone()],scene:PdfScene{pages:vec![]},output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
+        assert!(outcome.error().is_some_and(|error| error.message.contains("1–2000 pages")),"{:?}",outcome.error());
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
+        assert_eq!(fs::read(&input).unwrap(),original);
     }
     #[test]
     fn scene_reservation_does_not_replace_a_competing_destination() {
@@ -1246,8 +1436,8 @@ mod tests {
         let mut s=scene(); s.pages[0].crop.as_mut().unwrap().x=-1.; assert!(compose(&input,&s).is_err());
         let mut s=scene(); s.pages[0].objects[0].opacity=f32::NAN; assert!(compose(&input,&s).is_err());
         let mut s=scene(); s.pages[0].source_index=Some(90); assert!(compose(&input,&s).is_err());
-        let mut s=scene(); s.pages[1].objects[0].text="unsupported \u{1f600}".into();
-        let result=export(&ExportRequest {paths:vec![],scene:s,output_location:OutputLocation::AlongsideInput},input.clone());
+        let mut s=scene(); s.pages[1].objects[0].text="unsupported \u{E000}".into();
+        let result=export(&ExportRequest {paths:vec![],scene:s,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some()); assert!(result.output_paths().is_empty());
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
         assert!(compose(&input,&PdfScene{pages:vec![]}).is_err());
@@ -1292,7 +1482,7 @@ mod tests {
         let renderer=match renderer() { Ok(r)=>r,Err(e)=>{if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}");return;} };
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let before=fs::read(&input).unwrap();
-        let request=ExportRequest{paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput};
+        let request=ExportRequest{paths:vec![input.clone()],scene:scene(),output_location:OutputLocation::AlongsideInput, sections: Default::default()};
         let exported=export(&request,input.clone()); assert!(exported.error().is_none());
         for index in 0..3 {
             let preview=preview(&PreviewRequest{path:input.clone(),scene:scene(),page_index:index}).unwrap();
@@ -1306,6 +1496,19 @@ mod tests {
         let mut bare=scene();bare.pages[0].objects.clear();
         assert_ne!(preview(&PreviewRequest{path:input.clone(),scene:bare,page_index:0}).unwrap().data_url,
             preview(&PreviewRequest{path:input,scene:scene(),page_index:0}).unwrap().data_url);
+    }
+
+    #[test]
+    fn cropped_page_preview_shows_only_the_visible_area() {
+        let _guard = crate::kit::lock_process_env();
+        if let Err(e)=renderer() { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}"); return; }
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        // A tall 200x600 crop of the 612x792 page keeps its full media box but previews at the crop's shape.
+        let page=|crop:Option<Rect>| PdfScene { pages:vec![ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop, source_rotation:None, source_box:None, objects:vec![] }] };
+        let cropped=preview(&PreviewRequest{path:input.clone(),scene:page(Some(Rect{x:100.,y:50.,width:200.,height:600.})),page_index:0}).unwrap();
+        let full=preview(&PreviewRequest{path:input,scene:page(None),page_index:0}).unwrap();
+        assert!((cropped.width as f32/cropped.height as f32 - 200./600.).abs() < 0.02, "{}x{}", cropped.width, cropped.height);
+        assert!((full.width as f32/full.height as f32 - 612./792.).abs() < 0.02, "{}x{}", full.width, full.height);
     }
 
     #[test]
@@ -1397,7 +1600,7 @@ mod tests {
         signature_object.signature_mode = Some(SignatureMode::Image);
         signature_object.signature_path = Some(signature);
         let model = PdfScene { pages: vec![ScenePage {
-            source_index: Some(0), width: 612., height: 792., rotation: 0,
+            source_index: Some(0), width: 612., height: 792., rotation: 90,
             crop: Some(Rect { x: 0., y: 0., width: 500., height: 700. }),
             source_rotation: None, source_box: None,
             objects: vec![object(Kind::Text), signature_object],
@@ -1417,6 +1620,44 @@ mod tests {
         for name in ["SceneFont", "SceneFont1", "SceneFont2"] { assert!(fonts.has(name.as_bytes())); }
         for name in ["Original", "Original1", "Original2", "Sig1", "Sig11", "Sig12"] { assert!(xobjects.has(name.as_bytes())); }
         for name in ["S0", "S01", "S02", "S1", "S11", "S12"] { assert!(states.has(name.as_bytes())); }
+    }
+
+    const BUNDLED_PDFTOTEXT_CHILD: &str = "TOOLBOX_TEST_BUNDLED_PDFTOTEXT_CHILD";
+
+    // PATH and the resource root are changed only in a child test process, because other tests spawn helpers by name.
+    #[cfg(unix)]
+    #[test]
+    fn text_preview_uses_the_bundled_pdftotext_when_path_is_empty() {
+        if std::env::var_os(BUNDLED_PDFTOTEXT_CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let _guard = crate::kit::lock_process_env();
+            let temp = TempDir::new().unwrap();
+            let pdf_bin = temp.0.join("Resources").join("pdf-bin");
+            fs::create_dir_all(&pdf_bin).unwrap();
+            let stand_in = pdf_bin.join("pdftotext");
+            // Shell built-ins only: the child runs with an empty PATH.
+            fs::write(&stand_in, "#!/bin/sh\ncase \"$1\" in -h) exit 0;; esac\nprintf '%s\\n' '<doc><page width=\"300\" height=\"200\"><word xMin=\"10\" yMin=\"20\" xMax=\"60\" yMax=\"30\">BundledStandIn</word></page></doc>'\n").unwrap();
+            fs::set_permissions(&stand_in, fs::Permissions::from_mode(0o755)).unwrap();
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args(["kit::pdf::scene::tests::text_preview_uses_the_bundled_pdftotext_when_path_is_empty", "--exact", "--nocapture", "--test-threads=1"])
+                .env(BUNDLED_PDFTOTEXT_CHILD, "1")
+                .env("PATH", "")
+                .env("TOOLBOX_RESOURCE_ROOT", temp.0.join("Resources"))
+                .env_remove("TOOLBOX_PDFTOTEXT_PATH")
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            return;
+        }
+        assert_eq!(std::env::var_os("PATH").unwrap_or_default(), "");
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        fixture(&input);
+        let runs = extract_text_runs(&input, 1, 300., 200., Instant::now() + super::super::PDF_TEXT_TIMEOUT).expect("the bundled pdftotext should be found");
+        assert_eq!(runs.len(), 1, "runs: {runs:?}");
+        assert_eq!(runs[0].text, "BundledStandIn");
+        assert_eq!((runs[0].x, runs[0].y, runs[0].width, runs[0].height), (10., 20., 50., 10.));
     }
 
     #[test]
@@ -1490,22 +1731,72 @@ mod tests {
     fn scene_rejects_nested_page_tree_before_output() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("nested.pdf"); nested_fixture(&input);
         let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }, ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("nested")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("nested-edited-1.pdf").exists());
     }
     #[test]
-    fn scene_rejects_annotation_crop_before_output() {
+    fn scene_rejects_annotation_rotation_before_output() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("annotated.pdf"); fixture(&input);
         let mut source=Document::load(&input).unwrap(); let page=source.get_pages().values().next().copied().unwrap();
         let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[20.,20.,80.,50.])});
         source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(annotation)]); source.save(&input).unwrap();
-        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), source_rotation:None, source_box:None, objects:vec![] }] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:90, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("annotation")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
+    }
+    #[test]
+    fn scene_crop_keeps_annotations_navigation_and_overlay_placement_on_the_cropped_page() {
+        // Page 1 is rotated 90 degrees with a crop box inside an offset media box, and carries a link and a widget.
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("cropped.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap();
+        let page=source.get_pages().values().next().copied().unwrap();
+        let link=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[40.,60.,90.,80.])});
+        let widget=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "Rect"=>array(&[100.,60.,180.,80.])});
+        source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(link),Object::Reference(widget)]);
+        let outlines=source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
+        let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
+        source.get_dictionary_mut(catalog_id).unwrap().set("AcroForm", dictionary! {"Fields"=>vec![Object::Reference(widget)]});
+        source.save(&input).unwrap();
+        let original=fs::read(&input).unwrap();
+        let mut shape=object(Kind::Shape); shape.shape=Some(Shape::Square);
+        let objects=vec![object(Kind::Text), shape, object(Kind::Watermark)];
+        let page_with=|crop:Option<Rect>| ScenePage { source_index:Some(0), width:300., height:200., rotation:0, crop, source_rotation:None, source_box:None, objects:objects.clone() };
+        let second=ScenePage { source_index:Some(1), width:612., height:792., rotation:0, crop:None, source_rotation:None, source_box:None, objects:vec![] };
+        let crop=Rect{x:20.,y:30.,width:200.,height:120.};
+
+        let uncropped=compose(&input,&PdfScene{pages:vec![page_with(None),second.clone()]}).unwrap();
+        let cropped=compose(&input,&PdfScene{pages:vec![page_with(Some(crop.clone())),second.clone()]}).unwrap();
+
+        let id=cropped.get_pages().values().next().copied().unwrap();
+        assert_eq!(id, page, "the cropped page keeps its object");
+        let dict=cropped.get_dictionary(id).unwrap();
+        // Displayed top-left (20,30)–(220,150) on a 90-degree page over crop box [20,30,220,330].
+        let crop_box=bounds(&cropped,dict.get(b"CropBox").unwrap()).unwrap();
+        assert!(same_box(crop_box,[50.,50.,170.,250.]), "{crop_box:?}");
+        assert_eq!(bounds(&cropped,dict.get(b"MediaBox").unwrap()).unwrap(),[10.,20.,250.,360.]);
+        assert_eq!(dict.get(b"Rotate").unwrap().as_i64().unwrap(),90);
+        assert_eq!(dict.get(b"Annots").unwrap().as_array().unwrap(),&vec![Object::Reference(link),Object::Reference(widget)]);
+        assert!(cropped.get_dictionary(catalog_id).unwrap().has(b"Outlines"));
+        // The overlays are drawn through the page's own displayed-space matrix, exactly as on the uncropped
+        // page, after the untouched original content; the watermark tiles only the visible area.
+        let drawn=|document:&Document| String::from_utf8_lossy(&document.get_page_content(document.get_pages().values().next().copied().unwrap())).into_owned();
+        let (with_crop, without_crop)=(drawn(&cropped), drawn(&uncropped));
+        assert!(with_crop.starts_with("q 1 0 0 rg 40 60 50 70 re f Q BT /OriginalFont 18 Tf 40 260 Td (Original content) Tj ET"), "{with_crop}");
+        assert!(with_crop.contains("q\n0 1 1 0 20 30 cm\n0 0 300 200 re W n\n"), "{with_crop}");
+        // Segments: original content and page matrix, then the text, the shape and the watermark.
+        let segments=|content:&str| content.split("q /S").map(str::to_string).collect::<Vec<_>>();
+        let (cropped_segments, uncropped_segments)=(segments(&with_crop), segments(&without_crop));
+        assert_eq!(cropped_segments.len(), 4, "{with_crop}");
+        assert!(cropped_segments[1].contains("30 40 120 40 re W n") && cropped_segments[1].contains("BT /SceneFont 18 Tf 1 0 0 -1 30 58 Tm <4C4F43414C> Tj ET"), "{with_crop}");
+        assert_eq!(cropped_segments[..3], uncropped_segments[..3], "text and shape land where they were placed");
+        let area=|content:&str| content.matches("Tm <4C4F43414C> Tj ET").count();
+        assert!(area(&with_crop) < area(&without_crop), "watermark covers only the visible area");
+        assert_eq!(fs::read(&input).unwrap(),original);
     }
     #[test]
     fn scene_rejects_digitally_signed_pdf_before_output() {
@@ -1520,7 +1811,7 @@ mod tests {
             ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("signed-edited-1.pdf").exists());
@@ -1545,7 +1836,7 @@ mod tests {
                 ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
                 ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ] };
-            let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+            let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
             assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")), "{name}: {:?}", result.error());
             assert!(result.output_paths().is_empty());
             assert!(!input.with_file_name(format!("{name}-edited-1.pdf")).exists());
@@ -1560,10 +1851,10 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:90,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("destinations")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("navigation-edited-1.pdf").exists());
@@ -1583,7 +1874,7 @@ mod tests {
             ScenePage {source_index:Some(0),width:200.,height:300.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_none(), "{result:?}");
         assert_eq!(result.output_paths().len(), 1);
         assert!(input.with_file_name("box-origin-navigation-edited-1.pdf").exists());
@@ -1599,7 +1890,7 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("StructTreeRoot",structure);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]}] };
-        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput},input.clone());
+        let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{:?}", result.error());
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-edited-1.pdf").exists());
@@ -1627,9 +1918,311 @@ mod tests {
         assert!(compose(&input, &identity).is_ok());
         let mut overlay = identity;
         overlay.pages[0].objects.push(object(Kind::Text));
-        let result = export(&ExportRequest { paths: vec![input.clone()], scene: overlay, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = export(&ExportRequest { paths: vec![input.clone()], scene: overlay, output_location: OutputLocation::AlongsideInput, sections: Default::default() }, input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("tagged PDF")), "{result:?}");
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("tagged-overlay-edited-1.pdf").exists());
+    }
+
+    fn wire_request(input: &Path, sections: serde_json::Value) -> ExportRequest {
+        let mut request = serde_json::json!({
+            "paths": [input],
+            "outputLocation": "alongsideInput",
+            "scene": { "pages": [
+                { "sourceIndex": 1, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [
+                    { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Staged", "fontSize": 18, "color": "#1455AA", "opacity": 1, "strokes": [] }
+                ] },
+                { "sourceIndex": null, "width": 300, "height": 200, "rotation": 90, "crop": null, "objects": [] },
+                { "sourceIndex": 0, "width": 300, "height": 200, "rotation": 0, "crop": null, "objects": [] }
+            ] }
+        });
+        request.as_object_mut().unwrap().extend(sections.as_object().unwrap().clone());
+        serde_json::from_value(request).unwrap()
+    }
+
+    #[test]
+    fn export_without_stage_sections_matches_the_overlay_only_composition() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let mut overlay_only=load(&input).unwrap();
+        let request=wire_request(&input, serde_json::json!({}));
+        let plan=overlay_preflight(&overlay_only,&request.scene).unwrap();
+        stage_apply(plan,&mut overlay_only,&request.scene,&ScriptFonts::base()).unwrap();
+        let mut expected=Vec::new(); overlay_only.save_to(&mut expected).unwrap();
+
+        for sections in [serde_json::json!({}), serde_json::json!({ "formValues": null, "textEdits": null, "flatten": null, "redactions": null })] {
+            let request=wire_request(&input, sections);
+            assert!(request.sections.form_values.is_none() && request.sections.text_edits.is_none() && request.sections.flatten.is_none() && request.sections.redactions.is_none());
+            let outcome=export(&request,input.clone());
+            assert!(outcome.error().is_none(),"{:?}",outcome.error());
+            assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(),expected);
+            fs::remove_file(&outcome.output_paths()[0]).unwrap();
+        }
+        assert_eq!(fs::read(&input).unwrap(),original);
+    }
+
+    #[test]
+    fn present_but_unimplemented_sections_are_rejected_before_output() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let cases=[
+            (serde_json::json!({ "formValues": [] }), "Filling form fields is not supported yet"),
+            (serde_json::json!({ "textEdits": [{ "run": 0 }] }), "Editing existing text is not supported yet"),
+            (serde_json::json!({ "flatten": false }), "Flattening is not supported yet"),
+            (serde_json::json!({ "redactions": [] }), "Redaction is not supported yet"),
+        ];
+        for (sections,message) in cases {
+            let outcome=export(&wire_request(&input, sections),input.clone());
+            assert!(outcome.error().is_some_and(|error| error.message.starts_with(message)),"{outcome:?}");
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1);
+            assert_eq!(fs::read(&input).unwrap(),original);
+        }
+    }
+
+    #[test]
+    fn stages_run_in_a_fixed_order_with_every_preflight_before_any_apply() {
+        assert_eq!(STAGES,[Stage::FillForms,Stage::EditText,Stage::Overlays,Stage::Flatten,Stage::Redact]);
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        let first_failure=|sections: serde_json::Value, scene: Option<PdfScene>| {
+            let mut request=wire_request(&input, sections);
+            if let Some(scene)=scene { request.scene=scene; }
+            run_stages(&input,&request.scene,&request.sections,&ScriptFonts::base()).err().unwrap()
+        };
+        let all=serde_json::json!({ "formValues": [], "textEdits": [], "flatten": true, "redactions": [] });
+        assert!(first_failure(all, None).starts_with("Filling form fields"));
+        assert!(first_failure(serde_json::json!({ "textEdits": [], "flatten": true, "redactions": [] }), None).starts_with("Editing existing text"));
+        assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), Some(PdfScene{pages:vec![]})).starts_with("Scene must contain"));
+        assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), None).starts_with("Flattening"));
+        assert!(first_failure(serde_json::json!({ "redactions": [] }), None).starts_with("Redaction"));
+    }
+
+    // Text in scripts the app does not write with its own font comes from the Unicode scripts pack.
+    mod script_packs {
+        use super::*;
+        use crate::kit::contracts::{ErrorKind, OutcomePointer, PackNeed};
+        use crate::packs::install::tests::{sandbox, Fixture, TestKey};
+        use crate::packs::install::{install, InstallContext, PackLimits};
+
+        const PACK_ID: &str = "unicode-scripts";
+        const PACK_NAME: &str = "Unicode scripts";
+        const SCRIPT_FONT_DIR_ENV: &str = "TOOLBOX_SCRIPT_FONT_DIR";
+        const APP: &str = "1.0.14";
+        const ARABIC_LINE: &str = "Paid مرحبا 2026";
+
+        /// A script pack whose Arabic font is the app's own font, which has Arabic.
+        fn script_fixture() -> Fixture {
+            let mut fixture = Fixture::new();
+            fixture.id = PACK_ID.into();
+            fixture.files = vec![("fonts/Arabic.ttf".into(), crate::kit::images::tools::INCLUDED_WATERMARK_FONT.to_vec()), ("LICENSE.txt".into(), b"OFL-1.1".to_vec())];
+            fixture
+        }
+
+        fn script_catalog(fixture: &Fixture) -> crate::packs::Catalog {
+            let mut entry = fixture.catalog_entry();
+            entry.as_object_mut().unwrap().remove("ocrLanguage");
+            entry["name"] = PACK_NAME.into();
+            entry["toolIds"] = serde_json::json!(["pdf-edit", "convert-to-pdf"]);
+            entry["scriptFonts"] = serde_json::json!({ "Arabic": "fonts/Arabic.ttf", "Devanagari": "fonts/Devanagari.ttf", "Han": "fonts/Han.ttf" });
+            entry["payloads"][0]["path"] = "packs/unicode-scripts.toolboxpack".into();
+            crate::packs::parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [entry] }).to_string()).unwrap()
+        }
+
+        fn packs(app_data: &Path) -> RunPacks {
+            RunPacks::new(Ok(app_data.to_path_buf()), APP, Ok(script_catalog(&script_fixture())))
+        }
+
+        fn text_scene(text: &str) -> PdfScene {
+            let mut text_object = object(Kind::Text);
+            text_object.text = text.into();
+            text_object.rect = Rect { x: 72., y: 100., width: 440., height: 200. };
+            text_object.opacity = 1.;
+            text_object.color = "#000000".into();
+            PdfScene { pages: vec![ScenePage { source_index: Some(1), width: 612., height: 792., rotation: 0, crop: None, source_rotation: None, source_box: None, objects: vec![text_object] }] }
+        }
+
+        fn run(input: &Path, text: &str, packs: RunPacks) -> JobOutcome {
+            let request = ExportRequest { paths: vec![input.to_path_buf()], scene: text_scene(text), output_location: OutputLocation::AlongsideInput, sections: Default::default() };
+            super::super::export(&SceneRun { request, packs }, input.to_path_buf())
+        }
+
+        fn set_font_dir(value: Option<&Path>) {
+            match value { Some(value) => std::env::set_var(SCRIPT_FONT_DIR_ENV, value), None => std::env::remove_var(SCRIPT_FONT_DIR_ENV) }
+        }
+
+        /// The fonts the output's first page writes with, by resource name.
+        fn page_fonts(document: &Document) -> Vec<(String, lopdf::Dictionary)> {
+            let page = document.get_pages().values().next().copied().unwrap();
+            let resources = document.get_dictionary(page).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
+            let fonts = resolve(document, resources.get(b"Font").unwrap()).unwrap().as_dict().unwrap().clone();
+            fonts.iter().filter_map(|(name, value)| {
+                let font = resolve(document, value).ok()?.as_dict().ok()?.clone();
+                Some((String::from_utf8_lossy(name).into_owned(), font))
+            }).collect()
+        }
+
+        /// The embedded font file of a Type 0 font, decompressed.
+        fn embedded_font(document: &Document, font: &lopdf::Dictionary) -> Vec<u8> {
+            let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+            let descriptor = document.get_dictionary(descendant).unwrap().get(b"FontDescriptor").unwrap().as_reference().unwrap();
+            let file = document.get_dictionary(descriptor).unwrap().get(b"FontFile2").unwrap().as_reference().unwrap();
+            document.get_object(file).unwrap().as_stream().unwrap().decompressed_content().unwrap()
+        }
+
+        fn page_content(document: &Document) -> String {
+            let page = document.get_pages().values().next().copied().unwrap();
+            String::from_utf8_lossy(&document.get_page_content(page)).into_owned()
+        }
+
+        fn actual_text(line: &str) -> String {
+            std::iter::once(0xFEFFu16).chain(line.encode_utf16()).map(|unit| format!("{unit:04X}")).collect()
+        }
+
+        /// The output's text as the local Poppler extracts it, when it is installed.
+        fn extracted_text(path: &Path) -> Option<String> {
+            let output = Command::new("pdftotext").args(["-enc", "UTF-8"]).arg(path).arg("-").output().ok()?;
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+
+        fn saved_files(folder: &Path) -> Vec<String> {
+            let mut names: Vec<_> = fs::read_dir(folder).unwrap().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        }
+
+        #[test]
+        fn script_text_without_its_pack_points_at_the_pack_and_saves_nothing() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("scene-script-missing");
+            let input = root.join("source.pdf");
+            fixture(&input);
+            let original = fs::read(&input).unwrap();
+            for (script, text) in [("Arabic", ARABIC_LINE), ("Devanagari", "Received from आशा"), ("Han", "你好")] {
+                let outcome = run(&input, text, packs(&root.join("app-data")));
+                let error = outcome.error().unwrap_or_else(|| panic!("{script}: {outcome:?}"));
+                assert_eq!(error.kind, ErrorKind::Unavailable, "{script}");
+                assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled }), "{script}");
+                assert_eq!(error.message, format!("{script} text needs the {PACK_NAME} pack, which isn't installed. Nothing was saved."));
+                assert!(outcome.output_paths().is_empty());
+                // The preview says the same before it renders anything.
+                let preview = super::super::preview(&PreviewRequest { path: input.clone(), scene: text_scene(text), page_index: 0 }, &packs(&root.join("app-data")));
+                assert_eq!(preview.err(), Some(error.message.clone()));
+            }
+            // A script no pack in the catalog writes has no pointer.
+            let outcome = run(&input, "สวัสดี", packs(&root.join("app-data")));
+            let error = outcome.error().unwrap();
+            assert_eq!((error.kind.clone(), error.pointer.clone(), error.message.as_str()), (ErrorKind::Unavailable, None, "Toolbox can't write Thai text yet. Nothing was saved."));
+            assert_eq!(saved_files(&root), ["source.pdf"], "nothing was saved and no pack folder was created");
+            assert_eq!(fs::read(&input).unwrap(), original);
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn latin_cyrillic_and_greek_need_no_pack() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("scene-script-base");
+            let input = root.join("source.pdf");
+            fixture(&input);
+            // No catalog and no app data: nothing may be looked up.
+            let outcome = run(&input, "Café au lait", no_packs());
+            assert!(outcome.error().is_none(), "{outcome:?}");
+            let latin = Document::load(&outcome.output_paths()[0]).unwrap();
+            assert!(page_fonts(&latin).iter().all(|(_, font)| font.get(b"Subtype").unwrap().as_name().unwrap() == b"Type1"), "Latin-1 text keeps the standard fonts");
+
+            let line = "Привет, κόσμε – Ωmega № 5";
+            let outcome = run(&input, line, no_packs());
+            assert!(outcome.error().is_none(), "{outcome:?}");
+            let output = &outcome.output_paths()[0];
+            let document = Document::load(output).unwrap();
+            let unicode: Vec<_> = page_fonts(&document).into_iter().filter(|(_, font)| font.get(b"Subtype").unwrap().as_name().unwrap() == b"Type0").collect();
+            assert_eq!(unicode.len(), 1, "one embedded font, the app's own");
+            assert!(page_content(&document).contains(&actual_text(line)));
+            if let Some(text) = extracted_text(output) {
+                assert!(text.contains(line), "{text:?}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn with_the_development_font_script_text_is_shaped_embedded_and_extracts_in_reading_order() {
+            let _guard = crate::kit::lock_process_env();
+            let root = sandbox("scene-script-override");
+            let fonts = root.join("dev-fonts");
+            fs::create_dir_all(fonts.join("fonts")).unwrap();
+            fs::write(fonts.join("fonts/Arabic.ttf"), crate::kit::images::tools::INCLUDED_WATERMARK_FONT).unwrap();
+            set_font_dir(Some(&fonts));
+            let input = root.join("source.pdf");
+            fixture(&input);
+            let original = fs::read(&input).unwrap();
+            let text = format!("{ARABIC_LINE}\nПривет κόσμε");
+            let first = run(&input, &text, packs(&root.join("app-data")));
+            let second = run(&input, &text, packs(&root.join("app-data")));
+            set_font_dir(None);
+            assert!(first.error().is_none(), "{first:?}");
+            assert!(second.error().is_none(), "{second:?}");
+            let output = first.output_paths()[0].clone();
+            assert_eq!(fs::read(&output).unwrap(), fs::read(&second.output_paths()[0]).unwrap(), "the same scene writes the same bytes");
+            assert_eq!(fs::read(&input).unwrap(), original);
+
+            let document = Document::load(&output).unwrap();
+            let unicode: Vec<_> = page_fonts(&document).into_iter().filter(|(_, font)| font.get(b"Subtype").unwrap().as_name().unwrap() == b"Type0").collect();
+            assert_eq!(unicode.len(), 2, "the app's font and the Arabic font");
+            for (_, font) in &unicode {
+                assert_eq!(font.get(b"Encoding").unwrap().as_name().unwrap(), b"Identity-H");
+                let base_font = String::from_utf8_lossy(font.get(b"BaseFont").unwrap().as_name().unwrap()).into_owned();
+                assert!(base_font.len() > 7 && base_font.as_bytes()[6] == b'+', "subset fonts are tagged: {base_font}");
+                let embedded = embedded_font(&document, font);
+                assert!(embedded.len() < crate::kit::images::tools::INCLUDED_WATERMARK_FONT.len() / 4, "only a subset is embedded: {} bytes", embedded.len());
+                assert!(rustybuzz::ttf_parser::Face::parse(&embedded, 0).is_ok());
+                assert!(font.has(b"ToUnicode"));
+            }
+            let content = page_content(&document);
+            assert!(content.contains(&actual_text("Привет κόσμε")), "left-to-right lines are marked with their text");
+            assert!(!content.contains(&actual_text(ARABIC_LINE)), "right-to-left lines extract glyph by glyph");
+            // The Arabic word is written with its joined forms, right to left.
+            let face = rustybuzz::Face::from_slice(crate::kit::images::tools::INCLUDED_WATERMARK_FONT, 0).unwrap();
+            let isolated: Vec<String> = "مرحبا".chars().map(|character| format!("<{:04X}>", face.glyph_index(character).unwrap().0)).collect();
+            assert!(!isolated.iter().all(|glyph| content.contains(glyph.as_str())), "letters are shaped, not written in their isolated forms");
+            if let Some(extracted) = extracted_text(&output) {
+                // Arabic numbers sit left of the Arabic word they follow, and the extractor lists a
+                // left-to-right line's runs in visual order, each in reading order.
+                assert!(extracted.contains("Paid 2026 \u{202B}مرحبا\u{202C}\nПривет κόσμε"), "{extracted:?}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn output_written_with_an_installed_pack_still_renders_after_the_pack_is_uninstalled() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("scene-script-installed");
+            let (fixture_pack, key) = (script_fixture(), TestKey::new(1));
+            let file = root.join("unicode-scripts.toolboxpack");
+            fs::write(&file, fixture_pack.file(&key)).unwrap();
+            let app_data = root.join("app-data");
+            let target = crate::packs::current_target();
+            install(&file, &InstallContext { catalog: &script_catalog(&fixture_pack), app_data: &app_data, target: &target, app_version: APP, public_key: &key.public_key(), limits: PackLimits::DEFAULT, cancel: None, changed: None }).unwrap();
+            let input = root.join("source.pdf");
+            fixture(&input);
+
+            let outcome = run(&input, ARABIC_LINE, packs(&app_data));
+            assert!(outcome.error().is_none(), "{outcome:?}");
+            let output = outcome.output_paths()[0].clone();
+            let temp = TempDir::new().unwrap();
+            let before = render(&output, 0, &renderer().unwrap(), &temp).unwrap().data_url;
+
+            crate::packs::uninstall::uninstall(&app_data, PACK_ID).unwrap();
+            assert!(crate::packs::installed_pack_root(&app_data, PACK_ID).is_none());
+            let after = render(&output, 0, &renderer().unwrap(), &temp).unwrap().data_url;
+            assert_eq!(before, after, "the output embeds what it needs");
+            let blank = run(&input, "", packs(&app_data));
+            assert_ne!(render(&blank.output_paths()[0], 0, &renderer().unwrap(), &temp).unwrap().data_url, after, "the text is drawn");
+            let again = run(&input, ARABIC_LINE, packs(&app_data));
+            assert_eq!(again.error().unwrap().pointer, Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled }));
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }
