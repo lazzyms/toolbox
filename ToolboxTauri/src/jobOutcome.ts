@@ -108,6 +108,7 @@ const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> =
   imageTooLarge: { ...imagePlace, width: count, height: count },
   jpegColourKept: { colour, pages: counts, images: count },
   pagesWithoutText: { pages: counts },
+  upscaled: { from: count, to: count },
 };
 
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {

@@ -88,6 +88,8 @@ export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: stri
             return warning.details.pages.length === 1
                 ? `${pageList(warning.details.pages)} has no selectable text. OCR can read it.`
                 : `${pageList(warning.details.pages)} have no selectable text. OCR can read them.`;
+        case "upscaled":
+            return `Upscaled to ${warning.details.to} from ${warning.details.from} pixels.`;
     }
 };
 
@@ -95,7 +97,7 @@ export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", da
 
 const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): RowDetail => ({
     text: warningText(warning, signatureRemovedNote),
-    tone: warning.code === "omittedContent" ? "warn" : null,
+    tone: warning.code === "omittedContent" || warning.code === "upscaled" ? "warn" : null,
 });
 
 /** Pages without text tell what OCR can still do for a file; the row points at OCR, and the summary doesn't count them. */

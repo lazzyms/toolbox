@@ -525,6 +525,8 @@ pub enum WarningKind {
     JpegColourKept { colour: JpegColour, pages: Vec<u32>, images: u32 },
     /// Pages that had no selectable text while the rest of the file did. OCR can read them.
     PagesWithoutText { pages: Vec<u32> },
+    /// The squared master was smaller than the largest size made, so that size was enlarged.
+    Upscaled { from: u32, to: u32 },
 }
 
 /// Why a JPEG copied byte for byte may show the wrong colours in some viewers.
@@ -857,9 +859,10 @@ mod tests {
             WarningKind::ImageTooLarge { page: 1, image: 1, width: 2, height: 2 },
             WarningKind::JpegColourKept { colour: JpegColour::Cmyk, pages: vec![1], images: 1 },
             WarningKind::PagesWithoutText { pages: vec![1] },
+            WarningKind::Upscaled { from: 512, to: 1024 },
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "omittedContent", "approximateLayout", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept", "pagesWithoutText"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "omittedContent", "approximateLayout", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept", "pagesWithoutText", "upscaled"]);
     }
 
     #[test]
