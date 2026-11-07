@@ -23,6 +23,25 @@ npm run check:release
 npm run build
 ```
 
+Enable the repository hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook runs the GitGuardian secret scan on staged changes, then the
+Playwright suite. The scan runs only when ggshield is installed and signed in:
+
+```bash
+brew install ggshield   # or: pipx install ggshield
+ggshield auth login
+```
+
+Pull requests are scanned by GitGuardian too, commit by commit, so a secret that
+is removed in a later commit is still reported. When it flags a dummy value in a
+test, use the check run's **Skip: test credential** action so it is not raised
+again.
+
 ## Where changes belong
 
 | Change | Location |
