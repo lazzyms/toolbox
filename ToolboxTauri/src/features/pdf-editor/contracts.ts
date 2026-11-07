@@ -1,5 +1,6 @@
 import type { OutputLocation } from "../../contracts";
 import type { PdfScene } from "./scene";
+import type { RedactionMark } from "./subtools";
 
 export type EditorLayout = "vertical" | "horizontal";
 export type EditorDensity = "compact" | "comfortable";
@@ -18,6 +19,7 @@ export interface PdfPage {
     pageBox?: [number, number, number, number];
     preview?: string | null;
     textRuns?: PdfTextRun[] | null;
+    editRuns?: PdfEditRun[] | null;
 }
 
 export interface PdfTextRun {
@@ -28,9 +30,27 @@ export interface PdfTextRun {
     height: number;
 }
 
+export type PdfEditRunReason = "picture" | "encoding" | "tagged" | "unsupported";
+
+export interface PdfEditRun extends PdfTextRun {
+    index: number;
+    fontName: string;
+    fontSize: number;
+    reason: PdfEditRunReason | null;
+}
+
+export interface PdfTextEdit {
+    pageIndex: number;
+    run: number;
+    original: string;
+    replacement: string;
+}
+
 export interface PdfDocument {
     path: string;
     pages: PdfPage[];
+    /** True when a signature field holds a signature value. An exported copy is no longer signed. */
+    signed?: boolean;
 }
 
 export interface PdfEditorState {
@@ -72,15 +92,6 @@ export interface SignPdfRequest extends CropPdfRequest {
     signaturePath: string | null;
 }
 
-export interface OrganizePdfRequest {
-    paths: string[];
-    pageOrder: number[];
-    deletePages: number[];
-    rotatePages: { page: number; degrees: number }[];
-    scope: PdfPageScope;
-    outputLocation: OutputLocation;
-}
-
 export type PdfOverlay =
     | { kind: "edit"; mode: "text" | "note" | "highlight" | "shape"; text: string; pages: number[] | null; rectangle: PdfRect }
     | { kind: "watermark"; text: string; opacity: number; position: string | null; logoPath: string | null; pages: number[] | null }
@@ -105,12 +116,33 @@ export interface PdfEditSessionRequest {
     outputLocation: OutputLocation;
 }
 
+// Widget rectangles use scene coordinates: points from the top-left of the unrotated source page.
+export interface PdfFormWidget { page: number; x: number; y: number; width: number; height: number }
+export interface PdfFormField {
+    name: string;
+    label: string | null;
+    type: 'text' | 'checkbox';
+    value: string | boolean;
+    options: string[];
+    flags: number;
+    required: boolean;
+    readOnly: boolean;
+    multiline: boolean;
+    maxLen: number | null;
+    widgets: PdfFormWidget[];
+}
+// Fields arrive in Tab order. `unsupported` explains why a form can't be filled at all.
+export interface PdfFormInspection { fields: PdfFormField[]; unsupported: string | null }
+export interface PdfFormValue { name: string; value: string | boolean }
+
 export interface PdfSceneExportRequest {
     paths: string[];
     scene: PdfScene;
     outputLocation: OutputLocation;
-    formValues?: unknown[];
-    textEdits?: unknown[];
+    /** Export As: the chosen file. Never replaced; a taken name is numbered. */
+    outputPath?: string;
+    formValues?: PdfFormValue[];
+    textEdits?: PdfTextEdit[];
     flatten?: boolean;
-    redactions?: unknown[];
+    redactions?: RedactionMark[];
 }
