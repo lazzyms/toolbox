@@ -112,19 +112,19 @@ a{color:inherit}a:hover{color:var(--mut)}
 <p>Contact for payment questions: accounts@harbourproperties.example, telephone 0113 496 0721.</p>
 <p>Tenant's National Insurance number: QQ 12 34 56 C, provided for referencing only.</p>
 <p style="position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; font-size: 9px; color: #6b6b6b">Page 9 of 14</p>
-<button class="obj idle" aria-label="Redaction mark, sort code" style="left: 132px; top: 132px; width: 52px; height: 14px; background: rgba(0,0,0,.18); outline: 1.5px dashed #1f1f1f; border: 0"></button>
-<button class="obj" aria-label="Redaction mark, account number. Selected" style="left: 150px; top: 147px; width: 62px; height: 14px; background: rgba(0,0,0,.18); outline: 1.5px dashed #1f1f1f; border: 0"></button><span class="h" aria-hidden="true" style="left: 147px; top: 144px"></span><span class="h" aria-hidden="true" style="left: 208px; top: 144px"></span><span class="h" aria-hidden="true" style="left: 147px; top: 157px"></span><span class="h" aria-hidden="true" style="left: 208px; top: 157px"></span>
-<button class="obj idle" aria-label="Redaction mark, address" style="left: 184px; top: 190px; width: 120px; height: 14px; background: rgba(0,0,0,.18); outline: 1.5px dashed #1f1f1f; border: 0"></button>
-<button class="obj idle" aria-label="Redaction mark, NI number, search match" style="left: 310px; top: 280px; width: 92px; height: 14px; background: rgba(0,0,0,.18); outline: 1.5px dashed #1f1f1f; border: 0"></button>
+<button class="obj idle" aria-label="Redaction mark, sort code" style="left: 103px; top: 117px; width: 44px; height: 15px; background: {{markBg}}; outline: {{markLine}}; border: 0"></button>
+<button class="obj" aria-label="Redaction mark, account number. Selected" style="left: 136px; top: 132px; width: 49px; height: 15px; background: {{markBg}}; outline: {{selLine}}; outline-offset: {{selOff}}; border: 0"></button><sc-if value="{{handles}}" hint-placeholder-val="{{ true }}"><span class="h" aria-hidden="true" style="left: 133px; top: 129px"></span><span class="h" aria-hidden="true" style="left: 181px; top: 129px"></span><span class="h" aria-hidden="true" style="left: 133px; top: 143px"></span><span class="h" aria-hidden="true" style="left: 181px; top: 143px"></span></sc-if>
+<button class="obj idle" aria-label="Redaction mark, address" style="left: 175px; top: 154px; width: 146px; height: 15px; background: {{markBg}}; outline: {{markLine}}; border: 0"></button>
+<button class="obj idle" aria-label="Redaction mark, NI number, search match" style="left: 223px; top: 228px; width: 72px; height: 15px; background: {{markBg}}; outline: {{markLine}}; border: 0"></button><sc-if value="{{isSearch}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="position: absolute; left: 111px; top: 154px; width: 51px; height: 15px; background: rgba(255,196,0,.4); outline: 1.5px solid #c99a00"></span></sc-if>
 </div></main>
 <aside aria-labelledby="insp" style="width: 300px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow: auto">
 <div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 14px">
 <div style="display: flex; flex-direction: column; gap: 4px"><h2 id="insp" style="margin: 0; font-size: 14px; font-weight: 600">Redact</h2>
 <p class="hint" style="margin: 0">Drag over anything you want removed. Marks are only previews until you export.</p></div>
-<div style="display: flex; flex-direction: column; gap: 6px"><label class="lbl" for="rs">Find text to redact</label>
-<div style="display: flex; gap: 6px"><input id="rs" class="field" value="QQ 12 34 56 C" style="flex: 1"><button class="btn sm">Find</button></div>
+<sc-if value="{{notReview}}" hint-placeholder-val="{{ true }}"><div style="display: flex; flex-direction: column; gap: 6px"><label class="lbl" for="rs">Find text to redact</label>
+<div style="display: flex; gap: 6px"><input id="rs" class="field" value="{{query}}" style="flex: 1"><button class="btn sm">Find</button></div>
 <label style="display: flex; gap: 8px; align-items: center" class="hint"><input type="checkbox">Match case</label>
-<div style="display: flex; align-items: center; gap: 8px"><span class="hint" role="status" style="flex: 1">1 match, on page 9</span><button class="btn sm">Mark all matches</button></div></div>
+<sc-if value="{{isMarking}}" hint-placeholder-val="{{ true }}"><div style="display: flex; align-items: center; gap: 8px"><span class="hint" role="status" style="flex: 1">1 match, on page 9</span><button class="btn sm">Mark all matches</button></div></sc-if></div><sc-if value="{{isSearch}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="rl">3 matches for “Asha Patel”</span><ul aria-labelledby="rl" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px"><li><label style="display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 6px"><input type="checkbox" checked style="margin-top: 2px"><span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-size: 13px">Page 1</span><span class="hint">…between Harbour Properties Ltd and <b>Asha Patel</b> (the Tenant)…</span></span></label></li><li><label style="display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 6px"><input type="checkbox" checked style="margin-top: 2px"><span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-size: 13px">Page 9</span><span class="hint">The Tenant, <b>Asha Patel</b>, of 22 Wren Street…</span></span></label></li><li><label style="display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: 6px"><input type="checkbox" style="margin-top: 2px"><span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="font-size: 13px">Page 14</span><span class="hint">Tenant, <b>Asha Patel</b> (signature line)</span></span></label></li></ul><span class="hint">Uncheck a match to leave it visible. Matches inside pictures aren't found, so check scanned pages by eye.</span><div style="display: flex; gap: 6px"><button class="btn sm pri">Mark 2 selected</button><button class="btn sm ghost">Clear search</button></div></div></sc-if>
 <div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="ml">Marks</span>
 <ol class="olist" aria-labelledby="ml">
 <li><button aria-current="false"><span style="flex: 1">Page 9, sort code</span></button></li>
@@ -133,7 +133,7 @@ a{color:inherit}a:hover{color:var(--mut)}
 <li><button aria-current="false"><span style="flex: 1">Page 9, “QQ 12 34 56 C”</span></button></li>
 <li><button aria-current="false"><span style="flex: 1">Page 11, signature area</span></button></li>
 </ol>
-<div style="display: flex; gap: 6px"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg>Remove mark</button><button class="btn sm ghost">Remove all</button></div></div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap"><button class="btn sm">Review marks</button><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg>Remove mark</button><button class="btn sm ghost">Remove all</button></div></div></sc-if><sc-if value="{{isReview}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 10px"><div style="display: flex; align-items: center; gap: 8px"><span class="lbl" role="status" style="flex: 1">Mark 2 of 5: page 9, account number</span></div><div style="display: flex; gap: 6px"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>Previous</button><button class="btn sm">Next<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg>Remove</button></div><label style="display: flex; gap: 8px; align-items: center; font-size: 13px"><input type="checkbox" checked>Preview as exported</label><span class="hint">Marks show as they will in the copy: solid boxes with nothing underneath. Tab and Shift+Tab also step through marks, and the page follows.</span><ol class="olist" aria-label="Marks to review"><li><button aria-current="false"><span style="flex: 1">Page 9, sort code</span></button></li><li><button aria-current="true"><span style="flex: 1">Page 9, account number</span></button></li><li><button aria-current="false"><span style="flex: 1">Page 9, address</span></button></li><li><button aria-current="false"><span style="flex: 1">Page 9, “QQ 12 34 56 C”</span></button></li><li><button aria-current="false"><span style="flex: 1">Page 11, signature area</span></button></li></ol><button class="btn sm pri" style="align-self: flex-start">Done reviewing</button></div></sc-if>
 <div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="fc">Fill</span>
 <div role="radiogroup" aria-labelledby="fc" class="seg"><button role="radio" aria-checked="true">Black</button><button role="radio" aria-checked="false" tabindex="-1">White</button></div></div>
 <div class="note" style="border-color: var(--warn)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); margin-top: 1px"><path d="M12 3l10 18H2z"></path><path d="M12 10v5M12 18v.5"></path></svg><span class="hint"><strong style="font-weight: 600; color: var(--fg)">Redaction is permanent in the copy.</strong> Pages with marks become images, and hidden data is removed. Details appear before you export.</span></div>
@@ -155,13 +155,13 @@ a{color:inherit}a:hover{color:var(--mut)}
 <footer style="height: 30px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--side)">
 <label class="hint" for="pg" style="display: flex; align-items: center; gap: 6px">Page<input id="pg" class="field" value="9" inputmode="numeric" style="width: 44px; height: 22px; padding: 0 6px; text-align: center"></label><span class="hint">of 14</span>
 <div style="flex: 1"></div>
-<span class="hint" role="status">Marked 1 match for “QQ 12 34 56 C”.</span>
+<span class="hint" role="status">{{statusMsg}}</span>
 <span class="sep" aria-hidden="true"></span>
 <span class="hint">The original PDF is never changed</span>
 </footer>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "step": {"editor": "enum", "options": ["Marking", "Export disclosure"], "default": "Marking"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "step": {"editor": "enum", "options": ["Marking", "Search results", "Reviewing", "Export disclosure"], "default": "Marking"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
@@ -180,7 +180,9 @@ mod: win ? 'Ctrl' : '⌘',
 reveal: win ? 'Show in File Explorer' : 'Show in Finder',
 docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents'
 };
-const extra = { showDisc: (this.props.step ?? 'Marking') === 'Export disclosure' };
+const st = this.props.step ?? 'Marking';
+const isSearch = st === 'Search results', isReview = st === 'Reviewing';
+const extra = { showDisc: st === 'Export disclosure', isSearch, isReview, notReview: !isReview, isMarking: !isSearch, handles: !isReview, query: isSearch ? 'Asha Patel' : 'QQ 12 34 56 C', markBg: isReview ? '#111111' : 'rgba(0,0,0,.18)', selLine: isReview ? '2px solid #1d5fd1' : '1.5px dashed #1f1f1f', selOff: isReview ? '2px' : '0', markLine: isReview ? '1.5px solid #111111' : '1.5px dashed #1f1f1f', statusMsg: isSearch ? '3 matches for “Asha Patel” on pages 1, 9 and 14.' : isReview ? 'Reviewing mark 2 of 5.' : 'Marked 1 match for “QQ 12 34 56 C”.' };
 return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
 }
 }
