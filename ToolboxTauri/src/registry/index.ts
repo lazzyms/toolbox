@@ -11,19 +11,19 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-page-numbers", title: "Add PDF Page Numbers", shortTitle: "Page Numbers", resultVerb: "Numbered", runningVerb: "Numbering", blurb: "Stamp page numbers onto a PDF.", symbol: "numbers", category: "PDF", command: "add_page_numbers", verification: "pdf-page-numbers", view: "pdf-page-numbers" },
     { id: "pdf-merge", title: "Merge PDF", shortTitle: "Merge", resultVerb: "Merged", runningVerb: "Merging", blurb: "Combine several PDFs into one file.", symbol: "files", category: "PDF", command: "merge_pdfs", verification: "pdf-merge", view: "pdf-merge" },
     { id: "pdf-watermark", title: "Watermark PDF", shortTitle: "Watermark", resultVerb: "Watermarked", runningVerb: "Watermarking", blurb: "Stamp text across PDF pages.", symbol: "droplet", category: "PDF", command: "watermark_pdf", verification: "pdf-watermark", view: "pdf-watermark" },
-    { id: "pdf-crop", title: "Crop PDF", shortTitle: "Crop", resultVerb: "Cropped", runningVerb: "Cropping", blurb: "Hide content outside a selected page rectangle.", symbol: "crop", category: "PDF", command: "crop_pdf", verification: "pdf-crop", view: "pdf-crop" },
+    { id: "pdf-crop", title: "Crop and Resize PDF", shortTitle: "Crop and Resize", resultVerb: "Cropped", runningVerb: "Cropping", blurb: "Trim the edges of every page.", symbol: "crop", category: "PDF", command: "crop_pdf", verification: "pdf-crop", view: "pdf-crop" },
     { id: "pdf-edit", title: "Edit PDF", shortTitle: "Edit", resultVerb: "Edited", runningVerb: "Editing", blurb: "Add text, highlights, shapes, and notes to a PDF.", symbol: "wand", category: "PDF", command: "edit_pdf", verification: "pdf-edit", view: "pdf-edit" },
     { id: "images-to-pdf", title: "Images to PDF", shortTitle: "Images to PDF", resultVerb: "Converted", runningVerb: "Converting", blurb: "Turn photos and scans into one PDF.", symbol: "photo", category: "PDF", command: "images_to_pdf", verification: "images-to-pdf", view: "images-to-pdf" },
-    { id: "pdf-to-images", title: "PDF to Images", shortTitle: "PDF to Images", resultVerb: "Converted", runningVerb: "Converting", blurb: "Render PDF pages to JPEG images at 72 to 300 dpi.", symbol: "photo", category: "PDF", command: "pdf_to_images", verification: "pdf-to-images", view: "pdf-to-images" },
-    { id: "pdf-to-text", title: "PDF to Text", shortTitle: "PDF to Text", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Extract selectable PDF text into a text file.", symbol: "file-text", category: "PDF", command: "pdf_to_text", verification: "pdf-to-text", view: "pdf-to-text" },
+    { id: "pdf-to-images", title: "PDF to Images", shortTitle: "PDF to Images", resultVerb: "Converted", runningVerb: "Converting", outputNoun: "images", blurb: "Render PDF pages to JPEG, PNG or WebP images at 72 to 300 dpi.", symbol: "photo", category: "PDF", command: "pdf_to_images", verification: "pdf-to-images", view: "pdf-to-images" },
+    { id: "pdf-extract", title: "Extract from PDF", shortTitle: "Extract from PDF", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Save the text, the images, or both from each PDF.", keywords: ["text", "txt", "images", "pictures", "photos", "extract", "pdf to text", "extract images"], symbol: "file-text", category: "PDF", command: "extract_from_pdf", verification: "pdf-extract", view: "pdf-extract" },
+    { id: "convert-to-pdf", title: "Convert to PDF", shortTitle: "Convert to PDF", resultVerb: "Saved", resultNoun: "PDF", runningVerb: "Converting", blurb: "Turn documents, spreadsheets, slides, eBooks and text into PDFs.", symbol: "file-text", category: "PDF", command: "convert_to_pdf", verification: "convert-to-pdf", view: "convert-to-pdf" },
     { id: "pdf-split", title: "Split PDF", shortTitle: "Split", resultVerb: "Split", runningVerb: "Splitting", blurb: "Break a PDF into separate page files.", symbol: "file-scissors", category: "PDF", command: "split_pdf", verification: "pdf-split", view: "pdf-split" },
-    { id: "pdf-image-extract", title: "Extract Images from PDF", shortTitle: "Extract Images", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Pull embedded JPEG pictures out at their original resolution.", symbol: "photo-search", category: "PDF", command: "extract_pdf_images", verification: "pdf-image-extract", view: "pdf-image-extract" },
     { id: "pdf-sign", title: "Sign PDF", shortTitle: "Sign", resultVerb: "Signed", runningVerb: "Signing", blurb: "Place a visible typed signature on a PDF page.", symbol: "signature", category: "PDF", command: "sign_pdf", verification: "pdf-sign", view: "pdf-sign" },
     { id: "pdf-ocr", title: "OCR PDF", shortTitle: "OCR", resultVerb: "Recognised", runningVerb: "Recognising", blurb: "Read text out of scans through an offline OCR adapter.", symbol: "scan", category: "PDF", command: "ocr_pdf", verification: "pdf-ocr", view: "pdf-ocr" },
-    { id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", resultVerb: "Trimmed", runningVerb: "Trimming", blurb: "Delete selected pages while keeping the rest in order.", symbol: "file-minus", category: "PDF", command: "remove_pdf_pages", verification: "pdf-remove-pages", view: "pdf-remove-pages" },
+    { id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", resultVerb: "Trimmed", runningVerb: "Trimming", blurb: "Delete selected pages while keeping the rest in order.", symbol: "file-minus", category: "PDF", command: "export_pdf_scene", verification: "pdf-remove-pages", view: "pdf-remove-pages" },
     { id: "pdf-extract-pages", title: "Extract PDF Pages", shortTitle: "Extract Pages", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Pull selected page ranges into a new PDF.", symbol: "file-search", category: "PDF", command: "extract_pdf_pages", verification: "pdf-extract-pages", view: "pdf-extract-pages" },
-    { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", resultVerb: "Organized", runningVerb: "Organizing", blurb: "Reorder, rotate, remove, or add blank PDF pages and save an organized copy.", symbol: "layout-grid", category: "PDF", command: "organize_pdf", verification: "pdf-organize", view: "pdf-organize" },
-    { id: "pdf-compress", title: "Compress PDF", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Shrink PDF stream data without changing page geometry.", symbol: "file-download", category: "PDF", command: "compress_pdf", verification: "pdf-compress", view: "pdf-compress" },
+    { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", resultVerb: "Organized", runningVerb: "Organizing", blurb: "Reorder, rotate, mirror and remove PDF pages and save an organized copy.", symbol: "layout-grid", category: "PDF", command: "export_pdf_scene", verification: "pdf-organize", view: "pdf-organize" },
+    { id: "compress-files", title: "Compress", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Make PDFs smaller without losing anything.", symbol: "file-download", category: "PDF", command: "compress_files", verification: "compress-files", view: "compress-files" },
     { id: "pdf-rotate", title: "Rotate PDFs", shortTitle: "Rotate", resultVerb: "Rotated", runningVerb: "Rotating", blurb: "Turn all pages, or just the ones you pick.", symbol: "rotate", category: "PDF", command: "rotate_pdf", verification: "pdf-rotate", view: "pdf-rotate" },
     { id: "pdf-repair", title: "Repair PDF", shortTitle: "Repair", resultVerb: "Repaired", runningVerb: "Repairing", blurb: "Fix a damaged PDF that won't open properly.", symbol: "tool", category: "PDF", command: "repair_pdf", verification: "pdf-repair", view: "pdf-repair" },
     { id: "pdf-redact", title: "Redact PDF", shortTitle: "Redact", resultVerb: "Redacted", runningVerb: "Redacting", blurb: "Black out private details so they can't be recovered.", symbol: "eye-off", category: "PDF", command: "redact_pdf", verification: "pdf-redact", view: "pdf-redact" },
@@ -34,7 +34,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "compress", title: "Compress Images", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Shrink image files losslessly or trade quality for size.", symbol: "file-download", category: "Images", command: "compress_images", verification: "compress-images", view: "image-compress" },
     { id: "resize", title: "Resize Images", shortTitle: "Resize", resultVerb: "Resized", runningVerb: "Resizing", blurb: "Scale images to exact dimensions.", symbol: "resize", category: "Images", command: "resize_images", verification: "resize-images", view: "image-resize" },
     { id: "rotate", title: "Rotate and Flip Images", shortTitle: "Rotate", resultVerb: "Rotated", runningVerb: "Rotating", blurb: "Rotate images by a right angle.", symbol: "rotate", category: "Images", command: "rotate_images", verification: "rotate-images", view: "image-rotate" },
-    { id: "crop", title: "Crop Images", shortTitle: "Crop", resultVerb: "Cropped", runningVerb: "Cropping", blurb: "Crop images to a pixel rectangle.", symbol: "crop", category: "Images", command: "crop_images", verification: "crop-images", view: "image-crop" },
+    { id: "crop", title: "Crop Images", shortTitle: "Crop", resultVerb: "Cropped", runningVerb: "Cropping", blurb: "Crop a batch of images to an aspect ratio or a pixel rectangle.", symbol: "crop", category: "Images", command: "export_image_edit_stack", verification: "crop-images", view: "image-crop" },
     { id: "icon-set", title: "Generate App Icons", shortTitle: "Icons", resultVerb: "Generated", runningVerb: "Generating", blurb: "Turn one image into a complete app icon set.", symbol: "icons", category: "Images", command: "generate_icon_set", verification: "icon-set", view: "image-icons" },
     { id: "gif-create", title: "Create GIF", shortTitle: "GIF Maker", resultVerb: "Created", runningVerb: "Creating", blurb: "Animate a batch of still images into a looped GIF.", symbol: "movie", category: "Images", command: "create_gif", verification: "gif-create", view: "gif-create" },
     { id: "gif-extract", title: "Extract GIF Frames", shortTitle: "Frames", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Split an animated GIF into individual frames.", symbol: "stack-2", category: "Images", command: "extract_gif_frames", verification: "gif-extract", view: "gif-extract" },
@@ -116,7 +116,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "arrows-exchange",
         category: "PDF",
         categories: ["PDF"],
-        toolIds: ["pdf-to-images", "images-to-pdf", "pdf-ocr", "pdf-to-text", "pdf-image-extract"],
+        toolIds: ["pdf-to-images", "pdf-extract", "images-to-pdf", "pdf-ocr", "convert-to-pdf"],
     },
     {
         id: "image-editor",
@@ -140,7 +140,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "compress-pdf",
         category: "PDF",
         categories: ["PDF", "Images"],
-        toolIds: ["pdf-compress", "compress"],
+        toolIds: ["compress-files", "compress"],
     },
     {
         id: "media-tools",
@@ -212,5 +212,5 @@ export const workspaceEntries = (
 };
 
 /** PDF Editor tools that open the full-window page editor rather than a batch screen. */
-const pdfSceneToolIds: readonly AtomicToolId[] = ["pdf-edit", "pdf-crop", "pdf-watermark", "pdf-sign", "pdf-page-numbers", "pdf-remove-pages", "pdf-organize"];
+const pdfSceneToolIds: readonly AtomicToolId[] = ["pdf-edit", "pdf-watermark", "pdf-sign", "pdf-page-numbers", "pdf-remove-pages", "pdf-organize"];
 export const isPdfSceneTool = (id: AtomicToolId) => pdfSceneToolIds.includes(id);

@@ -229,7 +229,7 @@ fn edit(request: &EditPropertiesRequest, input: &Path) -> Result<Edited, ToolErr
         return Ok(Edited::Unchanged(format!("No effective change: {}. No copy was made.", sentence_list(&unchanged))));
     }
 
-    let signed = super::remove_signatures(&mut document).map_err(ToolError::processing)?;
+    let signed = super::remove_signature_values(&mut document).map_err(ToolError::processing)?;
     apply_info(&mut document, &effective).map_err(ToolError::processing)?;
     match packet {
         Some((id, bytes)) => {
