@@ -1,6 +1,8 @@
 import { useState, type ComponentType } from 'react';
-import { Bold, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart } from 'lucide-react';
+import { TypedSignature } from './SceneCanvas';
+import { Bold, Check, Info, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart, TriangleAlert } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { NativeSelect } from '../../components/ui/native-select';
@@ -9,7 +11,9 @@ import { Slider } from '../../components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
 import type { WatermarkOptions, WatermarkPlacement } from '../../contracts';
-import { pagesInRange, WATERMARK_DEFAULT_SIZE } from './scene';
+import type { PdfEditRun, PdfFormEntry, PdfFormField, PdfFormInspection, PdfTextEdit } from './contracts';
+import { formChoiceText, isFormEntryEmpty } from './form-checks';
+import { notEditableReasons, pagesInRange, textOverflowWords, WATERMARK_DEFAULT_SIZE } from './scene';
 import type { PageNumberFormat, PageNumberOptions, PageNumberPosition, SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
 import type { SubToolId } from './subtools';
 
@@ -28,26 +32,33 @@ export interface SubToolInspectorProps {
   signaturePath: string | null; signaturePreview: string | null;
   signatureText: string; setSignatureText: (value: string) => void;
   signatureTextDraft: string; setSignatureTextDraft: (value: string) => void;
-  signatureFont: string; setSignatureFont: (value: string) => void;
+  signatureColor: string; setSignatureColor: (value: string) => void;
+  signatureError: string | null;
   chooseSignatureImage: () => Promise<void>;
+  usedSignatures: UsedSignature[]; reuseSignature: (value: UsedSignature) => void; clearUsedSignatures: () => void;
   pageCount: number;
   addWatermark: () => void;
   chooseWatermarkPicture: () => Promise<void>;
   watermarkPictureError: string | null;
   addPageNumbers: () => void;
+  form: PdfFormInspection | null;
+  formValue: (field: PdfFormField) => PdfFormEntry;
+  formFlag: (field: PdfFormField) => string | null;
+  goToField: (field: PdfFormField) => void;
+  goToNextRequired: () => void;
+  switchToAddText: () => void;
+  selectedRun: PdfEditRun | undefined;
+  textEdits: PdfTextEdit[];
+  pageNumberOf: (sourceIndex: number) => number;
+  showEdit: (edit: PdfTextEdit) => void;
+  revertEdit: (edit: PdfTextEdit) => void;
+  chooseTool: (tool: SceneTool) => void;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
 
-const signatureFontOptions = [
-  { value: 'Satisfy', label: 'Satisfy — cursive' },
-  { value: 'Pacifico', label: 'Pacifico — cursive' },
-  { value: 'Helvetica-Oblique', label: 'Helvetica italic' },
-  { value: 'Times-Italic', label: 'Times italic' },
-  { value: 'Courier-Oblique', label: 'Courier italic' },
-  { value: 'Helvetica', label: 'Helvetica' },
-  { value: 'Times-Roman', label: 'Times' },
-  { value: 'Courier', label: 'Courier' },
-];
+// A signature placed earlier in this app session; see usedSignatures in the workspace.
+export interface UsedSignature { mode: SignatureMode; text: string; path: string | null; preview: string | null; color: string }
+const inks = [{ value: '#1f1f1f', label: 'Black' }, { value: '#1a3a8f', label: 'Dark blue' }];
 const watermarkAngles: Record<string, number> = { rising: -45, horizontal: 0, falling: 45 };
 const watermarkPlacements: { value: WatermarkPlacement; label: string }[] = [
   { value: 'center', label: 'Centre' }, { value: 'top-left', label: 'Top left' }, { value: 'top-right', label: 'Top right' },
@@ -63,7 +74,6 @@ const TextFields: Panel = ({ selected, fontSize, setFontSize, textStyle, setText
     fontFamily: (selected.fontFamily as TextFontFamily | undefined) ?? 'Noto Sans', bold: Boolean(selected.bold), italic: Boolean(selected.italic), align: selected.align ?? 'left',
   } : textStyle;
   const setStyle = (patch: Partial<TextStyle>, field: string) => selected ? updateObject(patch, field) : setTextStyle({ ...textStyle, ...patch });
-  const commitRange = (value: string) => { if (selected && value.trim() !== (selected.pageRange ?? '')) updateObject({ pageRange: value.trim() }, 'page-range'); };
   return <>
     <div className="scene-inspector-field"><Label htmlFor="scene-text-font">Font</Label>
       <NativeSelect id="scene-text-font" size="sm" value={style.fontFamily} onChange={(event) => setStyle({ fontFamily: event.target.value as TextFontFamily }, 'font-family')}>
@@ -92,19 +102,27 @@ const TextFields: Panel = ({ selected, fontSize, setFontSize, textStyle, setText
         </ToggleGroup>
       </div>
     </div>
-    {selected?.kind === 'text' && <fieldset className="scene-inspector-field">
-      <legend className="mb-1.5 text-sm font-medium">Show this text on</legend>
-      <RadioGroup className="gap-1.5" value={selected.pageRange == null ? 'page' : 'pages'}
-        onValueChange={(value) => updateObject({ pageRange: value === 'page' ? null : String(pageNumber) }, 'page-range')}>
-        <span className="settings-radio"><RadioGroupItem id="scene-text-this-page" value="page" /><Label htmlFor="scene-text-this-page">This page only</Label></span>
-        <span className="settings-radio"><RadioGroupItem id="scene-text-pages" value="pages" /><Label htmlFor="scene-text-pages">These pages</Label></span>
-      </RadioGroup>
-      <Input key={`${selected.id}:${selected.pageRange ?? ''}`} aria-label="Pages for this text box" placeholder="For example 1-3, 7, 10-"
-        defaultValue={selected.pageRange ?? ''} disabled={selected.pageRange == null}
-        onBlur={(event) => commitRange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') commitRange(event.currentTarget.value); }} />
-    </fieldset>}
+    {selected?.kind === 'text' && <PageRangeField selected={selected} updateObject={updateObject} pageNumber={pageNumber}
+      legend="Show this text on" pagesLabel="These pages" inputLabel="Pages for this text box" placeholder="For example 1-3, 7, 10-" />}
   </>;
 };
+
+function PageRangeField({ selected, updateObject, pageNumber, legend, pagesLabel, inputLabel, placeholder }: Pick<SubToolInspectorProps, 'updateObject' | 'pageNumber'>
+  & { selected: SceneObject; legend: string; pagesLabel: string; inputLabel: string; placeholder: string }) {
+  const id = `scene-${selected.kind}`;
+  const commitRange = (value: string) => { if (value.trim() !== (selected.pageRange ?? '')) updateObject({ pageRange: value.trim() }, 'page-range'); };
+  return <fieldset className="scene-inspector-field">
+    <legend className="mb-1.5 text-sm font-medium">{legend}</legend>
+    <RadioGroup className="gap-1.5" value={selected.pageRange == null ? 'page' : 'pages'}
+      onValueChange={(value) => updateObject({ pageRange: value === 'page' ? null : String(pageNumber) }, 'page-range')}>
+      <span className="settings-radio"><RadioGroupItem id={`${id}-this-page`} value="page" /><Label htmlFor={`${id}-this-page`}>This page only</Label></span>
+      <span className="settings-radio"><RadioGroupItem id={`${id}-pages`} value="pages" /><Label htmlFor={`${id}-pages`}>{pagesLabel}</Label></span>
+    </RadioGroup>
+    <Input key={`${selected.id}:${selected.pageRange ?? ''}`} aria-label={inputLabel} placeholder={placeholder}
+      defaultValue={selected.pageRange ?? ''} disabled={selected.pageRange == null}
+      onBlur={(event) => commitRange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') commitRange(event.currentTarget.value); }} />
+  </fieldset>;
+}
 
 const ShapeFields: Panel = ({ selected, shape, setShape, updateObject }) => <div className="scene-inspector-field">
   <Label htmlFor="scene-shape-type">Shape type</Label>
@@ -116,40 +134,64 @@ const ShapeFields: Panel = ({ selected, shape, setShape, updateObject }) => <div
   </NativeSelect>
 </div>;
 
+const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
 const SignatureFields: Panel = (props) => {
-  const { selected, updateObject, endGroup, signatureTextDraft } = props;
+  const { selected, updateObject, endGroup, signatureTextDraft, pageNumber } = props;
   const selectedSignature = selected?.kind === 'signature' ? selected : null;
-  const mode = selected?.signatureMode ?? props.signatureMode;
-  const path = selected?.signaturePath ?? props.signaturePath;
-  const preview = selected?.signaturePreview ?? props.signaturePreview;
+  const mode = selectedSignature?.signatureMode ?? props.signatureMode;
+  const path = selectedSignature ? selectedSignature.signaturePath : props.signaturePath;
+  const preview = selectedSignature ? selectedSignature.signaturePreview : props.signaturePreview;
+  const name = selectedSignature ? signatureTextDraft : props.signatureText;
+  const ink = selectedSignature?.color ?? props.signatureColor;
+  const setInk = (value: string) => selectedSignature ? updateObject({ color: value }, 'color') : props.setSignatureColor(value);
   return <>
-    <div className="scene-inspector-field"><Label htmlFor="scene-signature-mode">Signature mode</Label>
-      <NativeSelect id="scene-signature-mode" size="sm" value={mode}
-        onChange={(event) => { const value = event.target.value as SignatureMode; selected ? updateObject({ signatureMode: value, strokes: [] }, 'signature-mode') : props.setSignatureMode(value); }}>
-        <option value="image">Choose image</option><option value="text">Type signature</option>
-      </NativeSelect>
-    </div>
+    <p className="scene-property-note">Type your name or use a picture of your signature, then click where it goes.</p>
+    <p className="scene-property-note" id="scene-signature-note">This adds a picture of a signature. It isn't a certified digital signature.</p>
+    <ToggleGroup type="single" variant="outline" size="sm" className="w-full" aria-label="Signature source" value={mode}
+      onValueChange={(value) => { if (!value) return; selectedSignature ? updateObject({ signatureMode: value as SignatureMode }, 'signature-mode') : props.setSignatureMode(value as SignatureMode); }}>
+      <ToggleGroupItem value="text">Type</ToggleGroupItem>
+      <ToggleGroupItem value="image">Picture</ToggleGroupItem>
+    </ToggleGroup>
     {mode === 'image' ? <>
-      <Button variant="outline" size="sm" onClick={() => void props.chooseSignatureImage()}>Choose signature image</Button>
-      <p className="scene-property-note">{path ? path.split(/[\\/]/).pop() : 'No image chosen'}</p>
+      <Button variant="outline" size="sm" onClick={() => void props.chooseSignatureImage()}>Choose a PNG or JPG</Button>
+      {props.signatureError && <p role="alert" className="scene-property-note text-destructive">{props.signatureError}</p>}
+      {path && <p className="scene-property-note">{fileName(path)}</p>}
+      {preview && <img className="scene-signature-mini-preview" alt="Selected signature preview" src={preview} />}
     </> : <>
-      <div className="scene-inspector-field"><Label htmlFor="scene-signature-text">Signature text</Label>
-        <Input id="scene-signature-text" value={selectedSignature ? signatureTextDraft : props.signatureText}
+      <div className="scene-inspector-field"><Label htmlFor="scene-signature-text">Name</Label>
+        <Input id="scene-signature-text" value={name} maxLength={200}
           onChange={(event) => selectedSignature ? props.setSignatureTextDraft(event.target.value) : props.setSignatureText(event.target.value)}
           onBlur={() => { if (selectedSignature && signatureTextDraft !== selectedSignature.text) updateObject({ text: signatureTextDraft }, 'signature-text'); endGroup(); }} />
       </div>
-      <div className="scene-inspector-field"><Label htmlFor="scene-signature-font">Signature font</Label>
-        <NativeSelect id="scene-signature-font" size="sm" value={selected?.fontFamily ?? props.signatureFont}
-          onChange={(event) => selected ? updateObject({ fontFamily: event.target.value }, 'signature-font') : props.setSignatureFont(event.target.value)}>
-          {signatureFontOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </NativeSelect>
+      <div role="img" aria-label="Preview" className="scene-signature-preview">
+        {name.trim() && <TypedSignature text={name} color={ink} width="100%" height="100%" />}
       </div>
     </>}
-    <div className="scene-inspector-field"><Label htmlFor="scene-signature-size">Font size</Label>
-      <Input id="scene-signature-size" type="number" min="8" max="144" value={selected?.fontSize ?? Math.max(18, props.fontSize)}
-        onChange={(event) => { const value = Math.max(8, Math.min(144, Number(event.target.value) || 8)); selected ? updateObject({ fontSize: value }, 'signature-font-size') : props.setFontSize(value); }} onBlur={endGroup} />
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-signature-ink">Ink</span>
+      <div className="flex items-center gap-3">
+        <RadioGroup className="flex gap-3" aria-labelledby="scene-signature-ink" value={inks.some((item) => item.value === ink.toLowerCase()) ? ink.toLowerCase() : ''} onValueChange={setInk}>
+          {inks.map((item) => <RadioGroupItem key={item.value} value={item.value} aria-label={item.label} className="size-5" style={{ backgroundColor: item.value }} />)}
+        </RadioGroup>
+        <input type="color" aria-label="Other colour" value={ink} onChange={(event) => setInk(event.target.value)} onBlur={endGroup} />
+      </div>
     </div>
-    {mode === 'image' && preview && <img className="scene-signature-mini-preview" alt="Selected signature preview" src={preview} />}
+    <p className="scene-property-note">Corner handles keep proportions.</p>
+    {selectedSignature && <PageRangeField selected={selectedSignature} updateObject={updateObject} pageNumber={pageNumber}
+      legend="Place on" pagesLabel="These pages, for initials" inputLabel="Pages for this signature" placeholder="For example 1-13" />}
+    {props.usedSignatures.length > 0 && <div className="scene-inspector-field">
+      <span className="text-sm font-medium" id="scene-signature-reuse">Use again</span>
+      <p className="scene-property-note">Signatures you place stay here until you close Toolbox. They're never saved to disk.</p>
+      <ul className="flex flex-col gap-1" aria-labelledby="scene-signature-reuse" aria-describedby="scene-signature-note">
+        {props.usedSignatures.map((item) => <li key={`${item.mode}:${item.path ?? item.text}:${item.color}`}>
+          <Button variant="ghost" size="sm" className="w-full justify-between" onClick={() => props.reuseSignature(item)}>
+            <span style={{ color: item.color }}>{item.mode === 'text' ? item.text : fileName(item.path ?? '')}</span>
+            <span className="scene-property-note">{item.mode === 'text' ? 'Typed' : fileName(item.path ?? '')}</span>
+          </Button>
+        </li>)}
+      </ul>
+      <Button variant="ghost" size="sm" onClick={props.clearUsedSignatures}>Clear list</Button>
+    </div>}
   </>;
 };
 
@@ -333,8 +375,9 @@ const TextGuide: Panel = () =>
 const HighlightGuide: Panel = ({ hasTextRuns }) =>
   <p className="scene-property-note">{hasTextRuns ? 'Drag across selectable PDF text, or draw a highlight area.' : 'Drag across the page to highlight an area.'}</p>;
 
-const SignatureGuide: Panel = ({ selected, signatureMode }) => selected ? null
-  : <p className="scene-property-note">{signatureMode === 'image' ? 'Choose an image, then drag its box onto the page.' : 'Type a signature, choose its font, then drag a box onto the page.'}</p>;
+const SignatureGuide: Panel = ({ selected, signatureMode, signaturePath, signatureText }) => selected ? null
+  : <p className="scene-property-note">{signatureMode === 'image' ? signaturePath ? 'Click the page to place the picture, or drag to set its size.' : 'Choose a PNG or JPG before placing it.'
+    : signatureText.trim() ? 'Click the page to place the signature, or drag to set its size.' : 'Type a name before placing it.'}</p>;
 
 const WatermarkGuide: Panel = ({ selected, addWatermark }) => {
   const availability = useToolAvailability();
@@ -360,8 +403,91 @@ const CropGuide: Panel = ({ page, commitPage }) => {
   </> : null;
 };
 
+const pageList = (pages: number[]) => pages.length === 1 ? `page ${pages[0]}`
+  : `pages ${pages.slice(0, -1).join(', ')} and ${pages[pages.length - 1]}`;
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+const FormGuide: Panel = ({ page, form, formValue, formFlag, goToField, goToNextRequired, switchToAddText }) => {
+  if (!form) return <p className="scene-property-note" role="status">Reading the form fields…</p>;
+  if (form.unsupported || !form.fields.length) {
+    const [headline, ...rest] = (form.unsupported ?? 'This PDF has no form fields to fill.').split(/(?<=\.) /);
+    return <>
+      <p className="scene-property-note">{form.unsupported ? 'This PDF has a form, but not one Toolbox can fill.' : 'Fill form is unavailable for this PDF.'}</p>
+      <Card className="scene-form-note py-0" role="note"><CardContent className="scene-form-note-content">
+        <TriangleAlert aria-hidden="true" /><p><strong>{headline}</strong> {rest.join(' ')}</p>
+      </CardContent></Card>
+      <p className="scene-property-note">{form.unsupported ? 'To fill it anyway, open it in Adobe Acrobat or Reader. Or type your answers onto the page with Add text.' : 'Type your answers onto the page with Add text instead.'}</p>
+      <Button variant="outline" size="sm" className="self-start" onClick={switchToAddText}>Use Add text instead</Button>
+    </>;
+  }
+  const pages = [...new Set(form.fields.map((field) => field.widgets[0].page + 1))].sort((a, b) => a - b);
+  const missing = form.fields.filter((field) => field.required && isFormEntryEmpty(formValue(field))).length;
+  const invalid = form.fields.filter((field) => (formFlag(field) ?? 'Required') !== 'Required').length;
+  const status = (field: PdfFormField) => {
+    const value = formValue(field);
+    const flag = formFlag(field);
+    const flagged = (text: string) => flag ? <span className="text-destructive">{text}</span> : text;
+    if (flag && flag !== 'Required') return flagged(flag);
+    if (field.type === 'checkbox') return value ? 'Checked' : field.required ? flagged('Required, not checked') : null;
+    if (!isFormEntryEmpty(value)) return field.type === 'text' ? <Check aria-label="Filled" /> : formChoiceText(field, value);
+    if (field.widgets[0].page !== page.sourceIndex) return `Page ${field.widgets[0].page + 1}${field.required ? ', required' : ''}`;
+    return field.required ? flagged('Required, empty') : field.readOnly ? 'Read-only' : null;
+  };
+  const problems = [
+    invalid ? `${plural(invalid, "field has an entry that isn't valid", "fields have entries that aren't valid")}` : '',
+    missing ? `${plural(missing, 'required field is', 'required fields are')} still empty` : '',
+  ].filter(Boolean).join(', and ');
+  return <>
+    <p className="scene-property-note">Type into the fields on the page. Tab moves to the next field in the order below.</p>
+    <Card className="scene-form-note py-0" role="note"><CardContent className="scene-form-note-content">
+      <Info aria-hidden="true" /><p>{`${plural(form.fields.length, 'field', 'fields')} on ${pageList(pages)}.`}{problems ? ` ${problems}.` : ''}</p>
+    </CardContent></Card>
+    <Button variant="outline" size="sm" className="self-start" disabled={!missing} onClick={goToNextRequired}>Go to next empty required field</Button>
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-form-fields">Fields</span>
+      <ol className="scene-form-fields" aria-labelledby="scene-form-fields">
+        {form.fields.map((field) => <li key={field.name}>
+          <Button variant="ghost" size="sm" className="w-full justify-between" onClick={() => goToField(field)}>
+            <span className="truncate">{field.label || field.name}</span><span className="scene-property-note">{status(field)}</span>
+          </Button>
+        </li>)}
+      </ol>
+    </div>
+  </>;
+};
+
+const EditTextGuide: Panel = ({ page, selectedRun, textEdits, pageNumberOf, showEdit, revertEdit, chooseTool }) => {
+  const availability = useToolAvailability();
+  const selectedEdit = selectedRun && textEdits.find((edit) => edit.pageIndex === page.sourceIndex && edit.run === selectedRun.index);
+  const overflow = selectedEdit ? textOverflowWords(selectedEdit.original, selectedEdit.replacement) : 0;
+  return <>
+    {selectedRun?.reason && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text can't be edited.</CardTitle>
+        <CardDescription>{notEditableReasons[selectedRun.reason].detail}</CardDescription></CardHeader>
+      {availability.allows('pdf-edit') && <CardContent className="px-3">
+        <Button variant="ghost" size="sm" onClick={() => chooseTool('text')}>Cover it with Add text instead</Button>
+      </CardContent>}
+    </Card>}
+    {selectedRun && !selectedRun.reason && <div className="scene-inspector-field" role="group" aria-label="Selected text">
+      <Label>Selected text</Label>
+      <p className="scene-property-note">{selectedRun.fontName} · {Math.round(selectedRun.fontSize * 10) / 10} pt</p>
+      <p className="scene-property-note">Edited text keeps this font, size and colour.</p>
+    </div>}
+    {overflow > 0 && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text is too long for its space.</CardTitle>
+        <CardDescription>Shorten it so it fits the original line.</CardDescription></CardHeader>
+    </Card>}
+    {textEdits.length > 0 && <div className="scene-inspector-field" role="group" aria-label="Edits on this document">
+      <Label>Edits on this document</Label>
+      {textEdits.map((edit) => <Button key={`${edit.pageIndex}-${edit.run}`} variant="ghost" size="sm" className="h-auto justify-start whitespace-normal text-left"
+        onClick={() => showEdit(edit)}>Page {pageNumberOf(edit.pageIndex)}: “{edit.original}” to “{edit.replacement}”</Button>)}
+    </div>}
+    {selectedEdit && <Button variant="ghost" size="sm" onClick={() => revertEdit(selectedEdit)}>Revert this text</Button>}
+  </>;
+};
+
 // Fields edit the selected object or the next new one; Guide shows while the sub-tool is active.
 export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?: Panel; Guide?: Panel }>> = {
+  'edit-text': { Guide: EditTextGuide },
   text: { Fields: TextFields, Guide: TextGuide },
   highlight: { Guide: HighlightGuide },
   shape: { Fields: ShapeFields },
@@ -369,4 +495,5 @@ export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?:
   watermark: { Fields: WatermarkFields, Guide: WatermarkGuide },
   pageNumbers: { Fields: PageNumberFields, Guide: PageNumberGuide },
   crop: { Guide: CropGuide },
+  form: { Guide: FormGuide },
 };
