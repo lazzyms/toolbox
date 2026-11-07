@@ -11,19 +11,19 @@ export type AtomicToolId =
   | "pdf-edit"
   | "images-to-pdf"
   | "pdf-to-images"
-  | "pdf-to-text"
+  | "pdf-extract"
   | "pdf-split"
-  | "pdf-image-extract"
   | "pdf-sign"
   | "pdf-ocr"
   | "pdf-remove-pages"
   | "pdf-extract-pages"
   | "pdf-organize"
-  | "pdf-compress"
+  | "compress-files"
   | "pdf-rotate"
   | "pdf-repair"
   | "pdf-redact"
   | "pdf-compare"
+  | "pdf-privacy"
   | "heic-convert"
   | "compress"
   | "resize"
@@ -47,18 +47,28 @@ export type WorkspaceId =
   | "compress-files"
   | "media-tools";
 
-export type ToolInputCardinality = "single" | "multiple" | "ordered";
+/** "none" marks a creation tool: it takes no input files and accepts no extensions. */
+export type ToolInputCardinality = "single" | "multiple" | "ordered" | "none";
 
 export type NativeAvailability = "available" | "unavailable";
 
+export interface FormatFamily {
+  id: string;
+  extensions: readonly string[];
+  nativeAvailability: NativeAvailability;
+  basicFidelity: boolean;
+}
+
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
+  formatFamilies?: readonly FormatFamily[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;
   nativeAvailability: NativeAvailability;
   outputSuffix: string;
   manyToOne: boolean;
+  outputFormats?: readonly string[];
 }
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
@@ -80,22 +90,21 @@ export type ToolCommand =
   | "inspect_pdf"
   | "crop_pdf"
   | "edit_pdf"
+  | "export_pdf_scene"
   | "sign_pdf"
-  | "organize_pdf"
   | "add_page_numbers"
   | "watermark_pdf"
-  | "compress_pdf"
+  | "compress_files"
   | "rotate_pdf"
   | "repair_pdf"
+  | "inspect_pdf_privacy"
   | "redact_pdf"
   | "compare_pdfs"
-  | "remove_pdf_pages"
   | "extract_pdf_pages"
   | "merge_pdfs"
   | "split_pdf"
   | "pdf_to_images"
-  | "pdf_to_text"
-  | "extract_pdf_images"
+  | "extract_from_pdf"
   | "images_to_pdf"
   | "ocr_pdf"
   | "blur_faces"
@@ -103,6 +112,7 @@ export type ToolCommand =
   | "resize_images"
   | "rotate_images"
   | "crop_images"
+  | "export_image_edit_stack"
   | "adjust_image_tone"
   | "watermark_images"
   | "generate_icon_set"
@@ -117,7 +127,7 @@ export type OutcomePointer =
   | { kind: "pack"; packId: string }
   | { kind: "outputFolder" };
 
-export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "textLength";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
   | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }
@@ -148,7 +158,9 @@ export type OutcomeWarning =
   | { code: "signatureRemoved"; message: string }
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
-  | { code: "precisionReduced"; message: string };
+  | { code: "precisionReduced"; message: string }
+  | { code: "bookmarksNotCarried"; message: string; details: { into: string } }
+  | { code: "tagsNotCarried"; message: string; details: { into: string } };
 
 export type WarningCode = OutcomeWarning["code"];
 
@@ -156,6 +168,8 @@ interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  originalBytes?: number;
+  outputBytes?: number;
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
@@ -194,6 +208,25 @@ export interface ImagePreview {
   dataUrl: string;
 }
 
+export type ImageMetadataFormat = "jpeg" | "png" | "webp" | "tiff" | "heic";
+
+export type ImageMetadataErrorCode = "unreadable" | "unsupportedFormat" | "truncated" | "corrupt";
+
+export type ImageMetadataInspection =
+  | {
+      status: "report";
+      path: string;
+      format: ImageMetadataFormat;
+      exif: boolean;
+      gps: boolean;
+      xmp: boolean;
+      iptc: boolean;
+      comments: boolean;
+      icc: boolean;
+      orientation: number | null;
+    }
+  | { status: "error"; path: string; code: ImageMetadataErrorCode; message: string };
+
 export interface ToolDefinition {
   id: AtomicToolId;
   title: string;
@@ -201,6 +234,7 @@ export interface ToolDefinition {
   resultVerb: string;
   runningVerb: string;
   runningDetail?: string;
+  outputNoun?: string;
   lockedNote?: string;
   blurb: string;
   keywords?: readonly string[];
@@ -218,18 +252,18 @@ export interface ToolDefinition {
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"
-    | "pdf-compress"
+    | "compress-files"
     | "pdf-rotate"
     | "pdf-repair"
     | "pdf-redact"
     | "pdf-compare"
+    | "pdf-privacy"
     | "pdf-remove-pages"
     | "pdf-extract-pages"
     | "pdf-merge"
     | "pdf-split"
     | "pdf-to-images"
-    | "pdf-to-text"
-    | "pdf-image-extract"
+    | "pdf-extract"
     | "images-to-pdf"
     | "pdf-ocr"
     | "image-blur-faces"
@@ -260,8 +294,8 @@ export interface ToolWorkspaceDefinition {
   toolIds: AtomicToolId[];
   /** Tools shown as one entry whose tabs or modes are those tools. The entry opens the first one. */
   editor?: { title: string; blurb: string; symbol: string; toolIds: AtomicToolId[] };
-  /** Tools listed after the main tools, under More. */
-  moreToolIds?: AtomicToolId[];
+  /** Labelled groups listed after the main tools, in this order, such as Details and More. */
+  groups?: { label: string; toolIds: AtomicToolId[] }[];
 }
 
 export interface ToolRequest {
@@ -281,6 +315,30 @@ export interface PasswordRequest extends ToolRequest {
   password: string;
   passwordOverrides: Record<string, string>;
 }
+
+/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss at each level. */
+export type CompressLevel = "low" | "medium" | "high";
+
+export interface CompressFilesRequest extends ToolRequest {
+  level: CompressLevel;
+  stripExif: boolean;
+}
+
+export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number };
+
+// Mirrors kit::common::watermark::WatermarkOptions.
+export interface WatermarkOptions {
+  text?: string;
+  logoPath?: string;
+  size?: number;
+  opacity: number;
+  color?: string;
+  position?: WatermarkPosition;
+  rotation?: number;
+}
+
+export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
 
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
