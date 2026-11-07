@@ -586,12 +586,14 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             const pasted = pastedHtml(entry.path);
                             const name = pasted?.name ?? fileName(entry.path);
                             const isSelected = selection.has(entry.key);
+                            const mark = flag ? null : intakeCopy?.mark?.(entry.path) ?? null;
+                            const label = mark ? `${name}, ${mark.toLowerCase()}` : name;
                             return (
                                 <li
                                     key={entry.key}
                                     role="option"
                                     aria-selected={isSelected}
-                                    aria-label={ordered ? `${index + 1} of ${entries.length}, ${name}` : name}
+                                    aria-label={ordered ? `${index + 1} of ${entries.length}, ${label}` : label}
                                     data-intake-key={entry.key}
                                     data-flag={flag?.kind}
                                     data-dragging={dragKey === entry.key ? 'true' : undefined}
@@ -642,6 +644,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         <span className="file-selection-detail">{flag?.message ?? (pasted ? pastedRowDetail(pasted) : shortenHomePath(parentFolder(entry.path), home))}</span>
                                     </Button>
                                     {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? "Won't run"}</Badge>}
+                                    {mark && <Badge variant="outline" className="file-selection-badge">{mark}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (

@@ -164,6 +164,9 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
       : fail(`${path}.warnings`, "an array"),
     ...byteSizes(outcome, path),
     ...pageDetails(outcome, path),
+    ...(outcome.basicFidelity === undefined
+      ? {}
+      : { basicFidelity: typeof outcome.basicFidelity === "boolean" ? outcome.basicFidelity : fail(`${path}.basicFidelity`, "a boolean") }),
     ...(outcome.fonts === undefined
       ? {}
       : {

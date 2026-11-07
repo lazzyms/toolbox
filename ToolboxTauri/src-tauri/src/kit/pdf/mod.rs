@@ -23,6 +23,10 @@ pub mod ods;
 pub mod presentation;
 pub mod pptx;
 pub mod odp;
+pub mod compound;
+pub mod doc;
+pub mod xls;
+pub mod ppt;
 pub mod convert;
 
 use std::collections::HashSet;

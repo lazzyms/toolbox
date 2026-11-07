@@ -127,5 +127,15 @@
         "source": "bundled fallback"
       }
     ]
+  },
+  {
+    "inputPath": "minutes.doc",
+    "state": "succeeded",
+    "outputPaths": ["minutes.pdf"],
+    "detail": "2 pages.",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "basicFidelity": true
   }
 ]

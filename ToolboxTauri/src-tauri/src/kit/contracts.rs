@@ -349,6 +349,14 @@ pub fn native_capability(command: &str) -> Option<&'static NativeCapability> {
         .find(|capability| capability.command == command)
 }
 
+/// Whether `path` is in one of the command's format families that it reads in basic fidelity.
+pub fn is_basic_fidelity(command: &str, path: &Path) -> bool {
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else { return false };
+    native_capability(command).is_some_and(|capability| capability.format_families.iter().any(|family| {
+        family.basic_fidelity && family.extensions.iter().any(|accepted| accepted.trim_start_matches('.').eq_ignore_ascii_case(extension))
+    }))
+}
+
 pub struct ValidatedCommandInputs {
     pub accepted: Vec<(usize, PathBuf)>,
     pub rejected: Vec<(usize, JobOutcome)>,
@@ -510,6 +518,8 @@ pub struct JobOutcome {
     pub original_bytes: Option<u64>,
     pub output_bytes: Option<u64>,
     pub page_details: Vec<OutcomeDetail>,
+    /// The input is in a format family read in basic fidelity, so the output may differ from the original more than usual.
+    pub basic_fidelity: bool,
 }
 
 impl JobOutcome {
@@ -530,7 +540,7 @@ impl JobOutcome {
     }
 
     fn new(input_path: PathBuf, detail: String, state: OutcomeState) -> Self {
-        Self { input_path, detail, warnings: Vec::new(), fonts: Vec::new(), state, original_bytes: None, output_bytes: None, page_details: Vec::new() }
+        Self { input_path, detail, warnings: Vec::new(), fonts: Vec::new(), state, original_bytes: None, output_bytes: None, page_details: Vec::new(), basic_fidelity: false }
     }
 
     pub fn with_sizes(self, original_bytes: u64, output_bytes: u64) -> Self {
@@ -539,6 +549,10 @@ impl JobOutcome {
 
     pub fn with_page_details(self, page_details: Vec<OutcomeDetail>) -> Self {
         Self { page_details, ..self }
+    }
+
+    pub fn with_basic_fidelity(self) -> Self {
+        Self { basic_fidelity: true, ..self }
     }
 
     pub fn with_fonts(mut self, fonts: Vec<FontReport>) -> Self {
@@ -592,6 +606,8 @@ struct JobOutcomeWire {
     page_details: Vec<OutcomeDetail>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     fonts: Vec<FontReport>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    basic_fidelity: bool,
 }
 
 impl From<JobOutcome> for JobOutcomeWire {
@@ -601,7 +617,7 @@ impl From<JobOutcome> for JobOutcomeWire {
             OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
             OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
         };
-        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, fonts: outcome.fonts, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes, page_details: outcome.page_details }
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, fonts: outcome.fonts, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes, page_details: outcome.page_details, basic_fidelity: outcome.basic_fidelity }
     }
 }
 
@@ -615,7 +631,7 @@ impl TryFrom<JobOutcomeWire> for JobOutcome {
             (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
             (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
         };
-        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, fonts: wire.fonts, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes, page_details: wire.page_details })
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, fonts: wire.fonts, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes, page_details: wire.page_details, basic_fidelity: wire.basic_fidelity })
     }
 }
 
@@ -844,6 +860,7 @@ mod tests {
                 style_used: FontStyle::Regular,
                 source: FontSource::BundledFallback,
             }]),
+            JobOutcome::succeeded(PathBuf::from("minutes.doc"), vec![PathBuf::from("minutes.pdf")], "2 pages.").with_basic_fidelity(),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
@@ -1084,7 +1101,7 @@ mod tests {
         assert_eq!(families, [
             ("plain-text", true, false), ("pdf", true, false), ("word", true, false), ("rich-text", true, false), ("spreadsheets", true, false),
             ("presentations", true, false), ("markdown", true, false), ("web-pages", true, false), ("tables", true, false),
-            ("ebooks", true, false), ("legacy-office", false, true), ("mobi", false, false),
+            ("ebooks", true, false), ("legacy-office", true, true), ("mobi", false, false),
         ]);
         assert!(convert.native_available && convert.output_suffix.is_empty() && !convert.many_to_one);
         assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
@@ -1099,6 +1116,10 @@ mod tests {
         assert_eq!(rejected[0], (2, ErrorKind::Unavailable, "MOBI comes in a later update."));
         assert_eq!((rejected[1].0, &rejected[1].1), (4, &ErrorKind::InvalidInput));
         assert_eq!(rejected.len(), 2);
+
+        assert!(["/in/old.doc", "/in/OLD.XLS", "/in/deck.ppt"].iter().all(|path| is_basic_fidelity("convert_to_pdf", Path::new(path))));
+        assert!(["/in/new.docx", "/in/notes.txt", "/in/none"].iter().all(|path| !is_basic_fidelity("convert_to_pdf", Path::new(path))));
+        assert!(!is_basic_fidelity("compress_pdf", Path::new("/in/old.doc")));
     }
 
     #[test]

@@ -193,6 +193,8 @@ interface JobOutcomeBase {
   outputBytes?: number;
   pageDetails?: OutcomeDetail[];
   fonts?: FontUse[];
+  /** The input is in a format read in basic fidelity, so the output may differ from it more than usual. */
+  basicFidelity?: boolean;
 }
 
 export interface SucceededJobOutcome extends JobOutcomeBase {
