@@ -135,8 +135,10 @@ a{color:inherit}a:hover{color:var(--mut)}
 <div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 16px">
 <div style="display: flex; flex-direction: column; gap: 4px">
 <h2 id="insp" style="margin: 0; font-size: 14px; font-weight: 600">Sign</h2>
-<p class="hint" style="margin: 0">Type your name or use a picture of your signature, then click where it goes.</p>
+<p class="hint" style="margin: 0">{{intro}}</p>
 </div>
+<div class="note" id="sigNote"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint">This adds a picture of a signature. It isn't a certified digital signature.</span></div>
+<sc-if value="{{placing}}" hint-placeholder-val="{{ true }}">
 <div role="tablist" aria-label="Signature source" class="seg" style="align-self: stretch; display: grid; grid-template-columns: 1fr 1fr">
 <button role="tab" aria-selected="{{typeSel}}" aria-checked="{{typeSel}}" aria-controls="sigpanel" tabindex="{{typeTab}}">Type</button>
 <button role="tab" aria-selected="{{imgSel}}" aria-checked="{{imgSel}}" aria-controls="sigpanel" tabindex="{{imgTab}}">Picture</button>
@@ -167,15 +169,17 @@ a{color:inherit}a:hover{color:var(--mut)}
 <label style="display: flex; gap: 8px; align-items: center"><input type="radio" name="scope">These pages, for initials</label>
 <input class="field" aria-label="Pages for this signature" placeholder="For example 1-13" disabled>
 </fieldset>
+</sc-if>
 <div style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 6px">
 <span class="lbl" id="reuse">Use again</span>
 <p class="hint" style="margin: 0">Signatures you place stay here until you close Toolbox. They're never saved to disk.</p>
-<ul class="olist" aria-labelledby="reuse">
+<ul class="olist" aria-labelledby="reuse" aria-describedby="sigNote">
 <li><button aria-current="true"><span style="font-family: 'Snell Roundhand','Segoe Script',cursive; font-size: 18px; line-height: 1.1">Asha Patel</span><span class="hint" style="margin-left: auto">Typed</span></button></li>
 <li><button aria-current="false"><span style="font-family: 'Snell Roundhand','Segoe Script',cursive; font-size: 18px; line-height: 1.1">AP</span><span class="hint" style="margin-left: auto">initials.png</span></button></li>
 </ul>
+<sc-if value="{{reusing}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 4px"><span class="hint">Placed so far: page 14 (Tenant), page 2 (Initials). Each placed copy can be moved, resized or deleted on its own.</span></div>
+<div style="display: flex; gap: 8px"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>New signature</button><button class="btn sm ghost">Clear list</button></div></sc-if>
 </div>
-<div class="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint">This adds a picture of a signature. It isn't a certified digital signature.</span></div>
 </div>
 </aside>
 </div>
@@ -188,7 +192,7 @@ a{color:inherit}a:hover{color:var(--mut)}
 </footer>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "source": {"editor": "enum", "options": ["Type", "Picture"], "default": "Type"}, "ink": {"editor": "enum", "options": ["Black", "Dark blue"], "default": "Dark blue"}, "drag": {"editor": "enum", "options": ["Selected", "Moving", "Resizing", "Rotating"], "default": "Selected"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "source": {"editor": "enum", "options": ["Type", "Picture"], "default": "Type"}, "ink": {"editor": "enum", "options": ["Black", "Dark blue"], "default": "Dark blue"}, "drag": {"editor": "enum", "options": ["Selected", "Moving", "Resizing", "Rotating"], "default": "Selected"}, "panel": {"editor": "enum", "options": ["Placing", "Use again"], "default": "Placing"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
@@ -215,6 +219,7 @@ const ink = this.props.ink ?? 'Black';
 const t = tab === 'Type';
 const extra = { isType: t, isImg: !t, typeSel: t ? 'true' : 'false', imgSel: t ? 'false' : 'true', typeTab: t ? '0' : '-1', imgTab: t ? '-1' : '0',
 inkHex: ink === 'Black' ? '#1f1f1f' : '#1a3a8f', inkBlack: ink === 'Black' ? 'true' : 'false', inkBlue: ink === 'Black' ? 'false' : 'true',
+placing: this.props.panel !== 'Use again', reusing: this.props.panel === 'Use again', intro: this.props.panel === 'Use again' ? 'Pick a signature you used before, then click where it goes on the page.' : 'Type your name or use a picture of your signature, then click where it goes.',
 ringBlack: ink === 'Black' ? 'var(--fg)' : 'var(--line2)', ringBlue: ink === 'Black' ? 'var(--line2)' : 'var(--fg)', ...dragX };
 return Object.assign(base, typeof extra === 'undefined' ? {} : extra);
 }
