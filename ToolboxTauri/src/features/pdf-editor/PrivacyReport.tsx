@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Copy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import { ResultList, revealButtonLabel } from "../../components/ResultList";
 import { describeLocation } from "../../components/RunDestination";
 import { passwordsFor, PasswordRetryForm } from "../../components/PasswordFields";
 import type { PdfEditorBatchTool, ReportActions } from "./batchTools";
+import { matchReportKey, reportKeyAria, reportKeyLabel } from "../../shortcuts";
 
 /** The report `inspect_pdf_privacy` returns in each succeeded outcome's detail. */
 interface PdfProperties {
@@ -265,7 +266,7 @@ const formatLabel: Record<ReportFormat, string> = { json: "JSON", markdown: "Mar
 const formatExtension: Record<ReportFormat, string> = { json: "json", markdown: "md" };
 const detailsName = (inputPath: string, format: ReportFormat) => `${fileName(inputPath).replace(/\.[^.]+$/, "")}-details.${formatExtension[format]}`;
 
-const CopyButton = ({ label, text }: { label: string; text: () => string }) => {
+const CopyButton = ({ label, text, shortcut = false }: { label: string; text: () => string; shortcut?: boolean }) => {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const copy = async () => {
     try {
@@ -277,17 +278,19 @@ const CopyButton = ({ label, text }: { label: string; text: () => string }) => {
   };
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => void copy()}>
+      <Button variant="outline" size="sm" onClick={() => void copy()} {...(shortcut ? { "data-report-copy": "", "aria-keyshortcuts": reportKeyAria("copyReport") } : {})}>
         {state === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
         {state === "copied" ? "Copied" : label}
+        {shortcut && <kbd aria-hidden="true" className="shortcut-hint">{reportKeyLabel("copyReport")}</kbd>}
       </Button>
       {state === "failed" && <span role="alert" className="privacy-report-error">Couldn't copy to the clipboard.</span>}
     </>
   );
 };
 
-const ExportButtons = ({ copyLabel, saveLabel, readable, home, busy, onSave }: {
+const ExportButtons = ({ copyLabel, copyShortcut = false, saveLabel, readable, home, busy, onSave }: {
   copyLabel: string;
+  copyShortcut?: boolean;
   saveLabel: string;
   readable: Readable[];
   home: string | null;
@@ -295,7 +298,7 @@ const ExportButtons = ({ copyLabel, saveLabel, readable, home, busy, onSave }: {
   onSave: (entries: Readable[], format: ReportFormat) => void;
 }) => (
   <>
-    <CopyButton label={copyLabel} text={() => readable.map(({ inputPath, report }) => reportMarkdown(inputPath, report, home)).join("\n")} />
+    <CopyButton label={copyLabel} shortcut={copyShortcut} text={() => readable.map(({ inputPath, report }) => reportMarkdown(inputPath, report, home)).join("\n")} />
     {(["json", "markdown"] as const).map((format) => (
       <Button key={format} variant="outline" size="sm" disabled={busy} onClick={() => onSave(readable, format)}>{saveLabel} {formatLabel[format]}</Button>
     ))}
@@ -309,7 +312,7 @@ const FileReport = ({ outcome, home, actions, saving, onSave }: { outcome: JobOu
   const summary = report ? summaryOf(report) : null;
   const categories = summary?.categories ?? [];
   return (
-    <Card role="region" aria-labelledby={headingId} className="privacy-report py-0" data-state={report ? "report" : "failed"}>
+    <Card role="region" aria-labelledby={headingId} tabIndex={-1} data-report-region="" className="privacy-report py-0" data-state={report ? "report" : "failed"}>
       <CardContent className="privacy-report-content p-4">
         <div className="privacy-report-header">
           <div className="privacy-report-heading">
@@ -318,7 +321,7 @@ const FileReport = ({ outcome, home, actions, saving, onSave }: { outcome: JobOu
           </div>
           {report && (
             <div role="group" aria-label="This report" className="privacy-report-export">
-              <ExportButtons copyLabel="Copy" saveLabel="Save as" readable={[{ inputPath: outcome.inputPath, report }]} home={home} busy={saving} onSave={onSave} />
+              <ExportButtons copyLabel="Copy" copyShortcut saveLabel="Save as" readable={[{ inputPath: outcome.inputPath, report }]} home={home} busy={saving} onSave={onSave} />
             </div>
           )}
         </div>
@@ -449,6 +452,27 @@ const SavedReports = ({ saved, home }: { saved: Saved; home: string | null }) =>
   );
 };
 
+/** ⌥↑ and ⌥↓ move focus to the previous or next file's report; ⇧⌘C copies the report that has focus. */
+const moveBetweenReports = (event: ReactKeyboardEvent<HTMLElement>) => {
+  const key = matchReportKey(event.nativeEvent);
+  if (!key) return;
+  const current = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-report-region]") : null;
+  if (key === "copyReport") {
+    const copy = current?.querySelector<HTMLButtonElement>("[data-report-copy]");
+    if (!copy) return;
+    event.preventDefault();
+    copy.click();
+    return;
+  }
+  const regions = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-report-region]")];
+  const index = current ? regions.indexOf(current) : -1;
+  const next = regions[key === "nextReport" ? index + 1 : index === -1 ? regions.length - 1 : index - 1];
+  if (!next) return;
+  event.preventDefault();
+  next.focus();
+  next.scrollIntoView?.({ block: "nearest" });
+};
+
 export const PrivacyReports = ({ results, actions }: { results: JobOutcome[]; actions: ReportActions }) => {
   const home = useHomeDir();
   const [saving, setSaving] = useState(false);
@@ -484,12 +508,19 @@ export const PrivacyReports = ({ results, actions }: { results: JobOutcome[]; ac
   };
   const onSave = (entries: Readable[], format: ReportFormat) => void save(entries, format);
   return (
-    <section className="privacy-reports" aria-label="Privacy reports">
+    <section className="privacy-reports" aria-label="Privacy reports" onKeyDown={moveBetweenReports}>
       <div className="privacy-reports-header">
         <p role="status" className="result-summary">
           <strong>Done. {plural(readable.length, "report", "reports")}{failed ? `, ${failed} failed` : ""}</strong>
           <span className="result-summary-hint">Nothing was changed in any PDF.</span>
         </p>
+        {results.length > 1 && (
+          <p className="result-summary-hint privacy-report-keys">
+            <kbd aria-hidden="true" className="shortcut-hint">{reportKeyLabel("previousReport")}</kbd>
+            <kbd aria-hidden="true" className="shortcut-hint">{reportKeyLabel("nextReport")}</kbd>
+            <span>from the report<span className="sr-only"> moves to the previous or next report</span></span>
+          </p>
+        )}
         {results.length > 1 && readable.length > 0 && (
           <div role="group" aria-label={`All ${plural(readable.length, "report", "reports")}`} className="privacy-report-export">
             <span className="result-summary-hint">All {plural(readable.length, "report", "reports")}:</span>

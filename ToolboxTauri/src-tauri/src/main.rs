@@ -3360,6 +3360,211 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// The PDF Details tools: Privacy Check, Edit Properties (reading and saving) and Unlock, which also removes restrictions.
+    #[derive(Clone, Copy, Debug)]
+    enum DetailsTool { Privacy, ReadProperties, EditProperties, Unlock }
+
+    impl DetailsTool {
+        const ALL: [DetailsTool; 4] = [DetailsTool::Privacy, DetailsTool::ReadProperties, DetailsTool::EditProperties, DetailsTool::Unlock];
+
+        fn command(self) -> &'static str {
+            match self {
+                DetailsTool::Privacy => "inspect_pdf_privacy",
+                DetailsTool::ReadProperties | DetailsTool::EditProperties => "edit_pdf_properties",
+                DetailsTool::Unlock => "remove_password",
+            }
+        }
+
+        fn saves(self) -> bool { matches!(self, DetailsTool::EditProperties | DetailsTool::Unlock) }
+
+        /// A file the tool handles: a plain PDF, or for Unlock one with print and copy restrictions.
+        fn good_input(self, root: &PathBuf) -> PathBuf {
+            let good = root.join("good.pdf");
+            match self {
+                DetailsTool::Unlock => std::fs::write(&good, crate::kit::password::tests::pdf(Some(("owner-secret", "")))).unwrap(),
+                _ => make_pdf(&good, 1),
+            }
+            good
+        }
+
+        fn edit_request(paths: &[PathBuf], root: &PathBuf) -> properties::EditPropertiesRequest {
+            serde_json::from_value(serde_json::json!({ "paths": paths, "patch": { "title": { "action": "set", "value": "Hardened" } }, "outputLocation": location(root, "out") })).unwrap()
+        }
+
+        fn password_request(paths: &[PathBuf], root: &PathBuf) -> PasswordRequest {
+            PasswordRequest { paths: paths.to_vec(), password: String::new(), password_overrides: Default::default(), output_location: location(root, "out") }
+        }
+
+        /// Runs the tool's command with its recorded limits.
+        fn run(self, root: &PathBuf, paths: Vec<PathBuf>) -> Vec<JobOutcome> {
+            let events = RunEvents::silent();
+            tauri::async_runtime::block_on(async move {
+                match self {
+                    DetailsTool::Privacy => inspect_pdf_privacy(events, privacy::PrivacyRequest { paths, passwords: Default::default() }).await,
+                    DetailsTool::ReadProperties => read_pdf_properties(events, properties::ReadPropertiesRequest { paths, passwords: Default::default() }).await,
+                    DetailsTool::EditProperties => edit_pdf_properties(events, Self::edit_request(&paths, root)).await,
+                    DetailsTool::Unlock => remove_password(events, Self::password_request(&paths, root)).await,
+                }
+            })
+        }
+
+        /// Runs the tool's job with `limits`, holding `slow` until `released` is set.
+        fn run_holding(self, root: &PathBuf, paths: Vec<PathBuf>, limits: crate::kit::common::limits::ToolLimits, slow: PathBuf, released: Arc<std::sync::atomic::AtomicBool>) -> Vec<JobOutcome> {
+            let hold = move |path: &PathBuf| { while *path == slow && !released.load(std::sync::atomic::Ordering::SeqCst) { std::thread::sleep(std::time::Duration::from_millis(10)); } };
+            let events = RunEvents::silent();
+            let command = self.command();
+            match self {
+                DetailsTool::Privacy => {
+                    let request = Arc::new(privacy::PrivacyRequest { paths: paths.clone(), passwords: Default::default() });
+                    BatchRunner::inspect_with_limits(&events, command, paths, Some(limits), &request, move |request, path| { hold(&path); privacy::inspect_job(request, path) })
+                }
+                DetailsTool::ReadProperties => {
+                    let request = Arc::new(properties::ReadPropertiesRequest { paths: paths.clone(), passwords: Default::default() });
+                    BatchRunner::inspect_with_limits(&events, command, paths, Some(limits), &request, move |request, path| { hold(&path); properties::read_job(request, path) })
+                }
+                DetailsTool::EditProperties => {
+                    let request = Arc::new(Self::edit_request(&paths, root));
+                    BatchRunner::run_with_limits(&events, command, paths, &request.output_location, Some(limits), &request, move |request, path| { hold(&path); properties::edit_job(request, path) })
+                }
+                DetailsTool::Unlock => {
+                    let request = Arc::new(Self::password_request(&paths, root));
+                    BatchRunner::run_with_limits(&events, command, paths, &request.output_location, Some(limits), &request, move |request, path| {
+                        hold(&path);
+                        let password = request.password_for(&path);
+                        PasswordProcessor::remove_password(path, password, &request.output_location)
+                    })
+                }
+            }
+        }
+    }
+
+    /// Runs `tool` on `offender` beside a file it handles, and checks the offender alone fails with `expected` while
+    /// the other file succeeds and both originals stay byte-identical.
+    fn assert_details_offender_fails_alone(tool: DetailsTool, root: &PathBuf, offender: &PathBuf, expected: ErrorKind, message: &str, run: impl FnOnce(Vec<PathBuf>) -> Vec<JobOutcome>) {
+        let good = tool.good_input(root);
+        let originals = [std::fs::read(offender).unwrap(), std::fs::read(&good).unwrap()];
+        let outcomes = run(vec![offender.clone(), good.clone()]);
+        assert_eq!([std::fs::read(offender).unwrap(), std::fs::read(&good).unwrap()], originals, "{tool:?} modified an original");
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![offender.clone(), good.clone()], "{tool:?}");
+        let error = outcomes[0].error().unwrap_or_else(|| panic!("{tool:?} must fail {}", offender.display()));
+        assert_eq!(error.kind, expected, "{tool:?}: {}", error.message);
+        assert!(error.message.contains(message), "{tool:?}: {} should contain {message}", error.message);
+        assert!(outcomes[0].output_paths().is_empty(), "{tool:?} saved output for the failed file");
+        assert!(outcomes[1].error().is_none(), "{tool:?}: the other file must still succeed: {}", outcomes[1].error().cloned().unwrap_or_default());
+        if tool.saves() {
+            assert_eq!(outcomes[1].output_paths().len(), 1, "{tool:?}");
+            assert!(outcomes[1].output_paths()[0].is_file(), "{tool:?}");
+        } else {
+            assert!(outcomes[1].output_paths().is_empty(), "{tool:?} is read-only");
+            assert!(!outcomes[1].detail.is_empty(), "{tool:?} returns a report for the good file");
+        }
+    }
+
+    #[test]
+    fn a_pdf_details_batch_with_more_files_than_cores_finishes_every_file() {
+        // Each file waits on its own job thread, and lopdf parses on rayon; waiting on rayon workers once starved those
+        // parses, so a batch of as many files as cores ran every file out to its time limit.
+        let root = sandbox("details-many-files");
+        let paths = (0..rayon::current_num_threads() * 3 + 1).map(|i| { let path = root.join(format!("file-{i}.pdf")); make_pdf(&path, 3); path }).collect::<Vec<_>>();
+        let request = Arc::new(privacy::PrivacyRequest { paths: paths.clone(), passwords: Default::default() });
+        let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(30), ..crate::kit::common::limits::recorded("inspect_pdf_privacy").unwrap() };
+        let outcomes = BatchRunner::inspect_with_limits(&RunEvents::silent(), "inspect_pdf_privacy", paths.clone(), Some(limits), &request, privacy::inspect_job);
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        for outcome in &outcomes { assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn every_pdf_details_tool_records_the_shared_pdf_limits() {
+        for tool in DetailsTool::ALL {
+            let limits = crate::kit::common::limits::recorded(tool.command()).unwrap_or_else(|| panic!("{tool:?} has recorded limits"));
+            assert_eq!(limits.max_bytes, 1_000_000_000, "{tool:?}");
+            assert_eq!(limits.max_pages, Some(5_000), "{tool:?}");
+            assert_eq!(limits.max_expanded_bytes, 500_000_000, "{tool:?}");
+            assert_eq!(limits.max_duration, std::time::Duration::from_secs(300), "{tool:?}");
+        }
+    }
+
+    #[test]
+    fn every_pdf_details_tool_fails_a_pdf_over_the_size_limit_alone() {
+        for tool in DetailsTool::ALL {
+            let root = sandbox(&format!("details-size-{tool:?}"));
+            let offender = root.join("oversized.pdf");
+            std::fs::write(&offender, b"%PDF-1.7\n").unwrap();
+            std::fs::OpenOptions::new().write(true).open(&offender).unwrap().set_len(1_000_000_001).unwrap();
+            let (len, modified) = { let metadata = std::fs::metadata(&offender).unwrap(); (metadata.len(), metadata.modified().unwrap()) };
+            let good = tool.good_input(&root);
+            let good_bytes = std::fs::read(&good).unwrap();
+            let outcomes = tool.run(&root, vec![offender.clone(), good.clone()]);
+            let metadata = std::fs::metadata(&offender).unwrap();
+            assert_eq!((metadata.len(), metadata.modified().unwrap()), (len, modified), "{tool:?} modified the oversized original");
+            assert_eq!(std::fs::read(&good).unwrap(), good_bytes, "{tool:?} modified the good original");
+            let error = outcomes[0].error().expect("the oversized PDF fails");
+            assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::FileSize }, "{tool:?}: {}", error.message);
+            assert!(error.message.contains("Larger than the 1 GB limit for one PDF."), "{tool:?}: {}", error.message);
+            assert!(outcomes[1].error().is_none(), "{tool:?}: {:?}", outcomes[1].error());
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn every_pdf_details_tool_fails_a_pdf_over_the_page_limit_alone() {
+        for tool in DetailsTool::ALL {
+            let root = sandbox(&format!("details-pages-{tool:?}"));
+            let offender = root.join("long.pdf");
+            make_pdf(&offender, 5_001);
+            assert_details_offender_fails_alone(tool, &root, &offender, ErrorKind::LimitExceeded { limit: LimitKind::PageCount }, "More than 5,000 pages, over the limit for one PDF.", |paths| tool.run(&root, paths));
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn every_pdf_details_tool_fails_a_pdf_expanding_past_the_limit_alone() {
+        use crate::kit::common::limits::fixtures::{pdf_with_stream, zlib_of_zeros};
+        let bomb = pdf_with_stream(&zlib_of_zeros(500_000_001));
+        for tool in DetailsTool::ALL {
+            let root = sandbox(&format!("details-expansion-{tool:?}"));
+            let offender = root.join("bomb.pdf");
+            std::fs::write(&offender, &bomb).unwrap();
+            assert_details_offender_fails_alone(tool, &root, &offender, ErrorKind::LimitExceeded { limit: LimitKind::Decompression }, "500 MB", |paths| tool.run(&root, paths));
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn every_pdf_details_tool_fails_a_pdf_past_its_time_limit_alone() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // Five seconds leaves the good file room under a loaded test run; the tools run side by side to keep it short.
+        std::thread::scope(|scope| {
+            for tool in DetailsTool::ALL {
+                scope.spawn(move || {
+                    let root = sandbox(&format!("details-time-{tool:?}"));
+                    let offender = root.join("slow.pdf");
+                    make_pdf(&offender, 1);
+                    let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(5), ..crate::kit::common::limits::recorded(tool.command()).unwrap() };
+                    let released = Arc::new(AtomicBool::new(false));
+                    assert_details_offender_fails_alone(tool, &root, &offender, ErrorKind::LimitExceeded { limit: LimitKind::Time }, "5 seconds", |paths| {
+                        let outcomes = tool.run_holding(&root, paths, limits, offender.clone(), Arc::clone(&released));
+                        released.store(true, Ordering::SeqCst);
+                        outcomes
+                    });
+                    let _ = std::fs::remove_dir_all(root);
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn every_pdf_details_tool_fails_a_damaged_pdf_alone() {
+        for tool in DetailsTool::ALL {
+            let root = sandbox(&format!("details-damaged-{tool:?}"));
+            let offender = root.join("damaged.pdf");
+            std::fs::write(&offender, b"%PDF-1.7 not really a PDF").unwrap();
+            assert_details_offender_fails_alone(tool, &root, &offender, ErrorKind::Processing, "", |paths| tool.run(&root, paths));
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
     fn assert_merge_stopped_by(outcomes: &[JobOutcome], paths: &[PathBuf], offender: &PathBuf, output: &PathBuf, message: &str) {
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
         for outcome in outcomes {
