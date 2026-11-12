@@ -21,6 +21,7 @@ import {
   type EditHistory,
   type ImageCropStep,
   type ImageEditStack,
+  type ImageEditStackFormat,
   type ImageEditStackStep,
   type ImageResizeStep,
   type ImageRotateStep,
@@ -40,6 +41,14 @@ import { ShortcutHint } from "../components/ShortcutHint";
 import { isWindows, shortcutTarget } from "../shortcuts";
 
 export type StackMessage = { text: string; undo: boolean };
+
+const stackFormats = [
+  { value: "original", label: "Keep original format" },
+  { value: "jpg", label: "JPEG" },
+  { value: "png", label: "PNG" },
+  { value: "webp", label: "WebP" },
+  { value: "heic", label: "HEIC" },
+] as const satisfies ReadonlyArray<{ value: ImageEditStackFormat; label: string }>;
 
 const cropRatios = [[1, 1], [4, 5], [4, 3], [3, 2], [16, 9]] as const;
 const keepOptions = [
@@ -173,6 +182,8 @@ export const ImageEditStackPanel = ({
   loading,
   history,
   message,
+  format,
+  onFormatChange,
   focus,
   onFocus,
   onAdd,
@@ -196,6 +207,9 @@ export const ImageEditStackPanel = ({
   loading: boolean;
   history: EditHistory<ImageEditStack>;
   message: StackMessage | null;
+  /** The output format for every image in the run; "original" keeps each input's own format. */
+  format: ImageEditStackFormat;
+  onFormatChange: (format: ImageEditStackFormat) => void;
   /** The step whose options are showing; it follows the chosen tool. */
   focus: ImageEditStackStep;
   onFocus: (step: ImageEditStackStep) => void;
@@ -811,7 +825,7 @@ export const ImageEditStackPanel = ({
                 <p className="workspace-panel-copy flex gap-2" role="note">
                   <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
                   {isNeutralImageToneStep(tone)
-                    ? "This step changes nothing. All four values are 0, so the preview matches the original."
+                    ? "This step changes nothing. With no other step, every image is Skipped as No changes, unless you choose another format below."
                     : "Transparent areas stay transparent."}
                 </p>
               </>
@@ -959,6 +973,24 @@ export const ImageEditStackPanel = ({
                 </CardContent>
               </Card>
             )}
+            <div className="grid gap-2">
+              <Label htmlFor="image-edit-stack-format">Format</Label>
+              <NativeSelect id="image-edit-stack-format" value={format} onChange={(event) => onFormatChange(event.target.value as ImageEditStackFormat)}>
+                {stackFormats.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </NativeSelect>
+              {format === "jpg" ? (
+                <>
+                  <p className="workspace-panel-copy flex gap-2" role="note">
+                    <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                    Transparent areas are flattened onto white, because JPEG has none.
+                  </p>
+                  <p className="workspace-panel-copy flex gap-2" role="note">
+                    <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                    JPEG is saved at quality 90.
+                  </p>
+                </>
+              ) : <p className="workspace-panel-copy">JPEG and HEIC save at quality 90.</p>}
+            </div>
             {destination}
             <div className="image-edit-stack-footer">
               <span className="workspace-panel-copy">{footHint}</span>

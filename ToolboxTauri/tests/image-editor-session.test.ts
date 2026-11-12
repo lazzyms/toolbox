@@ -14,6 +14,7 @@ import {
   imageWatermarkStepProblem,
   isNeutralImageToneStep,
   imageEditStackPreviewPlan,
+  imageEditStackExtension,
   imageEditStackRequestSteps,
   imageEditStackSuffix,
   imageResizeStepProblem,
@@ -215,4 +216,13 @@ test("aspect crops keep the start or end of the long side", () => {
   assert.deepEqual(resolveImageCropRect(300, 100, { ...step, anchor: "end" }), { x: 200, y: 0, width: 100, height: 100 });
   assert.deepEqual(resolveImageCropRect(100, 300, { ...step, anchor: "end" }), { x: 0, y: 200, width: 100, height: 100 });
   assert.deepEqual(resolveImageCropRect(100, 300, { ...step, anchor: "center" }), { x: 0, y: 100, width: 100, height: 100 });
+});
+
+test("the stack's output extension follows the chosen format, or each input's own", () => {
+  assert.equal(imageEditStackExtension("original", "/photos/a.JPEG"), "jpg");
+  assert.equal(imageEditStackExtension("original", "/photos/b.webp"), "webp");
+  assert.equal(imageEditStackExtension("original", "/photos/c.heif"), "heic");
+  assert.equal(imageEditStackExtension("original", "/photos/d.tiff"), "png");
+  assert.equal(imageEditStackExtension("jpg", "/photos/badge.png"), "jpg");
+  assert.equal(imageEditStackExtension("heic", "/photos/b.webp"), "heic");
 });

@@ -256,6 +256,13 @@ export const editedImageExtension = (plan: ImageEditPlan, inputPath: string) => 
   return "png";
 };
 
+/** The stack's Format choice: keep each input's own format, or save every image as one format. */
+export type ImageEditStackFormat = "original" | ConvertImagesRequest["format"];
+
+/** Mirrors the native stack export: a chosen format wins, otherwise the input's format is kept. */
+export const imageEditStackExtension = (format: ImageEditStackFormat, inputPath: string) =>
+  format === "original" ? editedImageExtension({ edits: [] }, inputPath) : format;
+
 export const planWithDraft = (plan: ImageEditPlan, draft: ImageEditOperation | null): ImageEditPlan => ({
   ...plan,
   edits: draft ? upsertImageEdit(plan.edits, draft) : plan.edits,
