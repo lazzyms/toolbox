@@ -99,27 +99,23 @@ impl QuickAction {
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, compress_file)
             }
             QuickAction::PdfToImages => {
-                let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, output_location: output_location.clone() });
+                let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, picks: Vec::new(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::to_images)
             }
-            QuickAction::CompressImage | QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {
-                let options = Arc::new(match self {
-                    QuickAction::ConvertToPng => image_conversion(OutputFormat::Png, &output_location),
-                    QuickAction::ConvertToJpg => image_conversion(OutputFormat::Jpeg, &output_location),
-                    _ => ImageOptions { target_format: None, quality: 80, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: output_location.clone() },
-                });
+            QuickAction::CompressImage => {
+                let options = Arc::new(ImageOptions { target_format: None, quality: 80, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &options, |options: &ImageOptions, path| ImageProcessor::run(path, ImageOptions { suffix: options.suffix.clone(), output_location: options.output_location.clone(), ..*options }))
             }
+            QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {
+                let format = if self == QuickAction::ConvertToPng { OutputFormat::Png } else { OutputFormat::Jpeg };
+                BatchRunner::run(&events, self.tool(), paths, &output_location, &Arc::new(output_location.clone()), move |location: &OutputLocation, path| ImageProcessor::convert(path, format, location.clone()))
+            }
             QuickAction::RemoveBackground => {
-                let request = Arc::new(vision::VisionRequest { paths: paths.clone(), pages: None, output_location: output_location.clone() });
+                let request = Arc::new(vision::VisionRequest { paths: paths.clone(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, vision::remove_background)
             }
         }
     }
-}
-
-fn image_conversion(format: OutputFormat, output_location: &OutputLocation) -> ImageOptions {
-    ImageOptions { target_format: Some(format), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: output_location.clone() }
 }
 
 pub struct Invocation { pub action: QuickAction, pub paths: Vec<PathBuf> }
