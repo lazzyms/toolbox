@@ -445,7 +445,7 @@ test.describe("Media requests", () => {
     test("App Icon Set shows a set with its containers as one icon folder, or the container that failed", async ({ page }) => {
         await start(page);
         await page.addInitScript(() => {
-            (window as unknown as MediaWindow).__results = { generate_icon_set: [
+            (window as unknown as MediaWindow).__outcomes = { generate_icon_set: [
                 // 7 macOS sizes, AppIcon.appiconset (10 images and Contents.json) and the ICNS; 13 iOS sizes and their 19-file asset catalog; 6 Website sizes and favicon.ico.
                 { inputPath: "/local/art/app-icon.png", outputPaths: ["/local/art/app-icon-icons"], detail: "58 files", state: "succeeded", failure: null, reason: null, warnings: [] },
                 { inputPath: "/local/art/brand-mark.png", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "The macOS ICNS failed: the disk is full. Nothing was saved for this image.", pointer: null }, reason: null, warnings: [] },
