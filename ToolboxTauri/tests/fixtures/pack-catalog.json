@@ -1,0 +1,64 @@
+{
+  "formatVersion": 1,
+  "packs": [
+    {
+      "id": "unicode-scripts",
+      "name": "Unicode scripts",
+      "description": "Adds fonts for writing systems beyond Latin so Edit PDF can show and add text in them.",
+      "toolIds": ["pdf-edit"],
+      "license": "Open-source license. Free to use, including for work.",
+      "version": "1.0",
+      "minPackFormat": 1,
+      "appVersions": { "from": "0.1.0" },
+      "payloads": [{ "target": "all", "downloadBytes": 52428800, "installedBytes": 115343360, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "path": "packs/unicode-scripts-1.0/unicode-scripts-1.0-all.toolboxpack" }]
+    },
+    {
+      "id": "ocr-german",
+      "name": "OCR language: German",
+      "description": "Lets OCR PDF read German text in scanned pages.",
+      "toolIds": ["pdf-ocr"],
+      "license": "Open-source license. Free to use, including for work.",
+      "version": "4.1",
+      "minPackFormat": 1,
+      "appVersions": { "from": "0.1.0" },
+      "payloads": [{ "target": "all", "downloadBytes": 15728640, "installedBytes": 15728640, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "path": "packs/ocr-german-4.1/ocr-german-4.1-all.toolboxpack" }]
+    },
+    {
+      "id": "ocr-french",
+      "name": "OCR language: French",
+      "description": "Lets OCR PDF read French text in scanned pages.",
+      "toolIds": ["pdf-ocr"],
+      "license": "Open-source license. Free to use, including for work.",
+      "version": "4.1",
+      "minPackFormat": 1,
+      "appVersions": { "from": "0.1.0" },
+      "payloads": [{ "target": "all", "downloadBytes": 14680064, "installedBytes": 14680064, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "path": "packs/ocr-french-4.1/ocr-french-4.1-all.toolboxpack" }]
+    },
+    {
+      "id": "ocr-japanese",
+      "name": "OCR language: Japanese",
+      "description": "Lets OCR PDF read Japanese text in scanned pages.",
+      "toolIds": ["pdf-ocr", "pdf-edit"],
+      "license": "Open-source license. Free to use, including for work.",
+      "version": "4.1",
+      "minPackFormat": 1,
+      "appVersions": { "from": "0.1.0" },
+      "payloads": [
+        { "target": "macos-aarch64", "downloadBytes": 20971520, "installedBytes": 31457280, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "path": "packs/ocr-japanese-4.1/ocr-japanese-4.1-macos-aarch64.toolboxpack" },
+        { "target": "windows-aarch64", "downloadBytes": 20971520, "installedBytes": 31457280, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "path": "packs/ocr-japanese-4.1/ocr-japanese-4.1-windows-aarch64.toolboxpack" },
+        { "target": "windows-x86_64", "downloadBytes": 20971520, "installedBytes": 31457280, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "path": "packs/ocr-japanese-4.1/ocr-japanese-4.1-windows-x86_64.toolboxpack" }
+      ]
+    },
+    {
+      "id": "other-target-only",
+      "name": "Other target only",
+      "description": "A native pack built only for a target the tests never run on.",
+      "toolIds": ["pdf-ocr"],
+      "license": "Open-source license. Free to use, including for work.",
+      "version": "1.0",
+      "minPackFormat": 1,
+      "appVersions": { "from": "0.1.0" },
+      "payloads": [{ "target": "windows-aarch64", "downloadBytes": 1048576, "installedBytes": 1048576, "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "path": "packs/other-target-only-1.0/other-target-only-1.0-windows-aarch64.toolboxpack" }]
+    }
+  ]
+}
