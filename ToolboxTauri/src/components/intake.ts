@@ -1,32 +1,47 @@
-import type { ToolDefinition } from '../contracts';
+import type { AtomicToolId, ToolDefinition } from '../contracts';
 
 export type PathKind = 'file' | 'folder' | 'unreadable';
 
-export type InspectedPath = { path: string; kind: PathKind };
+/** `animated` is true when the native side found an animated PNG or WebP. */
+export type InspectedPath = { path: string; kind: PathKind; animated?: boolean };
 
-export type IntakeEntry = { key: string; path: string };
+export type IntakeEntry = { key: string; path: string; animated?: boolean };
 
 export type NotAddedReason = 'notAccepted' | 'folder' | 'duplicate' | 'unreadable';
 
-export type NotAdded = { path: string; reason: NotAddedReason; message: string };
+// A redirect names the tool that handles a refused file, so the notice can offer to open it.
+export type IntakeRedirect = { message: string; toolId: AtomicToolId };
+
+export type NotAdded = { path: string; reason: NotAddedReason; message: string; redirectTo?: AtomicToolId };
 
 export type IntakePolicy = {
     label: string;
     acceptedExtensions: string[];
     allowsRepeats: boolean;
     notAcceptedMessage?: string;
+    redirect?: (path: string) => IntakeRedirect | null;
+    /** Keeps files of any type in the list, where the active tool flags the ones it can't take. */
+    keepsUnsupported?: boolean;
 };
 
 export type IntakeCopy = {
     notAccepted: string;
+    /** Keeps unsupported files in the list, flagged, instead of listing them as not added. */
+    keepsUnsupported?: boolean;
     unsupported: (path: string) => string;
+    /** Why a file of one of the tool's skipped extensions will be skipped. */
+    willSkip?: (path: string) => string;
+    /** Why an animated image won't run, for tools that take only still images. */
+    animated?: (path: string) => string;
     willFail?: (path: string) => string | null;
-    flaggedNotice: (count: number) => string;
+    flagLabel?: (path: string) => string;
+    flaggedNotice: (count: number, skipped: number) => string;
     countHint: (flagged: number, total: number) => string;
 };
 
 // A wontRun file stays out of the run. A willFail file is sent and fails on its own result row.
-export type EntryFlag = { kind: 'wontRun' | 'willFail'; message: string };
+// A willSkip file is sent and comes back Skipped, with a pointer to the tool that takes it.
+export type EntryFlag = { kind: 'wontRun' | 'willFail' | 'willSkip'; message: string; label?: string };
 
 export type EntryStatus = {
     entry: IntakeEntry;
@@ -38,12 +53,14 @@ const pathKinds: ReadonlySet<string> = new Set<PathKind>(['file', 'folder', 'unr
 
 export const parseInspection = (raw: unknown, paths: string[]): InspectedPath[] => {
     const kinds = new Map<string, PathKind>();
+    const animated = new Set<string>();
     if (Array.isArray(raw)) {
         for (const item of raw) {
             if (typeof item?.path === 'string' && pathKinds.has(item?.kind)) kinds.set(item.path, item.kind);
+            if (typeof item?.path === 'string' && item?.animated === true) animated.add(item.path);
         }
     }
-    return paths.map((path) => ({ path, kind: kinds.get(path) ?? 'file' }));
+    return paths.map((path) => ({ path, kind: kinds.get(path) ?? 'file', animated: animated.has(path) }));
 };
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
@@ -64,11 +81,12 @@ const accepts = (extensions: readonly string[], path: string) =>
 
 const extensionList = (extensions: readonly string[]) => `${extensions.join(', ')} files`;
 
-export const allowsRepeats = (tool: ToolDefinition) => tool.capability.inputCardinality === 'ordered';
+// Only tools that join their inputs into one file can use the same file twice; ordered per-file tools run each file once.
+export const allowsRepeats = (tool: ToolDefinition) => tool.capability.manyToOne;
 
 export const intakePolicyFor = (label: string, tools: ToolDefinition[], active: ToolDefinition): IntakePolicy => ({
     label,
-    acceptedExtensions: [...new Set(tools.flatMap((tool) => tool.capability.acceptedExtensions.map((extension) => extension.toLowerCase())))],
+    acceptedExtensions: [...new Set(tools.flatMap((tool) => [...tool.capability.acceptedExtensions, ...tool.capability.skippedExtensions].map((extension) => extension.toLowerCase())))],
     allowsRepeats: allowsRepeats(active),
 });
 
@@ -83,18 +101,22 @@ export const notAddedMessage = (reason: NotAddedReason, policy: IntakePolicy) =>
 
 export const classifyIntake = (existing: string[], incoming: InspectedPath[], policy: IntakePolicy) => {
     const present = new Set(existing);
-    const added: string[] = [];
+    const added: InspectedPath[] = [];
     const notAdded: NotAdded[] = [];
     const refuse = (path: string, reason: NotAddedReason) =>
         notAdded.push({ path, reason, message: notAddedMessage(reason, policy) });
-    for (const { path, kind } of incoming) {
+    for (const item of incoming) {
+        const { path, kind } = item;
+        // The active tool refuses a redirected file even when its workspace takes it, and names the tool that does.
+        const redirect = policy.redirect?.(path);
         if (kind === 'folder') refuse(path, 'folder');
         else if (kind === 'unreadable') refuse(path, 'unreadable');
-        else if (!accepts(policy.acceptedExtensions, path)) refuse(path, 'notAccepted');
+        else if (redirect) notAdded.push({ path, reason: 'notAccepted', message: redirect.message, redirectTo: redirect.toolId });
+        else if (!policy.keepsUnsupported && !accepts(policy.acceptedExtensions, path)) refuse(path, 'notAccepted');
         else if (present.has(path) && !policy.allowsRepeats) refuse(path, 'duplicate');
         else {
             present.add(path);
-            added.push(path);
+            added.push(item);
         }
     }
     return { added, notAdded };
@@ -103,7 +125,7 @@ export const classifyIntake = (existing: string[], incoming: InspectedPath[], po
 export const entryStatuses = (
     entries: IntakeEntry[],
     tool: ToolDefinition,
-    copy: Partial<Pick<IntakeCopy, 'unsupported' | 'willFail'>> = {},
+    copy: Partial<Pick<IntakeCopy, 'unsupported' | 'willSkip' | 'animated' | 'willFail' | 'flagLabel'>> = {},
 ): EntryStatus[] => {
     const unsupported = copy.unsupported ?? (() => `${tool.title} only takes ${extensionList(tool.capability.acceptedExtensions)}.`);
     const seen = new Map<string, number>();
@@ -112,13 +134,18 @@ export const entryStatuses = (
         const occurrence = (seen.get(entry.path) ?? 0) + 1;
         seen.set(entry.path, occurrence);
         const willFail = copy.willFail?.(entry.path) ?? null;
-        const flag: EntryFlag | null = !accepts(tool.capability.acceptedExtensions, entry.path)
+        const skipped = accepts(tool.capability.skippedExtensions, entry.path);
+        const flag: EntryFlag | null = !skipped && !accepts(tool.capability.acceptedExtensions, entry.path)
             ? { kind: 'wontRun', message: unsupported(entry.path) }
             : occurrence > 1 && !repeats
                 ? { kind: 'wontRun', message: `${tool.title} runs each file once.` }
-                : willFail !== null
-                    ? { kind: 'willFail', message: willFail }
-                    : null;
+                : skipped
+                    ? { kind: 'willSkip', message: copy.willSkip?.(entry.path) ?? `${tool.title} skips ${extensionOf(entry.path)} files.` }
+                    : entry.animated && copy.animated
+                        ? { kind: 'wontRun', message: copy.animated(entry.path) }
+                        : willFail !== null
+                            ? { kind: 'willFail', message: willFail, label: copy.flagLabel?.(entry.path) }
+                            : null;
         return { entry, occurrence, flag };
     });
 };
@@ -137,4 +164,67 @@ export const rangeKeys = (entries: IntakeEntry[], anchor: string, target: string
     const b = entries.findIndex((entry) => entry.key === target);
     if (a < 0 || b < 0) return [target];
     return entries.slice(Math.min(a, b), Math.max(a, b) + 1).map((entry) => entry.key);
+};
+
+/** Facts read from each listed file. A fact that couldn't be read is null and the row leaves it out. */
+export type EntryFacts = { pageCount: number | null; modifiedMs: number | null; sizeBytes: number | null };
+
+export type EntrySort = 'added' | 'nameAsc' | 'nameDesc' | 'modifiedAsc' | 'modifiedDesc';
+
+export type EntrySortOption = { value: EntrySort; label: string };
+
+/** Every sort an ordered list can offer. A tool may offer a subset, with its own labels. */
+export const entrySortOptions: readonly EntrySortOption[] = [
+    { value: 'added', label: 'Order added' },
+    { value: 'nameAsc', label: 'Name, A to Z' },
+    { value: 'nameDesc', label: 'Name, Z to A' },
+    { value: 'modifiedAsc', label: 'Date modified, oldest first' },
+    { value: 'modifiedDesc', label: 'Date modified, newest first' },
+];
+
+export const sortNeedsFacts = (sort: EntrySort) => sort === 'modifiedAsc' || sort === 'modifiedDesc';
+
+const names = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** Returns the entries in the chosen order. Ties and files without a date keep their current relative order, dateless files last. */
+export const sortEntries = (entries: IntakeEntry[], sort: EntrySort, facts: (path: string) => EntryFacts | undefined, addedOrder: (entry: IntakeEntry) => number) => {
+    const modified = (entry: IntakeEntry) => facts(entry.path)?.modifiedMs ?? null;
+    const byModified = (direction: 1 | -1) => (a: IntakeEntry, b: IntakeEntry) => {
+        const left = modified(a);
+        const right = modified(b);
+        if (left === null || right === null) return Number(left === null) - Number(right === null);
+        return direction * (left - right);
+    };
+    const compare: Record<EntrySort, (a: IntakeEntry, b: IntakeEntry) => number> = {
+        added: (a, b) => addedOrder(a) - addedOrder(b),
+        nameAsc: (a, b) => names.compare(fileName(a.path), fileName(b.path)),
+        nameDesc: (a, b) => names.compare(fileName(b.path), fileName(a.path)),
+        modifiedAsc: byModified(1),
+        modifiedDesc: byModified(-1),
+    };
+    return [...entries].sort(compare[sort]);
+};
+
+export const pageCountLabel = (count: number) => count === 1 ? '1 page' : `${count} pages`;
+
+export const fileSizeLabel = (bytes: number) => {
+    if (bytes < 1000) return `${bytes} bytes`;
+    if (bytes < 1000 * 1000) return `${Math.round(bytes / 1000)} KB`;
+    if (bytes < 1000 * 1000 * 1000) return `${(bytes / (1000 * 1000)).toFixed(1)} MB`;
+    return `${(bytes / (1000 * 1000 * 1000)).toFixed(1)} GB`;
+};
+
+export const modifiedLabel = (modifiedMs: number) =>
+    new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(modifiedMs));
+
+export const parseEntryFacts = (value: unknown): Map<string, EntryFacts> => {
+    const facts = new Map<string, EntryFacts>();
+    if (!Array.isArray(value)) return facts;
+    const number = (field: unknown) => typeof field === 'number' && Number.isFinite(field) ? field : null;
+    for (const item of value) {
+        if (!item || typeof item !== 'object' || typeof (item as { path?: unknown }).path !== 'string') continue;
+        const { path, pageCount, modifiedMs, sizeBytes } = item as Record<string, unknown>;
+        facts.set(path as string, { pageCount: number(pageCount), modifiedMs: number(modifiedMs), sizeBytes: number(sizeBytes) });
+    }
+    return facts;
 };
