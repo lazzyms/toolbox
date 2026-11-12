@@ -1,18 +1,76 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import type { ToolDefinition, ToolResult } from "../contracts";
+import type { JobOutcome, ToolDefinition, ToolResult } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
+type Cover = "firstPage" | "none";
+/** The title and author shown for the one PDF being converted; `edited` stops a late read from replacing what was typed. */
+type BookDetails = { path: string; title: string; author: string; edited: boolean };
+
+/** Fills in the one PDF's title and author from its properties, once per PDF. */
+const useBookDetails = (path: string | null, setDetails: (update: (current: BookDetails | null) => BookDetails | null) => void) => {
+  useEffect(() => {
+    if (path === null) return;
+    setDetails((current) => current?.path === path ? current : { path, title: "", author: "", edited: false });
+    let current = true;
+    void invoke<JobOutcome[]>("read_pdf_properties", { request: { paths: [path] } }).then(([outcome]) => {
+      if (!current || outcome?.state !== "succeeded") return;
+      const { title, author } = JSON.parse(outcome.detail) as { title?: string | null; author?: string | null };
+      setDetails((details) => details?.path === path && !details.edited ? { ...details, title: title ?? "", author: author ?? "" } : details);
+    }, () => undefined);
+    return () => { current = false; };
+  }, [path, setDetails]);
+};
+
+const BookDetailsFields = ({ files, details, setDetails, disabled }: {
+  files: readonly string[];
+  details: BookDetails | null;
+  setDetails: (update: (current: BookDetails | null) => BookDetails | null) => void;
+  disabled: boolean;
+}) => {
+  const single = files.length === 1 ? files[0] : null;
+  useBookDetails(single, setDetails);
+  const edit = (field: "title" | "author", value: string) =>
+    setDetails((current) => current && current.path === single ? { ...current, [field]: value, edited: true } : current);
+  const shown = single !== null && details?.path === single ? details : null;
+  return (
+    <fieldset className="workspace-field" disabled={disabled}>
+      <legend className="workspace-panel-label">Book details</legend>
+      {single === null ? (
+        <p className="workspace-note">Each book uses its PDF's title and author. Convert one PDF to edit them.</p>
+      ) : (
+        <>
+          <div className="workspace-field">
+            <Label htmlFor="epub-title">Title</Label>
+            <Input id="epub-title" aria-describedby="epub-details-hint" value={shown?.title ?? ""} onChange={(event) => edit("title", event.target.value)} />
+          </div>
+          <div className="workspace-field">
+            <Label htmlFor="epub-author">Author</Label>
+            <Input id="epub-author" aria-describedby="epub-details-hint" value={shown?.author ?? ""} onChange={(event) => edit("author", event.target.value)} />
+          </div>
+          <p id="epub-details-hint" className="workspace-note">Filled in from the PDF. Your changes go into this EPUB only; the PDF isn't changed.</p>
+        </>
+      )}
+    </fieldset>
+  );
+};
+
 export const PdfToEpubView = ({ utility, initialPaths = [], onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
   const [removeHeadersAndFooters, setRemoveHeadersAndFooters] = useState(true);
+  const [cover, setCover] = useState<Cover>("firstPage");
+  const [details, setDetails] = useState<BookDetails | null>(null);
+  const overrides = (paths: readonly string[]) =>
+    paths.length === 1 && details?.path === paths[0] ? { title: details.title, author: details.author } : {};
   return (
     <ToolScaffold
       key={initialPaths.join("\0") || "no-initial-pdf"}
@@ -24,7 +82,7 @@ export const PdfToEpubView = ({ utility, initialPaths = [], onFilesChange }: { u
       emptyHint="Accepts PDF. Makes one EPUB for each PDF. Works best on text-heavy books, reports and articles."
       exampleHint="An existing name is never replaced; the new one gets -1, -2."
       destinationMentionsSettingKept
-      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>("pdf_to_epub", { runId, request: { paths, outputLocation, removeHeadersAndFooters } })}
+      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>("pdf_to_epub", { runId, request: { paths, outputLocation, removeHeadersAndFooters, cover, ...overrides(paths) } })}
     >
       {({ files, run, loading, destination }) => {
         const runLabel = files.length === 0 ? "Convert" : `Convert ${count(files.length, "PDF")}`;
@@ -50,6 +108,24 @@ export const PdfToEpubView = ({ utility, initialPaths = [], onFilesChange }: { u
                 </Label>
                 <p id="epub-remove-running-text-hint" className="workspace-note">Text repeated on most pages is left out of the book.</p>
               </fieldset>
+              <fieldset className="workspace-field" disabled={loading}>
+                <legend className="workspace-panel-label">Cover</legend>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Cover"
+                  aria-describedby="epub-cover-hint"
+                  value={cover}
+                  disabled={loading}
+                  onValueChange={(value) => { if (value) setCover(value as Cover); }}
+                >
+                  <ToggleGroupItem value="firstPage">First page</ToggleGroupItem>
+                  <ToggleGroupItem value="none">No cover</ToggleGroupItem>
+                </ToggleGroup>
+                <p id="epub-cover-hint" className="workspace-note">The first page becomes the cover.</p>
+              </fieldset>
+              <BookDetailsFields files={files} details={details} setDetails={setDetails} disabled={loading} />
               {destination}
               {files.length > 0 && (
                 <p className="workspace-note">

@@ -1460,7 +1460,7 @@ fn capitalized(text: &str) -> String {
 }
 /// The page a destination points at: an explicit destination array, a dictionary holding one under /D,
 /// a name looked up in the catalog's /Dests, or a string looked up in the /Names /Dests tree.
-fn destination_page(document: &Document, value: &Object, depth: usize) -> Option<ObjectId> {
+pub(super) fn destination_page(document: &Document, value: &Object, depth: usize) -> Option<ObjectId> {
     if depth > 16 { return None; }
     let catalog = document.catalog().ok()?;
     match resolve(document, value).ok()? {
