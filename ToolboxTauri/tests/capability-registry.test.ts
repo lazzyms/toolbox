@@ -18,6 +18,7 @@ import {
 } from "../src/registry/index.ts";
 import { isMediaToolId, mediaTools, type MediaOptions, type MediaToolId } from "../src/features/media/index.ts";
 import { estimateGifBytes, isLargeGif, LARGE_GIF_BYTES, playedDelayMs } from "../src/features/media/gifTiming.ts";
+import { classifyIntake, entryStatuses, intakePolicyFor } from "../src/components/intake.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
   const capabilitiesByCommand = new Map(
@@ -274,6 +275,16 @@ test("TIFF Pages names its mode in every request and is many-to-one only in Comb
   assert.equal(tool.runLabel?.(arranged, both.paths, both.keys), "Combine 2 pages…");
   assert.equal(tool.canRun({ ...arranged, sources: { ...arranged.sources, b: { kind: "loading" } } }, both.paths, both.keys), false, "Combine waits for every file's pages");
   assert.equal(tool.canRun({ ...arranged, leftOut: ["a\u00000", "a\u00001", "b\u00000"] }, both.paths, both.keys), false, "Combine needs at least one page");
+
+  // Fax (Group 3 and 4) and JPEG-compressed TIFF scans are decoded in-process, so both modes take them without a message.
+  const scans = ["/scans/fax-g3.tif", "/scans/fax-g3-2d.TIFF", "/scans/fax-g4.tiff", "/scans/scan-jpeg.tif"];
+  for (const options of [split, combine]) {
+    const active = { ...utility, capability: tool.capability!(options, utility.capability) };
+    const intake = classifyIntake([], scans.map((path) => ({ path, kind: "file" as const })), intakePolicyFor(utility.title, [active], active));
+    assert.deepEqual(intake, { added: scans.map((path) => ({ path, kind: "file" })), notAdded: [] }, `${options.mode} adds every fax and JPEG scan`);
+    const statuses = entryStatuses(scans.map((path, index) => ({ key: String(index), path })), active);
+    assert.deepEqual(statuses.map(({ flag }) => flag), scans.map(() => null), `${options.mode} flags none of them`);
+  }
 });
 
 test("workspace membership covers every registered utility exactly once", () => {

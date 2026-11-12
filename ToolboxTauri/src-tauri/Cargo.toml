@@ -60,7 +60,6 @@ webpx = { version = "0.4", features = ["icc"] }
 sha2 = "0.11"
 minisign-verify = "0.2.5"
 tiff = "0.11"
-fax = "0.2"
 tract-onnx = { version = "0.23.7", optional = true }
 notify-rust = "4"
 pulldown-cmark = { version = "0.13", default-features = false }
@@ -84,6 +83,8 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 ring = "0.17"
+# Encodes code-generated CCITT fax fixtures; already in the tree through tiff.
+fax = "0.2"
 
 [profile.release]
 codegen-units = 1
