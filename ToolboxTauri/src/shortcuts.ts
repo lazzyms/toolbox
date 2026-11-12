@@ -5,6 +5,9 @@ export const currentPlatform = (): Platform =>
 
 export const isWindows = () => currentPlatform() === "windows";
 
+// Cmd on macOS, Ctrl on Windows. Ctrl-click on macOS opens a context menu, so it never counts.
+export const primaryModifierPressed = (event: { metaKey: boolean; ctrlKey: boolean }) => (isWindows() ? event.ctrlKey : event.metaKey);
+
 export type ShortcutId =
   | "find"
   | "settings"
@@ -15,16 +18,21 @@ export type ShortcutId =
   | "cancel"
   | "selectAll"
   | "remove"
-  | "move";
+  | "move"
+  | "undo"
+  | "redo"
+  | "export"
+  | "duplicate"
+  | "deleteMark";
 
 // Where a shortcut is listened for. "file-list" fires only while focus is in a file list.
-// "system" is handled by the operating system and is listed for reference only.
-export type ShortcutScope = "window" | "file-list" | "system";
+// "editor" is handled by the PDF editor. "system" is handled by the operating system and is listed for reference only.
+export type ShortcutScope = "window" | "file-list" | "editor" | "system";
 
 export interface Shortcut {
   id: ShortcutId;
   action: string;
-  group: "Everywhere" | "Batch tools";
+  group: "Everywhere" | "Batch tools" | "PDF Editor";
   scope: ShortcutScope;
   // KeyboardEvent.key values, matched without regard to case.
   keys: readonly string[];
@@ -45,6 +53,11 @@ export const shortcuts: readonly Shortcut[] = [
   { id: "selectAll", action: "Select all files", group: "Batch tools", scope: "file-list", keys: ["A"], primary: true, firesInTextFields: false, label: { macos: "⌘A", windows: "Ctrl+A" } },
   { id: "remove", action: "Remove selected files", group: "Batch tools", scope: "file-list", keys: ["Delete", "Backspace"], primary: false, firesInTextFields: false, label: { macos: "Delete", windows: "Delete" } },
   { id: "move", action: "Move through the list", group: "Batch tools", scope: "file-list", keys: ["ArrowUp", "ArrowDown"], primary: false, firesInTextFields: false, label: { macos: "↑ ↓", windows: "↑ ↓" } },
+  { id: "undo", action: "Undo", group: "PDF Editor", scope: "editor", keys: ["Z"], primary: true, firesInTextFields: false, label: { macos: "⌘Z", windows: "Ctrl+Z" } },
+  { id: "redo", action: "Redo", group: "PDF Editor", scope: "editor", keys: ["Y"], primary: true, firesInTextFields: false, label: { macos: "⇧⌘Z", windows: "Ctrl+Y" } },
+  { id: "export", action: "Export a copy", group: "PDF Editor", scope: "editor", keys: ["E"], primary: true, firesInTextFields: false, label: { macos: "⌘E", windows: "Ctrl+E" } },
+  { id: "duplicate", action: "Duplicate the selected mark", group: "PDF Editor", scope: "editor", keys: ["D"], primary: true, firesInTextFields: false, label: { macos: "⌘D", windows: "Ctrl+D" } },
+  { id: "deleteMark", action: "Delete the selected mark", group: "PDF Editor", scope: "editor", keys: ["Delete", "Backspace"], primary: false, firesInTextFields: false, label: { macos: "Delete", windows: "Delete" } },
 ];
 
 const byId = new Map(shortcuts.map((shortcut) => [shortcut.id, shortcut]));
@@ -63,7 +76,7 @@ export const shortcutTarget = (id: ShortcutId) => ({ "data-shortcut": id, "aria-
 export const pressShortcutTarget = (root: ParentNode | null | undefined, id: ShortcutId) =>
   root?.querySelector<HTMLButtonElement>(`[data-shortcut="${id}"]:not(:disabled)`)?.click();
 
-const isTextField = (target: EventTarget | null) =>
+export const isTextField = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.isContentEditable || target.matches('input:not([type="checkbox"], [type="radio"], [type="range"]), textarea, select'));
 
@@ -75,4 +88,28 @@ export const matchShortcut = (event: KeyboardEvent, scope: ShortcutScope): Short
     item.scope === scope && item.primary === primary && item.keys.some((candidate) => candidate.toLowerCase() === key));
   if (!match || (!match.firesInTextFields && isTextField(event.target))) return null;
   return match.id;
+};
+
+// Keys inside the PDF Details reports (PdfPrivacy and PdfDetailsNarrow boards). They act on the report that has
+// focus, so they are not window shortcuts and are not listed on the Shortcuts board.
+export type ReportKeyId = "previousReport" | "nextReport" | "copyReport";
+
+const reportKeys: Record<ReportKeyId, { label: Record<Platform, string>; aria: Record<Platform, string> }> = {
+  previousReport: { label: { macos: "⌥↑", windows: "Alt+↑" }, aria: { macos: "Alt+ArrowUp", windows: "Alt+ArrowUp" } },
+  nextReport: { label: { macos: "⌥↓", windows: "Alt+↓" }, aria: { macos: "Alt+ArrowDown", windows: "Alt+ArrowDown" } },
+  copyReport: { label: { macos: "⇧⌘C", windows: "Ctrl+Shift+C" }, aria: { macos: "Meta+Shift+C", windows: "Control+Shift+C" } },
+};
+
+export const reportKeyLabel = (id: ReportKeyId) => reportKeys[id].label[currentPlatform()];
+export const reportKeyAria = (id: ReportKeyId) => reportKeys[id].aria[currentPlatform()];
+
+export const matchReportKey = (event: KeyboardEvent): ReportKeyId | null => {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || isTextField(event.target)) return null;
+  const primary = event.metaKey || event.ctrlKey;
+  if (event.altKey && !primary && !event.shiftKey) {
+    if (event.key === "ArrowUp") return "previousReport";
+    if (event.key === "ArrowDown") return "nextReport";
+  }
+  if (primary && event.shiftKey && !event.altKey && event.key.toLowerCase() === "c") return "copyReport";
+  return null;
 };

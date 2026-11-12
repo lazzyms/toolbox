@@ -1,7 +1,6 @@
-use rayon::prelude::*;
 use crate::kit::common::limits::{self, CancelFlag, ToolLimits};
 use crate::kit::common::JobOutcome;
-use crate::kit::contracts::{partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{is_basic_fidelity, partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io;
@@ -16,13 +15,56 @@ pub struct BatchRunner;
 pub enum FileEvent {
     Started { index: usize },
     Finished { index: usize, outcome: JobOutcome },
+    /// How far a long single-file job has got, such as the page a PDF export is on.
+    Progress { index: usize, completed: usize, total: usize },
+}
+
+pub(crate) type Sink = Arc<dyn Fn(FileEvent) + Send + Sync>;
+
+thread_local! {
+    static PROGRESS: std::cell::RefCell<Option<(usize, Sink)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Sends progress this thread reports to `sink` as the file at `index`. Each job runs on its own thread, so the reporter belongs to that file alone.
+pub(crate) fn report_progress_to(index: usize, sink: Option<Sink>) {
+    PROGRESS.with(|progress| *progress.borrow_mut() = sink.map(|sink| (index, sink)));
+}
+
+/// Reports progress for the file the current job is processing. Outside a batch run, such as a preview, it does nothing.
+pub fn report_progress(completed: usize, total: usize) {
+    PROGRESS.with(|progress| {
+        if let Some((index, sink)) = &*progress.borrow() { sink(FileEvent::Progress { index: *index, completed, total }) }
+    });
 }
 
 /// A run's link to the view that started it. Progress goes out through the sink and a cancel comes back in by run id.
 pub struct RunEvents {
-    sink: Option<Box<dyn Fn(FileEvent) + Send + Sync>>,
-    cancel: CancelFlag,
+    sink: Option<Sink>,
+    cancel: RunCancel,
+}
+
+/// A cancel flag that [`cancel_run`] reaches by run id for as long as it lives.
+pub struct RunCancel {
+    flag: CancelFlag,
     run_id: Option<String>,
+}
+
+impl RunCancel {
+    pub fn unregistered() -> Self { Self { flag: CancelFlag::default(), run_id: None } }
+    pub fn register(run_id: String) -> Self {
+        let flag = CancelFlag::default();
+        running().insert(run_id.clone(), flag.clone());
+        Self { flag, run_id: Some(run_id) }
+    }
+    pub fn flag(&self) -> &CancelFlag { &self.flag }
+}
+
+impl Drop for RunCancel {
+    fn drop(&mut self) {
+        let Some(run_id) = &self.run_id else { return };
+        let mut running = running();
+        if running.get(run_id).is_some_and(|flag| flag.same_as(&self.flag)) { running.remove(run_id); }
+    }
 }
 
 static RUNNING: LazyLock<Mutex<HashMap<String, CancelFlag>>> = LazyLock::new(Default::default);
@@ -39,27 +81,17 @@ pub fn cancel_run(run_id: &str) -> bool {
 pub const CANCELLED_BEFORE_START: &str = "Cancelled before it started";
 
 impl RunEvents {
-    pub fn silent() -> Self { Self { sink: None, cancel: CancelFlag::default(), run_id: None } }
+    pub fn silent() -> Self { Self { sink: None, cancel: RunCancel::unregistered() } }
     pub fn new(sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        Self { sink: Some(Box::new(sink)), cancel: CancelFlag::default(), run_id: None }
+        Self { sink: Some(Arc::new(sink)), cancel: RunCancel::unregistered() }
     }
     pub fn for_run(run_id: String, sink: impl Fn(FileEvent) + Send + Sync + 'static) -> Self {
-        let cancel = CancelFlag::default();
-        running().insert(run_id.clone(), cancel.clone());
-        Self { sink: Some(Box::new(sink)), cancel, run_id: Some(run_id) }
+        Self { sink: Some(Arc::new(sink)), cancel: RunCancel::register(run_id) }
     }
     fn emit(&self, event: FileEvent) { if let Some(sink) = &self.sink { sink(event) } }
     fn settled(&self, index: usize, outcome: &JobOutcome) {
         self.emit(FileEvent::Started { index });
         self.emit(FileEvent::Finished { index, outcome: outcome.clone() });
-    }
-}
-
-impl Drop for RunEvents {
-    fn drop(&mut self) {
-        let Some(run_id) = &self.run_id else { return };
-        let mut running = running();
-        if running.get(run_id).is_some_and(|flag| flag.same_as(&self.cancel)) { running.remove(run_id); }
     }
 }
 
@@ -81,6 +113,30 @@ impl BatchRunner {
         Self::run_with_limits(events, command, inputs, location, limits::recorded(command), request, job)
     }
 
+    /// Runs a job that only reads its inputs. It saves nothing, so no output folder is probed and nothing is created.
+    pub fn inspect<R, F>(events: &RunEvents, command: &str, inputs: Vec<PathBuf>, request: &Arc<R>, job: F) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        Self::inspect_with_limits(events, command, inputs, limits::recorded(command), request, job)
+    }
+
+    pub fn inspect_with_limits<R, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        limits: Option<ToolLimits>,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        Self::run_batch(events, command, inputs, None, move |_| limits, request, job)
+    }
+
     pub fn run_with_limits<R, F>(
         events: &RunEvents,
         command: &str,
@@ -94,53 +150,118 @@ impl BatchRunner {
         R: Send + Sync + 'static,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
-        // rayon::into_par_iter automatically uses the system core count for the thread pool,
-        // matching the original Swift `ProcessInfo.processInfo.activeProcessorCount` behavior.
+        Self::run_batch(events, command, inputs, Some(location), move |_| limits, request, job)
+    }
+
+    /// For a command whose limits depend on the input, such as Convert to PDF, which takes many formats.
+    pub fn run_limited<R, L, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: &OutputLocation,
+        limits_for: L,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        L: Fn(&Path) -> Option<ToolLimits> + Sync,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        Self::run_batch(events, command, inputs, Some(location), limits_for, request, job)
+    }
+
+    /// `location` is where outputs go; `None` means the job writes nothing.
+    fn run_batch<R, L, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: Option<&OutputLocation>,
+        limits_for: L,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        L: Fn(&Path) -> Option<ToolLimits> + Sync,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        // Every result for a file read in basic fidelity says so, whichever way the file settled.
+        let label = |outcome: JobOutcome| {
+            if is_basic_fidelity(command, &outcome.input_path) { outcome.with_basic_fidelity() } else { outcome }
+        };
         match partition_command_inputs(command, &inputs) {
             Ok(validation) => {
                 let mut outcomes = vec![None; inputs.len()];
-                for (index, outcome) in validation.rejected { outcomes[index] = Some(outcome); }
+                for (index, outcome) in validation.rejected { outcomes[index] = Some(label(outcome)); }
                 let mut writable = HashMap::new();
                 let mut runnable = Vec::with_capacity(validation.accepted.len());
                 for (index, path) in validation.accepted {
-                    let directory = location.directory_for(&path).to_path_buf();
-                    let is_writable = *writable.entry(directory).or_insert_with_key(|directory| !is_read_only(directory));
+                    let is_writable = location.is_none_or(|location| {
+                        let directory = location.directory_for(&path).to_path_buf();
+                        *writable.entry(directory).or_insert_with_key(|directory| !is_read_only(directory))
+                    });
                     if is_writable {
                         runnable.push((index, path));
                     } else {
-                        outcomes[index] = Some(JobOutcome::failure(
+                        outcomes[index] = Some(label(JobOutcome::failure(
                             path,
                             ToolError::processing(READ_ONLY_OUTPUT_MESSAGE).with_pointer(OutcomePointer::OutputFolder),
-                        ));
+                        )));
                     }
                 }
                 for (index, outcome) in outcomes.iter().enumerate() {
                     if let Some(outcome) = outcome { events.settled(index, outcome); }
                 }
                 let job = Arc::new(job);
-                let processed = runnable.into_par_iter().map(|(index, path)| {
-                    if events.cancel.is_cancelled() {
-                        let outcome = JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START));
+                let process = |(index, path): (usize, PathBuf)| {
+                    if events.cancel.flag().is_cancelled() {
+                        let outcome = label(JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START)));
                         events.settled(index, &outcome);
                         return (index, outcome);
                     }
                     events.emit(FileEvent::Started { index });
-                    let outcome = match limits {
+                    let outcome = label(match limits_for(&path) {
                         Some(limits) => {
-                            let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                            limits.run_each(path, &events.cancel, move |path| job(&request, path))
+                            let (job, request, sink) = (Arc::clone(&job), Arc::clone(request), events.sink.clone());
+                            limits.run_each(path, events.cancel.flag(), move |path| {
+                                report_progress_to(index, sink);
+                                job(&request, path)
+                            })
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
-                    };
+                    });
                     events.emit(FileEvent::Finished { index, outcome: outcome.clone() });
                     (index, outcome)
-                }).collect::<Vec<_>>();
-                for (index, outcome) in processed { outcomes[index] = Some(outcome); }
+                };
+                for (index, outcome) in run_side_by_side(runnable, process) { outcomes[index] = Some(outcome); }
                 outcomes.into_iter().map(Option::unwrap).collect()
             }
-            Err(outcomes) => outcomes,
+            Err(outcomes) => outcomes.into_iter().map(label).collect(),
         }
     }
+}
+
+/// Runs `process` on each item, as many at once as the current rayon pool has threads (one per core by default), and
+/// returns the results in the order they finish.
+///
+/// Each item waits on its own job thread for the time limit, so the waiting happens on plain threads rather than rayon
+/// workers. Jobs use rayon themselves (lopdf parses a PDF's objects in parallel); waiting on rayon workers left those
+/// jobs no worker once a batch had as many files as cores, and every file then ran out its time limit.
+fn run_side_by_side<T: Send, U: Send>(items: Vec<T>, process: impl Fn(T) -> U + Sync) -> Vec<U> {
+    let workers = rayon::current_num_threads().clamp(1, items.len().max(1));
+    let queue = Mutex::new(items.into_iter());
+    let done = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let Some(item) = queue.lock().unwrap_or_else(PoisonError::into_inner).next() else { break };
+                let result = process(item);
+                done.lock().unwrap_or_else(PoisonError::into_inner).push(result);
+            });
+        }
+    });
+    done.into_inner().unwrap_or_else(PoisonError::into_inner)
 }
 
 // Permission bits miss ACLs, sandboxing and read-only mounts, so only a real create answers the question.
@@ -190,6 +311,10 @@ mod tests {
         assert_eq!(finished["phase"], "finished");
         assert_eq!(finished["index"], 0);
         assert_eq!(finished["outcome"], serde_json::to_value(&outcome).unwrap());
+        assert_eq!(
+            serde_json::to_value(FileEvent::Progress { index: 0, completed: 4, total: 9 }).unwrap(),
+            serde_json::json!({ "phase": "progress", "index": 0, "completed": 4, "total": 9 })
+        );
     }
 
     #[test]

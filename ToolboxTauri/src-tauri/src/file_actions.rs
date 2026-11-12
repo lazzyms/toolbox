@@ -60,6 +60,36 @@ fn reveal_command(path: &Path, kind: OutputKind) -> RevealCommand {
     RevealCommand { program: "explorer.exe", arguments: vec![argument] }
 }
 
+/// Each folder holding outputs, in first-seen order, with the outputs it holds, so one window per folder selects them together.
+fn reveal_groups(paths: &[PathBuf]) -> Result<Vec<Vec<PathBuf>>, String> {
+    let mut groups: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
+    for path in paths {
+        output_kind(path)?;
+        let folder = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        match groups.iter_mut().find(|(existing, _)| *existing == folder) {
+            Some((_, members)) if members.contains(path) => {}
+            Some((_, members)) => members.push(path.clone()),
+            None => groups.push((folder, vec![path.clone()])),
+        }
+    }
+    if groups.is_empty() {
+        return Err("There are no output files to show.".to_string());
+    }
+    Ok(groups.into_iter().map(|(_, members)| members).collect())
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_together_command(paths: &[PathBuf]) -> RevealCommand {
+    let arguments = std::iter::once(OsString::from("-R")).chain(paths.iter().map(|path| path.as_os_str().to_owned())).collect();
+    RevealCommand { program: "/usr/bin/open", arguments }
+}
+
+// Explorer's command line selects one item, so each folder opens with its first output selected.
+#[cfg(target_os = "windows")]
+fn reveal_together_command(paths: &[PathBuf]) -> RevealCommand {
+    reveal_command(&paths[0], OutputKind::File)
+}
+
 #[tauri::command]
 pub fn open_output_path(path: PathBuf) -> Result<(), String> {
     output_kind(&path)?;
@@ -70,6 +100,14 @@ pub fn open_output_path(path: PathBuf) -> Result<(), String> {
 pub fn reveal_output_path(path: PathBuf) -> Result<(), String> {
     let kind = output_kind(&path)?;
     reveal_file(&path, kind)
+}
+
+#[tauri::command]
+pub fn reveal_output_paths(paths: Vec<PathBuf>) -> Result<(), String> {
+    for group in reveal_groups(&paths)? {
+        reveal_together(&group)?;
+    }
+    Ok(())
 }
 
 const NOTICES_FILE: &str = "THIRD-PARTY-NOTICES.txt";
@@ -107,6 +145,12 @@ fn open_file(path: &Path) -> Result<(), String> {
 fn reveal_file(path: &Path, kind: OutputKind) -> Result<(), String> {
     let command = reveal_command(path, kind);
     run_open(command.program, &command.arguments, "reveal", path)
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_together(paths: &[PathBuf]) -> Result<(), String> {
+    let command = reveal_together_command(paths);
+    run_open(command.program, &command.arguments, "reveal", &paths[0])
 }
 
 #[cfg(target_os = "macos")]
@@ -167,12 +211,29 @@ fn open_file(path: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn reveal_file(path: &Path, kind: OutputKind) -> Result<(), String> {
-    let command = reveal_command(path, kind);
+    spawn_reveal(reveal_command(path, kind), path)
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_reveal(command: RevealCommand, path: &Path) -> Result<(), String> {
     std::process::Command::new(command.program)
         .args(command.arguments)
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("Could not reveal output file {}: {error}", path.display()))
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_together(paths: &[PathBuf]) -> Result<(), String> {
+    spawn_reveal(reveal_together_command(paths), &paths[0])
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn reveal_together(paths: &[PathBuf]) -> Result<(), String> {
+    Err(format!(
+        "Revealing output files is unsupported on this platform: {}",
+        paths[0].display()
+    ))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -210,6 +271,8 @@ mod tests {
 
     #[test]
     fn finds_the_bundled_third_party_notices() {
+        // OCR tests point TOOLBOX_RESOURCE_ROOT elsewhere while they hold this lock.
+        let _guard = crate::kit::lock_process_env();
         let root = crate::kit::resources::application_resource_root().unwrap();
         let path = third_party_notices_path(&root).unwrap();
         let notices = std::fs::read_to_string(&path).unwrap();
@@ -283,6 +346,39 @@ mod tests {
         assert_eq!(value["state"], "failed");
         assert_eq!(value["outputPaths"], serde_json::json!([frame, folder]));
         assert_eq!(kinds, vec![Ok(OutputKind::File), Ok(OutputKind::Folder)]);
+    }
+
+    #[test]
+    fn reveal_all_groups_outputs_by_folder_in_first_seen_order_and_rejects_missing_ones() {
+        use super::reveal_groups;
+
+        let root = unique_path("reveal_groups");
+        let (first, second) = (root.join("first"), root.join("second"));
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let files = [first.join("a-compressed.pdf"), second.join("b-compressed.jpg"), first.join("c-compressed.png")];
+        for file in &files { std::fs::write(file, b"output").unwrap(); }
+
+        let groups = reveal_groups(&[files[0].clone(), files[1].clone(), files[2].clone(), files[0].clone()]);
+        let missing = reveal_groups(&[files[0].clone(), first.join("gone.pdf")]);
+        let empty = reveal_groups(&[]);
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(groups, Ok(vec![vec![files[0].clone(), files[2].clone()], vec![files[1].clone()]]));
+        assert!(missing.unwrap_err().contains("does not exist"));
+        assert_eq!(empty, Err("There are no output files to show.".to_string()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reveal_all_selects_every_output_of_a_folder_in_one_finder_call() {
+        use super::reveal_together_command;
+        use std::ffi::OsString;
+
+        let files = [PathBuf::from("/out/a-compressed.pdf"), PathBuf::from("/out/c-compressed.png")];
+        let command = reveal_together_command(&files);
+        assert_eq!(command.program, "/usr/bin/open");
+        assert_eq!(command.arguments, vec![OsString::from("-R"), OsString::from("/out/a-compressed.pdf"), OsString::from("/out/c-compressed.png")]);
     }
 
     #[cfg(target_os = "macos")]

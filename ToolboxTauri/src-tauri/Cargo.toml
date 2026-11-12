@@ -41,16 +41,49 @@ quick-xml = "0.41.0"
 sha1 = "0.10"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff"] }
+# Create GIF writes its own palette and transparency, so it talks to the encoder image uses directly.
+gif = "0.14"
 fontdue = "0.9.4"
 rustybuzz = "0.20.1"
+# Script itemization and bidi reordering for PDF scene text (src/kit/pdf/script_text.rs). Both are
+# already in the lock file, through rustybuzz and lopdf.
+unicode-script = "0.5.8"
+unicode-bidi = "0.3.18"
+subsetter = { version = "0.2.6", default-features = false }
 lopdf = "0.44"
+hayro-ccitt = "0.5"
+hayro-jbig2 = { version = "0.4.0", default-features = false, features = ["std"] }
+encoding_rs = "0.8"
 rayon = "1"
 heif-rs = "26.7"
-webpx = "0.4"
+webpx = { version = "0.4", features = ["icc"] }
 sha2 = "0.11"
+minisign-verify = "0.2.5"
 tiff = "0.11"
+fax = "0.2"
 tract-onnx = { version = "0.23.7", optional = true }
 notify-rust = "4"
+pulldown-cmark = { version = "0.13", default-features = false }
+# HTML to PDF. Already in the tree through tauri-utils; parses with scripting off and never fetches.
+dom_query = { version = "0.27", default-features = false }
+csv = "1.3"
+color_quant = "1.1"
+oxipng = { version = "10.2.1", default-features = false, features = ["parallel"] }
+
+# Pack downloads (src/packs/download.rs). The same client, TLS stack and versions the updater uses.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+futures-util = { version = "0.3", default-features = false }
+tokio = { version = "1", features = ["sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+ring = "0.17"
 
 [profile.release]
 codegen-units = 1
