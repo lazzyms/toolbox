@@ -27,7 +27,7 @@ const fontStyles: readonly FontStyle[] = ["regular", "bold", "italic", "boldItal
 
 const fontSources: readonly FontSource[] = ["embedded", "system", "bundled fallback", "bundled default"];
 
-const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
+const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "textLength", "dimensions"];
 
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
@@ -61,6 +61,36 @@ const member = <T extends string>(value: unknown, allowed: readonly T[], path: s
 const texts = (value: unknown, path: string): string[] =>
   Array.isArray(value) ? value.map((item, index) => text(item, `${path}[${index}]`)) : fail(path, "an array");
 
+type DetailParser = (value: unknown, path: string) => unknown;
+
+const count = (value: unknown, path: string): number =>
+  Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(path, "a whole number");
+
+const counts = (value: unknown, path: string): number[] =>
+  Array.isArray(value) ? value.map((item, index) => count(item, `${path}[${index}]`)) : fail(path, "an array");
+
+const colour = (value: unknown, path: string) => member(value, jpegColours, path);
+
+const imagePlace = { page: count, image: count };
+
+const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> = {
+  signatureRemoved: null,
+  fontSubstituted: { requestedFamily: text, actualFamily: text },
+  renamedToAvoidReplacing: { chosenName: text, finalName: text },
+  precisionReduced: null,
+  bookmarksNotCarried: { into: text },
+  tagsNotCarried: { into: text },
+  omittedContent: null,
+  approximateLayout: null,
+  imageUnsupported: { ...imagePlace, feature: text },
+  imageDamaged: imagePlace,
+  imageTooLarge: { ...imagePlace, width: count, height: count },
+  jpegColourKept: { colour, pages: counts, images: count },
+  pagesWithoutText: { pages: counts },
+  transparencyFlattened: null,
+  upscaled: { from: count, to: count },
+};
+
 const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {
   const sizes: { originalBytes?: number; outputBytes?: number } = {};
   for (const key of ["originalBytes", "outputBytes"] as const) {
@@ -82,33 +112,6 @@ const pageDetails = (outcome: Json, path: string): { pageDetails?: OutcomeDetail
       return { label: text(detail.label, `${path}.pageDetails[${index}].label`), value: text(detail.value, `${path}.pageDetails[${index}].value`) };
     }),
   };
-};
-
-type DetailParser = (value: unknown, path: string) => unknown;
-
-const count = (value: unknown, path: string): number =>
-  Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(path, "a whole number");
-
-const counts = (value: unknown, path: string): number[] =>
-  Array.isArray(value) ? value.map((item, index) => count(item, `${path}[${index}]`)) : fail(path, "an array");
-
-const colour = (value: unknown, path: string) => member(value, jpegColours, path);
-
-const imagePlace = { page: count, image: count };
-
-const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> = {
-  signatureRemoved: null,
-  fontSubstituted: { requestedFamily: text, actualFamily: text },
-  renamedToAvoidReplacing: { chosenName: text, finalName: text },
-  precisionReduced: null,
-  omittedContent: null,
-  approximateLayout: null,
-  imageUnsupported: { ...imagePlace, feature: text },
-  imageDamaged: imagePlace,
-  imageTooLarge: { ...imagePlace, width: count, height: count },
-  jpegColourKept: { colour, pages: counts, images: count },
-  pagesWithoutText: { pages: counts },
-  upscaled: { from: count, to: count },
 };
 
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
@@ -181,8 +184,6 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
     warnings: Array.isArray(outcome.warnings)
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
-    ...byteSizes(outcome, path),
-    ...pageDetails(outcome, path),
     ...(outcome.basicFidelity === undefined
       ? {}
       : { basicFidelity: typeof outcome.basicFidelity === "boolean" ? outcome.basicFidelity : fail(`${path}.basicFidelity`, "a boolean") }),
@@ -193,6 +194,8 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
             ? outcome.fonts.map((font, index) => parseFontUse(font, `${path}.fonts[${index}]`))
             : fail(`${path}.fonts`, "an array"),
         }),
+    ...byteSizes(outcome, path),
+    ...pageDetails(outcome, path),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;

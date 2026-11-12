@@ -8,7 +8,9 @@ type MediaWindow = Window & {
     __invocations: Array<{ command: string; args: unknown }>;
     __dialogResults: Array<string | string[] | null>;
     __outputSettings: OutputSettings;
-    __results: Record<string, unknown>;
+    __outcomesByPath?: Record<string, Record<string, unknown>>;
+    __warnings: Record<string, Array<{ code: string; message: string }>>;
+    __outcomes: Record<string, unknown[]>;
 };
 
 const customFolder: OutputSettings = { mode: "customFolder", folder: "/Users/test/Media out" };
@@ -20,7 +22,8 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
         win.__invocations = [];
         win.__dialogResults = [];
         win.__outputSettings = settings;
-        win.__results = {};
+        win.__warnings = {};
+        win.__outcomes = {};
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         window.__TAURI_INTERNALS__ = {
             metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
@@ -45,18 +48,17 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     const { path } = (args as { request: { path: string } }).request;
                     return Array.from({ length: path.endsWith("two-page.tiff") ? 2 : 1 }, () => ({ width: 640, height: 480, dataUrl: blankImage }));
                 }
-                if (command === "inspect_image_metadata") return [{ path: "fixture", fields: ["Camera"] }];
                 if (command.startsWith("plugin:")) return null;
-                if (command in win.__results) return win.__results[command];
+                if (win.__outcomes[command]) return win.__outcomes[command];
                 const { request } = (args ?? {}) as { request?: { paths?: string[] } };
-                return (request?.paths ?? []).map((inputPath) => ({
+                return (request?.paths ?? []).map((inputPath) => win.__outcomesByPath?.[inputPath] ?? ({
                     inputPath,
                     outputPaths: [`${inputPath}.out`],
                     detail: "",
                     state: "succeeded",
                     failure: null,
                     reason: null,
-                    warnings: [],
+                    warnings: win.__warnings[inputPath] ?? [],
                 }));
             },
             transformCallback: () => 1,
@@ -222,6 +224,23 @@ test.describe("Media requests", () => {
         await expect(action).toBeDisabled();
     });
 
+    test("App Icon Set shows the bit-depth reduction warning on the HEIC result row", async ({ page }) => {
+        await start(page);
+        await page.evaluate(() => {
+            (window as unknown as MediaWindow).__warnings = {
+                "/local/art/widget-small.heic": [{ code: "precisionReduced", message: "10-bit HEIC saved as 8-bit sRGB." }],
+            };
+        });
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, "/local/art/widget-small.heic");
+        await runOnce(page, "generate_icon_set");
+
+        const row = page.locator(".result-row", { hasText: "widget-small" });
+        await expect(row).toHaveAttribute("data-tone", "warn");
+        await expect(row.locator(".result-row-detail").first()).toHaveText("10-bit HEIC saved as 8-bit sRGB.");
+        await expect(row.locator(".result-row-state .sr-only")).toHaveText("Generated with a warning");
+    });
+
     test("App Icon Set takes several masters and sends them all in one run", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Generate App Icons");
@@ -335,7 +354,7 @@ test.describe("Media requests", () => {
     test("App Icon Set shows each master's own result, with its folder or the size that failed", async ({ page }) => {
         await start(page);
         await page.addInitScript(() => {
-            (window as unknown as MediaWindow).__results = { generate_icon_set: [
+            (window as unknown as MediaWindow).__outcomes = { generate_icon_set: [
                 { inputPath: "/local/art/app-icon.png", outputPaths: ["/local/art/app-icon-icons"], detail: "7 files", state: "succeeded", failure: null, reason: null, warnings: [] },
                 { inputPath: "/local/art/brand-mark.png", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "The macOS 1024 size failed: the image data is damaged. Nothing was saved for this image.", pointer: null }, reason: null, warnings: [] },
                 { inputPath: "/local/art/launcher.webp", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "Not a readable WebP image. The file may be damaged. Nothing was saved.", pointer: null }, reason: null, warnings: [] },
@@ -402,6 +421,76 @@ test.describe("Media requests", () => {
         } });
     });
 
+    test("Create GIF proposes the first frame's name in the resolved folder, and cancelling sends nothing", async ({ page }) => {
+        await start(page, customFolder);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/IMG_2210.heic", "/local/frames/IMG_2211.png"]);
+
+        await page.locator(".workspace-primary-action").click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByLabel("File name")).toHaveValue("IMG_2210-animated.gif");
+        await expect(dialog.getByTestId("save-folder")).toHaveText("~/Media out");
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await expect(dialog).toHaveCount(0);
+        expect(await invocationsOf(page, "create_gif")).toEqual([]);
+
+        expect(await runOnce(page, "create_gif", "IMG_2210-animated.gif")).toEqual({ runId, request: {
+            paths: ["/local/frames/IMG_2210.heic", "/local/frames/IMG_2211.png"],
+            frameDelayMs: 100,
+            loopForever: true,
+            outputLocation: { customFolder: "/Users/test/Media out" },
+            outputPath: "/Users/test/Media out/IMG_2210-animated.gif",
+        } });
+    });
+
+    test("Create GIF shows the renamed GIF with both names", async ({ page }) => {
+        await start(page, customFolder);
+        await page.evaluate(() => {
+            (window as unknown as MediaWindow).__outcomes = { create_gif: [{
+                inputPath: "/local/frames/loop.png",
+                outputPaths: ["/Users/test/Media out/loop-animated-1.gif"],
+                detail: "GIF saved",
+                state: "succeeded",
+                failure: null,
+                reason: null,
+                warnings: [{ code: "renamedToAvoidReplacing", message: "native wording", details: { chosenName: "loop-animated.gif", finalName: "loop-animated-1.gif" } }],
+            }] };
+        });
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/loop.png", "/local/frames/loop-2.png"]);
+        await runOnce(page, "create_gif", "loop-animated.gif");
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveCount(1);
+        await expect(rows.first()).toHaveAttribute("data-tone", "warn");
+        await expect(rows.first().locator(".result-row-name")).toHaveText("loop-animated-1.gif");
+        await expect(rows.first()).toContainText("Saved as loop-animated-1.gif. Renamed to avoid replacing an existing file.");
+        await expect(rows.first()).not.toContainText("native wording");
+    });
+
+    test("Create GIF names the unreadable frame and says nothing was saved", async ({ page }) => {
+        await start(page);
+        const message = "Frame 2, IMG_2212.heic, isn't a readable HEIC image. Replace or remove frame 2, then make the GIF again. Nothing was saved.";
+        await page.evaluate((message) => {
+            const failed = (inputPath: string, text: string) => ({ inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: text, pointer: null }, reason: null, warnings: [] });
+            (window as unknown as MediaWindow).__outcomes = { create_gif: [
+                failed("/local/frames/IMG_2211.png", "Aggregate operation stopped because /local/frames/IMG_2212.heic failed: " + message),
+                failed("/local/frames/IMG_2212.heic", message),
+            ] };
+        }, message);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/IMG_2211.png", "/local/frames/IMG_2212.heic"]);
+        await runOnce(page, "create_gif", "IMG_2211-animated.gif");
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveCount(2);
+        const failedFrame = rows.filter({ has: page.locator(".result-row-name", { hasText: /^IMG_2212\.heic$/ }) });
+        await expect(failedFrame).toHaveCount(1);
+        await expect(failedFrame).toHaveAttribute("data-tone", "fail");
+        await expect(failedFrame.getByText(message, { exact: true })).toHaveCount(1);
+        await expect(page.getByRole("list", { name: "Results" })).not.toContainText(".gif");
+    });
+
     test("Create GIF keeps its options when the rail switches tools and back", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Create GIF");
@@ -434,9 +523,12 @@ test.describe("Media requests", () => {
         } });
     });
 
-    test("TIFF Pages sends every inspected page in the displayed order and the saved path", async ({ page }) => {
+    const tiffMode = (page: Page) => page.getByRole("radiogroup", { name: "TIFF Pages mode" });
+
+    test("TIFF Pages in Combine mode sends the mode, every inspected page in the displayed order and the saved path", async ({ page }) => {
         await start(page, customFolder);
         await openToolBySearch(page, "Split and Combine TIFF");
+        await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
         await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
 
         const inspector = page.getByRole("region", { name: "Frame order" });
@@ -456,6 +548,7 @@ test.describe("Media requests", () => {
         await expect(pages.nth(1)).toContainText("one-page.tiff · page 1");
 
         expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tiff")).toEqual({ runId, request: {
+            mode: "combine",
             paths: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"],
             pages: [
                 { path: "/local/tiff/two-page.tiff", page: 0 },
@@ -467,41 +560,73 @@ test.describe("Media requests", () => {
         } });
     });
 
-    test("TIFF Pages splits one file without a saved path", async ({ page }) => {
+    test("TIFF Pages in Combine mode combines one file through the save step", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Split and Combine TIFF");
+        await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
         await choose(page, "/local/tiff/two-page.tiff");
         await expect(page.locator(".media-frame-list button")).toHaveCount(2);
+        await expect(page.locator(".workspace-primary-action")).toContainText("Make TIFF…");
 
-        expect(await runOnce(page, "process_tiff_pages")).toEqual({ runId, request: {
+        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tiff")).toEqual({ runId, request: {
+            mode: "combine",
             paths: ["/local/tiff/two-page.tiff"],
             pages: [
                 { path: "/local/tiff/two-page.tiff", page: 0 },
                 { path: "/local/tiff/two-page.tiff", page: 1 },
             ],
             outputLocation: "alongsideInput",
-            outputPath: null,
+            outputPath: "/local/tiff/two-page-combined.tiff",
         } });
     });
 
-    test("Image Metadata removes metadata and inspects with the same paths and output location", async ({ page }) => {
+    test("TIFF Pages splits several files as a batch in the chosen Split mode without a save step", async ({ page }) => {
         await start(page, customFolder);
-        await openToolBySearch(page, "Image Metadata");
-        await choose(page, ["/local/photos/a.jpg", "/local/photos/b.png"]);
-        await expect(page.locator(".workspace-primary-action")).toContainText("Remove metadata");
+        await openToolBySearch(page, "Split and Combine TIFF");
+        await expect(tiffMode(page).getByRole("radio", { name: "Split pages" })).toBeChecked();
+        await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/scan-0043.tiff"]);
+        await expect(page.getByRole("region", { name: "Frame order" })).toHaveCount(0);
+        await expect(page.locator(".workspace-primary-action")).toContainText("Split 2 TIFFs");
+        await expect(page.getByTestId("run-destination-example")).toContainText("two-page-page-01.tif");
 
-        expect(await runOnce(page, "image_metadata")).toEqual({ runId, request: {
-            paths: ["/local/photos/a.jpg", "/local/photos/b.png"],
+        expect(await runOnce(page, "process_tiff_pages")).toEqual({ runId, request: {
+            mode: "split",
+            paths: ["/local/tiff/two-page.tiff", "/local/tiff/scan-0043.tiff"],
             outputLocation: { customFolder: "/Users/test/Media out" },
         } });
+        await expect(page.getByRole("dialog")).toHaveCount(0);
+    });
 
-        await page.getByRole("radio", { name: "Inspect metadata" }).click();
-        await expect(page.locator(".workspace-primary-action")).toBeDisabled();
-        await page.locator(".workspace-control-panel").getByRole("button", { name: "Inspect metadata", exact: true }).click();
-        await expect(page.locator(".workspace-report")).toContainText("\"Camera\"");
-        expect(await invocationsOf(page, "inspect_image_metadata")).toEqual([{ request: {
-            paths: ["/local/photos/a.jpg", "/local/photos/b.png"],
-            outputLocation: { customFolder: "/Users/test/Media out" },
-        } }]);
+    test("TIFF Pages Split shows a skipped one-page TIFF apart from a failed one, with its reason", async ({ page }) => {
+        await start(page);
+        await page.addInitScript(() => {
+            const failed = (inputPath: string, message: string) => ({ inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message, pointer: null }, reason: null, warnings: [] });
+            (window as unknown as MediaWindow).__outcomesByPath = {
+                "/local/tiff/one-page.tiff": { inputPath: "/local/tiff/one-page.tiff", outputPaths: [], detail: "", state: "skipped", failure: null, reason: { code: "noEffectiveChange", message: "Only 1 page, so there's nothing to split. No file was made.", pointer: null }, warnings: [] },
+                "/local/tiff/broken.tiff": failed("/local/tiff/broken.tiff", "Could not process /local/tiff/broken.tiff: Could not read TIFF"),
+            };
+        });
+        await page.reload();
+        await openToolBySearch(page, "Split and Combine TIFF");
+        await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff", "/local/tiff/broken.tiff"]);
+        await runOnce(page, "process_tiff_pages");
+
+        const skipped = page.locator('.result-row[data-state="skipped"]');
+        await expect(skipped).toHaveCount(1);
+        await expect(skipped).toHaveAttribute("data-tone", "skip");
+        await expect(skipped).toContainText("one-page.tiff");
+        await expect(skipped).toContainText("Skipped");
+        await expect(skipped).toContainText("Only 1 page, so there's nothing to split. No file was made.");
+        await expect(skipped.getByRole("button", { name: /Retry/ })).toHaveCount(0);
+
+        const failed = page.locator('.result-row[data-state="failed"]');
+        await expect(failed).toHaveCount(1);
+        await expect(failed).toHaveAttribute("data-tone", "fail");
+        await expect(failed).toContainText("broken.tiff");
+        await expect(failed).toContainText("Failed");
+        await expect(failed).toContainText("Could not read TIFF");
+        await expect(failed.getByRole("button", { name: "Retry broken.tiff" })).toBeVisible();
+
+        await expect(page.locator('.result-row[data-state="succeeded"]')).toContainText("two-page.tiff");
     });
 });

@@ -14,11 +14,9 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
 
-  const [succeeded, pointedSkip, plainSkip, failed, limited] = outcomes;
-  const converted = outcomes[8];
-  const [images, blankPages] = outcomes.slice(10);
+  const [succeeded, pointedSkip, plainSkip, failed, limited, , , notCarried, converted, images, blankPages, flattened] = outcomes;
   for (const outcome of outcomes.slice(0, 5)) {
     assert.ok(!("originalBytes" in outcome) && !("outputBytes" in outcome), "outcomes without sizes stay unchanged");
   }
@@ -48,9 +46,16 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   assert.equal(limited.failure.details.limit, "time");
   assert.deepEqual(limited.outputPaths, ["drawings-page-1.png"], "a stopped run keeps the parts it saved");
 
+  assert.deepEqual(notCarried.warnings.map((warning) => warning.code), ["bookmarksNotCarried", "tagsNotCarried"]);
+  assert.deepEqual(
+    notCarried.warnings[0].code === "bookmarksNotCarried" && notCarried.warnings[0].details,
+    { into: "the merged file" },
+  );
+
   assert.deepEqual(images.warnings.map((warning) => warning.code), ["imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept"]);
   assert.deepEqual(images.warnings.map(warningText), images.warnings.map((warning) => warning.message), "rows say what the native side says");
   assert.deepEqual(blankPages.warnings.map(warningText), blankPages.warnings.map((warning) => warning.message));
+  assert.deepEqual(flattened.warnings.map((warning) => warning.code), ["transparencyFlattened"]);
 });
 
 test("an upscaled icon set is a warning row that names both sizes, as the native side does", () => {
@@ -68,7 +73,7 @@ test("an upscaled icon set is a warning row that names both sizes, as the native
 
 test("pages without text are a note that points at OCR, not a warning", () => {
   const withPages = (pages: number[], extra: unknown[] = []) =>
-    parseJobOutcome({ ...sample(11), warnings: [{ code: "pagesWithoutText", message: "", details: { pages } }, ...extra] });
+    parseJobOutcome({ ...sample(10), warnings: [{ code: "pagesWithoutText", message: "", details: { pages } }, ...extra] });
   assert.equal(warningText(withPages([3]).warnings[0]), "Page 3 has no selectable text. OCR can read it.");
   assert.equal(warningText(withPages([2, 3, 6]).warnings[0]), "Pages 2-3, 6 have no selectable text. OCR can read them.");
 
@@ -78,33 +83,33 @@ test("pages without text are a note that points at OCR, not a warning", () => {
   assert.deepEqual(note.detailLines.map((line) => line.text), ["Pages 30-33 have no selectable text. OCR can read them.", "PDF text extracted in reading order"]);
   assert.deepEqual(note.pointer?.pointer, { kind: "tool", toolId: "pdf-ocr" });
   assert.equal(note.openOutput?.path, "scan-archive-text.txt", "the text file was still written");
-  assert.deepEqual(resultSummary([withPages([2])], "Extracted").hints, [], "a note is not counted as a warning");
+  assert.deepEqual(resultSummary([withPages([2])], "Extracted").hints, ["1 extracted file has a warning or note."], "a note is counted with warnings");
 
-  const kept = sample(10).warnings as unknown[];
+  const kept = sample(9).warnings as unknown[];
   const warned = rowView(withPages([2], kept.slice(-1)), "Extracted");
   assert.equal(warned.tone, "warn", "a real warning still wins the row's tone");
   assert.deepEqual(warned.pointer?.pointer, { kind: "tool", toolId: "pdf-ocr" });
-  assert.equal(rowView(sample(10) as never, "Extracted").pointer, null, "rows without blank pages keep no pointer");
+  assert.equal(rowView(sample(9) as never, "Extracted").pointer, null, "rows without blank pages keep no pointer");
 });
 
 test("skipped PDFs keep their reason and OCR pointer apart from failures", () => {
   const scanned = parseJobOutcome({
     ...sample(2),
     inputPath: "scan.pdf",
-    reason: { code: "noEffectiveChange", message: "PDF contains no selectable text; scanned PDFs require OCR. No file was made.", pointer: { kind: "tool", toolId: "pdf-ocr" } },
+    reason: { code: "needsOcr", message: "This PDF has no text layer. Run OCR to read its text.", pointer: { kind: "tool", toolId: "pdf-ocr" } },
   });
-  const range = parseJobOutcome({ ...sample(2), inputPath: "memo.pdf", reason: { code: "rangeEmptyAfterClamping", message: "No pages in range 3-5, 8-. This PDF has 2 pages.", pointer: null } });
+  const range = parseJobOutcome({ ...sample(2), inputPath: "memo.pdf", reason: { code: "rangeEmptyAfterClamping", message: "No pages in 3-5, 8- are in this PDF, which has 2 pages.", pointer: null } });
   const scannedRow = rowView(scanned, "Extracted");
-  assert.deepEqual([scannedRow.tone, scannedRow.stateLabel, scannedRow.detailLines[0]?.text], ["skip", "Skipped", "PDF contains no selectable text; scanned PDFs require OCR. No file was made."]);
+  assert.deepEqual([scannedRow.tone, scannedRow.stateLabel, scannedRow.detailLines[0]?.text], ["skip", "Skipped", "This PDF has no text layer. Run OCR to read its text."]);
   assert.deepEqual(scannedRow.pointer?.pointer, { kind: "tool", toolId: "pdf-ocr" });
   assert.equal(scannedRow.canRetry, false);
   const rangeRow = rowView(range, "Extracted");
-  assert.deepEqual([rangeRow.tone, rangeRow.detailLines, rangeRow.pointer], ["skip", [{ text: "No pages in range 3-5, 8-. This PDF has 2 pages.", tone: null }], null]);
+  assert.deepEqual([rangeRow.tone, rangeRow.detailLines.map((line) => line.text), rangeRow.pointer], ["skip", ["No pages in 3-5, 8- are in this PDF, which has 2 pages."], null]);
 });
 
 test("image warnings name the pages as runs and keep singular wording for one image", () => {
   const kept = (colour: string, pages: number[], images: number) =>
-    warningText(parseJobOutcome({ ...sample(10), warnings: [{ code: "jpegColourKept", message: "", details: { colour, pages, images } }] }).warnings[0]);
+    warningText(parseJobOutcome({ ...sample(9), warnings: [{ code: "jpegColourKept", message: "", details: { colour, pages, images } }] }).warnings[0]);
 
   assert.equal(kept("inverted", [22], 1), "Page 22 — 1 inverted JPEG, copied as it is. Some viewers show it in negative.");
   assert.equal(kept("inverted", [1, 2, 3, 7], 5), "Pages 1-3, 7 — 5 inverted JPEGs, copied as they are. Some viewers show them in negative.");
@@ -134,7 +139,7 @@ test("native-shaped outcomes carry original and output byte sizes when reported"
 
 test("native-shaped outcomes carry a labelled page breakdown when reported", () => {
   const outcomes = parseToolResult(nativeSamples);
-  const mixed = outcomes[7];
+  const mixed = outcomes[12];
 
   assert.ok(mixed.state === "succeeded");
   assert.deepEqual(mixed.pageDetails, [
@@ -142,21 +147,21 @@ test("native-shaped outcomes carry a labelled page breakdown when reported", () 
     { label: "Skipped, visible text", value: "Page 2" },
     { label: "Languages", value: "English" },
   ]);
-  for (const outcome of outcomes.slice(0, 7)) assert.ok(!("pageDetails" in outcome), "outcomes without a breakdown stay unchanged");
-  assert.ok(!("pageDetails" in parseJobOutcome({ ...sample(7), pageDetails: [] })), "an empty breakdown is the same as none");
+  for (const outcome of outcomes.slice(0, 12)) assert.ok(!("pageDetails" in outcome), "outcomes without a breakdown stay unchanged");
+  assert.ok(!("pageDetails" in parseJobOutcome({ ...sample(12), pageDetails: [] })), "an empty breakdown is the same as none");
 
   for (const bad of ["Pages 1-3", [{ label: "Recognized" }], [{ label: 1, value: "Page 1" }]]) {
-    assert.throws(() => parseJobOutcome({ ...sample(7), pageDetails: bad }), /Invalid job outcome: outcome.pageDetails/);
+    assert.throws(() => parseJobOutcome({ ...sample(12), pageDetails: bad }), /Invalid job outcome: outcome.pageDetails/);
   }
 });
 
 test("native-shaped outcomes say when the input was read in basic fidelity", () => {
   const outcomes = parseToolResult(nativeSamples);
 
-  assert.equal(outcomes[9].basicFidelity, true);
-  for (const outcome of outcomes.slice(0, 9)) assert.ok(!("basicFidelity" in outcome), "outcomes in full fidelity carry no mark");
+  assert.equal(outcomes[13].basicFidelity, true);
+  for (const outcome of outcomes.slice(0, 13)) assert.ok(!("basicFidelity" in outcome), "outcomes in full fidelity carry no mark");
   for (const bad of ["yes", 1, null]) {
-    assert.throws(() => parseJobOutcome({ ...sample(9), basicFidelity: bad }), /Invalid job outcome: outcome.basicFidelity/);
+    assert.throws(() => parseJobOutcome({ ...sample(13), basicFidelity: bad }), /Invalid job outcome: outcome.basicFidelity/);
   }
 });
 
@@ -179,10 +184,10 @@ test("inconsistent native outcomes are rejected", () => {
   const unknownPackNeed = packPointer({ reason: "bored" });
   const unknownFontSource = { ...sample(8), fonts: [{ ...(sample(8).fonts as object[])[0], source: "borrowed" }] };
   const fontsNotAList = { ...sample(8), fonts: { fontUsed: "Liberation Mono" } };
-  const textPage = { ...sample(10), warnings: [{ code: "imageDamaged", message: "Damaged.", details: { page: "19", image: 1 } }] };
-  const fractionalSize = { ...sample(10), warnings: [{ code: "imageTooLarge", message: "Big.", details: { page: 1, image: 1, width: 1.5, height: 2 } }] };
-  const unknownColour = { ...sample(10), warnings: [{ code: "jpegColourKept", message: "Kept.", details: { colour: "sepia", pages: [1], images: 1 } }] };
-  const pagesNotList = { ...sample(10), warnings: [{ code: "jpegColourKept", message: "Kept.", details: { colour: "cmyk", pages: 1, images: 1 } }] };
+  const textPage = { ...sample(9), warnings: [{ code: "imageDamaged", message: "Damaged.", details: { page: "19", image: 1 } }] };
+  const fractionalSize = { ...sample(9), warnings: [{ code: "imageTooLarge", message: "Big.", details: { page: 1, image: 1, width: 1.5, height: 2 } }] };
+  const unknownColour = { ...sample(9), warnings: [{ code: "jpegColourKept", message: "Kept.", details: { colour: "sepia", pages: [1], images: 1 } }] };
+  const pagesNotList = { ...sample(9), warnings: [{ code: "jpegColourKept", message: "Kept.", details: { colour: "cmyk", pages: 1, images: 1 } }] };
 
   for (const [name, value] of Object.entries({
     skippedWithOutputs,
