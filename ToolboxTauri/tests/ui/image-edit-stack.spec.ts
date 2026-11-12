@@ -598,7 +598,7 @@ test("Format keeps each original by default and a chosen format reaches the requ
 });
 
 for (const theme of ["light", "dark"] as const) {
-    test(`flattening and 8-bit notes render on done rows in the ${theme} theme`, async ({ page }, testInfo) => {
+    test(`the flattening note renders on a done row and an 8-bit save warns in the ${theme} theme`, async ({ page }, testInfo) => {
         await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
         await openCrop(page, ["/photos/badge.png", "/photos/deep.heic"]);
         await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
@@ -615,10 +615,10 @@ for (const theme of ["light", "dark"] as const) {
         await expect(rows).toHaveCount(2);
         await expect(rows.nth(0)).toContainText(flattenedNote);
         await expect(rows.nth(1)).toContainText(reducedNote);
-        for (const index of [0, 1]) {
-            await expect(rows.nth(index)).toHaveAttribute("data-tone", "ok");
-            await expect(rows.nth(index)).not.toContainText(/warning/i);
-        }
+        await expect(rows.nth(0)).toHaveAttribute("data-tone", "ok");
+        await expect(rows.nth(0)).not.toContainText(/warning/i);
+        // An 8-bit save stays a warning, as it is in every other image tool.
+        await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
         await expect(page.getByRole("button", { name: "Open badge-cropped.jpg" })).toBeVisible();
         const colors = await rows.nth(0).evaluate((row, note) => {
             const text = Array.from(row.querySelectorAll("*")).find((node) => node.childElementCount === 0 && node.textContent?.includes(note));

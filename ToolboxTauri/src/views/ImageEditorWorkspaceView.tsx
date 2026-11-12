@@ -6,7 +6,6 @@ import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import type {
   AtomicToolId,
-  ConvertImagesRequest,
   ImagePreview,
   OutputLocation,
   ToolDefinition,
@@ -49,27 +48,16 @@ import {
 import { ImageEditStackPanel, type StackMessage } from "./ImageEditStackPanel";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { Label } from "../components/ui/label";
-import { NativeSelect } from "../components/ui/native-select";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 import { UtilityRegistry, workspaceById } from "../registry";
 import { useToolAvailability } from "../ToolAvailabilityContext";
-
-type ImageEditorDraftValues = {
-  format: ConvertImagesRequest["format"];
-};
 
 // Tools that are steps in the shared edit stack, not drafts of the edit plan.
 const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate", "image-tone": "tone", "image-watermark": "watermark", "image-metadata": "metadata" };
 const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate", tone: "image-tone", watermark: "image-watermark", metadata: "image-metadata" };
 const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep, tone: defaultImageToneStep, watermark: defaultImageWatermarkStep, metadata: () => ({}) };
 
-const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation | null => {
-  if (stackStepForTool[id]) return null;
-  if (id === "heic-convert") return { kind: "convert", format: values.format };
-  return null;
-};
 
 const imageEditLabel = (edit: ImageEditOperation) => {
   if (edit.kind === "resize") return `Resize ${edit.width} × ${edit.height}`;
@@ -135,11 +123,11 @@ export const ImageEditorWorkspaceView = ({
   onFilesChange?: (paths: readonly string[]) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
-  const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
   const [stackFormat, setStackFormat] = useState<ImageEditStackFormat>("original");
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
-  const draft = buildImageEditDraft(activeUtility.id, { format });
+  // Every Edit Image tool is now a stack step, so no tool drafts an edit-plan edit.
+  const draft: ImageEditOperation | null = null;
   const draftKey = JSON.stringify(draft);
   const liveDraft = draftKey === committedDraftKey ? null : draft;
   const previousLiveDraft = useRef<{ toolId: string; draft: ImageEditOperation | null } | null>(null);
@@ -210,11 +198,6 @@ export const ImageEditorWorkspaceView = ({
         ? exampleOutputName(path, activeUtility.command, imageEditStackSuffix(stack.present), imageEditStackExtension(stackFormat, path))
         : exampleOutputName(path, activeUtility.command, "-edited", editedImageExtension(editPlan, path))}
       onRun={(paths, outputLocation, { runId }) => {
-        if (activeUtility.id === "heic-convert") {
-          return invoke<ToolResult>("convert_images", { runId,
-            request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
-          });
-        }
         return invoke<ToolResult>("export_image_edit_stack", { runId, request: {
           paths,
           steps: imageEditStackRequestSteps(stack.present),
@@ -260,8 +243,6 @@ export const ImageEditorWorkspaceView = ({
           }}
         />
       ) : <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
-        format,
-        setFormat,
         plan: history.present,
         draft: liveDraft,
         canUndo: history.past.length > 0,
@@ -296,8 +277,6 @@ type ImageEditorControlsProps = {
   loading: boolean;
   utility: ToolDefinition;
   onSelectTool?: (id: AtomicToolId) => void;
-  format: ConvertImagesRequest["format"];
-  setFormat: (value: ConvertImagesRequest["format"]) => void;
   plan: ImageEditPlan;
   draft: ImageEditOperation | null;
   canUndo: boolean;
@@ -321,8 +300,6 @@ const ImageEditorControls = ({
   loading,
   utility,
   onSelectTool,
-  format,
-  setFormat,
   plan,
   draft,
   canUndo,
@@ -440,14 +417,6 @@ const ImageEditorControls = ({
           <h2 className="workspace-active-command">{utility.title}</h2>
           <p className="workspace-panel-copy">Change the outcome without leaving the image editor.</p>
         </div>
-        {utility.id === "heic-convert" && (
-          <div className="workspace-field">
-            <Label htmlFor="image-target-format">Target format</Label>
-            <NativeSelect id="image-target-format" aria-label="Target format" value={format} onChange={(event) => setFormat(event.target.value as ConvertImagesRequest["format"])}>
-              <option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="heic">HEIC</option>
-            </NativeSelect>
-          </div>
-        )}
         <Card role="region" className="image-editor-history py-0" aria-label="Image edit history">
           <CardContent className="image-editor-history-content py-4">
           <div className="workspace-panel-intro">
