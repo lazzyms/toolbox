@@ -17,13 +17,21 @@ const requiredCapabilityKeys = [
 const capabilityKeys = new Set([...requiredCapabilityKeys, "acceptedExtensions", "formatFamilies"]);
 const familyKeys = new Set(["id", "extensions", "nativeAvailability", "basicFidelity"]);
 
+const optionalCapabilityKeys = new Set(["outputFormats", "skippedExtensions"]);
+
+const isExtensionList = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every((extension) => typeof extension === "string" && /^\.[a-z0-9]+$/.test(extension)) &&
+  new Set(value).size === value.length;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isInputCardinality = (
   value: unknown,
 ): value is ToolCapability["inputCardinality"] =>
-  value === "single" || value === "multiple" || value === "ordered";
+  value === "single" || value === "multiple" || value === "ordered" || value === "none";
 
 const isNativeAvailability = (value: unknown): value is NativeAvailability =>
   value === "available" || value === "unavailable";
@@ -56,21 +64,26 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (!isRecord(value)) throw new Error("Each shared capability must be an object.");
   if (
     requiredCapabilityKeys.some((key) => !(key in value)) ||
-    Object.keys(value).some((key) => !capabilityKeys.has(key))
+    Object.keys(value).some((key) => !capabilityKeys.has(key) && !optionalCapabilityKeys.has(key))
   ) {
     throw new Error("Each shared capability must contain only the contract fields.");
   }
   const {
     command,
+    skippedExtensions = [],
     inputCardinality,
     supportsPageSelection,
     supportsPreview,
     nativeAvailability,
     outputSuffix,
     manyToOne,
+    outputFormats,
   } = value;
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Each shared capability needs a command.");
+  }
+  if (!isInputCardinality(inputCardinality)) {
+    throw new Error(`${command} has an invalid input cardinality.`);
   }
   if ((value.acceptedExtensions == null) === (value.formatFamilies == null)) {
     throw new Error(`${command} must declare either accepted extensions or format families.`);
@@ -79,20 +92,21 @@ const parseCapability = (value: unknown): SharedCapability => {
     value.formatFamilies == null ? undefined : parseFormatFamilies(command, value.formatFamilies);
   const acceptedExtensions =
     formatFamilies?.flatMap((family) => family.extensions) ?? value.acceptedExtensions;
+  if (inputCardinality === "none" && Array.isArray(acceptedExtensions) && acceptedExtensions.length > 0) {
+    throw new Error(`${command} takes no input files, so it cannot declare accepted extensions.`);
+  }
   if (
     !Array.isArray(acceptedExtensions) ||
-    acceptedExtensions.length === 0 ||
-    !acceptedExtensions.every(
+    (inputCardinality !== "none" && acceptedExtensions.length === 0) ||
+    !Array.isArray(skippedExtensions) ||
+    ![...acceptedExtensions, ...skippedExtensions].every(
       (extension) =>
         typeof extension === "string" &&
         /^\.[a-z0-9]+$/.test(extension),
     ) ||
-    new Set(acceptedExtensions).size !== acceptedExtensions.length
+    new Set([...acceptedExtensions, ...skippedExtensions]).size !== acceptedExtensions.length + skippedExtensions.length
   ) {
     throw new Error(`${command} has invalid accepted extensions.`);
-  }
-  if (!isInputCardinality(inputCardinality)) {
-    throw new Error(`${command} has an invalid input cardinality.`);
   }
   if (typeof supportsPageSelection !== "boolean" || typeof supportsPreview !== "boolean") {
     throw new Error(`${command} has invalid capability flags.`);
@@ -106,9 +120,13 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (typeof manyToOne !== "boolean") {
     throw new Error(`${command} has an invalid many-to-one flag.`);
   }
+  if (outputFormats !== undefined && !isExtensionList(outputFormats)) {
+    throw new Error(`${command} has invalid output formats.`);
+  }
   return {
     command,
     acceptedExtensions,
+    skippedExtensions,
     ...(formatFamilies && { formatFamilies }),
     inputCardinality,
     supportsPageSelection,
@@ -116,6 +134,7 @@ const parseCapability = (value: unknown): SharedCapability => {
     nativeAvailability,
     outputSuffix,
     manyToOne,
+    ...(outputFormats ? { outputFormats } : {}),
   };
 };
 
@@ -140,6 +159,7 @@ const capabilitiesByCommand = new Map<string, ToolCapability>();
 for (const capability of SharedCapabilityRegistry) {
   capabilitiesByCommand.set(capability.command, {
     acceptedExtensions: capability.acceptedExtensions,
+    skippedExtensions: capability.skippedExtensions,
     ...(capability.formatFamilies && { formatFamilies: capability.formatFamilies }),
     inputCardinality: capability.inputCardinality,
     supportsPageSelection: capability.supportsPageSelection,
@@ -147,6 +167,7 @@ for (const capability of SharedCapabilityRegistry) {
     nativeAvailability: capability.nativeAvailability,
     outputSuffix: capability.outputSuffix,
     manyToOne: capability.manyToOne,
+    ...(capability.outputFormats ? { outputFormats: capability.outputFormats } : {}),
   });
 }
 

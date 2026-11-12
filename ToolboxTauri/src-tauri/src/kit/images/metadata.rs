@@ -15,11 +15,15 @@ pub struct ImageMetadata {
     pub comments: bool,
     pub icc: bool,
     pub orientation: Option<u8>,
+    /// Whether EXIF holds anything beyond the orientation tag: camera, lens, date, thumbnail or
+    /// location. An orientation-only block is what a cleaned copy keeps, so it does not count.
+    #[serde(skip)]
+    pub(crate) camera_details: bool,
 }
 
 impl ImageMetadata {
     fn empty(format: MetadataFormat) -> Self {
-        Self { format, exif: false, gps: false, xmp: false, iptc: false, comments: false, icc: false, orientation: None }
+        Self { format, exif: false, gps: false, xmp: false, iptc: false, comments: false, icc: false, orientation: None, camera_details: false }
     }
 }
 
@@ -146,6 +150,8 @@ fn exif(payload: &[u8], metadata: &mut ImageMetadata) -> Read<()> {
     let (endian, at) = tiff_header(payload).ok_or_else(|| corrupt("EXIF block"))?;
     let entries = read_ifd(payload, at, endian).ok_or_else(|| corrupt("EXIF block"))?;
     read_ifd0_tags(payload, endian, &entries, metadata).ok_or_else(|| corrupt("EXIF block"))?;
+    let next_ifd = endian.u32(payload, at + 2 + entries.len() * 12).unwrap_or(0);
+    metadata.camera_details |= next_ifd != 0 || entries.iter().any(|entry| entry.tag != 0x0112);
     metadata.exif = true;
     Ok(())
 }
@@ -217,7 +223,7 @@ fn png(data: &[u8]) -> Read<ImageMetadata> {
             b"tEXt" | b"zTXt" | b"iTXt" => match chunk.split(|byte| *byte == 0).next().unwrap_or_default() {
                 b"XML:com.adobe.xmp" | b"Raw profile type xmp" => metadata.xmp = true,
                 b"Raw profile type iptc" | b"Raw profile type 8bim" => metadata.iptc = true,
-                b"Raw profile type exif" | b"Raw profile type APP1" => metadata.exif = true,
+                b"Raw profile type exif" | b"Raw profile type APP1" => { metadata.exif = true; metadata.camera_details = true; }
                 b"Raw profile type icc" | b"Raw profile type icm" => metadata.icc = true,
                 _ => metadata.comments = true,
             },
@@ -256,7 +262,7 @@ fn tiff(data: &[u8]) -> Read<ImageMetadata> {
     let values = |tag: u16| entries.iter().find(|entry| entry.tag == tag).map(|entry| entry_values(data, entry, endian).ok_or_else(|| truncated("TIFF image"))).transpose();
     for entry in &entries {
         match entry.tag {
-            0x8769 | 0x8825 => metadata.exif = true,
+            0x8769 | 0x8825 => { metadata.exif = true; metadata.camera_details = true; }
             0x02BC => metadata.xmp = true,
             0x83BB => metadata.iptc = true,
             0x8773 => metadata.icc = true,
@@ -512,7 +518,12 @@ pub mod fixtures {
         let base = encoded(image::ImageFormat::Png);
         let mut out = base[..33].to_vec();
         if let Some(payload) = wanted.exif_payload() { out.extend(chunk(b"eXIf", &payload)); }
-        if wanted.icc { out.extend(chunk(b"iCCP", &[b"fixture\0\0".as_slice(), ICC].concat())); }
+        if wanted.icc {
+            // iCCP holds the profile zlib-compressed, as decoders expect.
+            let mut compressed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            std::io::Write::write_all(&mut compressed, ICC).unwrap();
+            out.extend(chunk(b"iCCP", &[b"fixture\0\0".as_slice(), &compressed.finish().unwrap()].concat()));
+        }
         if wanted.xmp { out.extend(chunk(b"iTXt", &[b"XML:com.adobe.xmp\0\0\0\0\0".as_slice(), XMP].concat())); }
         if wanted.iptc { out.extend(chunk(b"tEXt", b"Raw profile type iptc\0\niptc\n       4\n1c020000\n")); }
         if wanted.comments { out.extend(chunk(b"tEXt", b"Comment\0fixture comment")); }
