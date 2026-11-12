@@ -596,6 +596,36 @@ mod tests {
         result.expect_err("the install should fail").kind
     }
 
+    /// The release fixture scripts/pack-release.mjs builds (tests/pack-release.test.mjs keeps it
+    /// current): the catalog a release compiles in, one published pack file and its test key.
+    #[test]
+    fn a_catalog_the_release_build_generates_verifies_and_installs_its_published_pack_from_a_stand_in_server() {
+        const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/pack-release/");
+        let read = |name: &str| std::fs::read(format!("{FIXTURE}{name}")).unwrap();
+        let catalog = parse_catalog(&String::from_utf8(read("pack-catalog.json")).unwrap()).unwrap();
+        let public_key = super::super::install::decode_public_key(&String::from_utf8(read("public-key.txt")).unwrap()).unwrap();
+        let pack = catalog.packs.iter().find(|pack| pack.id == "ocr-hindi").unwrap();
+        let path = pack.payloads[0].path.clone();
+        let server = Server::start();
+        server.route(&format!("/releases/{path}"), Reply::File(read(path.rsplit('/').next().unwrap())));
+        let downloads = Downloads::new(transport(server.base())).unwrap();
+        let (app_data, target) = (sandbox("download-release-fixture").join("app-data"), current_target());
+        let install = |public_key: &minisign_verify::PublicKey| {
+            let context = InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: APP, public_key, limits: PackLimits::DEFAULT, cancel: None, changed: None };
+            downloads.install("ocr-hindi", &context, &|_, _, _| {})
+        };
+
+        // The real updater key did not sign the fixture, so it is refused and nothing stays.
+        assert_eq!(kind(install(&super::super::install::trusted_public_key().unwrap())), PackInstallErrorKind::WrongKey);
+        assert!(!app_data.join(PACKS_DIR).join("ocr-hindi").exists());
+
+        install(&public_key).unwrap();
+        assert_eq!(server.requests(), [format!("/releases/{path}"), format!("/releases/{path}")]);
+        let status = list_packs_in(&catalog, &app_data, &target, APP).packs.into_iter().find(|pack| pack.id == "ocr-hindi").unwrap().status;
+        assert_eq!(status, PackStatus::Installed);
+        assert_eq!(std::fs::read(app_data.join(PACKS_DIR).join("ocr-hindi/1.0/tessdata/hin.traineddata")).unwrap(), b"hindi model".repeat(100));
+    }
+
     #[test]
     fn a_download_from_a_stand_in_server_installs_through_the_verified_path_with_well_formed_progress() {
         let setup = Setup::new("installs", &["ocr-hindi"]);

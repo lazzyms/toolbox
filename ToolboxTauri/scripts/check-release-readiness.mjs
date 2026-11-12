@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { inspectFallbackFonts, sourceFontsDir } from "./fallback-fonts.mjs";
-import { inspectPdftotext, inspectQpdf, readPin } from "./qpdf-pin.mjs";
+import { inspectPackRelease, inspectUninstallers, tauriNsisTemplate } from "./pack-release.mjs";
+import { inspectPdftotext, inspectQpdf, inspectRenderer, readPin } from "./qpdf-pin.mjs";
 import { describe, readOcrPin, verifyCommittedEnglishData, verifyOcrArtifact } from "./ocr-release.mjs";
 import { verifyConvertArtifact } from "./convert-release.mjs";
 
@@ -34,13 +35,27 @@ if (!/TOOLBOX_REQUIRE_OCR_RESOURCES: '1'/.test(workflow) || !workflow.includes("
 if (!workflow.includes("--convert-artifact") || !workflow.includes("compare-convert-outputs.mjs")) {
   throw new Error("Release builds must check every artifact with --convert-artifact and compare Convert to PDF snapshots across targets");
 }
+if (!/check-release-readiness\.mjs --packs pack-release/.test(workflow) || !/check-tool-matrix\.mjs --catalog pack-release\/pack-catalog\.json/.test(workflow)) {
+  throw new Error("Releases must build their packs, gate them with --packs and check the catalog against the tool matrix");
+}
+if (!/gh release create[^\n]*pack-release\/\*\.toolboxpack/.test(workflow)) throw new Error("Releases must publish the pack files they build");
+if (!/check-release-readiness\.mjs --renderer \S*pdftoppm\.exe --target \$\{\{ matrix\.target \}\}/.test(workflow)) throw new Error("Windows releases must refuse a page renderer that is missing or not native to the target");
+const uninstallers = inspectUninstallers({
+  config,
+  packsSource: readFileSync(projectFile("src-tauri/src/packs.rs"), "utf8"),
+  nsisTemplate: tauriNsisTemplate(),
+});
+const keepsAppData = uninstallers.filter(({ cause }) => cause);
+if (keepsAppData.length) throw new Error(`Uninstaller check failed: ${keepsAppData.map(({ cause, message }) => `${cause}: ${message}`).join("; ")}`);
 const pin = readPin();
 const ocrPin = readOcrPin();
 const englishProblem = verifyCommittedEnglishData(ocrPin);
 if (englishProblem) throw new Error(englishProblem);
 console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}, English OCR data ${ocrPin.englishData.version}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, pdftotext: { type: "string" }, target: { type: "string" }, "ocr-artifact": { type: "string" }, "convert-artifact": { type: "string" }, fonts: { type: "string" } } });
+for (const { message } of uninstallers) console.log(`Uninstall: ${message}`);
+
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, pdftotext: { type: "string" }, renderer: { type: "string" }, target: { type: "string" }, fonts: { type: "string" }, packs: { type: "string" }, "public-key": { type: "string" }, "ocr-artifact": { type: "string" }, "convert-artifact": { type: "string" } } });
 const fonts = inspectFallbackFonts({ fontsDir: values.fonts ?? sourceFontsDir });
 if (fonts.cause) {
   console.error(`Fallback font release check failed (${fonts.cause}): ${fonts.message}`);
@@ -74,8 +89,12 @@ if (convertArtifact !== undefined) {
   }
   console.log(`Convert to PDF release check passed: ${convertArtifact} carries the native ${values.target} renderer and the fallback fonts, and conversion uses no Bundled helper`);
 }
+
 const helperChecks = [];
-if (values.qpdf !== undefined || (values.target !== undefined && ocrArtifact === undefined && convertArtifact === undefined && values.pdftotext === undefined)) {
+if (values.renderer !== undefined) {
+  helperChecks.push(["page renderer", () => inspectRenderer({ path: values.renderer, target: values.target })]);
+}
+if (values.qpdf !== undefined || (values.target !== undefined && values.pdftotext === undefined && values.renderer === undefined && ocrArtifact === undefined && convertArtifact === undefined)) {
   helperChecks.push(["qpdf", () => inspectQpdf({ path: values.qpdf, target: values.target, pin })]);
 }
 if (values.pdftotext !== undefined) {
@@ -92,3 +111,17 @@ for (const [name, inspect] of helperChecks) {
   }
 }
 if (helperFailed) process.exit(1);
+
+// `--packs <dir>`: the release's pack files and catalog, as scripts/pack-release.mjs builds them.
+// They must verify against the updater key the app trusts; `--public-key <file>` substitutes
+// another key in the updater configuration's format, for checking a locally signed build.
+if (values.packs !== undefined) {
+  const publicKey = values["public-key"] ? readFileSync(values["public-key"], "utf8").trim() : config.plugins.updater.pubkey;
+  const failures = inspectPackRelease({ dir: values.packs, publicKey });
+  if (failures.length) {
+    for (const { cause, message } of failures) console.error(`Pack release check failed (${cause}): ${message}`);
+    process.exit(1);
+  }
+  const catalog = JSON.parse(readFileSync(`${values.packs}/pack-catalog.json`, "utf8"));
+  console.log(`Pack release check passed: ${catalog.packs.length} packs, ${catalog.packs.reduce((total, { payloads }) => total + payloads.length, 0)} payloads signed with the updater key`);
+}

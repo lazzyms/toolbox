@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { inspectPdftotext, inspectQpdf, readPin } from "../scripts/qpdf-pin.mjs";
+import { inspectPdftotext, inspectQpdf, inspectRenderer, readPin } from "../scripts/qpdf-pin.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtures = mkdtempSync(join(tmpdir(), "toolbox-qpdf-release-"));
@@ -111,6 +111,41 @@ test("release readiness names the cause when a release qpdf is emulated", () => 
   const result = readiness(["--qpdf", fixture("readiness-emulated.exe", pe(X86_64_PE)), "--target", "aarch64-pc-windows-msvc"]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /qpdf release check failed \(wrong-architecture\)/);
+});
+
+test("passes a native arm64 page renderer for Windows arm64", () => {
+  const result = inspectRenderer({ path: fixture("pdftoppm-arm64.exe", pe(ARM64_PE)), target: "aarch64-pc-windows-msvc" });
+  assert.equal(result.cause, null, result.message);
+});
+
+test("refuses an emulated x64 page renderer on Windows arm64", () => {
+  const result = inspectRenderer({ path: fixture("pdftoppm-x64.exe", pe(X86_64_PE)), target: "aarch64-pc-windows-msvc" });
+  assert.equal(result.cause, "wrong-architecture");
+  assert.match(result.message, /emulated/);
+});
+
+test("fails when the Windows arm64 artifact has no page renderer", () => {
+  const result = inspectRenderer({ path: join(fixtures, "absent", "pdftoppm.exe"), target: "aarch64-pc-windows-msvc" });
+  assert.equal(result.cause, "missing");
+});
+
+test("release readiness fails a Windows arm64 artifact whose page renderer is emulated", () => {
+  const result = readiness(["--renderer", fixture("readiness-renderer-x64.exe", pe(X86_64_PE)), "--target", "aarch64-pc-windows-msvc"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /page renderer release check failed \(wrong-architecture\)/);
+  assert.doesNotMatch(result.stdout + result.stderr, /qpdf release check/);
+});
+
+test("release readiness fails a Windows arm64 artifact without a page renderer", () => {
+  const result = readiness(["--renderer", join(fixtures, "absent", "pdftoppm.exe"), "--target", "aarch64-pc-windows-msvc"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /page renderer release check failed \(missing\)/);
+});
+
+test("release readiness passes a native Windows arm64 page renderer", () => {
+  const result = readiness(["--renderer", fixture("readiness-renderer-arm64.exe", pe(ARM64_PE)), "--target", "aarch64-pc-windows-msvc"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /page renderer release check passed/);
 });
 
 const compiler = process.platform === "darwin" && process.arch === "arm64" && spawnSync("cc", ["--version"]).status === 0;

@@ -178,38 +178,6 @@
 "title": "Details: privacy report and properties",
 "expand": "fill"
 },
-"PdfPrivacy.dc.html": {
-"x": 10040,
-"y": 6120,
-"w": 1280,
-"h": 800,
-"title": "Privacy Check: read-only report, one file or many",
-"expand": "fill"
-},
-"PdfProperties.dc.html": {
-"x": 11400,
-"y": 6120,
-"w": 1280,
-"h": 800,
-"title": "Edit Properties: keep, set or clear, mixed values",
-"expand": "fill"
-},
-"PdfRestrictions.dc.html": {
-"x": 12760,
-"y": 6120,
-"w": 1280,
-"h": 800,
-"title": "Remove Restrictions: permissions password, per-file override",
-"expand": "fill"
-},
-"PdfDetailsNarrow.dc.html": {
-"x": 14120,
-"y": 6120,
-"w": 900,
-"h": 800,
-"title": "Narrow window: Details tools with options as a drawer",
-"expand": "fill"
-},
 "Split.dc.html": {
 "x": 2720,
 "y": 6120,
@@ -259,11 +227,11 @@
 "expand": "fill"
 },
 "FormattedPdf.dc.html": {
-"x": 4080,
-"y": 7280,
+"x": 2720,
+"y": 14240,
 "w": 1280,
 "h": 800,
-"title": "Formatted PDF: blocks, preview, draft",
+"title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
 "expand": "fill"
 },
 "ImageEdit.dc.html": {
@@ -402,6 +370,126 @@
 "title": "Results: every lock and unlock outcome",
 "expand": "fill"
 },
+"PdfToEpub.dc.html": {
+"x": 0,
+"y": 14240,
+"w": 1280,
+"h": 800,
+"title": "PDF to EPUB: files, options, per-run folder, converting",
+"expand": "fill"
+},
+"PdfToEpubResults.dc.html": {
+"x": 1360,
+"y": 14240,
+"w": 1280,
+"h": 800,
+"title": "PDF to EPUB results: converted, skipped, failed, details",
+"expand": "fill"
+},
+"MediaEmpty.dc.html": {
+"x": 11800,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Media creation: empty drop target, all four tools",
+"expand": "fill"
+},
+"MediaIcons.dc.html": {
+"x": 13160,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "App Icon Set: masters, presets, sizes, pad or crop, contact sheet",
+"expand": "fill"
+},
+"MediaGif.dc.html": {
+"x": 14520,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Create GIF: frame strip, delays, reorder, preview, save dialog",
+"expand": "fill"
+},
+"MediaExtract.dc.html": {
+"x": 15880,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Extract GIF Frames: GIFs added, frames and timings",
+"expand": "fill"
+},
+"MediaTiff.dc.html": {
+"x": 17240,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "TIFF Pages: Split files, Combine page grid, save dialog",
+"expand": "fill"
+},
+"MediaRunning.dc.html": {
+"x": 18600,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Media creation: running, locked options, Cancel",
+"expand": "fill"
+},
+"MediaResults.dc.html": {
+"x": 19960,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Media creation: results, grouped outputs, Skipped and Failed",
+"expand": "fill"
+},
+"ExtractFromPdf.dc.html": {
+"x": 5440,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Extract from PDF: modes, range, options, running",
+"expand": "fill"
+},
+"ExtractFromPdfResults.dc.html": {
+"x": 6800,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Extract from PDF results: text, folders, skipped, failed",
+"expand": "fill"
+},
+"PdfPrivacy.dc.html": {
+"x": 10040,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Privacy Check: read-only report, one file or many",
+"expand": "fill"
+},
+"PdfProperties.dc.html": {
+"x": 11400,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Edit Properties: keep, set or clear, mixed values",
+"expand": "fill"
+},
+"PdfRestrictions.dc.html": {
+"x": 12760,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Remove Restrictions: permissions password, per-file override",
+"expand": "fill"
+},
+"PdfDetailsNarrow.dc.html": {
+"x": 14120,
+"y": 6120,
+"w": 900,
+"h": 800,
+"title": "Narrow window: Details tools with options as a drawer",
+"expand": "fill"
+},
 "ConvertToPdf.dc.html": {
 "x": 14000,
 "y": 7280,
@@ -457,22 +545,6 @@
 "h": 800,
 "title": "OCR results: files that need a pack, before and after install",
 "expand": "fill"
-},
-"ExtractFromPdf.dc.html": {
-"x": 5440,
-"y": 9600,
-"w": 1280,
-"h": 800,
-"title": "Extract from PDF: modes, range, options, running",
-"expand": "fill"
-},
-"ExtractFromPdfResults.dc.html": {
-"x": 6800,
-"y": 9600,
-"w": 1280,
-"h": 800,
-"title": "Extract from PDF results: text, folders, skipped, failed",
-"expand": "fill"
 }
 },
 "order": [
@@ -497,19 +569,12 @@
 "PdfNarrow.dc.html",
 "PdfCrop.dc.html",
 "PdfDetails.dc.html",
-"PdfPrivacy.dc.html",
-"PdfProperties.dc.html",
-"PdfRestrictions.dc.html",
-"PdfDetailsNarrow.dc.html",
 "Split.dc.html",
 "Merge.dc.html",
 "Bates.dc.html",
 "ConvertBatch.dc.html",
 "OCR.dc.html",
 "ImagesToPdf.dc.html",
-"FormattedPdf.dc.html",
-"ExtractFromPdf.dc.html",
-"ExtractFromPdfResults.dc.html",
 "ImageEdit.dc.html",
 "ImageConvert.dc.html",
 "Compress.dc.html",
@@ -527,6 +592,22 @@
 "SecOptions.dc.html",
 "SecRunning.dc.html",
 "SecResults.dc.html",
+"PdfToEpub.dc.html",
+"PdfToEpubResults.dc.html",
+"FormattedPdf.dc.html",
+"MediaEmpty.dc.html",
+"MediaIcons.dc.html",
+"MediaGif.dc.html",
+"MediaExtract.dc.html",
+"MediaTiff.dc.html",
+"MediaRunning.dc.html",
+"MediaResults.dc.html",
+"ExtractFromPdf.dc.html",
+"ExtractFromPdfResults.dc.html",
+"PdfPrivacy.dc.html",
+"PdfProperties.dc.html",
+"PdfRestrictions.dc.html",
+"PdfDetailsNarrow.dc.html",
 "ConvertToPdf.dc.html",
 "ConvertToPdfResults.dc.html",
 "CropResize.dc.html",
@@ -749,6 +830,251 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"row13": {
+"x": 0,
+"y": 13980,
+"text": "PDF Conversion: PDF to EPUB and Formatted PDF",
+"kind": "title1",
+"maxW": 8000
+},
+"fq1": {
+"x": 4080,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q1. Block formatting (Formatted PDF)\n\nOne toolbar above the document, nothing more: a block-type menu (Paragraph, Heading 1 to 3), Bold, Italic, bulleted and numbered list, then Table, Image… and Page break. There are no fonts, colours or alignment per block; the look comes from Page and Font in the right panel, so this stays a document builder, not a word processor.\n\nEvery toolbar button has a shortcut and shows it in its tooltip only. The document is a list of block cards with a type label in the gutter. The selected block gets a ring and Move up, Move down and Delete. Pasted text keeps paragraphs, headings, lists and bold or italic and drops the rest."
+},
+"fq2": {
+"x": 4480,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q2. Live preview (Formatted PDF)\n\nThe preview is the top of the right panel: one real-size page scaled to fit, with Page 1 of 2 and previous/next buttons. It redraws about half a second after typing stops. While it redraws, the old page dims and an Updating preview chip shows; the editor never waits for it.\n\nWhen a settings section is open, the page shrinks so Page, Font, Header and footer and Title and author fit without scrolling. Text the app can't draw pauses the preview instead of showing wrong glyphs."
+},
+"fq3": {
+"x": 4880,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q3. Draft restore, discard and autosave (Formatted PDF)\n\nThere is one draft, kept in app data on this device. The toolbar status reads Draft saved on this device, or Saving draft… while writing. Opening the tool with a draft restores it and shows a quiet note with when it was saved, Discard draft… and Dismiss.\n\nDiscard draft… sits in the panel footer next to Save PDF… and asks in an alert dialog, with Keep editing focused and Esc to cancel. Discard says the draft can't be brought back and that images on disk are not touched. A successful save clears the draft; a failed save keeps it."
+},
+"fq4": {
+"x": 5280,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q4. Fonts used and platform note (Formatted PDF)\n\nThe font picker has two groups. Bundled with Toolbox lists the metric-compatible fonts, the same on every computer. On this computer lists system fonts, each tagged This computer only, with a line saying they can look slightly different on the other platform.\n\nAfter saving, a Fonts used table shows what you chose, what went into the PDF and where it came from. A system font adds one platform note. A missing font, such as Calibri on a Mac, names the bundled substitute (Carlito) and says line breaks match. There is no platform note then, because bundled fonts are the same everywhere."
+},
+"fq5": {
+"x": 5680,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q5. Script-pack prompt (Formatted PDF)\n\nText outside Latin, Cyrillic and Greek is marked on its own block with a warning line. The preview pauses, and a note above the page names the script, says the pack is needed, and offers one Install script pack button with the 38 MB size. This is the same wording as Add text and the row patterns.\n\nSave PDF… is disabled and the estimate says why: install the pack or remove that text. Nothing downloads until Install is chosen, and installing never saves on its own."
+},
+"fq6": {
+"x": 6080,
+"y": 14240,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Q6. EPUB options, reflow notes and Skipped rows\n\nOptions in order: Pages (All pages or a Range, using the shared syntax and clamp hints), Clean up (remove running headers, footers and page numbers, on by default), Cover (First page or No cover), Book details and Save to. Title and Author fields appear only when one PDF is in the list; for a batch, each book takes its details from its PDF.\n\nResults keep Converted, Skipped and Failed rows in one list. Skipped is neutral and gives the reason (no text, range outside the PDF). Details open per row and list facts and notes: pages converted, images kept, where the table of contents came from, and content that couldn't reflow (two columns, tables, formulas, unreadable images) with page numbers."
+},
+"fq7": {
+"x": 6480,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Q7. Scanned PDFs and OCR\n\nA PDF with no text layer is Skipped, not Failed: There's no text to put in a book. It ends with one Open in OCR button, the shared pattern for a reason another tool fixes. Opening OCR keeps the files and selects OCR in the rail.\n\nA PDF where only some pages have no text still converts. Its details list those pages and offer the same Open in OCR. Nothing runs OCR automatically."
+},
+"fq8": {
+"x": 6880,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Q8. Destination and per-run change\n\nPDF to EPUB uses the shared Save to row with an example name (the-long-road-home.epub, no suffix). Change… sets a folder for this run only, shown with a This run badge and Reset to default; it goes back to the default after the run. A clash gets -1, -2 and the row says Renamed to avoid replacing.\n\nFormatted PDF makes one file, so Save PDF… ends in an ellipsis and opens the native save dialog. It starts in the last folder used by this tool, or Documents the first time, and suggests the title as the name. A name clash gets a number; nothing is replaced."
+},
+"fq9": {
+"x": 7280,
+"y": 14240,
+"w": 360,
+"maxH": 700,
+"fill": "purple",
+"text": "Q9. Multi-select (PDF to EPUB)\n\nThe file list is a multi-select listbox: click, Shift-click for a range, Cmd-click (Ctrl-click on Windows) to add, Cmd+A (Ctrl+A) for all, Up and Down to move, Delete to remove. A quiet line above the list says this only while two or more rows are selected, next to Remove 2 selected with its Delete hint.\n\nOptions lock while converting; Esc cancels the batch after the current PDF.\n\nOpen questions: should Cmd+S also save in Formatted PDF? Are Ctrl+Alt heading keys safe with AltGr layouts? Are the bundled font names final? Should a save clear the draft, or keep it until the editor is reset?"
+},
+"fkeys": {
+"x": 7680,
+"y": 14240,
+"w": 360,
+"maxH": 820,
+"fill": "green",
+"text": "Shortcuts, checked against the shell list (#429)\n\nFormatted PDF, Mac (Windows):\nBold Cmd+B (Ctrl+B)\nItalic Cmd+I (Ctrl+I)\nHeading 1 to 3 Opt+Cmd+1 to 3 (Ctrl+Alt+1 to 3)\nParagraph Opt+Cmd+0 (Ctrl+Alt+0)\nBulleted list Shift+Cmd+8 (Ctrl+Shift+8)\nNumbered list Shift+Cmd+7 (Ctrl+Shift+7)\nPage break Shift+Cmd+Return (Ctrl+Shift+Enter)\nMove block Opt+Shift+Up/Down (Alt+Shift+Up/Down)\nInsert image Cmd+O (Ctrl+O), the shell's open key\nEsc selects the block; then Delete removes it and Up/Down move between blocks\nUndo and Redo as in PDF Editor\nSave PDF… Cmd+Return (Ctrl+Enter), the shell's primary action\n\nPDF to EPUB uses the batch keys: Cmd+Return converts, Esc cancels, Cmd+A, Delete, Up/Down.\n\nNo clash with Cmd+K, Cmd+comma, Cmd+/, Cmd+W, F6, Cmd+E, Cmd+D, Cmd+plus/minus/0 or Shift+Cmd+V."
+},
+"row9m": {
+"x": 11800,
+"y": 9340,
+"text": "Media creation tools (#634). These boards replace the four Media boards at the left of this row.",
+"kind": "title1",
+"maxW": 9400
+},
+"m1": {
+"x": 21320,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Media rail with backlog tools hidden\n\nThe rail lists only the four creation tools, in this order: App Icon Set, Create GIF, Extract GIF Frames, TIFF Pages. Blur Faces and Remove Background are hidden, not shown as disabled. They also don't appear in Find a tool, so there are no dead ends.\n\nThe rail keeps the shell pattern: All tools, the tools, Settings, and 'Files stay on this device.' Up and Down move between tools. While a run is going, switching tools waits until it finishes."
+},
+"m2": {
+"x": 21720,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "App Icon Set: layout\n\nEach master image makes its own set, so the files list is the master list. Tags on a row say Not square or Will upscale.\n\nThe preview shows the selected master. A segmented control chooses Pad with transparency or Crop to centre. It applies to every non-square master in the run, and images are never stretched. Under it, a contact sheet shows the macOS sizes on the real result. Sizes up to 64 are actual pixels; larger ones are drawn at 96 with their label.\n\nOptions: 'Make icons for' is a list of presets (macOS, iPhone and iPad, Android, Website, Custom). Each has a checkbox and a chevron that opens its size grid and container checkboxes: AppIcon.appiconset and ICNS for macOS, appiconset for iOS, favicon.ico for Website."
+},
+"m3": {
+"x": 22120,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "App Icon Set: unticking a size\n\nAppIcon.appiconset and ICNS need every size in their preset. Unticking one size (64 in the sizeOff state) turns those containers off and disables them. The PNGs for the remaining sizes are still made.\n\nA note explains why: 'need every macOS size, so they're off. Tick 64 to turn them back on.' A 'Tick all macOS sizes' button restores the full set. favicon.ico holds whichever Website sizes are ticked, so it never turns off.\n\nCustom sizes are typed (1 to 4096) and shown as removable chips."
+},
+"m4": {
+"x": 22520,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "Create GIF: frame strip\n\nFrames are a 6-column grid of thumbnails in play order. Each tile shows its position and delay. Frame 1 is tagged 'Sets size'. Frames that don't match are tagged 'Fitted': they are centred, scaled down to fit and padded with transparency.\n\n'Delay for every frame' (ms) applies to all frames. Selecting a frame shows 'Own delay' for that frame. Clearing it returns the frame to the delay for every frame. Own delays are bold on the tile.\n\nLoop forever is a switch. The preview has Play/Pause and a scrubber. It doesn't autoplay when Reduce motion is on.\n\nReorder: drag (an insertion bar shows the drop point and the source tile dims) or keyboard. A live status line announces each move."
+},
+"m5": {
+"x": 22920,
+"y": 9600,
+"w": 360,
+"maxH": 480,
+"fill": "blue",
+"text": "TIFF Pages: Split or Combine\n\nThe mode is a segmented control in the header, like Lock and Unlock. Switching keeps the added files. It is disabled while a run is going.\n\nSplit: a file list with page count and format per file, and the selected file's pages below. A 1-page file is tagged Skipped before the run. A file Toolbox can't read is flagged 'Won't run', with a banner to remove flagged files.\n\nCombine: a legend of source files (A, B, C) and one grid of every page across files, each labelled with its source letter and page. Pages reorder like GIF frames. Delete leaves a page out without changing any file. Reset pages restores every page in file order.\n\nCompression: LZW (default), Deflate or None. 16-bit pages stay 16-bit."
+},
+"m6": {
+"x": 21320,
+"y": 10120,
+"w": 360,
+"maxH": 480,
+"fill": "green",
+"text": "Results with many outputs\n\nEach input gets one row. Rows with several outputs have a chevron that expands them: icon sets show their macos, ios and web folders; extracted GIFs show the timings file and the PNG range; split TIFFs show their pages. Groups start collapsed except the first.\n\nOpen and Reveal on the group row act on the folder or the first output. Reveal selects all of the group's files. 'Show all in Finder/File Explorer' and 'Expand all' sit above the list.\n\nCreate GIF and TIFF Combine make one file, so their result is one row."
+},
+"m7": {
+"x": 21720,
+"y": 10120,
+"w": 360,
+"maxH": 480,
+"fill": "green",
+"text": "Skipped, Failed and where messages appear\n\nSucceeded, Skipped and Failed rows share one list in input order, with the same filters as other tools (All, Needs attention, Warnings). Skipped uses the dash icon in muted text and says why, e.g. 'Only 1 page, so there's nothing to split. No file was made.'\n\nMessages:\n- Upscale: a tag on the master row before running, and a warning on the result.\n- Bit depth: a hint on the row before running, and a warning on the result.\n- Large GIF: a banner above the frames and an amber size estimate in the options.\n- Renamed: a warning on the result row naming the file it avoided replacing.\n- Unsupported TIFF: flagged 'Won't run' at intake if detectable; otherwise a Failed row naming the page and the compression.\n\nFailures never leave half a set: an icon set or a GIF's frames are saved only when all of them work."
+},
+"m8": {
+"x": 22120,
+"y": 10120,
+"w": 360,
+"maxH": 520,
+"fill": "purple",
+"text": "Keyboard\n\n- Cmd/Ctrl+O: add files (Open files).\n- Cmd/Ctrl+Enter: run.\n- Esc: cancel a run (with the shared confirmation dialog).\n- Delete: remove the selected file, frame or page. In Combine it leaves the page out.\n- Cmd/Ctrl+A: select all. Shift-click or Cmd/Ctrl-click selects several.\n- Frame and page grids: arrow keys move focus, Home and End jump to the ends, and Cmd/Ctrl+Arrow moves the selected items. Each move is announced, e.g. 'Moved IMG_2212.heic to position 3.'\n- Results: Up and Down move between rows. Right expands a group, Left collapses it. Enter opens.\n- Cmd/Ctrl+K: Find a tool. Cmd/Ctrl+, : Settings."
+},
+"m9": {
+"x": 22520,
+"y": 10120,
+"w": 360,
+"maxH": 520,
+"fill": "purple",
+"text": "Destination and save dialogs\n\nApp Icon Set, Extract GIF Frames and TIFF Split make outputs per input. They use the shared 'Save to' block with 'Change for this run' and an example name. Icon sets go into a folder per master (app-icon-icons), with a -1 suffix if the folder exists. No save dialog.\n\nCreate GIF and TIFF Combine make one file. The run button ends in an ellipsis. The system save dialog opens in the output location: next to the first frame or file by default, or the changed folder. It proposes title-card-animated.gif or cover-combined.tif. A name that's taken gets -1 and a warning. Cancel stops before anything is made.\n\nNames are padded so they sort: 2 digits for pages (-page-01) and 3 for frames (-frame-001)."
+},
+"m10": {
+"x": 22920,
+"y": 10120,
+"w": 360,
+"maxH": 480,
+"fill": "purple",
+"text": "Changes to earlier notes\n\nThese boards replace AppIcons, CreateGif, ExtractGif and TiffPages at the left of the Media row.\n\nThe 'One file from many' note lists App Icon Set as a save-dialog tool. Under this design it isn't: each master makes its own folder in the output location, so App Icon Set uses 'Save to' like other per-file tools. The note still holds for Create GIF and TIFF Combine."
+},
+"exrow": {
+"x": 5440,
+"y": 9340,
+"text": "PDF Conversion: Extract from PDF",
+"kind": "title1",
+"maxW": 2640
+},
+"ex1": {
+"x": 8160,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Extract 1. Mode choice, range and per-mode options\n\nBoard: Extract from PDF, states Files added, Text options, Images options.\n\nText / Images / Both is a three-way segmented radio group at the top of the options panel, because it decides everything below it. Both is the default. One hint line under it says what each PDF will produce.\n\nPages comes next and is the same for every mode: All pages or Range, using the shared range field and hints from PDF to Images.\n\nBelow that, one boxed section per part: Text for Text and Both, Images for Images and Both. A section for a part that isn't chosen is hidden, not greyed, and its values are kept if the user switches back."
+},
+"ex2": {
+"x": 8560,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Extract 2. Page range and clamping\n\nBoard: Extract from PDF, states Page range and Range error.\n\nOne range applies to the whole batch. The hint under Pages says it once: pages past a PDF's last page are left out, and a PDF with no pages left is skipped.\n\nThe Pages column becomes 'Pages used' and shows '9 of 12' per row, so the clamp is visible before running. A PDF the range shortens gets an amber 'Range shortened' state with the pages that remain.\n\nA PDF the range would empty is not blocked: it runs and ends Skipped with 'No pages in range 3-5, 8-. This PDF has 2 pages.' (results board, Text state).\n\nAn invalid range shows the error under the field and disables the run button, with the estimate saying why."
+},
+"ex3": {
+"x": 8960,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Extract 3. Folder-per-PDF results\n\nBoard: Extract from PDF results, states Both and Images.\n\nThere is one row per PDF. Under its name, an outputs list shows one line per output: the text file with Open and Show in Finder, and the images folder with Show in Finder only. In Both mode the text file and the folder share one row.\n\nThe folder line carries the counts. Extracted is always shown. Duplicates, small left out and couldn't be saved appear only when they are not zero, joined by middle dots. A renamed folder ('-images-1') says which name already existed.\n\nNo thumbnails. A folder can hold hundreds of images, decoding previews would slow the list, and Show in Finder already gives the system's own preview. This keeps the row the same height as every other ResultList row."
+},
+"ex4": {
+"x": 9360,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Extract 4. Skipped next to succeeded and failed, and the OCR hand-off\n\nBoard: Extract from PDF results, states Both, Text and Needs attention.\n\nSkipped uses the grey dash icon and grey state text. Failed uses the red x. Succeeded uses the check. Skipped rows have no outputs, and the reason says nothing was saved. Both Skipped and Failed count under 'Needs attention', but the segment bar draws Skipped in grey, not red.\n\nIn Both mode a PDF that has only one part succeeds with a note: 'Text only' or 'Images only', with the missing part named in the detail.\n\nOpen in OCR is the shared pointer button (Q3). It opens OCR with that PDF already in its list, selects OCR in the rail, and keeps the Extract list as it was. It never starts OCR by itself."
+},
+"ex5": {
+"x": 9760,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Extract 5. Per-image reports, colour warnings and OCR hints\n\nBoard: Extract from PDF results, states Both and Warnings and notes.\n\nThe row shows one summary sentence ('3 images weren't saved. 4 pages have no selectable text.') and the state '3 warnings'. A ghost 'Show details (4)' button expands a list beneath the outputs. Each line has its page and image number and a short reason: JBIG2 unsupported, damaged data, over the decoded-size limit, CMYK or inverted JPEG copied as it is, or pages with no selectable text.\n\nWarnings use the amber triangle. OCR hints use the grey info circle. Details start collapsed, so a long report never pushes other PDFs off screen. The Warnings and notes chip filters to these rows and opens their details.\n\nOne undecodable image never fails the file. A file fails only when no image could be decoded (Images state, fax-bundle.pdf)."
+},
+"ex6": {
+"x": 10160,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Extract 6. Where the layout and minimum-size options go, and their defaults\n\nBoard: Extract from PDF, states Text options, Images options and Small images skipped.\n\n'Preserve layout' sits in the Text section as a checkbox, off by default. Off means reading order. The hint says when to turn it on: columns and tables.\n\n'Skip small images' sits in the Images section as a checkbox, off by default, so every image is saved, as today. Turning it on shows a number field, 'Smaller than 64 px wide or tall'. The 64 px starting value is a design proposal.\n\nThe Images section also says what to expect: JPEG and JPEG 2000 are copied as they are, and everything else is saved as lossless PNG."
+},
+"ex7": {
+"x": 10560,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Extract 7. Destination and the per-run change\n\nBoard: Extract from PDF, states Files added and Changed save location.\n\nThe Save to block is the shared one. It shows the app-wide output location ('Next to each original') and a 'Change for this run' link. After a change it shows the folder, a 'This run only' badge, Change and Reset to default, and a sentence saying the setting itself is unchanged.\n\nThe example box under it previews the names for the chosen mode: report-text.txt, and the report-images folder with page-3-image-2.png. It also says that existing names get -1, -2 and so on.\n\nThe results panel repeats where outputs were saved and what the run used."
+},
+"ex8": {
+"x": 10960,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Extract 8. Errors, keyboard and screen readers\n\nBoard: Extract from PDF results, states Both, Text, Images and Helper unavailable.\n\nPassword-protected PDFs fail with a Remove Password pointer. Damaged files fail with no pointer. A file over a limit fails with the limit named and a Split PDF pointer when splitting helps (the limit values are placeholders until implementation). A helper timeout fails only that file and offers Retry. A partial publish keeps the saved images as an output and fails the row.\n\nIf the text helper is missing, one alert above the list says to reinstall Toolbox, and each row reads 'Unavailable'.\n\nThe mode, Pages and per-part choices are radio groups and checkboxes in tab order. The run shortcut, Cancel with Esc and the status lines are the shared ones. Each result row's accessible name is one sentence. Its output buttons name the file, such as 'Open report-text.txt'."
 },
 "pdrail": {
 "x": 15060,
@@ -1588,77 +1914,6 @@
 "maxH": 720,
 "fill": "green",
 "text": "Packs keyboard and screen reader\n\nSettings, Packs: Tab goes to Install from file…, then each row in order. Within a row, Tab goes to the details chevron, then the row's actions from left to right. Enter or Space opens and closes details. Details content is read in order and isn't a stop.\n\nNames for tests:\n- The list is \"Packs\". Each row is \"<pack name>, <status>\".\n- The chevron is \"Details for <pack name>\" with aria-expanded.\n- Buttons are \"<action> <pack name>\", such as \"Install Text recognition, Hindi\" and \"Cancel Text recognition, Hindi\".\n- Progress bars are \"Downloading <pack name>\", \"Checking <pack name>\" or \"Updating <pack name>\".\n- Status text is a polite live region. Damaged, in use and server errors are alerts.\n\nInstall from file: the native open dialog, then a dialog called \"Install this pack?\" with Cancel first and Install as the default. Rejection dialogs are alert dialogs with \"Choose another file…\" and OK.\n\nOCR picker: a combobox \"Add a language\" that opens a listbox with the groups \"Installed\" and \"Download to use\". Options are named \"<language>, installed\" or \"<language>, not installed, <size> download\". Arrow keys move, Enter chooses and Escape closes.\n\nResult rows: the action is \"<action> for <file name>\", such as \"Install Hindi pack for ration-card-hindi.pdf\"."
-},
-"exrow": {
-"x": 5440,
-"y": 9340,
-"text": "PDF Conversion: Extract from PDF",
-"kind": "title1",
-"maxW": 2640
-},
-"ex1": {
-"x": 8160,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "blue",
-"text": "Extract 1. Mode choice, range and per-mode options\n\nBoard: Extract from PDF, states Files added, Text options, Images options.\n\nText / Images / Both is a three-way segmented radio group at the top of the options panel, because it decides everything below it. Both is the default. One hint line under it says what each PDF will produce.\n\nPages comes next and is the same for every mode: All pages or Range, using the shared range field and hints from PDF to Images.\n\nBelow that, one boxed section per part: Text for Text and Both, Images for Images and Both. A section for a part that isn't chosen is hidden, not greyed, and its values are kept if the user switches back."
-},
-"ex2": {
-"x": 8560,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "blue",
-"text": "Extract 2. Page range and clamping\n\nBoard: Extract from PDF, states Page range and Range error.\n\nOne range applies to the whole batch. The hint under Pages says it once: pages past a PDF's last page are left out, and a PDF with no pages left is skipped.\n\nThe Pages column becomes 'Pages used' and shows '9 of 12' per row, so the clamp is visible before running. A PDF the range shortens gets an amber 'Range shortened' state with the pages that remain.\n\nA PDF the range would empty is not blocked: it runs and ends Skipped with 'No pages in range 3-5, 8-. This PDF has 2 pages.' (results board, Text state).\n\nAn invalid range shows the error under the field and disables the run button, with the estimate saying why."
-},
-"ex3": {
-"x": 8960,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "blue",
-"text": "Extract 3. Folder-per-PDF results\n\nBoard: Extract from PDF results, states Both and Images.\n\nThere is one row per PDF. Under its name, an outputs list shows one line per output: the text file with Open and Show in Finder, and the images folder with Show in Finder only. In Both mode the text file and the folder share one row.\n\nThe folder line carries the counts. Extracted is always shown. Duplicates, small left out and couldn't be saved appear only when they are not zero, joined by middle dots. A renamed folder ('-images-1') says which name already existed.\n\nNo thumbnails. A folder can hold hundreds of images, decoding previews would slow the list, and Show in Finder already gives the system's own preview. This keeps the row the same height as every other ResultList row."
-},
-"ex4": {
-"x": 9360,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "purple",
-"text": "Extract 4. Skipped next to succeeded and failed, and the OCR hand-off\n\nBoard: Extract from PDF results, states Both, Text and Needs attention.\n\nSkipped uses the grey dash icon and grey state text. Failed uses the red x. Succeeded uses the check. Skipped rows have no outputs, and the reason says nothing was saved. Both Skipped and Failed count under 'Needs attention', but the segment bar draws Skipped in grey, not red.\n\nIn Both mode a PDF that has only one part succeeds with a note: 'Text only' or 'Images only', with the missing part named in the detail.\n\nOpen in OCR is the shared pointer button (Q3). It opens OCR with that PDF already in its list, selects OCR in the rail, and keeps the Extract list as it was. It never starts OCR by itself."
-},
-"ex5": {
-"x": 9760,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "purple",
-"text": "Extract 5. Per-image reports, colour warnings and OCR hints\n\nBoard: Extract from PDF results, states Both and Warnings and notes.\n\nThe row shows one summary sentence ('3 images weren't saved. 4 pages have no selectable text.') and the state '3 warnings'. A ghost 'Show details (4)' button expands a list beneath the outputs. Each line has its page and image number and a short reason: JBIG2 unsupported, damaged data, over the decoded-size limit, CMYK or inverted JPEG copied as it is, or pages with no selectable text.\n\nWarnings use the amber triangle. OCR hints use the grey info circle. Details start collapsed, so a long report never pushes other PDFs off screen. The Warnings and notes chip filters to these rows and opens their details.\n\nOne undecodable image never fails the file. A file fails only when no image could be decoded (Images state, fax-bundle.pdf)."
-},
-"ex6": {
-"x": 10160,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "green",
-"text": "Extract 6. Where the layout and minimum-size options go, and their defaults\n\nBoard: Extract from PDF, states Text options, Images options and Small images skipped.\n\n'Preserve layout' sits in the Text section as a checkbox, off by default. Off means reading order. The hint says when to turn it on: columns and tables.\n\n'Skip small images' sits in the Images section as a checkbox, off by default, so every image is saved, as today. Turning it on shows a number field, 'Smaller than 64 px wide or tall'. The 64 px starting value is a design proposal.\n\nThe Images section also says what to expect: JPEG and JPEG 2000 are copied as they are, and everything else is saved as lossless PNG."
-},
-"ex7": {
-"x": 10560,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "green",
-"text": "Extract 7. Destination and the per-run change\n\nBoard: Extract from PDF, states Files added and Changed save location.\n\nThe Save to block is the shared one. It shows the app-wide output location ('Next to each original') and a 'Change for this run' link. After a change it shows the folder, a 'This run only' badge, Change and Reset to default, and a sentence saying the setting itself is unchanged.\n\nThe example box under it previews the names for the chosen mode: report-text.txt, and the report-images folder with page-3-image-2.png. It also says that existing names get -1, -2 and so on.\n\nThe results panel repeats where outputs were saved and what the run used."
-},
-"ex8": {
-"x": 10960,
-"y": 9600,
-"w": 360,
-"maxH": 640,
-"fill": "green",
-"text": "Extract 8. Errors, keyboard and screen readers\n\nBoard: Extract from PDF results, states Both, Text, Images and Helper unavailable.\n\nPassword-protected PDFs fail with a Remove Password pointer. Damaged files fail with no pointer. A file over a limit fails with the limit named and a Split PDF pointer when splitting helps (the limit values are placeholders until implementation). A helper timeout fails only that file and offers Retry. A partial publish keeps the saved images as an output and fails the row.\n\nIf the text helper is missing, one alert above the list says to reinstall Toolbox, and each row reads 'Unavailable'.\n\nThe mode, Pages and per-part choices are radio groups and checkboxes in tab order. The run shortcut, Cancel with Esc and the status lines are the shared ones. Each result row's accessible name is one sentence. Its output buttons name the file, such as 'Open report-text.txt'."
 }
 },
 "designSystems": []
