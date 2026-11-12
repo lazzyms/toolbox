@@ -21,12 +21,13 @@ export type IntakeCopy = {
     notAccepted: string;
     unsupported: (path: string) => string;
     willFail?: (path: string) => string | null;
+    flagLabel?: (path: string) => string;
     flaggedNotice: (count: number) => string;
     countHint: (flagged: number, total: number) => string;
 };
 
 // A wontRun file stays out of the run. A willFail file is sent and fails on its own result row.
-export type EntryFlag = { kind: 'wontRun' | 'willFail'; message: string };
+export type EntryFlag = { kind: 'wontRun' | 'willFail'; message: string; label?: string };
 
 export type EntryStatus = {
     entry: IntakeEntry;
@@ -104,7 +105,7 @@ export const classifyIntake = (existing: string[], incoming: InspectedPath[], po
 export const entryStatuses = (
     entries: IntakeEntry[],
     tool: ToolDefinition,
-    copy: Partial<Pick<IntakeCopy, 'unsupported' | 'willFail'>> = {},
+    copy: Partial<Pick<IntakeCopy, 'unsupported' | 'willFail' | 'flagLabel'>> = {},
 ): EntryStatus[] => {
     const unsupported = copy.unsupported ?? (() => `${tool.title} only takes ${extensionList(tool.capability.acceptedExtensions)}.`);
     const seen = new Map<string, number>();
@@ -118,7 +119,7 @@ export const entryStatuses = (
             : occurrence > 1 && !repeats
                 ? { kind: 'wontRun', message: `${tool.title} runs each file once.` }
                 : willFail !== null
-                    ? { kind: 'willFail', message: willFail }
+                    ? { kind: 'willFail', message: willFail, label: copy.flagLabel?.(entry.path) }
                     : null;
         return { entry, occurrence, flag };
     });
@@ -138,4 +139,67 @@ export const rangeKeys = (entries: IntakeEntry[], anchor: string, target: string
     const b = entries.findIndex((entry) => entry.key === target);
     if (a < 0 || b < 0) return [target];
     return entries.slice(Math.min(a, b), Math.max(a, b) + 1).map((entry) => entry.key);
+};
+
+/** Facts read from each listed file. A fact that couldn't be read is null and the row leaves it out. */
+export type EntryFacts = { pageCount: number | null; modifiedMs: number | null; sizeBytes: number | null };
+
+export type EntrySort = 'added' | 'nameAsc' | 'nameDesc' | 'modifiedAsc' | 'modifiedDesc';
+
+export type EntrySortOption = { value: EntrySort; label: string };
+
+/** Every sort an ordered list can offer. A tool may offer a subset, with its own labels. */
+export const entrySortOptions: readonly EntrySortOption[] = [
+    { value: 'added', label: 'Order added' },
+    { value: 'nameAsc', label: 'Name, A to Z' },
+    { value: 'nameDesc', label: 'Name, Z to A' },
+    { value: 'modifiedAsc', label: 'Date modified, oldest first' },
+    { value: 'modifiedDesc', label: 'Date modified, newest first' },
+];
+
+export const sortNeedsFacts = (sort: EntrySort) => sort === 'modifiedAsc' || sort === 'modifiedDesc';
+
+const names = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** Returns the entries in the chosen order. Ties and files without a date keep their current relative order, dateless files last. */
+export const sortEntries = (entries: IntakeEntry[], sort: EntrySort, facts: (path: string) => EntryFacts | undefined, addedOrder: (entry: IntakeEntry) => number) => {
+    const modified = (entry: IntakeEntry) => facts(entry.path)?.modifiedMs ?? null;
+    const byModified = (direction: 1 | -1) => (a: IntakeEntry, b: IntakeEntry) => {
+        const left = modified(a);
+        const right = modified(b);
+        if (left === null || right === null) return Number(left === null) - Number(right === null);
+        return direction * (left - right);
+    };
+    const compare: Record<EntrySort, (a: IntakeEntry, b: IntakeEntry) => number> = {
+        added: (a, b) => addedOrder(a) - addedOrder(b),
+        nameAsc: (a, b) => names.compare(fileName(a.path), fileName(b.path)),
+        nameDesc: (a, b) => names.compare(fileName(b.path), fileName(a.path)),
+        modifiedAsc: byModified(1),
+        modifiedDesc: byModified(-1),
+    };
+    return [...entries].sort(compare[sort]);
+};
+
+export const pageCountLabel = (count: number) => count === 1 ? '1 page' : `${count} pages`;
+
+export const fileSizeLabel = (bytes: number) => {
+    if (bytes < 1000) return `${bytes} bytes`;
+    if (bytes < 1000 * 1000) return `${Math.round(bytes / 1000)} KB`;
+    if (bytes < 1000 * 1000 * 1000) return `${(bytes / (1000 * 1000)).toFixed(1)} MB`;
+    return `${(bytes / (1000 * 1000 * 1000)).toFixed(1)} GB`;
+};
+
+export const modifiedLabel = (modifiedMs: number) =>
+    new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(modifiedMs));
+
+export const parseEntryFacts = (value: unknown): Map<string, EntryFacts> => {
+    const facts = new Map<string, EntryFacts>();
+    if (!Array.isArray(value)) return facts;
+    const number = (field: unknown) => typeof field === 'number' && Number.isFinite(field) ? field : null;
+    for (const item of value) {
+        if (!item || typeof item !== 'object' || typeof (item as { path?: unknown }).path !== 'string') continue;
+        const { path, pageCount, modifiedMs, sizeBytes } = item as Record<string, unknown>;
+        facts.set(path as string, { pageCount: number(pageCount), modifiedMs: number(modifiedMs), sizeBytes: number(sizeBytes) });
+    }
+    return facts;
 };

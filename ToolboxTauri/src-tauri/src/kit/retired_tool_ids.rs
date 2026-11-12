@@ -90,6 +90,7 @@ fn the_retired_table_rejects_drift_prone_rows() {
 fn tool_pointer_targets_are_never_retired_ids() {
     let targets = declared_pointer_targets();
     assert!(targets.iter().any(|target| target == "heic-convert"), "the scan finds the declared pointer targets");
+    assert!(targets.iter().any(|target| target == "pdf-ocr"), "PDF to Text points scans at OCR");
     assert_eq!(retired_targets(&targets, &shipped_table()), Vec::<String>::new());
 
     let retiring_heic = parse_retired_tool_ids(r#"{"version":1,"retired":{"heic-convert":"removed"}}"#).unwrap();

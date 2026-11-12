@@ -63,8 +63,8 @@ impl BatesFormat {
         let rect = Rect { x: margin, y: if top { margin } else { height - margin - line }, width: (width - 2. * margin).max(1.), height: line };
         SceneObject {
             kind: Kind::Text, rect, text: self.identifier(number), font_size: self.font_size, color: "#000000".into(), opacity: 1.,
-            strokes: Vec::new(), shape: None, highlight_mode: None, signature_mode: None, signature_path: None,
-            font_family: self.font_family.clone(), watermark_pattern: None, bold: false, italic: false, align, page_range: None,
+            shape: None, highlight_mode: None, signature_mode: None, signature_path: None,
+            font_family: self.font_family.clone(), watermark: None, layer: Default::default(), bold: false, italic: false, align, page_range: None, page_numbers: None, header_footer: None,
         }
     }
 
