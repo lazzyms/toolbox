@@ -4076,7 +4076,7 @@ mod command_tests {
         let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-resources"))), ("TOOLBOX_TESSERACT_PATH", Some(root.join("missing-tesseract")))]);
         let scan = root.join("scan.pdf");
         make_pdf(&scan, 1);
-        let outcomes = tauri::async_runtime::block_on(ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan], location(&root, "ocr"))));
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan], location(&root, "ocr")), no_packs()));
         let _ = std::fs::remove_dir_all(&root);
         let outcome = &outcomes[0];
         assert!(outcome.error().is_some_and(|error| matches!(error.kind, ErrorKind::Unavailable)), "{outcome:?}");
@@ -4111,8 +4111,8 @@ mod command_tests {
         let root = sandbox("ocr-release");
         let scan = root.join("scan.pdf");
         scanned_pdf(&scan, &[&["Toolbox page one", "Quarterly invoice summary"]]);
-        let text = assert_success("release OCR text", ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan.clone()], location(&root, "text"))));
-        let searchable = assert_success("release searchable PDF", ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![scan.clone()], location(&root, "searchable"))));
+        let text = assert_success("release OCR text", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan.clone()], location(&root, "text")), no_packs()));
+        let searchable = assert_success("release searchable PDF", run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![scan.clone()], location(&root, "searchable")), no_packs()));
         let recognized = std::fs::read_to_string(&text[0]).unwrap();
         for word in ["Toolbox", "page", "Quarterly", "invoice"] { assert!(recognized.contains(word), "{word} is missing from {recognized:?}"); }
         assert_eq!(lopdf::Document::load(&searchable[0]).unwrap().get_pages().len(), 1, "the searchable PDF keeps the scan's one page");
