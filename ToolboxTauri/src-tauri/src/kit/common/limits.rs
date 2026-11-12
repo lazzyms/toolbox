@@ -69,6 +69,56 @@ pub fn convert_to_pdf(input: &Path) -> ToolLimits {
     }
 }
 
+/// What one run of a creation tool may make, on top of the limits for each file it reads: how many
+/// frames or pages go into one output, and how much image data the outputs hold before they are written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MadeLimits {
+    pub max_parts: u32,
+    pub max_image_bytes: u64,
+}
+
+/// App Icon Set, Create GIF, Extract GIF Frames and TIFF Pages.
+pub const MADE_IMAGES: MadeLimits = MadeLimits { max_parts: MAX_IMAGE_PAGES, max_image_bytes: 2 * GB };
+
+/// What a creation tool makes, as its messages name it, such as one GIF of frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Made {
+    pub noun: &'static str,
+    pub parts: &'static str,
+}
+
+impl MadeLimits {
+    /// Checked before any part is read, so an over-limit run reads and saves nothing.
+    pub fn check_parts(&self, parts: usize, made: Made) -> Result<(), ToolError> {
+        if parts as u64 <= u64::from(self.max_parts) { return Ok(()) }
+        Err(ToolError::limit_exceeded(
+            LimitKind::PageCount,
+            format!(
+                "More than {} {}, over the limit for one {}. Use fewer {} and try again.",
+                count_label(u64::from(self.max_parts)), made.parts, made.noun, made.parts,
+            ),
+        ))
+    }
+
+    /// Every frame of a GIF decodes to a full canvas, so extracting them all makes canvas × frames of image data.
+    pub fn check_gif_frames(&self, gif: &[u8]) -> Result<(), ToolError> {
+        let shape = gif_shape(gif, self.max_parts);
+        self.check_image_bytes(shape.pages.saturating_mul(shape.largest_part), Made { noun: "GIF", parts: "frames" })
+    }
+
+    /// `bytes` is the decoded image data the outputs hold, checked before anything is saved.
+    pub fn check_image_bytes(&self, bytes: u64, made: Made) -> Result<(), ToolError> {
+        if bytes <= self.max_image_bytes { return Ok(()) }
+        Err(ToolError::limit_exceeded(
+            LimitKind::OutputSize,
+            format!(
+                "Would make more than {} of image data, over the limit for one {}. Use fewer or smaller {} and try again.",
+                bytes_label(self.max_image_bytes), made.noun, made.parts,
+            ),
+        ))
+    }
+}
+
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf"
@@ -716,6 +766,29 @@ mod tests {
         assert_eq!(limit_of(error.clone()), Some(LimitKind::PageCount));
         assert_eq!(error.unwrap_err().message, "Would make more than 5,000 pages, over the limit for one PDF. Split it into smaller files and try again.");
         assert!(IMAGE.check_made_pages(1_000_000).is_ok());
+    }
+
+    #[test]
+    fn creation_tools_record_their_input_and_made_limits() {
+        assert_eq!(MADE_IMAGES, MadeLimits { max_parts: 1_000, max_image_bytes: 2 * GB });
+        for command in ["generate_icon_set", "create_gif"] {
+            assert_eq!(recorded(command), Some(IMAGE), "{command}");
+        }
+        for command in ["extract_gif_frames", "process_tiff_pages"] {
+            assert_eq!(recorded(command), Some(PAGED_IMAGE), "{command}");
+        }
+        assert_eq!(IMAGE, ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer });
+        assert_eq!(PAGED_IMAGE, ToolLimits { max_pages: Some(1_000), ..IMAGE });
+
+        let gif = Made { noun: "GIF", parts: "frames" };
+        assert!(MADE_IMAGES.check_parts(1_000, gif).is_ok());
+        let parts = MADE_IMAGES.check_parts(1_001, gif);
+        assert_eq!(limit_of(parts.clone()), Some(LimitKind::PageCount));
+        assert_eq!(parts.unwrap_err().message, "More than 1,000 frames, over the limit for one GIF. Use fewer frames and try again.");
+        assert!(MADE_IMAGES.check_image_bytes(2 * GB, gif).is_ok());
+        let bytes = MADE_IMAGES.check_image_bytes(2 * GB + 1, Made { noun: "TIFF", parts: "pages" });
+        assert_eq!(limit_of(bytes.clone()), Some(LimitKind::OutputSize));
+        assert_eq!(bytes.unwrap_err().message, "Would make more than 2 GB of image data, over the limit for one TIFF. Use fewer or smaller pages and try again.");
     }
 
     #[test]

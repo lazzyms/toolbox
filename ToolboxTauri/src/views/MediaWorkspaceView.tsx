@@ -76,6 +76,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
       outputGroup={tool.outputGroup}
       resultsHint={tool.resultsHint}
       intakeRedirect={tool.intakeRedirect}
+      emptyHint={[`Accepts ${capability.acceptedExtensions.join(", ")}`, tool.acceptsNote].filter(Boolean).join(", ")}
       onRun={(paths, outputLocation, { outputPath, runId, keys }) => {
         const { command, request } = buildRequest(toolId, paths, keys, outputLocation, outputPath);
         return invoke<ToolResult>(command, { runId, request });

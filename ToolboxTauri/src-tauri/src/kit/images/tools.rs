@@ -1112,6 +1112,10 @@ fn icon_set_with(
     mut write: impl FnMut(&Path, &[u8]) -> Result<(), String>,
 ) -> JobOutcome {
     let plans = match icon_plans(&request.platforms) { Ok(plans) => plans, Err(error) => return failure(input, error) };
+    let icon_bytes = plans.iter().flat_map(|plan| plan.sizes.iter()).map(|&size| u64::from(size) * u64::from(size) * 4).sum();
+    if let Err(error) = crate::kit::common::limits::MADE_IMAGES.check_image_bytes(icon_bytes, ICON_SIZES) {
+        return JobOutcome::failure(input, error);
+    }
     // The master is read upright and reduced to 8-bit RGBA once, keeping its transparency, then made square by the run's rule.
     let (master, high_bit_depth) = match crate::kit::images::load_upright_image(&input) {
         Ok(source) => (square_master(source.image.to_rgba8(), request.square_rule), source.high_bit_depth),
@@ -1501,6 +1505,11 @@ fn validate_gif_timing(request: &GifCreateRequest) -> Result<(), JobOutcome> {
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
     if let Err(outcome) = validate_gif_timing(request) { return outcome; }
+    // The first frame past the limit stops the run before any frame is read.
+    let limits = crate::kit::common::limits::MADE_IMAGES;
+    if let Err(error) = limits.check_parts(request.paths.len(), GIF_FRAMES) {
+        return JobOutcome::failure(request.paths[limits.max_parts as usize].clone(), error);
+    }
     // Read every frame before reserving the output, so an unreadable frame publishes nothing.
     let mut reduced = Vec::new();
     let mut images = Vec::with_capacity(request.paths.len());
@@ -1511,6 +1520,14 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
                 images.push(source.image.to_rgba8());
             }
             Err(_) => return failure(path.clone(), unreadable_frame(index + 1, path)),
+        }
+        // Frame 1 sets the canvas every frame is drawn on, so it decides the size of the whole GIF.
+        if index == 0 {
+            let (width, height) = images[0].dimensions();
+            let canvas = u64::from(width) * u64::from(height) * 4;
+            if let Err(error) = limits.check_image_bytes(canvas.saturating_mul(request.paths.len() as u64), GIF_FRAMES) {
+                return JobOutcome::failure(path.clone(), error);
+            }
         }
     }
     let (output, file) = match OutputNaming::create_single_output(request.output_path.as_deref(), &input, &request.output_location, "-animated", "gif") {
@@ -1538,6 +1555,13 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     }
 }
 
+const GIF_FRAMES: crate::kit::common::limits::Made = crate::kit::common::limits::Made { noun: "GIF", parts: "frames" };
+const TIFF_PAGES: crate::kit::common::limits::Made = crate::kit::common::limits::Made { noun: "TIFF", parts: "pages" };
+const ICON_SIZES: crate::kit::common::limits::Made = crate::kit::common::limits::Made { noun: "icon set", parts: "sizes" };
+
+/// The decoded size of each page, as the TIFF writer holds it.
+fn page_bytes(page: &DynamicImage) -> u64 { page.as_bytes().len() as u64 }
+
 fn default_gif_delay_ms() -> u32 { 100 }
 fn default_gif_loop() -> bool { true }
 
@@ -1559,6 +1583,9 @@ pub fn tiff_split(request: &TiffRequest, input: PathBuf) -> JobOutcome {
     };
     if pages.len() == 1 {
         return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, TIFF_SINGLE_PAGE_SKIP));
+    }
+    if let Err(error) = crate::kit::common::limits::MADE_IMAGES.check_image_bytes(pages.iter().map(page_bytes).sum(), TIFF_PAGES) {
+        return JobOutcome::failure(input, error);
     }
     let width = pages.len().to_string().len().max(2);
     let mut outputs = Vec::with_capacity(pages.len());
@@ -1583,16 +1610,29 @@ pub fn tiff_combine(request: &TiffRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one TIFF file.".to_string()); };
     let pages = if let Some(page_refs) = &request.pages {
         if page_refs.is_empty() { return failure(input, "Select at least one TIFF page.".to_string()); }
+        // The first page past the limit stops the run before any page is read.
+        let limits = crate::kit::common::limits::MADE_IMAGES;
+        if let Err(error) = limits.check_parts(page_refs.len(), TIFF_PAGES) {
+            return JobOutcome::failure(page_refs[limits.max_parts as usize].path.clone(), error);
+        }
         match read_tiff_page_refs(&request.paths, page_refs) {
             Ok(pages) => pages,
             Err((path, error)) => return failure(path, error),
         }
     } else {
         let mut pages = Vec::new();
+        let mut bytes = 0;
         for path in &request.paths {
             match crate::kit::images::decode(path) {
-                Ok(mut decoded) => pages.append(&mut decoded.pages),
+                Ok(mut decoded) => {
+                    bytes += decoded.pages.iter().map(page_bytes).sum::<u64>();
+                    pages.append(&mut decoded.pages);
+                }
                 Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
+            }
+            let limits = crate::kit::common::limits::MADE_IMAGES;
+            if let Err(error) = limits.check_parts(pages.len(), TIFF_PAGES).and_then(|()| limits.check_image_bytes(bytes, TIFF_PAGES)) {
+                return JobOutcome::failure(path.clone(), error);
             }
         }
         pages

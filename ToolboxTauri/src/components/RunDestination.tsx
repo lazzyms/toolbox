@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import type { OutputLocation, ToolCommand } from '../contracts';
+import type { SaveDialogPlace } from '../registry/saveSteps';
 import { shortenHomePath, useHomeDir } from '../homePath';
 
 export type FolderCheck = 'ready' | 'missing' | 'unwritable';
@@ -46,6 +47,8 @@ interface RunDestinationProps {
     exampleName: string | readonly string[] | null;
     exampleHint?: string;
     savesOneFile?: boolean;
+    /** Where a one-file save dialog opens: the folder of the first input, or null before any file is open. */
+    saveDialog?: SaveDialogPlace & { folder: string | null };
     /** Ends the per-run hint by saying the saved setting is unchanged, where the tool's board says so. */
     mentionsSettingKept?: boolean;
     label?: string;
@@ -54,7 +57,7 @@ interface RunDestinationProps {
     onReset: () => void;
 }
 
-export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, exampleHint, savesOneFile = false, mentionsSettingKept = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, exampleHint, savesOneFile = false, saveDialog, mentionsSettingKept = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
     const home = useHomeDir();
     return (
     <section aria-label="Destination" className="run-destination">
@@ -62,10 +65,19 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
             <span className="run-destination-label">{label}</span>
             {overridden && <Badge variant="outline">This run only</Badge>}
         </div>
-        {!savesOneFile && <>
+        {savesOneFile && saveDialog && (
+            <p className="run-destination-hint">
+                You name the {saveDialog.noun} when you start. The save dialog opens {location === 'alongsideInput' ? `next to the ${saveDialog.nextTo}` : 'in'}:
+            </p>
+        )}
+        {(!savesOneFile || saveDialog) && <>
         <div className="run-destination-path">
             <FolderIcon aria-hidden="true" />
-            <span data-testid="run-destination-path">{describeLocation(location, home)}</span>
+            <span data-testid="run-destination-path">
+                {savesOneFile && saveDialog
+                    ? saveDialog.folder ? shortenHomePath(saveDialog.folder, home) : `Next to the ${saveDialog.nextTo}`
+                    : describeLocation(location, home)}
+            </span>
         </div>
         <div className="run-destination-actions">
             {overridden ? <>
@@ -81,7 +93,11 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
         </>}
         {note && <p className="run-destination-hint">{note}</p>}
         {savesOneFile && (
-            <p className="run-destination-hint">You choose a name and folder when you start, because this makes one file.</p>
+            <p className="run-destination-hint">
+                {saveDialog
+                    ? 'If you pick a name that\'s taken, Toolbox adds -1 and tells you. Nothing is replaced.'
+                    : 'You choose a name and folder when you start, because this makes one file.'}
+            </p>
         )}
         {exampleName && (
             <div className="run-destination-example">

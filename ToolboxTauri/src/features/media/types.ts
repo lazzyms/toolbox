@@ -58,6 +58,8 @@ export interface MediaTool<Options> {
   outputGroup?: OutputGrouping;
   /** A line after the finished headline, such as a total across files. */
   resultsHint?: (results: JobOutcome[]) => string | null;
+  /** Ends the empty workspace's Accepts line, such as which kinds of TIFF scans the tool reads. */
+  acceptsNote?: string;
   /** Points a file the tool refuses at the tool that takes it, such as a GIF at Extract GIF Frames. */
   intakeRedirect?: (path: string) => IntakeRedirect | null;
 }

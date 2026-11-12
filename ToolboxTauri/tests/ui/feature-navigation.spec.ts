@@ -3845,8 +3845,8 @@ test.describe("many-to-one save step", () => {
     const saveStepCases = [
         { tool: "Merge PDF", command: "merge_pdfs", files: ["/local/leases/lease-agreement.pdf", "/local/leases/lease-addendum.pdf"], title: "Save the merged PDF", name: "lease-agreement-merged.pdf", summary: "2 files, joined top to bottom.", runLabel: "Merge…" },
         { tool: "Images to PDF", command: "images_to_pdf", files: ["/local/scans/IMG_4012.jpg", "/local/scans/receipt-scan.png"], title: "Save the combined PDF", name: "IMG_4012-combined.pdf", summary: "2 images, one per page.", runLabel: "Make PDF…" },
-        { tool: "Create GIF", command: "create_gif", files: ["/local/frames/frame-1.png", "/local/frames/frame-2.png"], title: "Save the GIF", name: "frame-1-animated.gif", summary: "2 frames, in the order shown.", runLabel: "Make GIF…" },
-        { tool: "Split and Combine TIFF", command: "process_tiff_pages", files: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"], title: "Save the combined TIFF", name: "two-page-combined.tif", summary: "2 TIFF files, combined in the order shown.", runLabel: "Combine 3 pages…", mode: "Combine into one TIFF" },
+        { tool: "Create GIF", command: "create_gif", files: ["/local/frames/frame-1.png", "/local/frames/frame-2.png"], title: "Save the GIF", name: "frame-1-animated.gif", summary: "2 frames, in the order shown.", runLabel: "Make GIF…", dialogPlace: "You name the GIF when you start. The save dialog opens next to the first frame:" },
+        { tool: "Split and Combine TIFF", command: "process_tiff_pages", files: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"], title: "Save the combined TIFF", name: "two-page-combined.tif", summary: "2 TIFF files, combined in the order shown.", runLabel: "Combine 3 pages…", mode: "Combine into one TIFF", dialogPlace: "You name the TIFF when you start. The save dialog opens next to the first file:" },
     ] as const;
     const merge = saveStepCases[0];
 
@@ -3874,14 +3874,22 @@ test.describe("many-to-one save step", () => {
         test(`${testCase.command} asks for a name and folder in the app before it runs`, async ({ page }) => {
             await openWithFiles(page, testCase.tool, testCase.files, "mode" in testCase ? testCase.mode : undefined);
             const destination = page.getByRole("region", { name: "Destination" });
-            await expect(destination).toContainText("You choose a name and folder when you start, because this makes one file.");
+            const folder = testCase.files[0].slice(0, testCase.files[0].lastIndexOf("/"));
             await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
-            await expect(destination.getByTestId("run-destination-path")).toHaveCount(0);
-            await expect(destination.getByRole("button", { name: "Change for this run" })).toHaveCount(0);
+            if ("dialogPlace" in testCase) {
+                // The Media boards show where the save dialog opens, with a per-run change.
+                await expect(destination).toContainText(testCase.dialogPlace);
+                await expect(destination.getByTestId("run-destination-path")).toHaveText(folder);
+                await expect(destination.getByRole("button", { name: "Change for this run" })).toBeVisible();
+                await expect(destination).toContainText("If you pick a name that's taken, Toolbox adds -1 and tells you. Nothing is replaced.");
+            } else {
+                await expect(destination).toContainText("You choose a name and folder when you start, because this makes one file.");
+                await expect(destination.getByTestId("run-destination-path")).toHaveCount(0);
+                await expect(destination.getByRole("button", { name: "Change for this run" })).toHaveCount(0);
+            }
             await expect(page.locator(".workspace-primary-action")).toHaveText(`${testCase.runLabel}⌘↵`);
 
             const dialog = await startRun(page);
-            const folder = testCase.files[0].slice(0, testCase.files[0].lastIndexOf("/"));
             await expect(dialog.getByRole("heading", { name: testCase.title })).toBeVisible();
             await expect(dialog.getByLabel("File name")).toHaveValue(testCase.name);
             await expect(dialog.getByTestId("save-folder")).toHaveText(folder);

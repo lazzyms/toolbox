@@ -68,6 +68,7 @@ const TiffPagesPanel = ({ utility, options, setOptions, files, fileKeys, removeF
 const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`;
 
 export const tiffPagesTool: MediaTool<TiffPagesState> = {
+  acceptsNote: "including fax and JPEG-compressed scans",
   initialOptions: initialTiffPagesState,
   Panel: TiffPagesPanel,
   // Split runs each file on its own, so it never waits on the page grid. Combine waits until the
