@@ -11,22 +11,23 @@ export type AtomicToolId =
   | "pdf-edit"
   | "images-to-pdf"
   | "pdf-to-images"
-  | "pdf-to-text"
+  | "pdf-extract"
   | "convert-to-pdf"
   | "pdf-split"
-  | "pdf-image-extract"
   | "pdf-sign"
   | "pdf-ocr"
   | "pdf-remove-pages"
   | "pdf-extract-pages"
   | "pdf-organize"
-  | "pdf-compress"
+  | "compress-files"
   | "pdf-rotate"
   | "pdf-repair"
   | "pdf-redact"
   | "pdf-compare"
+  | "pdf-privacy"
+  | "pdf-properties"
+  | "pdf-bates"
   | "heic-convert"
-  | "compress"
   | "resize"
   | "rotate"
   | "crop"
@@ -48,7 +49,8 @@ export type WorkspaceId =
   | "compress-files"
   | "media-tools";
 
-export type ToolInputCardinality = "single" | "multiple" | "ordered";
+/** "none" marks a creation tool: it takes no input files and accepts no extensions. */
+export type ToolInputCardinality = "single" | "multiple" | "ordered" | "none";
 
 export type NativeAvailability = "available" | "unavailable";
 
@@ -62,12 +64,15 @@ export interface FormatFamily {
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
   formatFamilies?: readonly FormatFamily[];
+  /** Extensions the command takes only to report each file Skipped. The open dialog never offers them. */
+  skippedExtensions: readonly string[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;
   nativeAvailability: NativeAvailability;
   outputSuffix: string;
   manyToOne: boolean;
+  outputFormats?: readonly string[];
 }
 
 export type OutputLocation = "alongsideInput" | { customFolder: string };
@@ -84,42 +89,34 @@ export type JobState = "running" | "success" | "mixed" | "failure";
 export type ToolCommand =
   | "remove_password"
   | "protect_files"
-  | "compress_images"
   | "convert_images"
   | "inspect_pdf"
   | "crop_pdf"
   | "resize_pdf"
-  | "edit_pdf"
   | "export_pdf_scene"
-  | "sign_pdf"
-  | "add_page_numbers"
-  | "watermark_pdf"
-  | "compress_pdf"
+  | "bates_number_pdfs"
+  | "compress_files"
   | "rotate_pdf"
   | "repair_pdf"
+  | "inspect_pdf_privacy"
+  | "edit_pdf_properties"
   | "redact_pdf"
   | "compare_pdfs"
   | "extract_pdf_pages"
   | "merge_pdfs"
   | "split_pdf"
   | "pdf_to_images"
-  | "pdf_to_text"
-  | "extract_pdf_images"
+  | "extract_from_pdf"
   | "images_to_pdf"
   | "convert_to_pdf"
   | "ocr_pdf"
   | "blur_faces"
   | "remove_image_background"
-  | "resize_images"
-  | "rotate_images"
-  | "crop_images"
-  | "adjust_image_tone"
-  | "watermark_images"
+  | "export_image_edit_stack"
   | "generate_icon_set"
   | "create_gif"
   | "extract_gif_frames"
-  | "process_tiff_pages"
-  | "image_metadata";
+  | "process_tiff_pages";
 
 
 export type OutcomePointer =
@@ -130,7 +127,7 @@ export type OutcomePointer =
 /** Why a file needs its pack: `PackNeed` in `src-tauri/src/kit/contracts.rs`. */
 export type PackNeed = "notInstalled" | "damaged" | "incompatible";
 
-export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression";
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "textLength" | "dimensions";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
   | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }
@@ -162,16 +159,21 @@ export type OutcomeWarning =
   | { code: "fontSubstituted"; message: string; details: { requestedFamily: string; actualFamily: string } }
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
   | { code: "precisionReduced"; message: string }
+  | { code: "bookmarksNotCarried"; message: string; details: { into: string } }
+  | { code: "tagsNotCarried"; message: string; details: { into: string } }
   | { code: "omittedContent"; message: string }
-  | { code: "approximateLayout"; message: string };
+  | { code: "approximateLayout"; message: string }
+  | { code: "imageUnsupported"; message: string; details: { page: number; image: number; feature: string } }
+  | { code: "imageDamaged"; message: string; details: { page: number; image: number } }
+  | { code: "imageTooLarge"; message: string; details: { page: number; image: number; width: number; height: number } }
+  | { code: "jpegColourKept"; message: string; details: { colour: JpegColour; pages: number[]; images: number } }
+  | { code: "pagesWithoutText"; message: string; details: { pages: number[] } }
+  | { code: "transparencyFlattened"; message: string };
+
+export const jpegColours = ["cmyk", "inverted"] as const;
+export type JpegColour = (typeof jpegColours)[number];
 
 export type WarningCode = OutcomeWarning["code"];
-
-/** One labelled line of a result's breakdown, such as which pages were recognized. */
-export interface OutcomeDetail {
-  label: string;
-  value: string;
-}
 
 export type FontStyle = "regular" | "bold" | "italic" | "boldItalic";
 
@@ -185,14 +187,20 @@ export interface FontUse {
   source: FontSource;
 }
 
+/** One labelled line of a result's breakdown, such as which pages were recognized. */
+export interface OutcomeDetail {
+  label: string;
+  value: string;
+}
+
 interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  fonts?: FontUse[];
   originalBytes?: number;
   outputBytes?: number;
   pageDetails?: OutcomeDetail[];
-  fonts?: FontUse[];
   /** The input is in a format read in basic fidelity, so the output may differ from it more than usual. */
   basicFidelity?: boolean;
 }
@@ -262,9 +270,12 @@ export interface ToolDefinition {
   runningDetail?: string;
   /** The live run counts pages instead of files, as long scans take a while (OCR board). */
   progressByPage?: boolean;
+  outputNoun?: string;
   lockedNote?: string;
   /** The tool's own words for a result row whose copy lost its digital signature, when its board has them. */
   signatureRemovedNote?: string;
+  /** Its rows show a lower bit depth as a note, because the tool only reads the photo and needs nothing from the user. */
+  precisionReducedIsNote?: boolean;
   blurb: string;
   keywords?: readonly string[];
   symbol: string;
@@ -281,18 +292,20 @@ export interface ToolDefinition {
     | "pdf-organize"
     | "pdf-page-numbers"
     | "pdf-watermark"
-    | "pdf-compress"
+    | "compress-files"
     | "pdf-rotate"
     | "pdf-repair"
     | "pdf-redact"
     | "pdf-compare"
+    | "pdf-privacy"
+    | "pdf-properties"
+    | "pdf-bates"
     | "pdf-remove-pages"
     | "pdf-extract-pages"
     | "pdf-merge"
     | "pdf-split"
     | "pdf-to-images"
-    | "pdf-to-text"
-    | "pdf-image-extract"
+    | "pdf-extract"
     | "images-to-pdf"
     | "convert-to-pdf"
     | "pdf-ocr"
@@ -301,7 +314,6 @@ export interface ToolDefinition {
     | "image-resize"
     | "image-rotate"
     | "image-crop"
-    | "image-compress"
     | "image-convert"
     | "image-watermark"
     | "image-tone"
@@ -324,8 +336,8 @@ export interface ToolWorkspaceDefinition {
   toolIds: AtomicToolId[];
   /** Tools shown as one entry whose tabs or modes are those tools. The entry opens the first one. */
   editor?: { title: string; blurb: string; symbol: string; toolIds: AtomicToolId[] };
-  /** Tools listed after the main tools, under More. */
-  moreToolIds?: AtomicToolId[];
+  /** Labelled groups listed after the main tools, in this order, such as Details and More. */
+  groups?: { label: string; toolIds: AtomicToolId[] }[];
 }
 
 export interface ToolRequest {
@@ -346,8 +358,17 @@ export interface PasswordRequest extends ToolRequest {
   passwordOverrides: Record<string, string>;
 }
 
+/** Low keeps the most detail and High saves the most space. Every PDF is repacked without loss; Medium and High also recompress and downsample its photographs. JPEGs are re-saved at quality 85, 75 or 50. PNGs are repacked without loss at Low and Medium and cut to a dithered 256-colour palette at High. Lossless WebPs stay lossless at Low and Medium and become lossy at High; lossy WebPs are re-saved at the JPEG qualities. */
+export type CompressLevel = "low" | "medium" | "high";
+
+export interface CompressFilesRequest extends ToolRequest {
+  level: CompressLevel;
+  stripExif: boolean;
+}
+
 export type WatermarkPlacement = "center" | "top-left" | "top-right" | "bottom-left" | "bottom-right" | "tile";
-export type WatermarkPosition = WatermarkPlacement | { x: number; y: number };
+/** A placement, a legacy pen offset in pixels, or an anchor from 0 to 1 that lands the mark in the same relative place on every size. */
+export type WatermarkPosition = WatermarkPlacement | { x: number; y: number } | { anchorX: number; anchorY: number };
 
 // Mirrors kit::common::watermark::WatermarkOptions.
 export interface WatermarkOptions {
@@ -360,13 +381,6 @@ export interface WatermarkOptions {
   rotation?: number;
 }
 
-export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
-
-export interface CompressImagesRequest extends ToolRequest {
-  quality: number;
-  lossless?: boolean;
-}
-
 export type OcrMode = "searchablePdf" | "text";
 
 export interface OcrRequest extends ToolRequest {
@@ -376,6 +390,10 @@ export interface OcrRequest extends ToolRequest {
   languages: string[];
 }
 
+export type TiffCompression = "lzw" | "none" | "deflate";
+
 export interface ConvertImagesRequest extends ToolRequest {
-  format: "jpg" | "png" | "webp" | "heic";
+  format: "jpg" | "png" | "webp" | "heic" | "tiff";
+  /** Sent only with a TIFF target. */
+  tiffCompression?: TiffCompression;
 }
