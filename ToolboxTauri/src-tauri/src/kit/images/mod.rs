@@ -8,7 +8,13 @@ use image::ImageEncoder;
 use image::AnimationDecoder;
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
+
+pub(crate) mod source;
+pub(crate) use source::decode;
+use source::ImageFamily;
+
+pub(crate) const DEFAULT_QUALITY: u8 = 90;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OutputFormat {
@@ -26,6 +32,32 @@ impl OutputFormat {
             OutputFormat::WebP => "webp",
             OutputFormat::Heic => "heic",
         }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            OutputFormat::Jpeg => "JPEG",
+            OutputFormat::Png => "PNG",
+            OutputFormat::WebP => "WebP",
+            OutputFormat::Heic => "HEIC",
+        }
+    }
+}
+
+// HEIC/HEIF and JPG/JPEG each name one format, so a file already in the
+// target family makes no output.
+fn already_in_format(path: &std::path::Path, format: OutputFormat) -> Option<String> {
+    let aliases = match (ImageFamily::of(path), format) {
+        (ImageFamily::Jpeg, OutputFormat::Jpeg) => "JPG and JPEG",
+        (ImageFamily::Heif, OutputFormat::Heic) => "HEIC and HEIF",
+        (ImageFamily::Png, OutputFormat::Png) | (ImageFamily::WebP, OutputFormat::WebP) => "",
+        _ => return None,
+    };
+    let name = format.name();
+    if lower_ext(path).as_deref() == Some(format.extension()) {
+        Some(format!("Already {name}, so no file was made."))
+    } else {
+        Some(format!("Already {name}. {aliases} count as one format."))
     }
 }
 
@@ -45,40 +77,74 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_ascii_lowercase())
 }
 
-pub(crate) fn detect_format(path: &std::path::Path) -> OutputFormat {
-    match lower_ext(path).as_deref() {
-        Some("jpg" | "jpeg") => OutputFormat::Jpeg,
-        Some("webp") => OutputFormat::WebP,
-        // libheif reads .heif too; the extension tells us HEIC because the
-        // image crate can't (it reports an unsupported format error we
-        // intercept in load_image below)
-        Some("heic" | "heif") => OutputFormat::Heic,
-        _ => OutputFormat::Png,
+/// A source decoded the way a viewer shows it, plus the HEIF bit depth when it
+/// is above 8 so callers that write 8-bit output can say so.
+pub(crate) struct UprightImage {
+    pub image: image::DynamicImage,
+    pub high_bit_depth: Option<u8>,
+    /// The family the source was decoded as, which picks the format an edit writes back in.
+    pub family: source::ImageFamily,
+    /// Whether a non-neutral orientation was baked into the pixels.
+    pub oriented: bool,
+}
+
+/// Decodes a source upright, applying its orientation exactly once. libheif
+/// already applies HEIF irot/imir transforms while decoding, so `decode`
+/// reports no orientation for HEIC/HEIF sources and they are never rotated
+/// again here; every other format applies its EXIF orientation tag after
+/// decoding. Only HEIF reports a bit depth above 8: the image crate's
+/// decoders hand back 8-bit samples for the formats the 8-bit tools accept.
+pub(crate) fn load_upright_image(path: &std::path::Path) -> Result<UprightImage, String> {
+    let decoded = decode(path)?;
+    let high_bit_depth = (decoded.family == source::ImageFamily::Heif && decoded.bits_per_channel > 8).then_some(decoded.bits_per_channel);
+    let orientation = decoded.orientation;
+    let family = decoded.family;
+    let mut image = decoded.into_first_page();
+    if let Some(orientation) = orientation {
+        image.apply_orientation(orientation);
+    }
+    Ok(UprightImage { image, high_bit_depth, family, oriented: orientation.is_some() })
+}
+
+/// Whether any pixel is less than fully opaque. An alpha channel that is opaque
+/// everywhere, as the tone and flip steps add, does not count.
+pub(crate) fn has_transparency(img: &image::DynamicImage) -> bool {
+    match img {
+        image::DynamicImage::ImageRgba8(rgba) => rgba.pixels().any(|pixel| pixel.0[3] < u8::MAX),
+        image::DynamicImage::ImageLumaA8(luma) => luma.pixels().any(|pixel| pixel.0[1] < u8::MAX),
+        other if other.color().has_alpha() => other.to_rgba16().pixels().any(|pixel| pixel.0[3] < u16::MAX),
+        _ => false,
     }
 }
 
-// HEIC has no decoder in the image crate, so fall back to heif-rs when the
-// extension says HEIF but image::open refused it. Everything else errors
-// normally so a genuinely corrupt file is surfaced as such.
-pub(crate) fn load_image(path: &std::path::Path) -> Result<image::DynamicImage, String> {
-    match image::open(path) {
-        Ok(img) => Ok(img),
-        Err(first) => {
-            if matches!(lower_ext(path).as_deref(), Some("heic" | "heif")) {
-                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-                heif::decode(&bytes).map_err(|e| format!("HEIC decode failed: {}", e))
-            } else {
-                Err(format!("Decode failed: {}", first))
-            }
-        }
-    }
+/// Whether the image stores more than 8 bits per channel.
+pub(crate) fn has_high_bit_depth(color: image::ColorType) -> bool {
+    u16::from(color.bits_per_pixel()) / u16::from(color.channel_count()) > 8
+}
+
+/// Composites the image onto white, the background every image tool uses for a
+/// format without transparency.
+pub(crate) fn flatten_onto_white(img: &image::DynamicImage) -> image::RgbImage {
+    let rgba = img.to_rgba8();
+    image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+        let [red, green, blue, alpha] = rgba.get_pixel(x, y).0;
+        let over_white = |channel: u8| ((u32::from(channel) * u32::from(alpha) + 255 * u32::from(u8::MAX - alpha) + 127) / 255) as u8;
+        image::Rgb([over_white(red), over_white(green), over_white(blue)])
+    })
 }
 
 /// Baseline JPEG at `quality`. A greyscale image stays one channel; anything else is written as RGB
 /// with alpha dropped.
 pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+    encode_jpeg_with_profile(img, quality, None)
+}
+
+fn encode_jpeg_with_profile(img: &image::DynamicImage, quality: u8, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
-    let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+    let mut encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+    if let Some(icc) = icc {
+        encoder.set_icc_profile(icc.to_vec()).map_err(|error| format!("Could not keep the colour profile: {error}"))?;
+    }
     match img {
         image::DynamicImage::ImageLuma8(grey) => encoder.write_image(grey.as_raw(), grey.width(), grey.height(), image::ExtendedColorType::L8),
         _ => {
@@ -94,11 +160,31 @@ pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
 pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
+    encode_with_profile(img, format, quality, None)
+}
+
+/// The colour profile embedded in a JPEG, PNG or WebP file, if it has one. HEIC is not read
+/// here, because its encoder cannot write a profile back.
+pub(crate) fn icc_profile(path: &std::path::Path) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_decoder().ok()?;
+    decoder.icc_profile().ok().flatten()
+}
+
+/// Encodes like `encode`, embedding the given colour profile in JPEG, PNG and WebP. HEIC is saved
+/// without it, because libheif's encoder here has no way to write one.
+pub(crate) fn encode_with_profile(img: &image::DynamicImage, format: OutputFormat, quality: u8, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    let profile_error = |error: image::error::UnsupportedError| format!("Could not keep the colour profile: {error}");
     match format {
-        OutputFormat::Jpeg => encode_jpeg(&image::DynamicImage::ImageRgb8(img.to_rgb8()), quality),
+        OutputFormat::Jpeg => {
+            let rgb = if img.color().has_alpha() { flatten_onto_white(img) } else { img.to_rgb8() };
+            encode_jpeg_with_profile(&image::DynamicImage::ImageRgb8(rgb), quality, icc)
+        }
         OutputFormat::Png => {
             let mut buf = Vec::new();
-            PngEncoder::new(&mut buf)
+            let mut encoder = PngEncoder::new(&mut buf);
+            if let Some(icc) = icc { encoder.set_icc_profile(icc.to_vec()).map_err(profile_error)?; }
+            encoder
                 .write_image(
                     img.as_bytes(),
                     img.width(),
@@ -112,14 +198,18 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
             // image's WebPEncoder is lossless-only; lossy quality needs
             // Google's libwebp through webpx (quality 0-100)
             let rgba = img.to_rgba8();
-            webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+            let bytes = webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
                 .quality(quality.min(100) as f32)
                 .encode(webpx::Unstoppable)
-                .map_err(|e| format!("WebP encode failed: {}", e))
+                .map_err(|e| format!("WebP encode failed: {}", e))?;
+            match icc {
+                Some(icc) => webpx::embed_icc(&bytes, icc).map_err(|e| format!("Could not keep the colour profile: {}", e)),
+                None => Ok(bytes),
+            }
         }
         OutputFormat::Heic => {
-            // libheif's bundled x265 is 8-bit only, so downconvert first and
-            // let a high-bit-depth source fail at encode time like Swift does
+            // libheif's bundled x265 is 8-bit only, so a high-bit-depth source
+            // is reduced to 8 bits per channel here
             let rgba = img.to_rgba8();
             let mut buf = Vec::new();
             image::DynamicImage::ImageRgba8(rgba)
@@ -131,6 +221,19 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
 }
 
 impl ImageProcessor {
+    pub fn convert(input_path: PathBuf, format: OutputFormat, output_location: OutputLocation) -> JobOutcome {
+        if let Some(message) = already_in_format(&input_path, format) {
+            return JobOutcome::skipped(input_path, SkipReason::new(SkipCode::AlreadyInTargetFormat, message));
+        }
+        Self::run(input_path, Options {
+            target_format: Some(format),
+            quality: DEFAULT_QUALITY,
+            keep_smaller_original: false,
+            suffix: "-converted".to_string(),
+            output_location,
+        })
+    }
+
     pub fn run(input_path: PathBuf, options: Options) -> JobOutcome {
         let original_bytes = std::fs::metadata(&input_path).map(|m| m.len()).unwrap_or(0);
 
@@ -155,8 +258,8 @@ impl ImageProcessor {
             }
         }
 
-        let img = match load_image(&input_path) {
-            Ok(i) => i,
+        let decoded = match decode(&input_path) {
+            Ok(decoded) => decoded,
             Err(e) => {
                 return JobOutcome::failure(input_path, ToolError::processing(e));
             }
@@ -164,7 +267,8 @@ impl ImageProcessor {
 
         let format = options
             .target_format
-            .unwrap_or_else(|| detect_format(&input_path));
+            .unwrap_or_else(|| decoded.family.output_format());
+        let img = decoded.into_first_page();
         let extension = format.extension();
 
         let output_path = match OutputNaming::reserve_destination(
@@ -189,7 +293,7 @@ impl ImageProcessor {
             return JobOutcome::failure(input_path, ToolError::processing(format!("Write failed: {}", e)));
         }
 
-        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height(), format) {
+        if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height()) {
             return JobOutcome::failure(input_path, ToolError::processing(error));
         }
 
@@ -231,10 +335,9 @@ fn reject_animated_input(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32, format: OutputFormat) -> Result<(), String> {
+fn validate_encoded_output(path: &std::path::Path, width: u32, height: u32) -> Result<(), String> {
     if !path.is_file() { return Err("Encoder did not produce an output container.".to_string()); }
-    if format == OutputFormat::Heic { return Ok(()); }
-    let output = image::open(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?;
+    let output = decode(path).map_err(|error| format!("Encoded output could not be decoded: {error}"))?.into_first_page();
     if output.width() != width || output.height() != height { return Err("Encoded output dimensions do not match the source.".to_string()); }
     Ok(())
 }
@@ -401,9 +504,9 @@ mod tests {
 
     #[test]
     fn detection_maps_heic_extension() {
-        assert_eq!(detect_format(std::path::Path::new("x.heic")), OutputFormat::Heic);
-        assert_eq!(detect_format(std::path::Path::new("x.HEIC")), OutputFormat::Heic);
-        assert_eq!(detect_format(std::path::Path::new("x.jpeg")), OutputFormat::Jpeg);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.heic")).output_format(), OutputFormat::Heic);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.HEIC")).output_format(), OutputFormat::Heic);
+        assert_eq!(source::ImageFamily::of(std::path::Path::new("x.jpeg")).output_format(), OutputFormat::Jpeg);
     }
 
     #[test]
@@ -420,6 +523,61 @@ mod tests {
         cleanup(&result.output_paths());
         let _ = std::fs::remove_file(src);
     }
+
+    #[test]
+    fn generated_high_bit_depth_heic_is_a_real_ten_bit_image() {
+        let source = fixtures::red_left_blue_right(64, 32);
+        let ten = fixtures::heic_10bit(&source);
+        assert_eq!(heif::probe(&ten).unwrap().bit_depth, heif::BitDepth::Ten);
+        let decoded = heif::decode(&ten).unwrap();
+        assert!(matches!(decoded.color(), image::ColorType::Rgb16 | image::ColorType::Rgba16), "{:?}", decoded.color());
+        assert_eq!(heif::probe(&fixtures::heic(&source)).unwrap().bit_depth, heif::BitDepth::Eight);
+    }
+
+    #[test]
+    fn upright_loader_applies_each_orientation_exactly_once() {
+        let source = fixtures::red_left_blue_right(64, 32);
+        assert_eq!(fixtures::red_edge(&source), "left");
+        // EXIF 6 is "rotate 90 degrees clockwise to display"; irot 1 is a
+        // 90 degree anti-clockwise HEIF transform that libheif applies itself.
+        let cases: [(&str, Vec<u8>, &str); 4] = [
+            ("upright.jpg", fixtures::jpeg_with_orientation(&source, 1), "left"),
+            ("exif-6.jpg", fixtures::jpeg_with_orientation(&source, 6), "top"),
+            ("exif-3.jpg", fixtures::jpeg_with_orientation(&source, 3), "right"),
+            ("irot-1.heic", fixtures::heic_rotated(&source, 1), "bottom"),
+        ];
+        for (name, bytes, edge) in cases {
+            let path = temp_path(&format!("upright-{name}"));
+            std::fs::write(&path, &bytes).unwrap();
+            let loaded = load_upright_image(&path).unwrap();
+            let expected = if edge == "left" || edge == "right" { (64, 32) } else { (32, 64) };
+            assert_eq!((loaded.image.width(), loaded.image.height()), expected, "{name}");
+            assert_eq!(fixtures::red_edge(&loaded.image), edge, "{name} must be rotated exactly once");
+            assert_eq!(loaded.high_bit_depth, None);
+            if name.ends_with(".jpg") {
+                // The tag is real: a decode that ignores it still sees the stored landscape pixels.
+                assert_eq!(fixtures::red_edge(&image::open(&path).unwrap()), "left", "{name}");
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name} original must stay byte-identical");
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn upright_loader_reports_high_bit_depth_heic() {
+        let path = temp_path("upright-10bit.heic");
+        std::fs::write(&path, fixtures::heic_10bit(&fixtures::red_left_blue_right(64, 32))).unwrap();
+        let loaded = load_upright_image(&path).unwrap();
+        assert_eq!(loaded.high_bit_depth, Some(10));
+        assert_eq!(fixtures::red_edge(&loaded.image), "left");
+        let _ = std::fs::remove_file(path);
+    }
 }
 pub mod compress;
+pub mod gif_extract;
+pub(crate) mod gif_frames;
+pub mod metadata;
+pub(crate) mod strip;
 pub mod tools;
+#[cfg(test)]
+pub(crate) mod fixtures;

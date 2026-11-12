@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { inspectQpdf, readPin } from "./qpdf-pin.mjs";
+import { inspectFallbackFonts, sourceFontsDir } from "./fallback-fonts.mjs";
+import { inspectPackRelease, inspectUninstallers, tauriNsisTemplate } from "./pack-release.mjs";
+import { inspectPdftotext, inspectQpdf, inspectRenderer, readPin } from "./qpdf-pin.mjs";
 
 const projectFile = (path) => new URL(`../${path}`, import.meta.url);
 const config = JSON.parse(readFileSync(projectFile("src-tauri/tauri.conf.json"), "utf8"));
@@ -25,16 +27,63 @@ const workflow = readFileSync(projectFile("../.github/workflows/tauri-release.ym
 const notesHeader = readFileSync(projectFile("../.github/release-notes-header.md"), "utf8");
 if (!workflow.includes("node ToolboxTauri/scripts/release-notes.mjs") || !workflow.includes("--notes-file release-notes.md")) throw new Error("Releases must use the first-launch header and the PR release-notes changelog");
 if (!/Privacy & Security[\s\S]*Open Anyway/.test(notesHeader)) throw new Error("Release notes header must explain the macOS Open Anyway step");
+if (!/check-release-readiness\.mjs --packs pack-release/.test(workflow) || !/check-tool-matrix\.mjs --catalog pack-release\/pack-catalog\.json/.test(workflow)) {
+  throw new Error("Releases must build their packs, gate them with --packs and check the catalog against the tool matrix");
+}
+if (!/gh release create[^\n]*pack-release\/\*\.toolboxpack/.test(workflow)) throw new Error("Releases must publish the pack files they build");
+if (!/check-release-readiness\.mjs --renderer \S*pdftoppm\.exe --target \$\{\{ matrix\.target \}\}/.test(workflow)) throw new Error("Windows releases must refuse a page renderer that is missing or not native to the target");
+const uninstallers = inspectUninstallers({
+  config,
+  packsSource: readFileSync(projectFile("src-tauri/src/packs.rs"), "utf8"),
+  nsisTemplate: tauriNsisTemplate(),
+});
+const keepsAppData = uninstallers.filter(({ cause }) => cause);
+if (keepsAppData.length) throw new Error(`Uninstaller check failed: ${keepsAppData.map(({ cause, message }) => `${cause}: ${message}`).join("; ")}`);
 const pin = readPin();
 console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, target: { type: "string" } } });
-if (values.qpdf !== undefined || values.target !== undefined) {
-  const result = inspectQpdf({ path: values.qpdf, target: values.target, pin });
+for (const { message } of uninstallers) console.log(`Uninstall: ${message}`);
+
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, pdftotext: { type: "string" }, renderer: { type: "string" }, target: { type: "string" }, fonts: { type: "string" }, packs: { type: "string" }, "public-key": { type: "string" } } });
+const fonts = inspectFallbackFonts({ fontsDir: values.fonts ?? sourceFontsDir });
+if (fonts.cause) {
+  console.error(`Fallback font release check failed (${fonts.cause}): ${fonts.message}`);
+  process.exit(1);
+}
+console.log(`Fallback font release check passed: ${fonts.message}`);
+
+const helperChecks = [];
+if (values.renderer !== undefined) {
+  helperChecks.push(["page renderer", () => inspectRenderer({ path: values.renderer, target: values.target })]);
+}
+if (values.qpdf !== undefined || (values.target !== undefined && values.pdftotext === undefined && values.renderer === undefined)) {
+  helperChecks.push(["qpdf", () => inspectQpdf({ path: values.qpdf, target: values.target, pin })]);
+}
+if (values.pdftotext !== undefined) {
+  helperChecks.push(["pdftotext", () => inspectPdftotext({ path: values.pdftotext, target: values.target })]);
+}
+let helperFailed = false;
+for (const [name, inspect] of helperChecks) {
+  const result = inspect();
   if (result.cause) {
-    console.error(`qpdf release check failed (${result.cause}): ${result.message}`);
+    console.error(`${name} release check failed (${result.cause}): ${result.message}`);
+    helperFailed = true;
+  } else {
+    console.log(`${name} release check passed: ${result.message}`);
+  }
+}
+if (helperFailed) process.exit(1);
+
+// `--packs <dir>`: the release's pack files and catalog, as scripts/pack-release.mjs builds them.
+// They must verify against the updater key the app trusts; `--public-key <file>` substitutes
+// another key in the updater configuration's format, for checking a locally signed build.
+if (values.packs !== undefined) {
+  const publicKey = values["public-key"] ? readFileSync(values["public-key"], "utf8").trim() : config.plugins.updater.pubkey;
+  const failures = inspectPackRelease({ dir: values.packs, publicKey });
+  if (failures.length) {
+    for (const { cause, message } of failures) console.error(`Pack release check failed (${cause}): ${message}`);
     process.exit(1);
   }
-  console.log(`qpdf release check passed: ${result.message}`);
+  const catalog = JSON.parse(readFileSync(`${values.packs}/pack-catalog.json`, "utf8"));
+  console.log(`Pack release check passed: ${catalog.packs.length} packs, ${catalog.packs.reduce((total, { payloads }) => total + payloads.length, 0)} payloads signed with the updater key`);
 }
-

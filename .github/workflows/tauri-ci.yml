@@ -86,13 +86,20 @@ jobs:
         run: npm run test:analytics
         working-directory: ToolboxTauri
 
+      - name: Run PDF scene model tests
+        run: npm run test:scene-model
+        working-directory: ToolboxTauri
+
       - name: Run update and bundle config tests
-        run: npm run test:updates && npm run test:outcomes && npm run test:document-colors && npm run test:asset-config && npm run test:site-release && npm run test:release-notes && npm run test:notices && npm run check:notices
+        run: npm run test:updates && npm run test:outcomes && npm run test:document-colors && npm run test:scene-model && npm run test:asset-config && npm run test:site-release && npm run test:release-notes && npm run test:notices && npm run check:notices
         working-directory: ToolboxTauri
 
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
-        run: brew install qpdf poppler tesseract
+        run: |
+          brew install qpdf poppler tesseract
+          # pdftotext is never found on PATH; native tests use the Development override.
+          echo "TOOLBOX_PDFTOTEXT_PATH=$(command -v pdftotext)" >> "$GITHUB_ENV"
 
       - name: Install qpdf (Windows)
         if: runner.os == 'Windows'
