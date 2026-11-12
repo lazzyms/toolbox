@@ -122,7 +122,7 @@ impl MadeLimits {
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf"
-        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
+        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf" | "pdf_to_epub"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" | "edit_pdf_properties" | "bates_number_pdfs" => PDF,
         "compress_files" => ToolLimits { page_remedy: PageRemedy::SplitThen("compress"), ..PDF },
         "export_image_edit_plan" | "blur_faces"

@@ -8,7 +8,6 @@
 //! Coordinates follow the existing `PdfTextRun` convention: PDF points relative to the
 //! page's effective crop box, with the origin at its top-left corner and `y` growing down.
 //! Page `/Rotate` is not applied; runs are reported in the unrotated page space.
-#![allow(dead_code)] // First consumer is PDF to EPUB (#428).
 
 use std::collections::HashMap;
 use std::rc::Rc;
