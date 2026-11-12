@@ -74,6 +74,7 @@ test.beforeEach(async ({ page }) => {
                 }
                 if (command === "inspect_pdf_scene") return { path: pdfPath, pages: [{ index: 0, width: 612, height: 792, preview }] };
                 if (command === "inspect_pdf_scene_page") return { index: 0, width: 612, height: 792, preview, textRuns: [] };
+                if (command === "render_pdf_source_thumbnails") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, thumbnail: { dataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='612' height='792'/%3E", width: 247, height: 320 }, error: null }));
                 if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndices: number[] } }).request.pageIndices.map((pageIndex) => ({ pageIndex, preview: { dataUrl: preview, width: 612, height: 792 } }));
                 if (command === "inspect_tiff_pages") return [{ width: 640, height: 480, dataUrl: preview }];
                 if (command === "export_pdf_scene") return [{ inputPath: pdfPath, outputPaths: [`${pdfPath}.edited.pdf`], detail: "Exported", failure: null }];
