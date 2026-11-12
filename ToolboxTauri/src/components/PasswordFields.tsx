@@ -9,14 +9,20 @@ import { fileName } from "./resultRow";
 import { ShortcutHint } from "./ShortcutHint";
 
 export type PasswordMode = "lock" | "unlock";
+/** "open" tries an optional open password on files that need one, as Privacy Check does. */
+export type PasswordFieldMode = PasswordMode | "open";
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
 // Only the overrides of files in this request travel, so a retry or a smaller run never carries other files' passwords.
-export const passwordRequest = (paths: string[], passwords: PasswordSet, outputLocation: OutputLocation): PasswordRequest => ({
-    paths,
+export const passwordsFor = (paths: string[], passwords: PasswordSet): Pick<PasswordRequest, "password" | "passwordOverrides"> => ({
     password: passwords.batch,
     passwordOverrides: Object.fromEntries(paths.flatMap((path) => path in passwords.overrides ? [[path, passwords.overrides[path]]] : [])),
+});
+
+export const passwordRequest = (paths: string[], passwords: PasswordSet, outputLocation: OutputLocation): PasswordRequest => ({
+    paths,
+    ...passwordsFor(paths, passwords),
     outputLocation,
 });
 
@@ -75,10 +81,18 @@ export const usePasswordSet = () => {
 
 export type PasswordState = ReturnType<typeof usePasswordSet>;
 
-const confirmMismatch = (mode: PasswordMode, password: string, confirm: string) => mode === "lock" && confirm.length > 0 && confirm !== password;
+// Closing a file drops its own password, and closing every file drops them all.
+export const ForgetClosedFiles = ({ files, passwords }: { files: string[]; passwords: PasswordState }) => {
+    useEffect(() => {
+        passwords.keepOnly(files);
+    }, [files]);
+    return null;
+};
+
+const confirmMismatch = (mode: PasswordFieldMode, password: string, confirm: string) => mode === "lock" && confirm.length > 0 && confirm !== password;
 
 // Lock asks for the new password twice. Unlock checks against the file, so one entry is enough.
-const confirmed = (mode: PasswordMode, password: string, confirm: string) => mode === "unlock" || confirm === password;
+const confirmed = (mode: PasswordFieldMode, password: string, confirm: string) => mode !== "lock" || confirm === password;
 
 export const passwordReadiness = (mode: PasswordMode, passwords: PasswordState, files: readonly string[]) => {
     const missing = files.filter((path) => !(path in passwords.overrides)).length;
@@ -124,30 +138,49 @@ const RevealableInput = ({ id, label, value, onChange, visible, onToggle, invali
     </div>
 );
 
-export const BatchPasswordFields = ({ mode, passwords, files }: { mode: PasswordMode; passwords: PasswordState; files: readonly string[] }) => {
+const batchLabel: Record<PasswordFieldMode, string> = {
+    lock: "New password for all files",
+    unlock: "Current password for all files",
+    open: "Open password for all files",
+};
+
+const ownLabel: Record<PasswordFieldMode, string> = {
+    lock: "Own new password",
+    unlock: "Own current password",
+    open: "Own open password",
+};
+
+const batchUsage = (mode: PasswordFieldMode, fileCount: number, own: number) => {
+    if (mode === "open") {
+        const optional = "Only used for PDFs that need a password to open.";
+        return own === 0 ? optional : `${optional} ${plural(own, "PDF uses its", "PDFs use their")} own password.`;
+    }
+    if (fileCount === 0) return null;
+    return own === 0
+        ? `Used for all ${plural(fileCount, "file", "files")}.`
+        : `Used for ${plural(fileCount - own, "file", "files")}. ${plural(own, "file has its", "files have their")} own password${own === 1 ? "" : "s"}.`;
+};
+
+export const BatchPasswordFields = ({ mode, passwords, files }: { mode: PasswordFieldMode; passwords: PasswordState; files: readonly string[] }) => {
     const [visible, setVisible] = useState(false);
     const [confirmVisible, setConfirmVisible] = useState(false);
     const id = useId();
     const mismatch = confirmMismatch(mode, passwords.batch, passwords.confirm);
     const own = files.filter((path) => path in passwords.overrides).length;
-    const batchCount = files.length - own;
-    const usage = files.length === 0
-        ? null
-        : own === 0
-            ? `Used for all ${plural(files.length, "file", "files")}.`
-            : `Used for ${plural(batchCount, "file", "files")}. ${plural(own, "file has its", "files have their")} own password${own === 1 ? "" : "s"}.`;
+    const usage = batchUsage(mode, files.length, own);
     const cleared = passwords.cleared;
 
     return (
         <div className="password-options">
             <RevealableInput
                 id={`${id}-batch`}
-                label={mode === "lock" ? "New password for all files" : "Current password for all files"}
+                label={batchLabel[mode]}
                 value={passwords.batch}
                 onChange={passwords.setBatch}
                 visible={visible}
                 onToggle={() => setVisible((current) => !current)}
-                placeholder="Enter password"
+                describedBy={usage && mode === "open" ? `${id}-usage` : undefined}
+                placeholder={mode === "open" ? "Only for PDFs that need one" : "Enter password"}
             />
             {mode === "lock" && (
                 <RevealableInput
@@ -163,7 +196,8 @@ export const BatchPasswordFields = ({ mode, passwords, files }: { mode: Password
                 />
             )}
             {mismatch && <p id={`${id}-mismatch`} className="password-error" role="alert"><CircleX aria-hidden="true" />Passwords don't match. Type the new password again.</p>}
-            {usage && <p className="workspace-note" data-testid="password-usage">{usage}</p>}
+            {usage && <p id={`${id}-usage`} className="workspace-note" data-testid="password-usage">{usage}</p>}
+            {mode === "open" && <p className="workspace-note">Never saved. Cleared when you clear the list.</p>}
             {cleared && (
                 <p className="password-cleared" role="status">
                     {fileName(cleared.path)} uses the batch password again.
@@ -175,7 +209,7 @@ export const BatchPasswordFields = ({ mode, passwords, files }: { mode: Password
 };
 
 const OwnPasswordEditor = ({ mode, name, initial, onSave, onCancel }: {
-    mode: PasswordMode;
+    mode: PasswordFieldMode;
     name: string;
     initial: string;
     onSave: (password: string) => void;
@@ -198,7 +232,7 @@ const OwnPasswordEditor = ({ mode, name, initial, onSave, onCancel }: {
             }}
         >
             <div className="password-inline-fields">
-                <RevealableInput id={`${id}-own`} label={mode === "lock" ? "Own new password" : "Own current password"} value={password} onChange={setPassword} visible={false} autoFocus />
+                <RevealableInput id={`${id}-own`} label={ownLabel[mode]} value={password} onChange={setPassword} visible={false} autoFocus />
                 {mode === "lock" && <RevealableInput id={`${id}-own-confirm`} label="Confirm" value={confirm} onChange={setConfirm} visible={false} invalid={mismatch} />}
                 <span className="password-inline-actions">
                     <Button size="sm" disabled={!canSave} onClick={() => onSave(password)}>Save password</Button>
@@ -208,14 +242,14 @@ const OwnPasswordEditor = ({ mode, name, initial, onSave, onCancel }: {
             <p className="workspace-note">
                 {mismatch
                     ? "Passwords don't match. Type the new password again."
-                    : mode === "lock" ? "Only this file uses it. You'll need it to open the locked copy." : "Only this file uses it. The batch password is used for the rest."}
+                    : mode === "lock" ? "Only this file uses it. You'll need it to open the locked copy." : mode === "open" ? "Only this file uses it. The password for all files is tried on the rest." : "Only this file uses it. The batch password is used for the rest."}
             </p>
         </div>
     );
 };
 
 export const FilePasswordCell = ({ mode, path, passwords, selected, disabled }: {
-    mode: PasswordMode;
+    mode: PasswordFieldMode;
     path: string;
     passwords: PasswordState;
     selected: boolean;
@@ -229,7 +263,7 @@ export const FilePasswordCell = ({ mode, path, passwords, selected, disabled }: 
             <span className="file-password">
                 {own
                     ? <Badge variant="outline"><KeyRound aria-hidden="true" />Own password</Badge>
-                    : <span className="file-password-hint">Batch password</span>}
+                    : <span className="file-password-hint">{mode === "open" ? "Password for all files, if needed" : "Batch password"}</span>}
                 {selected && !editing && (own ? (
                     <>
                         <Button variant="ghost" size="xs" aria-label={`Change own password for ${name}`} disabled={disabled} onClick={() => passwords.setEditing(path)}>Change</Button>
@@ -253,8 +287,9 @@ export const FilePasswordCell = ({ mode, path, passwords, selected, disabled }: 
 };
 
 // The new password is used for this one retry only and is not kept as the file's override.
-export const PasswordRetryForm = ({ name, busy, onRetry, onCancel }: {
+export const PasswordRetryForm = ({ name, busy, onRetry, onCancel, note = "Only this file runs again. Its new password isn't saved." }: {
     name: string;
+    note?: string;
     busy: boolean;
     onRetry: (password: string) => void;
     onCancel: () => void;
@@ -279,7 +314,7 @@ export const PasswordRetryForm = ({ name, busy, onRetry, onCancel }: {
                     <Button variant="outline" size="sm" disabled={busy} onClick={onCancel}>Cancel<ShortcutHint id="cancel" /></Button>
                 </span>
             </div>
-            <p className="workspace-note">Only this file runs again. Its new password isn't saved.</p>
+            <p className="workspace-note">{note}</p>
         </div>
     );
 };
