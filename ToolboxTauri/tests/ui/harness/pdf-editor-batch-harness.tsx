@@ -27,6 +27,7 @@ const testTool: ToolDefinition = {
   status: "implemented",
   capability: {
     acceptedExtensions: [".pdf"],
+    skippedExtensions: [],
     inputCardinality: "multiple",
     supportsPageSelection: false,
     supportsPreview: false,

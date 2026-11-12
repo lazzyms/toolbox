@@ -1,4 +1,4 @@
-use crate::kit::contracts::{JobOutcome, LimitKind, ToolError};
+use crate::kit::contracts::{JobOutcome, LimitKind, OutcomePointer, ToolError};
 use flate2::read::ZlibDecoder;
 use std::cell::RefCell;
 use std::io::{self, Cursor, Read};
@@ -22,6 +22,9 @@ pub struct ToolLimits {
     pub max_pages: Option<u32>,
     pub max_expanded_bytes: u64,
     pub max_duration: Duration,
+    pub page_remedy: PageRemedy,
+    /// The longest side, in pixels, a decoded image may have. Only tools that hold the whole image in memory to edit it set one.
+    pub max_side: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,13 +37,26 @@ impl HelperDeadline {
     }
 }
 
+/// What an over-the-page-limit message asks for: fewer pages, or splitting the PDF and running the tool on the parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageRemedy {
+    UseFewer,
+    SplitThen(&'static str),
+}
+
+const SPLIT_PDF_TOOL_ID: &str = "pdf-split";
+
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
-const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
-const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
-const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
+const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
+pub const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
+pub const MAX_IMAGE_PAGES: u32 = 1_000;
+const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(MAX_IMAGE_PAGES), ..IMAGE };
+// The edit stack takes GIFs, so it counts their frames, and it caps each side at the largest size Resize can make.
+const EDIT_IMAGE: ToolLimits = ToolLimits { max_side: Some(16_384), ..PAGED_IMAGE };
+pub const SIGNATURE_IMAGE: ToolLimits = ToolLimits { max_bytes: 20 * MB, max_expanded_bytes: 80 * MB, ..IMAGE };
 // Converted text is read whole and laid out in memory, so text formats stop well below the PDF size. Packaged formats are
 // compressed archives whose parts are held to the expansion limit instead. For both, max_pages caps the pages a file makes.
-const TEXT_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
+const TEXT_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
 const PACKAGED_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 250 * MB, ..TEXT_DOCUMENT };
 
 /// Convert to PDF takes many formats, so its limits follow the input's family rather than the command.
@@ -55,25 +71,24 @@ pub fn convert_to_pdf(input: &Path) -> ToolLimits {
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
-        "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "add_page_numbers" | "watermark_pdf" | "compress_pdf"
-        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
-        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "convert_to_pdf" | "inspect_pdf_privacy"
-        | "edit_pdf_properties" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
-        | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
-        | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
-        "extract_gif_frames" | "process_tiff_pages" | "image_metadata" => PAGED_IMAGE,
+        "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf"
+        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
+        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" | "edit_pdf_properties" | "bates_number_pdfs" => PDF,
+        "compress_files" => ToolLimits { page_remedy: PageRemedy::SplitThen("compress"), ..PDF },
+        "export_image_edit_plan" | "blur_faces"
+        | "remove_image_background" | "generate_icon_set" | "create_gif" => IMAGE,
+        "extract_gif_frames" | "process_tiff_pages" | "images_to_pdf" | "convert_images" => PAGED_IMAGE,
+        "export_image_edit_stack" => EDIT_IMAGE,
         _ => return None,
     })
 }
 
 impl ToolLimits {
-    pub fn run_each<F>(self, input: PathBuf, cancel: &CancelFlag, pages: Option<PageSink>, job: F) -> JobOutcome
+    pub fn run_each<F>(self, input: PathBuf, cancel: &CancelFlag, job: F) -> JobOutcome
     where
         F: FnOnce(PathBuf) -> JobOutcome + Send + 'static,
     {
-        run_timed(input.clone(), self.max_duration, cancel, pages, move || match self.check(&input) {
+        run_timed(input.clone(), self.max_duration, cancel, move || match self.check(&input) {
             Ok(()) => job(input),
             Err(error) => JobOutcome::failure(input, error),
         })
@@ -85,7 +100,7 @@ impl ToolLimits {
     {
         let inputs = inputs.to_vec();
         let first = inputs.first().cloned().unwrap_or_default();
-        run_timed(first, self.max_duration, &CancelFlag::default(), None, move || {
+        run_timed(first, self.max_duration, &CancelFlag::default(), move || {
             match inputs.iter().find_map(|input| self.check(input).err().map(|error| (input, error))) {
                 Some((input, error)) => JobOutcome::failure(input.clone(), error),
                 None => job(),
@@ -125,17 +140,36 @@ impl ToolLimits {
         }
         let Ok(bytes) = std::fs::read(path) else { return Ok(()) };
         let shape = Shape::read(&bytes, self.max_pages.unwrap_or(u32::MAX), self.max_expanded_bytes);
+        if let Some(max_side) = self.max_side {
+            let (width, height) = shape.largest_dimensions;
+            if width.max(height) > u64::from(max_side) {
+                return Err(ToolError::limit_exceeded(
+                    LimitKind::Dimensions,
+                    format!("Too large to edit: {width} × {height}. The limit is {max_side} px on a side."),
+                ));
+            }
+        }
         if shape.largest_part > self.max_expanded_bytes {
             return Err(self.expansion_error(path));
         }
         match self.max_pages {
-            Some(max_pages) if shape.pages > u64::from(max_pages) => Err(ToolError::limit_exceeded(
-                LimitKind::PageCount,
-                format!(
-                    "More than {} {}, over the limit for one {}. Use fewer {} and try again.",
-                    count_label(u64::from(max_pages)), format.pages(), format.noun(), format.pages(),
+            Some(max_pages) if shape.pages > u64::from(max_pages) => Err(match self.page_remedy {
+                PageRemedy::UseFewer => ToolError::limit_exceeded(
+                    LimitKind::PageCount,
+                    format!(
+                        "More than {} {}, over the limit for one {}. Use fewer {} and try again.",
+                        count_label(u64::from(max_pages)), format.pages(), format.noun(), format.pages(),
+                    ),
                 ),
-            )),
+                PageRemedy::SplitThen(verb) => ToolError::limit_exceeded(
+                    LimitKind::PageCount,
+                    format!(
+                        "Over the size limit: {} {}, and the limit is {}. Split it, then {verb} the parts.",
+                        count_label(shape.pages), format.pages(), count_label(u64::from(max_pages)),
+                    ),
+                )
+                .with_pointer(OutcomePointer::Tool { tool_id: SPLIT_PDF_TOOL_ID.into() }),
+            }),
             _ => Ok(()),
         }
     }
@@ -179,6 +213,8 @@ impl Format {
 struct Shape {
     pages: u64,
     largest_part: u64,
+    /// Width and height of the largest decoded picture, or zero when the file has none to measure.
+    largest_dimensions: (u64, u64),
 }
 
 impl Shape {
@@ -190,20 +226,25 @@ impl Shape {
             let pages = if largest_part > max_expanded { 0 } else {
                 lopdf::Document::load_metadata_mem(bytes).map(|metadata| u64::from(metadata.page_count)).unwrap_or(0)
             };
-            Self { pages, largest_part }
+            Self { pages, largest_part, largest_dimensions: (0, 0) }
         } else if bytes.starts_with(b"PK\x03\x04") {
-            Self { pages: 0, largest_part: zip_largest_entry(bytes, max_expanded) }
+            Self { pages: 0, largest_part: zip_largest_entry(bytes, max_expanded), largest_dimensions: (0, 0) }
         } else if bytes.starts_with(b"GIF8") {
             gif_shape(bytes, max_pages)
         } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
             tiff_shape(bytes, max_pages)
         } else if bytes.get(4..8) == Some(b"ftyp") {
-            let largest_part = heif::probe(bytes)
-                .map(|info| u64::from(info.width) * u64::from(info.height) * u64::from(info.color_type.bytes_per_pixel()))
-                .unwrap_or(0);
-            Self { pages: 1, largest_part }
+            match heif::probe(bytes) {
+                Ok(info) => Self {
+                    pages: 1,
+                    largest_part: u64::from(info.width) * u64::from(info.height) * u64::from(info.color_type.bytes_per_pixel()),
+                    largest_dimensions: (u64::from(info.width), u64::from(info.height)),
+                },
+                Err(_) => Self { pages: 1, largest_part: 0, largest_dimensions: (0, 0) },
+            }
         } else {
-            Self { pages: 1, largest_part: raster_bytes(bytes) }
+            let (largest_part, largest_dimensions) = raster_size(bytes);
+            Self { pages: 1, largest_part, largest_dimensions }
         }
     }
 }
@@ -248,7 +289,7 @@ fn zip_largest_entry(bytes: &[u8], max_expanded: u64) -> u64 {
 }
 
 fn gif_shape(bytes: &[u8], max_pages: u32) -> Shape {
-    let Some(screen) = bytes.get(6..13) else { return Shape { pages: 0, largest_part: 0 } };
+    let Some(screen) = bytes.get(6..13) else { return Shape { pages: 0, largest_part: 0, largest_dimensions: (0, 0) } };
     let width = u64::from(u16::from_le_bytes([screen[0], screen[1]]));
     let height = u64::from(u16::from_le_bytes([screen[2], screen[3]]));
     let largest_part = width * height * 4;
@@ -265,7 +306,7 @@ fn gif_shape(bytes: &[u8], max_pages: u32) -> Shape {
             _ => break,
         }
     }
-    Shape { pages, largest_part }
+    Shape { pages, largest_part, largest_dimensions: (width, height) }
 }
 
 fn color_table_len(packed: u8) -> usize {
@@ -281,33 +322,38 @@ fn skip_sub_blocks(bytes: &[u8], mut position: usize) -> usize {
 }
 
 fn tiff_shape(bytes: &[u8], max_pages: u32) -> Shape {
-    let mut shape = Shape { pages: 0, largest_part: 0 };
+    let mut shape = Shape { pages: 0, largest_part: 0, largest_dimensions: (0, 0) };
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(bytes)) else { return shape };
     loop {
         shape.pages += 1;
         if let (Ok((width, height)), Ok(color)) = (decoder.dimensions(), decoder.colortype()) {
             let bits = u64::from(color.bit_depth()) * u64::from(color.num_samples());
             shape.largest_part = shape.largest_part.max((u64::from(width) * u64::from(height) * bits).div_ceil(8));
+            let (largest_width, largest_height) = shape.largest_dimensions;
+            if u64::from(width).max(u64::from(height)) > largest_width.max(largest_height) {
+                shape.largest_dimensions = (u64::from(width), u64::from(height));
+            }
         }
         if shape.pages > u64::from(max_pages) || !decoder.more_images() || decoder.next_image().is_err() { break; }
     }
     shape
 }
 
-fn raster_bytes(bytes: &[u8]) -> u64 {
+fn raster_size(bytes: &[u8]) -> (u64, (u64, u64)) {
     use image::ImageDecoder;
-    let Ok(mut reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() else { return 0 };
+    let Ok(mut reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() else { return (0, (0, 0)) };
     reader.no_limits();
-    reader.into_decoder().map(|decoder| decoder.total_bytes()).unwrap_or(0)
+    reader.into_decoder()
+        .map(|decoder| {
+            let (width, height) = decoder.dimensions();
+            (decoder.total_bytes(), (u64::from(width), u64::from(height)))
+        })
+        .unwrap_or((0, (0, 0)))
 }
-
-/// Receives `(done, total)` page counts while one file is processed.
-pub type PageSink = Arc<dyn Fn(usize, usize) + Send + Sync>;
 
 struct Clock {
     published: Mutex<Option<Vec<PathBuf>>>,
     pages: Mutex<Option<(usize, usize)>>,
-    sink: Option<PageSink>,
 }
 
 thread_local! {
@@ -332,9 +378,7 @@ pub fn job_stopped() -> bool {
 pub fn report_pages(done: usize, total: usize) {
     let Some(clock) = CLOCK.with(|clock| clock.borrow().clone()) else { return };
     *clock.pages.lock().unwrap_or_else(PoisonError::into_inner) = Some((done, total));
-    if let Some(sink) = &clock.sink {
-        if !job_stopped() { sink(done, total) }
-    }
+    if !job_stopped() { crate::kit::common::batch_runner::report_progress(done, total) }
 }
 
 /// "Stopped at page 3 of 9" once a file has reported its pages.
@@ -395,11 +439,11 @@ pub fn publish_within_time(publish: impl FnOnce() -> io::Result<PathBuf>) -> io:
 }
 
 // A thread cannot be killed, so a stopped job runs on detached while its helpers are terminated and every later publish is refused.
-fn run_timed<F>(input: PathBuf, max_duration: Duration, cancel: &CancelFlag, sink: Option<PageSink>, job: F) -> JobOutcome
+fn run_timed<F>(input: PathBuf, max_duration: Duration, cancel: &CancelFlag, job: F) -> JobOutcome
 where
     F: FnOnce() -> JobOutcome + Send + 'static,
 {
-    let clock = Arc::new(Clock { published: Mutex::new(Some(Vec::new())), pages: Mutex::new(None), sink });
+    let clock = Arc::new(Clock { published: Mutex::new(Some(Vec::new())), pages: Mutex::new(None) });
     let worker_clock = Arc::clone(&clock);
     let (sender, receiver) = mpsc::channel();
     let spawned = std::thread::Builder::new().name("toolbox-job".into()).spawn(move || {
@@ -605,6 +649,7 @@ mod tests {
     use super::fixtures::*;
     use super::*;
     use crate::kit::contracts::{native_capabilities, ErrorKind, OutcomeState};
+    use crate::kit::common::batch_runner::{report_progress_to, FileEvent, Sink};
     use std::io::Write;
     use std::time::Instant;
 
@@ -616,7 +661,7 @@ mod tests {
     }
 
     fn small() -> ToolLimits {
-        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5) }
+        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5), max_side: None, page_remedy: PageRemedy::UseFewer }
     }
 
     fn limit_of(result: Result<(), ToolError>) -> Option<LimitKind> {
@@ -635,15 +680,24 @@ mod tests {
             assert_eq!(limits.max_pages.is_some(), paged, "{}", capability.command);
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
-        assert_eq!(recorded("compress_pdf"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
-        assert_eq!(recorded("resize_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
+        assert_eq!(recorded("compress_files"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::SplitThen("compress") }));
+        assert_eq!(recorded("split_pdf").map(|limits| limits.page_remedy), Some(PageRemedy::UseFewer));
+        assert_eq!(recorded("compress_images"), None, "Compress Images is retired into compress_files");
+        assert_eq!(recorded("export_image_edit_stack"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: Some(1_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: Some(16_384), page_remedy: PageRemedy::UseFewer }));
+        for capability in native_capabilities() {
+            let max_side = recorded(&capability.command).and_then(|limits| limits.max_side);
+            assert_eq!(max_side.is_some(), capability.command == "export_image_edit_stack", "{} should not cap the side", capability.command);
+        }
         assert_eq!(recorded("extract_gif_frames").and_then(|limits| limits.max_pages), Some(1_000));
+        assert_eq!(recorded("images_to_pdf").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
+        assert_eq!(recorded("convert_images").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
+        assert_eq!(MAX_IMAGE_PAGES, 1_000);
         assert_eq!(recorded("unknown"), None);
     }
 
     #[test]
     fn convert_to_pdf_records_limits_for_each_family() {
-        let text = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
+        let text = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
         let packaged = ToolLimits { max_bytes: 250 * MB, ..text };
         for name in ["notes.txt", "notes.log", "README.MD", "notes.markdown", "page.html", "page.htm", "letter.rtf", "table.csv", "table.tsv"] {
             assert_eq!(convert_to_pdf(Path::new(name)), text, "{name}");
@@ -726,7 +780,7 @@ mod tests {
         let (late_sender, late_result) = mpsc::channel();
         let limits = ToolLimits { max_duration: Duration::from_millis(100), ..small() };
         let started = Instant::now();
-        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), None, {
+        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), {
             let (first, late) = (first.clone(), late.clone());
             move |input| {
                 publish_within_time(|| std::fs::write(&first, b"1").map(|()| first.clone())).unwrap();
@@ -764,7 +818,7 @@ mod tests {
             let cancel = cancel.clone();
             std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(150)); cancel.cancel(); Instant::now() })
         };
-        let outcome = small().run_each(input.clone(), &cancel, None, {
+        let outcome = small().run_each(input.clone(), &cancel, {
             let (first, late) = (first.clone(), late.clone());
             move |input| {
                 publish_within_time(|| std::fs::write(&first, b"1").map(|()| first.clone())).unwrap();
@@ -796,10 +850,14 @@ mod tests {
         let input = root.join("long.pdf");
         std::fs::write(&input, b"%PDF-1.7\n").unwrap();
         let reported = Arc::new(Mutex::new(Vec::new()));
-        let sink: PageSink = { let reported = Arc::clone(&reported); Arc::new(move |done, total| reported.lock().unwrap().push((done, total))) };
+        let sink: Sink = {
+            let reported = Arc::clone(&reported);
+            Arc::new(move |event| if let FileEvent::Progress { completed, total, .. } = event { reported.lock().unwrap().push((completed, total)) })
+        };
         let (late_sender, late_done) = mpsc::channel();
         let limits = ToolLimits { max_duration: Duration::from_millis(150), ..small() };
-        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), Some(sink), move |input| {
+        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), move |input| {
+            report_progress_to(0, Some(sink));
             report_pages(0, 480);
             report_pages(211, 480);
             std::thread::sleep(Duration::from_millis(400));
@@ -827,7 +885,7 @@ mod tests {
 
     #[test]
     fn a_panicking_job_fails_only_its_own_file() {
-        let outcome = small().run_each(PathBuf::from("missing.png"), &CancelFlag::default(), None, |_| panic!("decoder bug"));
+        let outcome = small().run_each(PathBuf::from("missing.png"), &CancelFlag::default(), |_| panic!("decoder bug"));
         assert!(matches!(outcome.error(), Some(ToolError { kind: ErrorKind::Processing, .. })));
         assert_eq!(outcome.error().unwrap().message, "Processing stopped unexpectedly. Nothing was saved.");
     }
