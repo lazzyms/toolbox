@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import {
   captureEvent,
@@ -209,5 +211,73 @@ test("capture respects a custom capture url (EU projects)", async () => {
   } finally {
     if (previous === undefined) delete process.env.VITE_POSTHOG_CAPTURE_URL;
     else process.env.VITE_POSTHOG_CAPTURE_URL = previous;
+  }
+});
+
+// Packs add no analytics: installing, updating, repairing and uninstalling a pack send no event
+// and no property beyond the fixed launch set.
+const projectRoot = join(import.meta.dirname, "..");
+const PACK_COMMAND = /invoke(?:<[^>]*>)?\("(?:list_packs|install_pack|install_pack_file|inspect_pack_file|uninstall_pack)"/;
+
+function sourceFiles(folder: string): string[] {
+  return readdirSync(folder).flatMap((name) => {
+    const path = join(folder, name);
+    if (statSync(path).isDirectory()) return sourceFiles(path);
+    return /\.(ts|tsx|rs)$/.test(name) ? [path] : [];
+  });
+}
+
+/** Every project module `files` import, directly or through other modules. */
+function importClosure(files: string[]): Set<string> {
+  const seen = new Set<string>();
+  const pending = [...files];
+  while (pending.length) {
+    const file = pending.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const [, specifier] of readFileSync(file, "utf8").matchAll(/(?:from|import)\s*\(?\s*"(\.{1,2}\/[^"]+)"/g)) {
+      const base = join(dirname(file), specifier);
+      const resolved = [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts"), join(base, "index.tsx")]
+        .find((candidate) => existsSync(candidate) && statSync(candidate).isFile());
+      if (resolved && /\.tsx?$/.test(resolved)) pending.push(resolved);
+    }
+  }
+  return seen;
+}
+
+test("pack lifecycle events are never sent", async () => {
+  await withPosthogKey("phc_testkey123456", async () => {
+    const calls: CapturedCall[] = [];
+    for (const event of ["pack_installed", "pack_updated", "pack_repaired", "pack_uninstalled", "install_pack"]) {
+      await captureEvent(event as Parameters<typeof captureEvent>[0], "test-distinct-id", mockFetch(calls));
+    }
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("every event carries exactly the fixed launch properties", async () => {
+  await withPosthogKey("phc_testkey123456", async () => {
+    const calls: CapturedCall[] = [];
+    await initializeInstallAnalyticsWith({ storage: new MemoryStorage(), isDev: false, fetchImpl: mockFetch(calls) });
+    const bodies = calls.map((call) => JSON.parse(call.init.body as string));
+    assert.deepEqual(bodies.map((body) => body.event), ["first_install", "app_opened"]);
+    for (const body of bodies) {
+      assert.deepEqual(Object.keys(body).sort(), ["api_key", "distinct_id", "event", "properties"]);
+      assert.deepEqual(body.properties, { app_platform: "tauri", $lib: "toolbox-tauri", $geoip_disable: true });
+    }
+  });
+});
+
+test("the code that installs, updates, repairs and uninstalls packs cannot reach analytics", () => {
+  const callers = sourceFiles(join(projectRoot, "src")).filter((file) => PACK_COMMAND.test(readFileSync(file, "utf8")));
+  assert.deepEqual(callers.map((file) => relative(projectRoot, file).replaceAll("\\", "/")).sort(), [
+    "src/components/ResultList.tsx", "src/views/OcrLanguagePicker.tsx", "src/views/PacksSection.tsx",
+  ]);
+  const reached = [...importClosure(callers)].map((file) => relative(projectRoot, file).replaceAll("\\", "/"));
+  assert.deepEqual(reached.filter((file) => /^src\/(analytics|toolFlags)\.ts$/.test(file)), []);
+
+  const nativePacks = [join(projectRoot, "src-tauri/src/packs.rs"), ...sourceFiles(join(projectRoot, "src-tauri/src/packs"))];
+  for (const file of nativePacks) {
+    assert.doesNotMatch(readFileSync(file, "utf8"), /posthog|analytics|capture_event/i, relative(projectRoot, file));
   }
 });

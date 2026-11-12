@@ -1,0 +1,32 @@
+{
+  "formatVersion": 1,
+  "packs": [
+    {
+      "id": "ocr-hindi",
+      "name": "OCR language: Hindi",
+      "description": "Lets OCR PDF read Hindi text in scanned pages.",
+      "toolIds": [
+        "pdf-ocr"
+      ],
+      "ocrLanguage": {
+        "code": "hin",
+        "name": "Hindi"
+      },
+      "license": "Apache-2.0",
+      "version": "1.0",
+      "minPackFormat": 1,
+      "appVersions": {
+        "from": "1.0.0"
+      },
+      "payloads": [
+        {
+          "target": "all",
+          "downloadBytes": 2661,
+          "installedBytes": 1621,
+          "sha256": "a9a5be55a9d3c622f0202867e5cbd573f02e7ed0c8ee62444fa9816e530fbfe3",
+          "path": "tauri-v1.0.14/ocr-hindi-1.0-all.toolboxpack"
+        }
+      ]
+    }
+  ]
+}
