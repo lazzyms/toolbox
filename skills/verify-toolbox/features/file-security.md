@@ -1,37 +1,31 @@
-# File security
+# File Security
 
-File security lets you remove an existing password or protect a PDF or supported Office file with a new password.
+The File Security workspace has one tool, `Lock & Unlock`. It adds a password to copies of files or removes a known password from copies.
 
 ## Sub-features
 
-- `password-remove` removes a known password from a PDF or supported Office file.
-- `pdf-protect` protects a PDF with a new password.
-- `office-protect` protects DOCX or XLSX files with a new password.
+- `lock` writes a `-protected` copy that opens only with the new password.
+- `unlock` writes an `-unlocked` copy that opens without a password.
+- `wrong-password` reports a failed file and offers a retry.
 
 ## How to get to it (user POV)
 
-- Choose `Documents` under Tool categories and select `Remove Password` or `Protect Office Files`.
-- Choose `PDF` under Tool categories and select `Protect PDF`.
-- Search `Search tools` for the exact action title.
-- Choose a visible action in Quick access or Recent.
-- Choose `Open Protect & unlock files` on the Tool library card.
+- Choose `File Security` in the home rail, or `Open Lock & Unlock` in the Tool library.
+- Choose the `Lock` or `Unlock` radio.
 
 ## Driving it with CUA desktop control
 
 Preconditions:
 
-- The native Toolbox window passes Doctor.
-- Use only a disposable password-protected fixture copied into the run's `scratch/` directory.
-- Record the test password in the local run notes only if the fixture needs one. Never use a personal password.
+- A PDF fixture copy is in `scratch/`.
+- Use a disposable password. Never use a real password.
 
-- **Remove a password.** Open `Remove Password`, choose `Choose files to process`, select the protected scratch file, and enter its known test password. Choose `Remove Password from selected files`. The result list reports completion and names a new unlocked copy. Confirm the output opens with the test password no longer required and the input remains unchanged.
-- **Protect a PDF.** Open `Protect PDF`, select a scratch PDF, enter a disposable new password, and choose `Protect`. The result list names a protected copy. Reopen that copy and confirm that the new password works.
-- **Protect an Office file.** Open `Protect Office Files`, select a DOCX or XLSX scratch copy, enter a disposable new password, and choose `Protect Office`. Confirm the output exists and opens with the test password. Report unsupported legacy Office formats as failures, not successes.
-- **Restore the run.** Keep only the evidence under `evidence/`. Remove scratch inputs and outputs after recording their names and checks.
+- **Lock.** Choose `Lock`, pick the PDF, and fill `New password for all files` and `Confirm new password`. Choose `Lock 1 file`. Expect `Done. 1 locked` and `<name>-protected.pdf`. `qpdf --show-encryption` reports the file as encrypted.
+- **Unlock.** Choose `Unlock`, `Clear list`, pick the locked PDF, fill `Current password for all files`, and choose `Unlock 1 file`. Expect `Done. 1 unlocked`, the status `Unlocked`, and `<name>-unlocked.pdf`. `qpdf --check` opens it without a password.
+- **Wrong password.** Unlock the locked PDF with a wrong password. Expect `Done. 0 unlocked, 1 failed`, `Failed, wrong password`, `Retry 1 failed file`, and `Try another password`. No output is written.
+- **Not protected.** Unlock a PDF that has no password. Expect `Done. 0 unlocked, 1 skipped` and no copy.
 
 ## Gotchas
 
-- `Remove Password` needs the correct existing password. A wrong password must fail without changing the source.
-- `Protect Office Files` supports DOCX and XLSX. Legacy DOC, XLS, and PPT formats are not accepted by that writer.
-- The visible result message does not prove that the output is valid. Reopen the output with the expected password behavior.
-- Passwords belong only in disposable local fixtures and local evidence notes. Do not put them in the shared skill, Git, or a user-facing report.
+- Passwords are cleared when you switch mode or leave the workspace.
+- The `Show …` checkboxes beside each password field reveal the typed text. Use them to confirm the field before you run.

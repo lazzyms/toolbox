@@ -1,47 +1,38 @@
 # Command center
 
-The command center lets you find a Toolbox action, narrow the library, reopen recent work, and reach a task workspace.
+The home screen lets you search tools, keep favorites, and open a workspace or a single tool.
 
 ## Sub-features
 
-- `tool-search` filters actions by their title and description.
-- `search-shortcut` focuses the search field with `super+k` on macOS or `ctrl+k` on Windows and Linux.
-- `category-filter` narrows the library to PDF, Images, or Documents.
-- `favorite-filter` shows actions saved with their favorite button.
-- `recent-filter` shows actions opened in the verification app.
-- `quick-access` opens one of the visible sidebar actions.
-- `workspace-open` opens an action or its containing workspace from a library card.
+- `tool-search` filters the Tool library by one substring of a tool title.
+- `favorites` saves tools with their favorite control and lists them under `Favorites`.
+- `tool-library` opens a workspace or a tool from its library card.
+- `workspace-rail` opens a workspace from the home rail.
 
 ## How to get to it (user POV)
 
-- Start at the home view after Toolbox launches.
-- Choose `All tools`, `Favorites`, or `Recent` in Workspace navigation.
-- Choose `PDF`, `Images`, or `Documents` under Tool categories.
-- Type in `Search tools` or press `super+k` on macOS or `ctrl+k` on Windows and Linux.
-- Choose a visible action in Quick access or choose `Open <tool title>` in Tool library.
-- Choose the star control named `Add <tool title> to favorites` or `Remove <tool title> from favorites` on an action card.
-- Choose `Open <workspace title>` to enter a workspace through its library card.
+- Start at the home view after Toolbox launches, or choose `← All tools` inside a workspace.
+- Choose `All tools`, `Favorites`, or a workspace button in the rail.
+- Type in `Search tools`. Its placeholder reads `Find a tool, like merge, split or compress`.
+- Choose `Open <workspace>` or `Open <tool>` under `Tool library`.
+- Choose `Add <tool> to favorites` or `Remove <tool> from favorites`. It sits beside the tool's toolbar item in its workspace.
 
 ## Driving it with CUA desktop control
 
 Preconditions:
 
-- The native Toolbox Verification window passes Doctor.
+- The verification window passes Doctor.
 - Settings and native file dialogs are closed.
-- Record the starting Favorites and Recent state if you will change either one.
+- Record the starting favorites if you will change them.
 
-- **Search.** Focus `Search tools` and type `Convert Image Format`. The updated tree contains one matching Tool library action named `Open Convert Image Format` under the `Image Editor` heading.
-- **Keyboard search.** Return to the home view, press `super+k` on macOS or `ctrl+k` on Windows and Linux, then type `Convert Image Format`. The same matching action appears and focus remains in `Search tools` until you move it.
-- **Open a search result.** Focus the search field, press `ArrowDown`, and press `Enter`. Toolbox opens the Image editor workspace and its live status reports that the workspace is open.
-- **Category filter.** Return to `All tools`, choose `PDF` in Tool categories, and confirm that the library shows PDF actions such as `Open Edit PDF` without `Open Convert Image Format`. Repeat with `Images` and `Documents` when those filters are in scope.
-- **Favorite filter.** Choose `Add Convert Image Format to favorites`, then choose `Favorites`. The action appears in the filtered library with `aria-pressed` on. Choose `Remove Convert Image Format from favorites` after verification and confirm that the action leaves Favorites.
-- **Recent filter.** Open `Convert Image Format`, return to the home view, and choose `Recent`. The Image editor action appears. The open action updates the verification app's Recent list.
-- **Quick access.** Choose one visible action in Quick access. Its workspace title appears and the live status reports that workspace is open.
-- **Workspace card.** Choose `Open <workspace title>` on a Tool library card. Toolbox opens the first action in that workspace. Confirm the workspace title and its initial input state.
+- **Search.** Type `merge` in `Search tools`. The library shows `Open Merge PDF`. Clear the field afterward.
+- **Search miss.** Type `extract pages`. The library shows `No matching tools` and `Browse all tools`. A single word such as `extract` shows `Open Extract PDF Pages`.
+- **Open a tool.** Choose `Open Lock & Unlock`. The window title becomes `Toolbox — File Security` and the tool heading is `Lock & Unlock`.
+- **Open a workspace.** Choose `Open PDF Editor`. The toolbar lists the PDF Editor tools.
+- **Favorites.** In a workspace, choose `Add Lock & Unlock to favorites`. The control becomes `Remove Lock & Unlock from favorites`. Choose `← All tools`, then `Favorites`, and confirm the tool is listed. Remove the favorite afterward and confirm the control reads `Add Lock & Unlock to favorites`.
 
 ## Gotchas
 
-- Search results update the Tool library while the Quick access row can remain visible. Check the library action, not only the sidebar.
-- Opening a tool writes to the Recent list. The separate verification app keeps that history out of the installed app.
-- Favorites persist in the verification profile. Restore the starting state after a favorites check.
-- `ArrowDown` moves focus from the search field to the first result. It does not open the result until you press `Enter`.
+- Search does not split words. Use one word per query.
+- Inside a workspace, the rail has no workspace buttons. Return with `← All tools` first.
+- Favorites persist in the verification profile. Restore the starting state.
