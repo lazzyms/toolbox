@@ -15,7 +15,7 @@ export const PlannedToolView = ({ utility }: { utility: ToolDefinition }) => (
 );
 
 export const UnavailableToolView = ({ utility }: { utility: ToolDefinition }) => {
-    const mode = utility.id === "pdf-ocr" ? "PDF OCR" : utility.id === "image-blur-faces" ? "Face blur" : utility.id === "image-remove-bg" ? "Background removal" : utility.title;
+    const mode = utility.id === "image-blur-faces" ? "Face blur" : utility.id === "image-remove-bg" ? "Background removal" : utility.title;
     const explanation = "This tool requires an offline vision resource that is not bundled. Files will not be selected or processed.";
     return (
     <div className="flex h-full flex-col">

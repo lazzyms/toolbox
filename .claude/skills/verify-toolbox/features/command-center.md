@@ -27,7 +27,7 @@ Preconditions:
 - Settings and native file dialogs are closed.
 - Record the starting Favorites list if you will change it.
 
-- **Search.** Focus `Search tools` and type `Compress`. The Tool library narrows to `Open Compress Files`, `Open Compress PDF`, and `Open Compress Images`. Re-read the tree to confirm. A query with no match shows the heading "No matching tools" and `Browse all tools`.
+- **Search.** Focus `Search tools` and type `Compress`. The Tool library narrows to one action, `Open Compress`, under the Compress Files heading. `shrink`, `reduce size`, `PDF` and `image` also find it. Re-read the tree to confirm. A query with no match shows the heading "No matching tools" and `Browse all tools`.
 - **Keyboard search.** Press `super+k` from the home view, a workspace, or Settings. Toolbox returns home with focus in `Search tools`.
 - **Open a View.** Choose `File Security` under VIEWS, or `Open File Security` in Tool library. The workspace heading `File Security` appears with the live status "File Security workspace open."
 - **Open a tool.** Choose `Open Lock & Unlock`. The workspace toolbar `File Security tools` shows the `Lock & Unlock` checkbox selected.
