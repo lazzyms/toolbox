@@ -602,6 +602,44 @@ body {
 .media-delay-input {
   width: 110px;
 }
+.media-gif-large p {
+  margin: 0;
+}
+.media-gif-playback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+}
+/* Frame 1's canvas; other frames sit centred on it, as the GIF places them. */
+.media-gif-canvas {
+  display: grid;
+  flex: none;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--muted);
+}
+.media-gif-canvas img {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+}
+.media-gif-playback-controls {
+  display: grid;
+  flex: 1 1 200px;
+  gap: 10px;
+  min-width: 0;
+}
+.media-gif-playback-controls .workspace-note {
+  margin: 0;
+}
+.media-gif-playback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .media-check-field {
   display: flex;
   align-items: center;

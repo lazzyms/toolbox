@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useRef, useState, type ReactNode } from "react";
 import type { ImagePreview } from "../../contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,8 +24,10 @@ const DRAG_THRESHOLD_PX = 4;
  * The frames of a new GIF, in play order. A frame moves by dragging it or with
  * the modifier and an arrow key, through the shared file list's ordering.
  */
-export const GifFrameStrip = ({ frames, totalMs, supportsPreview, selectedIndex, selectIndex, moveFrame, removeFrame, disabled }: {
+export const GifFrameStrip = ({ frames, previews, totalMs, supportsPreview, selectedIndex, selectIndex, moveFrame, removeFrame, disabled, notice, children }: {
   frames: GifFrame[];
+  /** Each path's preview, from the panel, so the strip and the playback share one fetch. */
+  previews: Record<string, ImagePreview | null>;
   /** The sum of every frame's delay, or null while a delay is out of range. */
   totalMs: number | null;
   supportsPreview: boolean;
@@ -35,39 +36,15 @@ export const GifFrameStrip = ({ frames, totalMs, supportsPreview, selectedIndex,
   moveFrame: (index: number, toIndex: number) => void;
   removeFrame: (index: number) => void;
   disabled: boolean;
+  /** A warning shown above the frames, such as a large GIF. */
+  notice?: ReactNode;
+  /** Shown below the frames, such as the playback preview. */
+  children?: ReactNode;
 }) => {
-  const [previews, setPreviews] = useState<Record<string, ImagePreview | null>>({});
   const [drag, setDrag] = useState<{ index: number; over: number | null } | null>(null);
   const pointer = useRef<{ index: number; x: number; y: number; moved: boolean } | null>(null);
   const clickAfterDrag = useRef(false);
   const tiles = useRef(new Map<string, HTMLButtonElement>());
-  const paths = [...new Set(frames.map((frame) => frame.path))];
-  const pathKey = paths.join("\u0000");
-
-  useEffect(() => {
-    if (!pathKey || !supportsPreview) {
-      setPreviews({});
-      return;
-    }
-    let current = true;
-    setPreviews({});
-    void Promise.all(
-      paths.map(async (path) => {
-        try {
-          return [path, await invoke<ImagePreview>("inspect_image_preview", { request: { path } })] as const;
-        } catch {
-          return [path, null] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (current) setPreviews(Object.fromEntries(entries));
-    });
-    return () => {
-      current = false;
-    };
-    // The path key stands for the paths, so a new array with the same paths does not refetch.
-  }, [pathKey, supportsPreview]);
-
   const focusFrame = (key: string | undefined) => requestAnimationFrame(() => key && tiles.current.get(key)?.focus());
   const frameAt = (x: number, y: number) => {
     const key = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-frame-key]")?.dataset.frameKey;
@@ -117,6 +94,7 @@ export const GifFrameStrip = ({ frames, totalMs, supportsPreview, selectedIndex,
           <p className="workspace-panel-label">{frames.length === 1 ? "1 frame" : `${frames.length} frames`}</p>
           {frames.length > 0 && totalMs !== null && <p className="workspace-note">{loopLength(totalMs)}</p>}
         </div>
+        {notice}
         <p className="workspace-panel-copy">Frames play in this order. Drag a frame, or select it and press {modifier}+Arrow to move it. Delete removes it.</p>
         {frames.length === 0 ? (
           <p className="workspace-note">Select frames to arrange them here.</p>
@@ -194,6 +172,7 @@ export const GifFrameStrip = ({ frames, totalMs, supportsPreview, selectedIndex,
           </ol>
         )}
         {status && <p className="workspace-note" role="status" aria-live="polite">{status}</p>}
+        {children}
       </CardContent>
     </Card>
   );
