@@ -42,8 +42,6 @@ pub(crate) struct DecodedImage {
     pub pages: Vec<DynamicImage>,
     pub family: ImageFamily,
     pub bits_per_channel: u8,
-    // Read by the orientation-aware tools that follow #552.
-    #[allow(dead_code)]
     pub orientation: Option<Orientation>,
     pub baseline_jpeg: Option<Vec<u8>>,
 }

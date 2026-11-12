@@ -1,45 +1,15 @@
-import { useEffect, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import { exampleOutputName } from "../components/RunDestination";
-import { extensionOf, type IntakeRedirect } from "../components/intake";
-import type { ConvertImagesRequest, ImagePreview, TiffCompression, ToolDefinition, ToolResult } from "../contracts";
-import { convertImagesRequest, convertTargets, defaultTiffCompression, tiffCompressions } from "../registry/convertTargets";
+import type { OutputLocation, ToolDefinition, ToolResult } from "../contracts";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Switch } from "@/components/ui/switch";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
+import { initialMediaOptions, isMediaToolId, mediaTools, type MediaOptions, type MediaToolId } from "../features/media";
 
-type TiffFrame = { key: string; path: string; page: number; preview: ImagePreview };
-export type TiffInspection =
-  | { kind: "idle" }
-  | { kind: "loading"; key: string }
-  | { kind: "ready"; key: string; frames: TiffFrame[] }
-  | { kind: "error"; key: string; message: string };
-
-export const tiffInspectionKey = (files: string[]) => files.join("\u0000");
-export const isCurrentTiffInspection = (inspection: TiffInspection, files: string[]): inspection is Extract<TiffInspection, { kind: "ready" }> =>
-  inspection.kind === "ready" && inspection.key === tiffInspectionKey(files);
-
-const iconSizesByPreset: Record<string, number[]> = {
-  macos: [16, 32, 128, 256, 512, 1024],
-  favicon: [16, 32, 48, 64, 128, 256],
-  ios: [20, 29, 40, 60, 76, 83, 1024],
-  android: [48, 72, 96, 144, 192, 512],
-  custom: [16, 32, 64, 128, 256, 512],
-};
-
-// Converting keeps one frame of a GIF, so Convert points GIFs at Extract GIF Frames instead.
-const convertGifRedirect = (path: string): IntakeRedirect | null => extensionOf(path) === ".gif"
-  ? { message: "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.", toolId: "gif-extract" }
-  : null;
+type OptionSetters = { [Id in MediaToolId]: (update: (current: MediaOptions[Id]) => MediaOptions[Id]) => void };
 
 export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileActivation, onActivationAccepted, onFilesChange }: {
   utility: ToolDefinition;
@@ -48,75 +18,67 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
 }) => {
-  const [delay, setDelay] = useState(100);
-  const [loop, setLoop] = useState(true);
-  const [iconPreset, setIconPreset] = useState("macos");
-  const [iconSizes, setIconSizes] = useState(iconSizesByPreset.macos);
-  const [metadataMode, setMetadataMode] = useState<"inspect" | "strip">("strip");
-  const [report, setReport] = useState<unknown[]>([]);
-  const [selectedTiffFrameIndex, setSelectedTiffFrameIndex] = useState(0);
-  const [tiffInspection, setTiffInspection] = useState<TiffInspection>({ kind: "idle" });
-  const [targetFormat, setTargetFormat] = useState<ConvertImagesRequest["format"]>("jpg");
-  const [tiffCompression, setTiffCompression] = useState<TiffCompression>(defaultTiffCompression);
+  // Every tool's options live here, so they survive switching tools on the rail.
+  const [options, setOptions] = useState(initialMediaOptions);
+  const setters = useMemo<OptionSetters>(() => {
+    const setterFor = <Id extends MediaToolId>(id: Id) => (update: (current: MediaOptions[Id]) => MediaOptions[Id]) =>
+      setOptions((all) => ({ ...all, [id]: update(all[id]) }));
+    return {
+      "icon-set": setterFor("icon-set"),
+      "gif-create": setterFor("gif-create"),
+      "gif-extract": setterFor("gif-extract"),
+      "tiff-pages": setterFor("tiff-pages"),
+      "heic-convert": setterFor("heic-convert"),
+    };
+  }, []);
 
-  useEffect(() => {
-    setReport([]);
-  }, [activeUtility.id]);
+  // Only Media tools reach this view (the vision tools in the Media rail are unavailable). Any other id runs as
+  // TIFF pages, which the old fallback branch also did.
+  const toolId: MediaToolId = isMediaToolId(activeUtility.id) ? activeUtility.id : "tiff-pages";
+  const tool = mediaTools[toolId];
 
-  const selectPreset = (preset: string) => {
-    setIconPreset(preset);
-    setIconSizes(iconSizesByPreset[preset] ?? iconSizesByPreset.custom);
+  const buildRequest = <Id extends MediaToolId>(id: Id, paths: string[], outputLocation: OutputLocation, outputPath: string | null) =>
+    mediaTools[id].buildRequest(options[id], { paths, outputLocation, outputPath });
+  const canRun = <Id extends MediaToolId>(id: Id, files: string[]) =>
+    mediaTools[id].canRun?.(options[id], files) ?? true;
+  const runLabelFor = <Id extends MediaToolId>(id: Id, files: string[]) => {
+    const label = mediaTools[id].runLabel;
+    return typeof label === "function" ? label(options[id], files) : label;
+  };
+  const exampleNameFor = <Id extends MediaToolId>(id: Id) => {
+    const exampleName = mediaTools[id].exampleName;
+    return exampleName && ((path: string) => exampleName(options[id], path));
+  };
+  // A tool's options can change how the shared run treats its inputs, such as TIFF Split versus Combine.
+  const capabilityFor = <Id extends MediaToolId>(id: Id) =>
+    mediaTools[id].capability?.(options[id], activeUtility.capability) ?? activeUtility.capability;
+  const capability = capabilityFor(toolId);
+  const utility = useMemo(
+    () => (capability === activeUtility.capability ? activeUtility : { ...activeUtility, capability }),
+    [activeUtility, capability.inputCardinality, capability.manyToOne],
+  );
+  const renderPanel = <Id extends MediaToolId>(id: Id, scaffold: { files: string[]; outputLocation: OutputLocation; loading: boolean; selectedFileIndex: number; selectFile: (index: number) => void }): ReactNode => {
+    const Panel = mediaTools[id].Panel;
+    return <Panel key={id} utility={activeUtility} options={options[id]} setOptions={setters[id]} {...scaffold} />;
   };
 
   return (
     <ToolScaffold
       variant="workspace"
       sessionKey="media-tools"
-      utility={activeUtility}
+      utility={utility}
+      exampleName={exampleNameFor(toolId)}
       initialPaths={initialPaths}
       fileActivation={fileActivation}
       onActivationAccepted={onActivationAccepted}
       onFilesChange={onFilesChange}
-      showFileOrdering={activeUtility.id !== "tiff-pages" && activeUtility.id !== "heic-convert"}
-      intakeRedirect={activeUtility.id === "heic-convert" ? convertGifRedirect : undefined}
-      listOutputs={activeUtility.id === "heic-convert"}
-      exampleName={activeUtility.id === "heic-convert" ? (path) => exampleOutputName(path, activeUtility.command, activeUtility.capability.outputSuffix, targetFormat) : undefined}
+      showFileOrdering={tool.showFileOrdering ?? true}
+      outputGroup={tool.outputGroup}
+      resultsHint={tool.resultsHint}
+      intakeRedirect={tool.intakeRedirect}
       onRun={(paths, outputLocation, { outputPath, runId }) => {
-        if (activeUtility.id === "heic-convert") {
-          return invoke<ToolResult>("convert_images", { runId,
-            request: convertImagesRequest(paths, targetFormat, tiffCompression, outputLocation),
-          });
-        }
-        if (activeUtility.id === "icon-set") {
-          return invoke<ToolResult>("generate_icon_set", { runId,
-            request: { paths, preset: iconPreset, sizes: iconSizes, outputLocation },
-          });
-        }
-        if (activeUtility.id === "gif-create") {
-          return invoke<ToolResult>("create_gif", { runId,
-            request: { paths, frameDelayMs: delay, loopForever: loop, outputLocation, outputPath },
-          });
-        }
-        if (activeUtility.id === "gif-extract") {
-          return invoke<ToolResult>("extract_gif_frames", { runId,
-            request: { paths, outputLocation },
-          });
-        }
-        if (activeUtility.id === "tiff-pages") {
-          return invoke<ToolResult>("process_tiff_pages", { runId,
-            request: {
-              paths,
-              pages: isCurrentTiffInspection(tiffInspection, paths)
-                ? tiffInspection.frames.map(({ path, page }) => ({ path, page }))
-                : [],
-              outputLocation,
-              outputPath,
-            },
-          });
-        }
-        return invoke<ToolResult>("image_metadata", { runId,
-          request: { paths, outputLocation },
-        });
+        const { command, request } = buildRequest(toolId, paths, outputLocation, outputPath);
+        return invoke<ToolResult>(command, { runId, request });
       }}
     >
       {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
@@ -125,259 +87,19 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
           <div>
             <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">Specialized media outcome</p>
-            <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon, or explicit metadata result.</p>
+            <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon or page order.</p>
           </div>
 
-          {(activeUtility.id === "gif-create" || activeUtility.id === "tiff-pages") && (
-            <MediaFrameOrder files={files} activeUtility={activeUtility} selectedIndex={activeUtility.id === "tiff-pages" ? selectedTiffFrameIndex : selectedFileIndex} selectIndex={activeUtility.id === "tiff-pages" ? setSelectedTiffFrameIndex : selectFile} tiffInspection={tiffInspection} setTiffInspection={setTiffInspection} moveTiffFrame={(delta) => {
-              setTiffInspection((current) => {
-                if (current.kind !== "ready") return current;
-                const nextIndex = selectedTiffFrameIndex + delta;
-                if (nextIndex < 0 || nextIndex >= current.frames.length) return current;
-                const frames = [...current.frames];
-                [frames[selectedTiffFrameIndex], frames[nextIndex]] = [frames[nextIndex], frames[selectedTiffFrameIndex]];
-                setSelectedTiffFrameIndex(nextIndex);
-                return { ...current, frames };
-              });
-            }} />
-          )}
-
-          {activeUtility.id === "heic-convert" && (
-            <>
-              <div className="workspace-field">
-                <Label id="image-target-format-label">Convert to</Label>
-                <ToggleGroup
-                  type="single"
-                  variant="outline"
-                  size="sm"
-                  aria-labelledby="image-target-format-label"
-                  aria-describedby="image-target-format-hint"
-                  value={targetFormat}
-                  onValueChange={(value) => {
-                    if (value) setTargetFormat(value as ConvertImagesRequest["format"]);
-                  }}
-                >
-                  {convertTargets.map(({ format, name }) => <ToggleGroupItem key={format} value={format}>{name}</ToggleGroupItem>)}
-                </ToggleGroup>
-                <p id="image-target-format-hint" className="workspace-panel-copy">{convertTargets.find(({ format }) => format === targetFormat)?.hint}</p>
-              </div>
-              {targetFormat === "tiff" && (
-                <div className="workspace-field">
-                  <Label id="tiff-compression-label">TIFF compression</Label>
-                  <ToggleGroup
-                    type="single"
-                    variant="outline"
-                    size="sm"
-                    aria-labelledby="tiff-compression-label"
-                    aria-describedby="tiff-compression-hint"
-                    value={tiffCompression}
-                    onValueChange={(value) => {
-                      if (value) setTiffCompression(value as TiffCompression);
-                    }}
-                  >
-                    {tiffCompressions.map(({ value, name }) => <ToggleGroupItem key={value} value={value}>{name}</ToggleGroupItem>)}
-                  </ToggleGroup>
-                  <p id="tiff-compression-hint" className="workspace-panel-copy">All three are lossless. LZW is the default. 16-bit sources stay 16-bit, and 8-bit sources stay 8-bit.</p>
-                </div>
-              )}
-              <p className="workspace-note">Lossy results use the shared quality of 90, so a second run gives the same files. To choose a quality, use Compress.</p>
-            </>
-          )}
-
-          {activeUtility.id === "icon-set" && (
-            <>
-              <div className="workspace-field">
-                <Label htmlFor="icon-preset">Icon preset</Label>
-                <NativeSelect id="icon-preset" aria-label="Icon preset" value={iconPreset} onChange={(event) => selectPreset(event.target.value)}>
-                  <option value="macos">macOS</option>
-                  <option value="favicon">Favicon</option>
-                  <option value="ios">iOS</option>
-                  <option value="android">Android</option>
-                  <option value="custom">Custom</option>
-                </NativeSelect>
-              </div>
-              <fieldset className="workspace-fieldset">
-                <legend>Icon sizes</legend>
-                <div className="icon-size-grid" aria-label="Icon size presets">
-                  {iconSizesByPreset[iconPreset].map((size) => (
-                    <Label key={size} className="workspace-check" htmlFor={`icon-size-${size}`}>
-                      <Checkbox
-                        id={`icon-size-${size}`}
-                        aria-label={`Icon size ${size}px`}
-                        checked={iconSizes.includes(size)}
-                        onCheckedChange={(checked) => setIconSizes((current) => checked ? [...new Set([...current, size])].sort((left, right) => left - right) : current.filter((value) => value !== size))}
-                      />
-                      <span>{size}px</span>
-                    </Label>
-                  ))}
-                </div>
-              </fieldset>
-            </>
-          )}
-
-          {activeUtility.id === "gif-create" && (
-            <div className="workspace-field-grid">
-              <div className="workspace-field">
-                <Label htmlFor="frame-delay">Frame delay</Label>
-                <Input
-                  id="frame-delay"
-                  type="number"
-                  aria-label="Frame delay in milliseconds"
-                  min="1"
-                  max="60000"
-                  value={delay}
-                  onChange={(event) => setDelay(Number(event.target.value))}
-                />
-              </div>
-              <div className="media-toggle-field">
-                <Label htmlFor="gif-loop">Loop animation</Label>
-                <Switch id="gif-loop" checked={loop} onCheckedChange={setLoop} />
-              </div>
-            </div>
-          )}
-
-          {activeUtility.id === "image-metadata" && (
-            <>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                aria-label="Metadata mode"
-                value={metadataMode}
-                onValueChange={(value) => {
-                  if (value) setMetadataMode(value as typeof metadataMode);
-                }}
-              >
-                <ToggleGroupItem value="inspect">Inspect metadata</ToggleGroupItem>
-                <ToggleGroupItem value="strip">Remove metadata in a new copy</ToggleGroupItem>
-              </ToggleGroup>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={loading || files.length === 0}
-                onClick={async () => setReport(await invoke<unknown[]>("inspect_image_metadata", { request: { paths: files, outputLocation } }))}
-              >
-                Inspect metadata
-              </Button>
-              {report.length > 0 && <pre className="workspace-report">{JSON.stringify(report, null, 2)}</pre>}
-            </>
-          )}
+          {renderPanel(toolId, { files, outputLocation, loading, selectedFileIndex, selectFile })}
 
           {destination}
-          <Button variant="default" disabled={loading || files.length === 0 || (activeUtility.id === "tiff-pages" && !isCurrentTiffInspection(tiffInspection, files)) || (activeUtility.id === "image-metadata" && metadataMode === "inspect")} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
-            {runLabel ?? (activeUtility.id === "image-metadata" ? "Remove metadata" : activeUtility.shortTitle)}
+          <Button variant="default" disabled={loading || files.length === 0 || !canRun(toolId, files)} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
+            {runLabel ?? runLabelFor(toolId, files) ?? activeUtility.shortTitle}
             <ShortcutHint id="run" />
           </Button>
           </CardContent>
         </Card>
       )}
     </ToolScaffold>
-  );
-};
-
-const MediaFrameOrder = ({
-  files,
-  activeUtility,
-  selectedIndex,
-  selectIndex,
-  tiffInspection,
-  setTiffInspection,
-  moveTiffFrame,
-}: {
-  files: string[];
-  activeUtility: ToolDefinition;
-  selectedIndex: number;
-  selectIndex: (index: number) => void;
-  tiffInspection: TiffInspection;
-  setTiffInspection: (update: TiffInspection | ((current: TiffInspection) => TiffInspection)) => void;
-  moveTiffFrame: (delta: -1 | 1) => void;
-}) => {
-  const [previews, setPreviews] = useState<Record<string, ImagePreview | null>>({});
-  const frameKey = tiffInspectionKey(files);
-  const isTiff = activeUtility.id === "tiff-pages";
-
-  useEffect(() => {
-    if (isTiff || !frameKey || !activeUtility.capability.supportsPreview || activeUtility.id !== "gif-create") {
-      setPreviews({});
-      return;
-    }
-    let current = true;
-    setPreviews({});
-    void Promise.all(
-      files.map(async (path) => {
-        try {
-          return [path, await invoke<ImagePreview>("inspect_image_preview", { request: { path } })] as const;
-        } catch {
-          return [path, null] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (current) setPreviews(Object.fromEntries(entries));
-    });
-    return () => {
-      current = false;
-    };
-  }, [activeUtility.capability.supportsPreview, activeUtility.id, frameKey, isTiff]);
-
-  useEffect(() => {
-    if (!isTiff) {
-      setTiffInspection({ kind: "idle" });
-      return;
-    }
-    if (!frameKey) {
-      setTiffInspection({ kind: "idle" });
-      selectIndex(0);
-      return;
-    }
-    let current = true;
-    setTiffInspection({ kind: "loading", key: frameKey });
-    selectIndex(0);
-    void Promise.all(files.map(async (path) => {
-      const pages = await invoke<ImagePreview[]>("inspect_tiff_pages", { request: { path } });
-      return pages.map((preview, page) => ({ key: path + "\u0000" + page, path, page, preview }));
-    })).then((groups) => {
-      if (current) setTiffInspection({ kind: "ready", key: frameKey, frames: groups.flat() });
-    }).catch((error) => {
-      if (current) setTiffInspection({ kind: "error", key: frameKey, message: String(error) });
-    });
-    return () => {
-      current = false;
-    };
-  }, [files, frameKey, isTiff, selectIndex]);
-
-  const tiffFrames = isCurrentTiffInspection(tiffInspection, files) ? tiffInspection.frames : [];
-
-  return (
-    <Card className="media-frame-order py-0" role="region" aria-label="Frame order">
-      <CardContent className="media-frame-order-content py-4">
-      <p className="workspace-panel-label">Frame order</p>
-      <p className="workspace-panel-copy">The output follows this order. Select a frame, then move it with the arrows.</p>
-      {isTiff && tiffInspection.kind === "loading" && <p className="workspace-note" role="status">Reading TIFF pages on this device.</p>}
-      {isTiff && tiffInspection.kind === "error" && <p className="workspace-note" role="alert">TIFF pages could not be read. {tiffInspection.message}</p>}
-      <ol className="media-frame-list">
-        {(isTiff ? tiffFrames : files).map((item, index) => {
-          const file = isTiff ? (item as TiffFrame).path : item as string;
-          const preview = isTiff ? (item as TiffFrame).preview : previews[file];
-          const page = isTiff ? (item as TiffFrame).page : null;
-          return (
-            <li key={isTiff ? (item as TiffFrame).key : file} data-selected={index === selectedIndex ? "true" : undefined}>
-              <Button variant={index === selectedIndex ? "secondary" : "ghost"} size="sm" aria-pressed={index === selectedIndex} onClick={() => selectIndex(index)} aria-label={"Frame " + (index + 1)}>
-                <span>{index + 1}</span>
-                {activeUtility.capability.supportsPreview && preview && <img className="media-frame-preview" src={preview.dataUrl} alt={"Preview of frame " + (index + 1)} />}
-                {file.split(/[\\/]/).pop()}{page === null ? "" : " · page " + (page + 1)}
-              </Button>
-            </li>
-          );
-        })}
-      </ol>
-      {((isTiff && tiffFrames.length === 0 && tiffInspection.kind !== "error") || (!isTiff && files.length === 0)) && <p className="workspace-note">Select frames to arrange them here.</p>}
-      {isTiff && tiffFrames.length > 0 && (
-        <div className="file-selection-order" aria-label="Selected TIFF page ordering">
-          <Button variant="ghost" size="icon-sm" aria-label="Move selected TIFF page up" disabled={selectedIndex === 0} onClick={() => moveTiffFrame(-1)}>↑</Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Move selected TIFF page down" disabled={selectedIndex >= tiffFrames.length - 1} onClick={() => moveTiffFrame(1)}>↓</Button>
-        </div>
-      )}
-      </CardContent>
-    </Card>
   );
 };

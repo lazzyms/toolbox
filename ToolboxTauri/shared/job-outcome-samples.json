@@ -27,7 +27,9 @@
       "pointer": { "kind": "tool", "toolId": "heic-convert" }
     },
     "warnings": [
-      { "code": "precisionReduced", "message": "The 16-bit source would be reduced to 8-bit." }
+      { "code": "precisionReduced", "message": "The 16-bit source would be reduced to 8-bit." },
+      { "code": "omittedContent", "message": "Omitted content: 1 chart has no stored image, so it was left out." },
+      { "code": "approximateLayout", "message": "Approximate layout: 1 floating object on page 2 was placed as close as possible." }
     ]
   },
   {
@@ -47,7 +49,7 @@
     "failure": {
       "kind": "unavailable",
       "message": "Install the script pack to shape this text.",
-      "pointer": { "kind": "pack", "packId": "script-pack" }
+      "pointer": { "kind": "pack", "packId": "script-pack", "name": "Indic script", "reason": "damaged" }
     },
     "reason": null,
     "warnings": [
@@ -71,6 +73,111 @@
     },
     "reason": null,
     "warnings": []
+  },
+  {
+    "inputPath": "report.pdf",
+    "state": "succeeded",
+    "outputPaths": ["report-compressed.pdf"],
+    "detail": "PDF compressed",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "originalBytes": 2500000,
+    "outputBytes": 1000000
+  },
+  {
+    "inputPath": "logo.png",
+    "state": "skipped",
+    "outputPaths": [],
+    "detail": "",
+    "failure": null,
+    "reason": { "code": "noSavings", "message": "No savings: already well compressed", "pointer": null },
+    "warnings": [],
+    "originalBytes": 4096,
+    "outputBytes": 4200
+  },
+  {
+    "inputPath": "minutes.pdf",
+    "state": "succeeded",
+    "outputPaths": ["board-merged.pdf"],
+    "detail": "Pages 3–5 of board-merged.pdf.",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "bookmarksNotCarried",
+        "details": { "into": "the merged file" },
+        "message": "Bookmarks weren't carried into the merged file."
+      },
+      {
+        "code": "tagsNotCarried",
+        "details": { "into": "the merged file" },
+        "message": "Accessibility tags weren't carried into the merged file."
+      }
+    ]
+  },
+  {
+    "inputPath": "notes.txt",
+    "state": "succeeded",
+    "outputPaths": ["notes.pdf"],
+    "detail": "1 page. Read as Windows-1252.",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "fonts": [
+      {
+        "requestedFamily": "Courier New",
+        "requestedStyle": "regular",
+        "fontUsed": "Liberation Mono",
+        "styleUsed": "regular",
+        "source": "bundled fallback"
+      }
+    ]
+  },
+  {
+    "inputPath": "atlas.pdf",
+    "state": "succeeded",
+    "outputPaths": ["atlas-images"],
+    "detail": "Saved 9 images · 3 couldn't be saved.",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "imageUnsupported",
+        "details": { "page": 7, "image": 2, "feature": "JBIG2" },
+        "message": "Page 7, image 2 — JBIG2 isn't supported in this version. Not saved."
+      },
+      {
+        "code": "imageDamaged",
+        "details": { "page": 19, "image": 1 },
+        "message": "Page 19, image 1 — The image data is damaged. Not saved."
+      },
+      {
+        "code": "imageTooLarge",
+        "details": { "page": 41, "image": 1, "width": 61000, "height": 48000 },
+        "message": "Page 41, image 1 — Would be 61,000 × 48,000 px when decoded, over the size limit. Not saved."
+      },
+      {
+        "code": "jpegColourKept",
+        "details": { "colour": "cmyk", "pages": [2, 5, 9], "images": 6 },
+        "message": "Pages 2, 5, 9 — 6 JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours."
+      }
+    ]
+  },
+  {
+    "inputPath": "scan-archive.pdf",
+    "state": "succeeded",
+    "outputPaths": ["scan-archive-text.txt"],
+    "detail": "PDF text extracted in reading order",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "pagesWithoutText",
+        "details": { "pages": [30, 31, 32, 33] },
+        "message": "Pages 30-33 have no selectable text. OCR can read them."
+      }
+    ]
   },
   {
     "inputPath": "badge.png",
