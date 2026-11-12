@@ -41,9 +41,9 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
     mediaTools[id].buildRequest(options[id], { paths, keys, outputLocation, outputPath });
   const canRun = <Id extends MediaToolId>(id: Id, files: string[], keys: string[]) =>
     mediaTools[id].canRun?.(options[id], files, keys) ?? true;
-  const runLabelFor = <Id extends MediaToolId>(id: Id, files: string[]) => {
+  const runLabelFor = <Id extends MediaToolId>(id: Id, files: string[], keys: string[]) => {
     const label = mediaTools[id].runLabel;
-    return typeof label === "function" ? label(options[id], files) : label;
+    return typeof label === "function" ? label(options[id], files, keys) : label;
   };
   const exampleNameFor = <Id extends MediaToolId>(id: Id) => {
     const exampleName = mediaTools[id].exampleName;
@@ -81,7 +81,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
         return invoke<ToolResult>(command, { runId, request });
       }}
     >
-      {({ files, fileKeys, moveFile, removeFile, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
+      {({ files, fileKeys, moveFile, removeFile, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel, browse }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <div>
@@ -90,11 +90,11 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
             <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon or page order.</p>
           </div>
 
-          {renderPanel(toolId, { files, fileKeys, moveFile, removeFile, outputLocation, loading, selectedFileIndex, selectFile })}
+          {renderPanel(toolId, { files, fileKeys, moveFile, removeFile, browse: () => void browse(), outputLocation, loading, selectedFileIndex, selectFile })}
 
           {destination}
           <Button variant="default" disabled={loading || files.length === 0 || !canRun(toolId, files, fileKeys)} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
-            {runLabel ?? runLabelFor(toolId, files) ?? activeUtility.shortTitle}
+            {runLabelFor(toolId, files, fileKeys) ?? runLabel ?? activeUtility.shortTitle}
             <ShortcutHint id="run" />
           </Button>
           </CardContent>

@@ -253,6 +253,24 @@ test("TIFF Pages names its mode in every request and is many-to-one only in Comb
   assert.deepEqual(tool.buildRequest(combine, input).request, {
     mode: "combine", paths: ["/scans/a.tiff"], pages: [], outputLocation: "alongsideInput", outputPath: "/chosen.tiff",
   });
+
+  // Pages follow the person's order across files; left-out pages are not sent, and new pages follow in file order.
+  const preview = { width: 1, height: 1, dataUrl: "" };
+  const arranged = {
+    ...combine,
+    sources: { a: { kind: "ready" as const, previews: [preview, preview] }, b: { kind: "ready" as const, previews: [preview] } },
+    order: ["b\u00000", "a\u00001"],
+    leftOut: ["a\u00001"],
+  };
+  const both = { ...input, paths: ["/scans/a.tiff", "/scans/b.tiff"], keys: ["a", "b"] };
+  assert.deepEqual(tool.buildRequest(arranged, both).request.pages, [
+    { path: "/scans/b.tiff", page: 0 },
+    { path: "/scans/a.tiff", page: 0 },
+  ]);
+  assert.equal(tool.canRun(arranged, both.paths, both.keys), true);
+  assert.equal(tool.runLabel?.(arranged, both.paths, both.keys), "Combine 2 pages…");
+  assert.equal(tool.canRun({ ...arranged, sources: { ...arranged.sources, b: { kind: "loading" } } }, both.paths, both.keys), false, "Combine waits for every file's pages");
+  assert.equal(tool.canRun({ ...arranged, leftOut: ["a\u00000", "a\u00001", "b\u00000"] }, both.paths, both.keys), false, "Combine needs at least one page");
 });
 
 test("workspace membership covers every registered utility exactly once", () => {

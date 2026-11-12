@@ -34,11 +34,12 @@ export const proposedSaveName = (inputPath: string, suffix: string, extension: s
 export const proposedSaveFolder = (firstInput: string, location: OutputLocation) =>
     location === 'alongsideInput' ? parentFolder(firstInput) : location.customFolder;
 
-export const parseSaveName = (raw: string, extension: string): SaveName => {
+export const parseSaveName = (raw: string, extension: string, alsoAccepts: readonly string[] = []): SaveName => {
     const name = raw.trim();
     if (name.length === 0) return { ok: false, error: 'Enter a file name.' };
     if (/[\\/]/.test(name)) return { ok: false, error: 'A file name can’t contain / or \\.' };
-    return { ok: true, name: name.toLowerCase().endsWith(`.${extension}`) ? name : `${name}.${extension}` };
+    const named = [extension, ...alsoAccepts].some((accepted) => name.toLowerCase().endsWith(`.${accepted}`));
+    return { ok: true, name: named ? name : `${name}.${extension}` };
 };
 
 let pending: PendingSave | null = null;

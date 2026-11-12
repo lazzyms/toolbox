@@ -13,7 +13,7 @@ const SaveForm = ({ request }: { request: PendingSave }) => {
     const [name, setName] = useState(request.name);
     const [folder, setFolder] = useState(request.folder);
     const [folderError, setFolderError] = useState<string | null>(null);
-    const parsed = parseSaveName(name, request.dialog.extension);
+    const parsed = parseSaveName(name, request.dialog.extension, request.dialog.alsoAccepts);
 
     const changeFolder = async () => {
         try {
