@@ -6,11 +6,11 @@ import type { WorkspaceSourceAction } from "../components/ToolScaffold";
 import type { ShellEvent } from "../hooks/useShellBridge";
 import type {
   AtomicToolId,
-  ConvertImagesRequest,
   ImagePreview,
   OutputLocation,
   ToolDefinition,
   ToolResult,
+  WatermarkImagesRequest,
 } from "../contracts";
 import {
   commitImageEdit,
@@ -46,7 +46,6 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { NativeSelect } from "../components/ui/native-select";
 import { Slider } from "../components/ui/slider";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
@@ -54,7 +53,6 @@ import { UtilityRegistry, workspaceById } from "../registry";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 
 type ImageEditorDraftValues = {
-  format: ConvertImagesRequest["format"];
   brightness: number;
   contrast: number;
   saturation: number;
@@ -72,13 +70,11 @@ const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<Image
 
 const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation | null => {
   if (stackStepForTool[id]) return null;
-  if (id === "heic-convert") return { kind: "convert", format: values.format };
   if (id === "image-watermark") return {
     kind: "watermark",
     text: values.watermarkText,
     opacity: values.watermarkOpacity,
-    x: values.watermarkX,
-    y: values.watermarkY,
+    position: { x: values.watermarkX, y: values.watermarkY },
   };
   return {
     kind: "tone",
@@ -153,7 +149,6 @@ export const ImageEditorWorkspaceView = ({
   onFilesChange?: (paths: readonly string[]) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
-  const [format, setFormat] = useState<ConvertImagesRequest["format"]>("png");
   const [brightness, setBrightness] = useState(0);
   const [contrast, setContrast] = useState(0);
   const [saturation, setSaturation] = useState(0);
@@ -165,7 +160,7 @@ export const ImageEditorWorkspaceView = ({
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
   const draft = buildImageEditDraft(activeUtility.id, {
-    format, brightness, contrast, saturation, exposure,
+    brightness, contrast, saturation, exposure,
     watermarkText, watermarkOpacity, watermarkX, watermarkY,
   });
   const draftKey = JSON.stringify(draft);
@@ -238,17 +233,12 @@ export const ImageEditorWorkspaceView = ({
         ? exampleOutputName(path, activeUtility.command, imageEditStackSuffix(stack.present), editedImageExtension(emptyImageEditPlan(), path))
         : exampleOutputName(path, activeUtility.command, "-edited", editedImageExtension(editPlan, path))}
       onRun={(paths, outputLocation, { runId }) => {
-        if (activeUtility.id === "heic-convert") {
-          return invoke<ToolResult>("convert_images", { runId,
-            request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
-          });
-        }
         if (stackStep) {
           return invoke<ToolResult>("export_image_edit_stack", { runId, request: { paths, steps: imageEditStackRequestSteps(stack.present), outputLocation } });
         }
         if (activeUtility.id === "image-watermark") {
           return invoke<ToolResult>("watermark_images", { runId,
-            request: { paths, opacity: watermarkOpacity, text: watermarkText, x: watermarkX, y: watermarkY, outputLocation },
+            request: { paths, opacity: watermarkOpacity, text: watermarkText, position: { x: watermarkX, y: watermarkY }, outputLocation } satisfies WatermarkImagesRequest,
           });
         }
         return invoke<ToolResult>("adjust_image_tone", { runId,
@@ -289,8 +279,6 @@ export const ImageEditorWorkspaceView = ({
           }}
         />
       ) : <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
-        format,
-        setFormat,
         brightness,
         setBrightness,
         contrast,
@@ -341,8 +329,6 @@ type ImageEditorControlsProps = {
   loading: boolean;
   utility: ToolDefinition;
   onSelectTool?: (id: AtomicToolId) => void;
-  format: ConvertImagesRequest["format"];
-  setFormat: (value: ConvertImagesRequest["format"]) => void;
   brightness: number;
   setBrightness: (value: number) => void;
   contrast: number;
@@ -382,8 +368,6 @@ const ImageEditorControls = ({
   loading,
   utility,
   onSelectTool,
-  format,
-  setFormat,
   brightness,
   setBrightness,
   contrast,
@@ -582,14 +566,6 @@ const ImageEditorControls = ({
           <h2 className="workspace-active-command">{utility.title}</h2>
           <p className="workspace-panel-copy">Change the outcome without leaving the image editor.</p>
         </div>
-        {utility.id === "heic-convert" && (
-          <div className="workspace-field">
-            <Label htmlFor="image-target-format">Target format</Label>
-            <NativeSelect id="image-target-format" aria-label="Target format" value={format} onChange={(event) => setFormat(event.target.value as ConvertImagesRequest["format"])}>
-              <option value="png">PNG</option><option value="jpg">JPEG</option><option value="webp">WebP</option><option value="heic">HEIC</option>
-            </NativeSelect>
-          </div>
-        )}
         {utility.id === "image-watermark" && (
           <>
             <div className="workspace-field"><Label htmlFor="image-watermark-text">Watermark text</Label><Input id="image-watermark-text" aria-label="Watermark text" value={watermarkText} onChange={(event) => setWatermarkText(event.target.value)} /></div>
