@@ -1,7 +1,8 @@
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::JobOutcome;
+use crate::kit::compress::{compress_file, CompressFilesRequest, CompressLevel};
 use crate::kit::contracts::OutputLocation;
-use crate::kit::images::{ImageProcessor, Options as ImageOptions, OutputFormat};
+use crate::kit::images::{ImageProcessor, OutputFormat};
 use crate::kit::pdf::remaining;
 use crate::kit::vision;
 use std::path::{Path, PathBuf};
@@ -65,9 +66,9 @@ impl QuickAction {
 
     pub fn tool(self) -> &'static str {
         match self {
-            QuickAction::CompressPdf => "compress_pdf",
+            QuickAction::CompressPdf => "compress_files",
             QuickAction::PdfToImages => "pdf_to_images",
-            QuickAction::CompressImage => "compress_images",
+            QuickAction::CompressImage => "compress_files",
             QuickAction::ConvertToPng | QuickAction::ConvertToJpg => "convert_images",
             QuickAction::RemoveBackground => "remove_image_background",
         }
@@ -93,24 +94,20 @@ impl QuickAction {
         let events = RunEvents::silent();
         let output_location = OutputLocation::AlongsideInput;
         match self {
-            QuickAction::CompressPdf => {
-                let request = Arc::new(remaining::CompressPdfRequest { paths: paths.clone(), quality: 80, output_location: output_location.clone() });
-                BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::compress)
+            QuickAction::CompressPdf | QuickAction::CompressImage => {
+                let request = Arc::new(CompressFilesRequest { paths: paths.clone(), level: CompressLevel::Medium, strip_exif: false, output_location: output_location.clone() });
+                BatchRunner::run(&events, self.tool(), paths, &output_location, &request, compress_file)
             }
             QuickAction::PdfToImages => {
-                let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, output_location: output_location.clone() });
+                let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, picks: Vec::new(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::to_images)
-            }
-            QuickAction::CompressImage => {
-                let options = Arc::new(ImageOptions { quality: 80, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: output_location.clone() });
-                BatchRunner::run(&events, self.tool(), paths, &output_location, &options, |options: &ImageOptions, path| ImageProcessor::run(path, ImageOptions { suffix: options.suffix.clone(), output_location: options.output_location.clone(), ..*options }))
             }
             QuickAction::ConvertToPng | QuickAction::ConvertToJpg => {
                 let format = if self == QuickAction::ConvertToPng { OutputFormat::Png } else { OutputFormat::Jpeg };
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &Arc::new(output_location.clone()), move |location: &OutputLocation, path| ImageProcessor::convert(path, format, location.clone()))
             }
             QuickAction::RemoveBackground => {
-                let request = Arc::new(vision::VisionRequest { paths: paths.clone(), pages: None, output_location: output_location.clone() });
+                let request = Arc::new(vision::VisionRequest { paths: paths.clone(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, vision::remove_background)
             }
         }
@@ -541,6 +538,7 @@ mod tests {
         let outcomes = QuickAction::CompressImage.run(vec![dir.join("missing.png"), good]);
         assert_eq!(outcomes.iter().filter(|o| o.error().is_none()).count(), 1);
         assert!(summary(QuickAction::CompressImage, &outcomes).contains("1 done, 1 failed"));
+        assert_eq!(QuickAction::CompressImage.tool(), "compress_files", "Compress Image runs the Compress Files pipeline");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
