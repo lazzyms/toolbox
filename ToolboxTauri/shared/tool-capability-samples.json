@@ -1,0 +1,52 @@
+{
+  "accepted": [
+    {
+      "command": "sample_create_document",
+      "acceptedExtensions": [],
+      "inputCardinality": "none",
+      "supportsPageSelection": false,
+      "supportsPreview": false,
+      "nativeAvailability": "available",
+      "outputSuffix": "",
+      "manyToOne": false
+    },
+    {
+      "command": "sample_convert_files",
+      "acceptedExtensions": [".pdf"],
+      "inputCardinality": "multiple",
+      "supportsPageSelection": false,
+      "supportsPreview": false,
+      "nativeAvailability": "available",
+      "outputSuffix": "-converted",
+      "manyToOne": false
+    }
+  ],
+  "rejected": [
+    {
+      "name": "a creation tool that declares accepted extensions",
+      "capability": {
+        "command": "sample_create_from_pdf",
+        "acceptedExtensions": [".pdf"],
+        "inputCardinality": "none",
+        "supportsPageSelection": false,
+        "supportsPreview": false,
+        "nativeAvailability": "available",
+        "outputSuffix": "",
+        "manyToOne": false
+      }
+    },
+    {
+      "name": "a file tool without accepted extensions",
+      "capability": {
+        "command": "sample_convert_nothing",
+        "acceptedExtensions": [],
+        "inputCardinality": "single",
+        "supportsPageSelection": false,
+        "supportsPreview": false,
+        "nativeAvailability": "available",
+        "outputSuffix": "-converted",
+        "manyToOne": false
+      }
+    }
+  ]
+}
