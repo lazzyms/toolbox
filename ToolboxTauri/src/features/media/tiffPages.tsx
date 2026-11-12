@@ -1,26 +1,62 @@
-import { TiffPageInspector, isCurrentTiffInspection, type TiffPagesState } from "./TiffPageInspector";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { exampleOutputName } from "../../components/RunDestination";
+import { TiffPageInspector, isCurrentTiffInspection, type TiffMode, type TiffPagesState } from "./TiffPageInspector";
 import type { MediaPanelProps, MediaTool } from "./types";
 
 const TiffPagesPanel = ({ utility, options, setOptions, files }: MediaPanelProps<TiffPagesState>) => (
-  <TiffPageInspector files={files} supportsPreview={utility.capability.supportsPreview} state={options} setState={setOptions} />
+  <>
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      size="sm"
+      aria-label="TIFF Pages mode"
+      value={options.mode}
+      onValueChange={(value) => {
+        if (value) setOptions((current) => ({ ...current, mode: value as TiffMode }));
+      }}
+    >
+      <ToggleGroupItem value="split">Split pages</ToggleGroupItem>
+      <ToggleGroupItem value="combine">Combine into one TIFF</ToggleGroupItem>
+    </ToggleGroup>
+    {options.mode === "split" ? (
+      <p className="workspace-panel-copy">
+        Each page of every TIFF becomes its own TIFF. Page numbers are padded so they sort. An existing name gets -1, -2 and so on.
+        A TIFF with only 1 page is skipped.
+      </p>
+    ) : (
+      <TiffPageInspector files={files} supportsPreview={utility.capability.supportsPreview} state={options} setState={setOptions} />
+    )}
+  </>
 );
 
+const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`;
+
 export const tiffPagesTool: MediaTool<TiffPagesState> = {
-  initialOptions: { inspection: { kind: "idle" }, selectedIndex: 0 },
+  initialOptions: { mode: "split", inspection: { kind: "idle" }, selectedIndex: 0 },
   Panel: TiffPagesPanel,
-  // A run waits until the pages of the current files have been read.
-  canRun: ({ inspection }, files) => isCurrentTiffInspection(inspection, files),
+  // Split runs each file on its own, so it never waits on the page inspector. Combine waits until the
+  // pages of the current files have been read.
+  canRun: ({ mode, inspection }, files) => mode === "split" || isCurrentTiffInspection(inspection, files),
+  runLabel: ({ mode }, files) => (mode === "split" ? `Split ${count(files.length, "TIFF", "TIFFs")}` : "Combine"),
   // The inspector orders pages, so the shared file list does not.
   showFileOrdering: false,
-  buildRequest: ({ inspection }, { paths, outputLocation, outputPath }) => ({
+  // The registry describes Combine. Split is a per-file batch: no save step, files fail alone, and failed
+  // files can be retried.
+  capability: ({ mode }, registered) =>
+    mode === "split" ? { ...registered, inputCardinality: "multiple", manyToOne: false } : registered,
+  exampleName: ({ mode }, path) => exampleOutputName(path, "process_tiff_pages", mode === "split" ? "-page-01" : "-combined", mode === "split" ? "tif" : "tiff"),
+  buildRequest: ({ mode, inspection }, { paths, outputLocation, outputPath }) => ({
     command: "process_tiff_pages",
-    request: {
-      paths,
-      pages: isCurrentTiffInspection(inspection, paths)
-        ? inspection.frames.map(({ path, page }) => ({ path, page }))
-        : [],
-      outputLocation,
-      outputPath,
-    },
+    request: mode === "split"
+      ? { mode, paths, outputLocation }
+      : {
+          mode,
+          paths,
+          pages: isCurrentTiffInspection(inspection, paths)
+            ? inspection.frames.map(({ path, page }) => ({ path, page }))
+            : [],
+          outputLocation,
+          outputPath,
+        },
   }),
 };

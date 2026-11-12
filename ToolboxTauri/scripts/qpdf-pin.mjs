@@ -3,10 +3,12 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 
 export const PIN_PATH = new URL("../qpdf-pin.json", import.meta.url);
 
+// The release targets: Rust triple, binary format and architecture, and the name packs use for the
+// target (`current_target()` in src-tauri/src/packs.rs).
 export const TARGETS = {
-  "aarch64-apple-darwin": { format: "mach-o", architecture: "aarch64" },
-  "x86_64-pc-windows-msvc": { format: "pe", architecture: "x86_64" },
-  "aarch64-pc-windows-msvc": { format: "pe", architecture: "aarch64" },
+  "aarch64-apple-darwin": { format: "mach-o", architecture: "aarch64", pack: "macos-aarch64" },
+  "x86_64-pc-windows-msvc": { format: "pe", architecture: "x86_64", pack: "windows-x86_64" },
+  "aarch64-pc-windows-msvc": { format: "pe", architecture: "aarch64", pack: "windows-aarch64" },
 };
 
 const MACH_O_CPU = { 0x01000007: "x86_64", 0x0100000c: "aarch64" };
@@ -85,6 +87,13 @@ function inspectNative(name, path, target) {
     };
   }
   return null;
+}
+
+// The bundled page renderer (pdftoppm) has no pinned version; it only has to be native to the target.
+export function inspectRenderer({ path, target }) {
+  const failure = inspectNative("page renderer", path, target);
+  if (failure) return failure;
+  return { cause: null, message: `page renderer is native ${TARGETS[target].architecture} for ${target}` };
 }
 
 export function runPdftotextVersion(path) {

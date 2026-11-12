@@ -3,7 +3,8 @@
   "models": {
     "source": "https://github.com/tesseract-ocr/tessdata_fast",
     "commit": "87416418657359cb625c412a48b6e1d6d41c29bd",
-    "license": "Apache-2.0"
+    "license": "Apache-2.0",
+    "packVersion": "1.0"
   },
   "budgetRule": "Each pack's download is at most its model file rounded up to a whole MiB, plus 1 MiB for the pack manifest, signature and archive.",
   "languages": [
