@@ -19,6 +19,9 @@ export default defineConfig({
     use: {
         baseURL,
         ...devices["Desktop Chrome"],
+        // A failure that does not reproduce locally can only be diagnosed from its trace.
+        trace: "retain-on-failure",
+        screenshot: "only-on-failure",
     },
     webServer: {
         command: productionPreview
