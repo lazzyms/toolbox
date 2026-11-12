@@ -109,8 +109,9 @@ test('form entries stay out of undo history and Reset clears them', async ({ pag
   await openForm(page, fillable);
   await canvas(page).getByRole('textbox', { name: 'Full name' }).fill('Ada');
   await expect(page.getByRole('button', { name: 'Undo' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Reset edits' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Reset edits' }).click();
+  await expect(page.getByRole('button', { name: 'Reset…' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Reset…' }).click();
+  await page.getByRole('alertdialog', { name: 'Reset all page changes?' }).getByRole('button', { name: 'Reset', exact: true }).click();
   await expect(canvas(page).getByRole('textbox', { name: 'Full name' })).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
 });
@@ -287,7 +288,8 @@ test('Flatten asks before turning on and exports exactly the chosen kind', async
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await flatten.click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Flatten when exporting' }).click();
-  await page.getByRole('button', { name: 'Reset edits' }).click();
+  await page.getByRole('button', { name: 'Reset…' }).click();
+  await page.getByRole('alertdialog', { name: 'Reset all page changes?' }).getByRole('button', { name: 'Reset', exact: true }).click();
   await expect(flatten).not.toBeChecked();
   await flatten.click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Flatten when exporting' }).click();

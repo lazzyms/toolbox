@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   commitImageEdit,
+  createEditHistory,
   createImageEditHistory,
+  defaultImageCropStep,
+  defaultImageResizeStep,
+  imageEditStackPreviewPlan,
+  imageEditStackRequestSteps,
+  imageEditStackSuffix,
+  imageResizeStepProblem,
+  presentImageEditSteps,
+  pushEdit,
   planWithDraft,
   redoImageEdit,
   resolveImageCropRect,
@@ -73,4 +82,55 @@ test("appends edits with predictable undo, redo, reset, and branch behavior", ()
   assert.deepEqual(initial.present.edits, []);
   assert.deepEqual(one.present.edits, [rotate]);
   assert.deepEqual(two.present.edits, [rotate, tone]);
+});
+
+test("the edit stack history pushes, undoes and redoes whole stacks", () => {
+  const cropStep = defaultImageCropStep();
+  const added = pushEdit(createEditHistory<{ crop?: typeof cropStep }>({}), { crop: cropStep });
+  const moved = pushEdit(added, { crop: { ...cropStep, anchor: "start" } });
+  assert.deepEqual(moved.past, [{}, { crop: cropStep }]);
+  const undone = undoImageEdit(moved);
+  assert.deepEqual(undone.present, { crop: cropStep });
+  assert.deepEqual(redoImageEdit(undone).present.crop?.anchor, "start");
+  assert.deepEqual(pushEdit(undone, {}).future, [], "a new edit clears redo");
+  assert.equal(undoImageEdit(createEditHistory({})).past.length, 0);
+});
+
+test("the stack lists its steps and names a crop-only run -cropped", () => {
+  assert.deepEqual(presentImageEditSteps({}), []);
+  assert.deepEqual(presentImageEditSteps({ crop: defaultImageCropStep() }), ["crop"]);
+  assert.equal(imageEditStackSuffix({ crop: defaultImageCropStep() }), "-cropped");
+  assert.deepEqual(defaultImageCropStep(), { mode: "aspectRatio", aspectWidth: 4, aspectHeight: 5, anchor: "center", x: 0, y: 0, width: 0, height: 0 });
+});
+
+test("a stack keeps the fixed run order and names more than one step -edited", () => {
+  const crop = defaultImageCropStep();
+  const resize = defaultImageResizeStep();
+  assert.equal(imageEditStackSuffix({ resize }), "-resized");
+  assert.equal(imageEditStackSuffix({ resize, crop }), "-edited");
+  assert.deepEqual(presentImageEditSteps({ resize, crop }), ["crop", "resize"]);
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps({ resize, crop })), ["crop", "resize"], "resize added first is still sent after crop");
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps({ resize, crop: undefined })), ["resize"], "a removed step is not sent");
+  assert.deepEqual(imageEditStackPreviewPlan({ resize, crop }).edits.map(({ kind }) => kind), ["crop", "resize"]);
+});
+
+test("resize steps are checked against the native limits", () => {
+  const resize = defaultImageResizeStep();
+  assert.deepEqual(resize, { mode: "longestSide", longestSide: 2048, width: 1600, height: 1200, percentage: 50, resampling: "lanczos", keepAspectRatio: true });
+  assert.equal(imageResizeStepProblem(resize), null);
+  assert.equal(imageResizeStepProblem({ ...resize, longestSide: 16385 })?.field, "longest side");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "percentage", percentage: 1000 }), null);
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "percentage", percentage: 1001 })?.message, "Enter a percentage from 1 to 1000.");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "percentage", percentage: 0 })?.field, "percentage");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "exact", width: 0 })?.field, "size");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "exact", height: 16385 })?.field, "size");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "exact", width: 1.5 })?.field, "size");
+});
+
+test("aspect crops keep the start or end of the long side", () => {
+  const step = { ...defaultImageCropStep(), aspectWidth: 1, aspectHeight: 1 };
+  assert.deepEqual(resolveImageCropRect(300, 100, { ...step, anchor: "start" }), { x: 0, y: 0, width: 100, height: 100 });
+  assert.deepEqual(resolveImageCropRect(300, 100, { ...step, anchor: "end" }), { x: 200, y: 0, width: 100, height: 100 });
+  assert.deepEqual(resolveImageCropRect(100, 300, { ...step, anchor: "end" }), { x: 0, y: 200, width: 100, height: 100 });
+  assert.deepEqual(resolveImageCropRect(100, 300, { ...step, anchor: "center" }), { x: 0, y: 100, width: 100, height: 100 });
 });

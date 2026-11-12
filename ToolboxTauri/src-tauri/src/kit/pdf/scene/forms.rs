@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream};
 use serde::Serialize;
 use crate::kit::contracts::ToolError;
-use super::{compress_bytes, embed_text_fonts, err, geometry, layout_text_for, load, resolve, text_content, Kind, Rect, SceneObject, TextAlign, TextLayout, TEXT_LINE_HEIGHT};
+use super::{compress_bytes, embed_text_fonts, err, geometry, layout_text_for, load, resolve, text_content, Kind, Layer, Rect, SceneObject, TextAlign, TextLayout, TEXT_LINE_HEIGHT};
 
 const READ_ONLY: i64 = 1;
 const REQUIRED: i64 = 1 << 1;
@@ -454,6 +454,10 @@ fn read(doc: &Document) -> Result<FormInspection, String> {
 enum Fill { Text { value: Object, red: bool }, Button(Vec<u8>), List(Vec<usize>) }
 
 pub(super) struct FormPlan { fills: Vec<(FormField, Fill)>, objects: HashMap<(usize, usize), SceneObject>, layouts: HashMap<(usize, usize), TextLayout> }
+impl FormPlan {
+    /// A plan without fills leaves the document as it was, so it does not name the export.
+    pub(super) fn changes_document(&self) -> bool { !self.fills.is_empty() }
+}
 
 struct Appearance { size: f32, color: String }
 
@@ -497,9 +501,9 @@ fn text_object(field: &FormField, text: &str, size: (f32, f32), multiline: bool)
         Rect { x: PADDING, y: (height - line) / 2., width: (width - 2. * PADDING).max(1.), height: line }
     };
     SceneObject {
-        kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1., strokes: Vec::new(),
-        shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark_pattern: None,
-        bold: false, italic: false, align: field.align, page_range: None,
+        kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1.,
+        shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark: None, layer: Layer::Front,
+        bold: false, italic: false, align: field.align, page_range: None, page_numbers: None, header_footer: None,
     }
 }
 
@@ -603,7 +607,8 @@ fn text_appearance(doc: &mut Document, plan: &FormPlan, fonts: &HashMap<&'static
     let (width, height) = widget_size(doc, id)?;
     let layout = &plan.layouts[&key];
     let (font_id, remapper) = &fonts[layout.font.name];
-    let content = format!("/Tx BMC\nq\n1 0 0 -1 0 {height} cm\n{under}{color}\n{}Q\nEMC\n", text_content(&plan.objects[&key], layout, FONT_RESOURCE, remapper));
+    let o = &plan.objects[&key];
+    let content = format!("/Tx BMC\nq\n1 0 0 -1 0 {height} cm\n{under}{color}\n{}Q\nEMC\n", text_content(&o.rect, o.align, o.font_size, layout, FONT_RESOURCE, remapper));
     let resources = dictionary! { "Font" => dictionary! { FONT_RESOURCE => *font_id } };
     let appearance = form_xobject(doc, width, height, resources, &content)?;
     doc.get_dictionary_mut(id).map_err(err)?.set("AP", dictionary! { "N" => appearance });
@@ -692,7 +697,8 @@ mod tests {
     use std::{fs, path::Path, process::Command};
     use lopdf::{dictionary, Document, Object, Stream};
     use crate::kit::{common::OutputLocation, contracts::ErrorKind};
-    use super::super::{export, text_extractor, ExportRequest, PdfScene, ScenePage, TempDir};
+    use super::super::tests::export;
+    use super::super::{text_extractor, ExportRequest, PdfScene, ScenePage, TempDir};
     use super::*;
 
     fn rect(values: [f32; 4]) -> Object { Object::Array(values.iter().map(|value| Object::Real(*value)).collect()) }
@@ -768,7 +774,7 @@ mod tests {
     }
 
     fn identity_scene() -> PdfScene {
-        PdfScene { pages: vec![ScenePage { source_index: Some(0), width: 612., height: 792., rotation: 0, crop: None, source_rotation: None, source_box: None, objects: vec![] }] }
+        PdfScene { pages: vec![ScenePage { mirrored: false, source_index: Some(0), width: 612., height: 792., rotation: 0, crop: None, source_rotation: None, source_box: None, objects: vec![] }] }
     }
 
     fn fill(input: &Path, scene: PdfScene, values: serde_json::Value) -> crate::kit::contracts::JobOutcome {
@@ -1178,7 +1184,7 @@ mod tests {
         assert!(outcome.error().is_none(), "{:?}", outcome.error());
         let output = outcome.output_paths()[0].clone();
         assert_eq!(output, temp.0.join("lease-edited.pdf"), "several stages share the combined name");
-        assert_eq!(outcome.detail, "Changes applied in this fixed order: Fill form; Edit text; Add text, signatures and page marks; Flatten; Redact. \
+        assert_eq!(outcome.detail, "2 pages kept, 0 removed, 0 rotated, 0 mirrored. Changes applied in this fixed order: Fill form; Edit text; Add text, signatures and page marks; Flatten; Redact. \
 Page 1 was redacted as a 300 dpi image. Document metadata, XMP data and attachments were removed.");
         assert_eq!(fs::read(&input).unwrap(), original, "the original is unchanged");
 

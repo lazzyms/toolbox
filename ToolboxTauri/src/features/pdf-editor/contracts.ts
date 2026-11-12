@@ -37,6 +37,7 @@ export interface PdfEditRun extends PdfTextRun {
     fontName: string;
     fontSize: number;
     reason: PdfEditRunReason | null;
+    substitute?: { family: string; characters: string } | null;
 }
 
 export interface PdfTextEdit {
@@ -49,6 +50,8 @@ export interface PdfTextEdit {
 export interface PdfDocument {
     path: string;
     pages: PdfPage[];
+    /** True when a signature field holds a signature value. An exported copy is no longer signed. */
+    signed?: boolean;
 }
 
 export interface PdfEditorState {
@@ -88,15 +91,6 @@ export interface SignPdfRequest extends CropPdfRequest {
     page: number;
     text: string;
     signaturePath: string | null;
-}
-
-export interface OrganizePdfRequest {
-    paths: string[];
-    pageOrder: number[];
-    deletePages: number[];
-    rotatePages: { page: number; degrees: number }[];
-    scope: PdfPageScope;
-    outputLocation: OutputLocation;
 }
 
 export type PdfOverlay =
