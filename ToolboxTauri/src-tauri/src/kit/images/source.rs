@@ -193,20 +193,75 @@ fn count_tiff_pages(decoder: &mut tiff::decoder::Decoder<File>) -> Result<usize,
 fn read_tiff_page(decoder: &mut tiff::decoder::Decoder<File>) -> Result<DynamicImage, String> {
     use tiff::decoder::DecodingResult;
     let (width, height) = decoder.dimensions().map_err(|error| format!("Could not read TIFF dimensions: {error}"))?;
-    if decoder.find_tag_unsigned::<u16>(tiff::tags::Tag::Compression).ok().flatten() == Some(FAX3_COMPRESSION) {
+    let compression = decoder.find_tag_unsigned::<u16>(tiff::tags::Tag::Compression).ok().flatten().unwrap_or(1);
+    if compression == FAX3_COMPRESSION {
         return read_fax3_page(decoder, width, height);
     }
+    if let Some(message) = unsupported_compression(compression) {
+        return Err(message);
+    }
     let color = decoder.colortype().map_err(|error| format!("Could not read TIFF color type: {error}"))?;
+    let unsupported = |decoder: &mut tiff::decoder::Decoder<File>| format!("{} TIFF pages aren't supported.", describe_variant(decoder, color));
+    if !matches!(color, tiff::ColorType::Gray(1 | 8 | 16) | tiff::ColorType::RGB(8 | 16) | tiff::ColorType::RGBA(8 | 16) | tiff::ColorType::YCbCr(8)) {
+        return Err(unsupported(decoder));
+    }
     let data = decoder.read_image().map_err(|error| format!("Unsupported TIFF page: {error}"))?;
     let page = match (color, data) {
         (tiff::ColorType::Gray(1), DecodingResult::U8(data)) => expand_bilevel(&data, width, height).map(DynamicImage::ImageLuma8),
         (tiff::ColorType::Gray(8), DecodingResult::U8(data)) => ImageBuffer::<Luma<u8>, _>::from_raw(width, height, data).map(DynamicImage::ImageLuma8),
+        (tiff::ColorType::Gray(16), DecodingResult::U16(data)) => ImageBuffer::<Luma<u16>, _>::from_raw(width, height, data).map(DynamicImage::ImageLuma16),
         (tiff::ColorType::RGB(8), DecodingResult::U8(data)) => ImageBuffer::<Rgb<u8>, _>::from_raw(width, height, data).map(DynamicImage::ImageRgb8),
+        (tiff::ColorType::RGB(16), DecodingResult::U16(data)) => ImageBuffer::<Rgb<u16>, _>::from_raw(width, height, data).map(DynamicImage::ImageRgb16),
         (tiff::ColorType::RGBA(8), DecodingResult::U8(data)) => ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, data).map(DynamicImage::ImageRgba8),
+        (tiff::ColorType::RGBA(16), DecodingResult::U16(data)) => ImageBuffer::<Rgba<u16>, _>::from_raw(width, height, data).map(DynamicImage::ImageRgba16),
         (tiff::ColorType::YCbCr(8), DecodingResult::U8(data)) => ImageBuffer::<Rgb<u8>, _>::from_raw(width, height, ycbcr_to_rgb(data)).map(DynamicImage::ImageRgb8),
-        (color, _) => return Err(format!("Unsupported TIFF color type or bit depth: {color:?}")),
+        // Signed or floating-point samples decode to other result types.
+        _ => return Err(unsupported(decoder)),
     };
     page.ok_or_else(|| "TIFF page pixel data has an invalid length.".to_string())
+}
+
+/// Explains which compression a page uses when this build can't decode it.
+fn unsupported_compression(compression: u16) -> Option<String> {
+    let name = match compression {
+        // None, Group 3 and 4 fax, LZW, JPEG, Deflate, PackBits and the older Deflate code.
+        1 | 3 | 4 | 5 | 7 | 8 | 32773 | 32946 => return None,
+        2 => "CCITT modified Huffman",
+        6 => "Old-style JPEG",
+        32809 => "ThunderScan",
+        34712 => "JPEG 2000",
+        34887 => "LERC",
+        34925 => "LZMA",
+        50000 => "Zstandard",
+        50001 => "WebP",
+        other => return Some(format!("TIFF compression scheme {other} isn't supported.")),
+    };
+    Some(format!("{name} compression isn't supported in TIFF pages."))
+}
+
+/// Names a page's pixel format, such as "16-bit CMYK" or "32-bit floating-point RGB".
+fn describe_variant(decoder: &mut tiff::decoder::Decoder<File>, color: tiff::ColorType) -> String {
+    use tiff::ColorType::*;
+    let (bits, model) = match color {
+        Gray(bits) => (bits, "greyscale".to_string()),
+        GrayA(bits) => (bits, "greyscale with alpha".to_string()),
+        RGB(bits) => (bits, "RGB".to_string()),
+        RGBA(bits) => (bits, "RGBA".to_string()),
+        Palette(bits) => (bits, "palette (indexed colour)".to_string()),
+        CMYK(bits) => (bits, "CMYK".to_string()),
+        CMYKA(bits) => (bits, "CMYK with alpha".to_string()),
+        YCbCr(bits) => (bits, "YCbCr".to_string()),
+        Lab(bits) => (bits, "CIELAB".to_string()),
+        Multiband { bit_depth, num_samples } => (bit_depth, format!("{num_samples}-channel")),
+        other => return format!("{other:?}"),
+    };
+    // SampleFormat holds one value per sample; they match on any page this reader meets.
+    let format = match decoder.find_tag_unsigned_vec::<u16>(tiff::tags::Tag::SampleFormat).ok().flatten().and_then(|formats| formats.first().copied()) {
+        Some(2) => "signed ",
+        Some(3) => "floating-point ",
+        _ => "",
+    };
+    format!("{bits}-bit {format}{model}")
 }
 
 const FAX3_COMPRESSION: u16 = 3;

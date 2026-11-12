@@ -244,15 +244,18 @@ test("TIFF Pages names its mode in every request and is many-to-one only in Comb
   assert.equal(splitCapability.inputCardinality, "multiple", "a rejected file in Split fails alone");
   assert.equal(saveStepFor({ command: utility.command, capability: splitCapability }), null, "Split never opens the save step");
   assert.deepEqual(tool.buildRequest(split, { ...input, paths: ["/scans/a.tiff", "/scans/b.tiff"], keys: ["a", "b"] }).request, {
-    mode: "split", paths: ["/scans/a.tiff", "/scans/b.tiff"], outputLocation: "alongsideInput",
+    mode: "split", paths: ["/scans/a.tiff", "/scans/b.tiff"], outputLocation: "alongsideInput", compression: "lzw",
   });
+  assert.equal(tool.initialOptions.compression, "lzw", "LZW is the default output compression");
+  assert.equal(tool.buildRequest({ ...split, compression: "deflate" }, input).request.compression, "deflate");
 
   const combine = { ...tool.initialOptions, mode: "combine" as const };
   assert.equal(tool.capability!(combine, utility.capability), utility.capability);
   assert.ok(saveStepAppliesTo(saveStepFor(utility), 1), "one file in Combine mode still makes one TIFF through the save step");
   assert.deepEqual(tool.buildRequest(combine, input).request, {
-    mode: "combine", paths: ["/scans/a.tiff"], pages: [], outputLocation: "alongsideInput", outputPath: "/chosen.tiff",
+    mode: "combine", paths: ["/scans/a.tiff"], pages: [], outputLocation: "alongsideInput", outputPath: "/chosen.tiff", compression: "lzw",
   });
+  assert.equal(tool.buildRequest({ ...combine, compression: "none" }, input).request.compression, "none");
 
   // Pages follow the person's order across files; left-out pages are not sent, and new pages follow in file order.
   const preview = { width: 1, height: 1, dataUrl: "" };
