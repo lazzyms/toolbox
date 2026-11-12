@@ -22,7 +22,7 @@ Image workflows edit images and provide utilities for icon sets, animation frame
 ## How to get to it (user POV)
 
 - Choose `Images` under Tool categories and select the desired action.
-- Search `Search tools` for an exact action title such as `Compress Images` or `Create GIF`.
+- Search `Search tools` for an exact action title such as `Convert Image Format` or `Create GIF`.
 - Choose a visible action in Quick access or Recent.
 - Choose `Open Image editor` or `Open Media utilities` from the corresponding Tool library card.
 
@@ -36,7 +36,7 @@ Preconditions:
 
 - **Enter an image action.** Search its exact title and choose `Open <title>`. Confirm the Image editor or Media utilities workspace title.
 - **Load an image.** Choose `Choose files to process` and select the scratch copy through the native file picker. The `Open document` region lists the selected file.
-- **Convert or compress.** For `Convert Image Format`, set `Target format`. For `Compress Images`, set `Preserve original pixels` or `Compression quality`. Choose the action's visible primary button. The result list reports completion and names the output.
+- **Convert or compress.** For `Convert Image Format`, set `Target format`. For `Compress` in Compress Files, choose a `Strength`; there is no quality slider or "Preserve original pixels" switch. Choose the action's visible primary button. The result list reports completion and names the output.
 - **Resize, rotate, crop, watermark, or adjust tone.** Use the controls named `Resize mode`, `Width`, `Height`, `Rotation`, `Mirror`, `Crop mode`, `Crop width`, `Crop height`, `Watermark text`, `Brightness`, `Contrast`, `Saturation`, and `Exposure` as required. Choose the visible primary action and verify the output file.
 - **Export a combined edit plan.** Add an edit with `Add edit to plan`. Confirm the preview updates, then choose `Export edited images`. Verify the output and unchanged source hash.
 - **Generate or inspect media.** Use the visible controls for the selected icon, GIF, TIFF, metadata, or vision action. The completed result names each output. For metadata inspection, confirm the report appears without claiming a file was written.

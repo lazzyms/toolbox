@@ -85,6 +85,44 @@ Pushing to `main` runs [the Tauri release workflow](.github/workflows/tauri-rele
 which builds macOS arm64 and Windows arm64/x86_64 artifacts, signs updater metadata,
 and publishes a `tauri-v*` GitHub release.
 
+### Packs
+
+Before any artifact is built, the workflow's `packs` job runs
+`ToolboxTauri/scripts/pack-release.mjs`. It builds each pack's payload for each
+declared target. OCR language packs are built from the pinned models in
+`shared/ocr-language-packs.json`. The job signs every payload archive with the
+updater key (`TAURI_SIGNING_PRIVATE_KEY`), then writes the pack catalog. Each
+build compiles that catalog in as `shared/pack-catalog.json`. The release publishes
+the `.toolboxpack` files alongside the installers.
+
+Two gates stop the release on a failure, and each failure names its cause:
+
+- `check-release-readiness.mjs --packs` checks payloads, signatures, licenses,
+  size budgets, native architectures (no emulated Windows arm64) and native code
+  signing.
+- `check-tool-matrix.mjs --catalog` checks that every pack a tool uses is in the
+  catalog for every Supported target.
+
+Native binaries in a pack must be signed with the app's certificates. Ad hoc or
+unsigned binaries are refused. The repository has no such certificates yet, so
+no native pack can ship until they exist. Adding them would mean these new
+secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` and
+`APPLE_SIGNING_IDENTITY` for macOS, and a Windows code-signing certificate for
+Windows.
+
+Uninstalling removes packs differently on each platform. Packs live in the app's
+local data folder.
+
+- **Windows:** the NSIS uninstaller's "Delete the application data" checkbox
+  removes `%LOCALAPPDATA%\com.toolbox.desktop`, packs included. It is unticked by
+  default, and a silent uninstall keeps the folder.
+- **macOS:** there is no uninstaller. Moving Toolbox.app to the Trash leaves
+  `~/Library/Application Support/com.toolbox.desktop`, packs included. Delete that
+  folder to remove packs.
+
+`check-release-readiness.mjs` confirms the Windows behaviour against the NSIS
+template that the Tauri CLI uses.
+
 The Tauri workflow is the only release path on `main`. The `docs/` website and its
 historical appcast are maintained separately from the application source.
 
