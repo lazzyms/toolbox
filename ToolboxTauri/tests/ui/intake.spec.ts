@@ -14,6 +14,8 @@ type IntakeWindow = Window & {
     __skippedPaths: Record<string, { code: string; message: string }>;
     __failures: Record<string, { kind: string; message: string }>;
     __warnings: Record<string, Array<{ code: string; message: string }>>;
+    __pageCounts: Record<string, number | null>;
+    __outputs: Record<string, { outputPaths: string[]; detail: string }>;
     __outputSettings: unknown;
     __sent: string[];
     __drop: (paths: string[]) => void;
@@ -34,6 +36,8 @@ test.beforeEach(async ({ page }) => {
         win.__skippedPaths = {};
         win.__failures = {};
         win.__warnings = {};
+        win.__pageCounts = {};
+        win.__outputs = {};
         win.__outputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
         // Everything that leaves the page or lands in the console, so a test can prove no password does.
         win.__sent = [];
@@ -89,18 +93,20 @@ test.beforeEach(async ({ page }) => {
                 if (command === "check_output_folder") return "ready";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:") || command === "shell_ready") return null;
+                if (command === "inspect_image_pages") return (args as { request: { paths: string[] } }).request.paths.map((path) => win.__pageCounts[path] ?? 1);
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
+                if (command === "open_output_path" || command === "reveal_output_path") return null;
                 if (win.__processingDelayMs) await new Promise((resolve) => window.setTimeout(resolve, win.__processingDelayMs));
                 const { request } = args as { request: { paths: string[] } };
                 return request.paths.map((inputPath) => win.__failures[inputPath]
-                    ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { ...win.__failures[inputPath], pointer: null }, reason: null, warnings: [] }
+                    ? { inputPath, outputPaths: win.__outputs[inputPath]?.outputPaths ?? [], detail: "", state: "failed", failure: { ...win.__failures[inputPath], pointer: null }, reason: null, warnings: [] }
                     : win.__skippedPaths[inputPath]
                     ? { inputPath, outputPaths: [], detail: "", state: "skipped", failure: null, reason: { ...win.__skippedPaths[inputPath], pointer: null }, warnings: [] }
                     : win.__wrongPasswordPaths.includes(inputPath)
                     ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "wrongPassword", message: "Wrong password or unsupported encryption.", pointer: null }, reason: null, warnings: [] }
                     : win.__invalidInputPaths.includes(inputPath)
                         ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "Only PDF, Word, Excel, and PowerPoint files can be unlocked.", pointer: null }, reason: null, warnings: [] }
-                        : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: win.__warnings[inputPath] ?? [] });
+                        : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", ...win.__outputs[inputPath], state: "succeeded", failure: null, reason: null, warnings: win.__warnings[inputPath] ?? [] });
             },
             transformCallback: (callback: (event: unknown) => void) => {
                 const id = nextId++;
@@ -171,11 +177,11 @@ test("ordered tools keep repeated drops in the order they arrive", async ({ page
     await drop(page, ["/local/a.pdf"]);
 
     await expect(rows(page)).toHaveCount(3);
-    await expect(rows(page).nth(2)).toContainText("Added twice");
-    const warningColor = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--warning").trim());
-    const badgeColor = await rows(page).nth(2).getByText("Added twice").evaluate((element) => getComputedStyle(element).color);
-    const probe = await page.evaluate((color) => { const span = document.createElement("span"); span.style.color = color; document.body.append(span); const value = getComputedStyle(span).color; span.remove(); return value; }, warningColor);
-    expect(badgeColor).toBe(probe);
+    // Merge allows repeats, so each copy carries a neutral tag rather than a warning.
+    await expect(rows(page).nth(0)).toContainText("Copy 1 of 2");
+    await expect(rows(page).nth(2)).toContainText("Copy 2 of 2");
+    await expect(rows(page).nth(1)).not.toContainText("Copy");
+    await expect(rows(page).nth(2).getByText("Copy 2 of 2")).not.toHaveAttribute("data-tone", "warning");
     await expect(page.getByRole("region", { name: "Not added" })).toHaveCount(0);
 
     await runAndSave(page);
@@ -196,10 +202,18 @@ test("the picker filters by the active tool and allows one file only for single-
 
     await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
     await expect(rows(page)).toHaveCount(2);
-    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = "/local/c.pdf"; });
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/c.pdf", "/local/d.pdf"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(rows(page)).toHaveText([/^c\.pdf/]);
+    await expect(rows(page)).toHaveText([/^a\.pdf/, /^b\.pdf/, /^c\.pdf/, /^d\.pdf/]);
+    await drop(page, ["/local/e.pdf", "/local/f.pdf"]);
+    await expect(rows(page)).toHaveText([/^a\.pdf/, /^b\.pdf/, /^c\.pdf/, /^d\.pdf/, /^e\.pdf/, /^f\.pdf/]);
+
+    await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Extract PDF Pages", exact: true }).click();
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = "/local/g.pdf"; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(rows(page)).toHaveText([/^g\.pdf/]);
     expect(await pickerOptions()).toEqual([
+        { multiple: true, extensions: ["pdf"] },
         { multiple: true, extensions: ["pdf"] },
         { multiple: false, extensions: ["pdf"] },
     ]);
@@ -208,7 +222,7 @@ test("the picker filters by the active tool and allows one file only for single-
     await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/scan.png"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(rows(page)).toHaveText([/scan\.png/]);
-    expect(await pickerOptions()).toEqual([{ multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic"] }]);
+    expect(await pickerOptions()).toEqual([{ multiple: true, extensions: ["png", "jpg", "jpeg", "webp", "heic", "heif", "tif", "tiff"] }]);
 });
 
 test("click, Shift-click and Cmd-click select rows, and removal only edits the list", async ({ page }) => {
@@ -278,7 +292,7 @@ test("drag and keyboard reorder set the order sent in the request", async ({ pag
     await b.press("Meta+ArrowUp");
     await expect(rows(page)).toHaveText([/c\.pdf/, /b\.pdf/, /a\.pdf/]);
     await expect(page.getByRole("status").filter({ hasText: "Moved" })).toHaveText("Moved b.pdf to position 2.");
-    await expect(rows(page).nth(1)).toHaveAttribute("aria-label", "2 of 3, b.pdf");
+    await expect(rows(page).nth(1)).toHaveAttribute("aria-label", "2. b.pdf");
 
     await page.getByRole("button", { name: "Move a.pdf up" }).click();
     await expect(rows(page)).toHaveText([/c\.pdf/, /a\.pdf/, /b\.pdf/]);
@@ -654,7 +668,7 @@ test("a saved Remove Password favorite and recent open File Security once migrat
 
 test("a saved Protect PDF favorite and recent open File Security after the earlier migration already ran", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "5") return;
         localStorage.setItem("toolbox-tool-id-migration", "1");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-protect", "pdf-merge"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-protect"]));
@@ -672,12 +686,12 @@ test("a saved Protect PDF favorite and recent open File Security after the earli
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["lock-unlock", "pdf-merge"], recent: ["lock-unlock"], marker: "5" });
 });
 
 test("a saved Protect Office Files favorite and recent open File Security after migration", async ({ page }) => {
     await page.addInitScript(() => {
-        if (localStorage.getItem("toolbox-tool-id-migration") === "3") return;
+        if (localStorage.getItem("toolbox-tool-id-migration") === "5") return;
         localStorage.setItem("toolbox-tool-id-migration", "2");
         localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-merge", "office-protect"]));
         localStorage.setItem("toolbox-recent", JSON.stringify(["office-protect", "pdf-merge"]));
@@ -697,7 +711,74 @@ test("a saved Protect Office Files favorite and recent open File Security after 
         recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
         marker: localStorage.getItem("toolbox-tool-id-migration"),
     }));
-    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "3" });
+    expect(saved).toEqual({ favorites: ["pdf-merge", "lock-unlock"], recent: ["lock-unlock", "pdf-merge"], marker: "5" });
+});
+
+test("a saved Compress PDF favorite and recent open Compress Files after the earlier migrations already ran", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-tool-id-migration") === "5") return;
+        localStorage.setItem("toolbox-tool-id-migration", "3");
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-compress", "pdf-merge"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-merge", "pdf-compress"]));
+    });
+    await page.goto("/");
+    const chips = page.getByRole("group", { name: "Favorite tools" });
+    await expect(chips.getByRole("button")).toHaveText(["Compress", "Merge PDF"]);
+    await chips.getByRole("button", { name: "Compress", exact: true }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("Compress Files");
+    await expect(page.getByRole("heading", { name: "Compress", exact: true })).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Strength" })).toBeVisible();
+
+    await page.reload();
+    const saved = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+        marker: localStorage.getItem("toolbox-tool-id-migration"),
+    }));
+    expect(saved).toEqual({ favorites: ["compress-files", "pdf-merge"], recent: ["compress-files", "pdf-merge"], marker: "5" });
+});
+
+test("saved PDF to Text and Extract Images favorites and recents open Extract from PDF after migration", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-tool-id-migration") === "5") return;
+        localStorage.setItem("toolbox-tool-id-migration", "3");
+        localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-to-text", "pdf-merge", "pdf-image-extract"]));
+        localStorage.setItem("toolbox-recent", JSON.stringify(["pdf-image-extract", "pdf-to-text"]));
+    });
+    await page.goto("/");
+    const chips = page.getByRole("group", { name: "Favorite tools" });
+    await expect(chips.getByRole("button")).toHaveText(["Extract from PDF", "Merge PDF"]);
+    await chips.getByRole("button", { name: "Extract from PDF" }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("PDF Conversion");
+    await expect(page.getByRole("heading", { name: "Extract from PDF", exact: true })).toBeVisible();
+    const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
+    await expect(rail.getByRole("button", { name: "Extract from PDF", exact: true })).toHaveCount(1);
+    await expect(rail.getByRole("button", { name: /PDF to Text|Extract Images/ })).toHaveCount(0);
+
+    await page.reload();
+    const saved = await page.evaluate(() => ({
+        favorites: JSON.parse(localStorage.getItem("toolbox-favorites") ?? "null"),
+        recent: JSON.parse(localStorage.getItem("toolbox-recent") ?? "null"),
+        marker: localStorage.getItem("toolbox-tool-id-migration"),
+    }));
+    expect(saved.favorites).toEqual(["pdf-extract", "pdf-merge"]);
+    expect(saved.recent[0]).toBe("pdf-extract");
+    expect(saved.recent.filter((id: string) => id === "pdf-extract")).toHaveLength(1);
+    expect(saved.recent).not.toContain("pdf-to-text");
+    expect(saved.recent).not.toContain("pdf-image-extract");
+    expect(saved.marker).toBe("5");
+});
+
+const extractSearchTerms = ["Extract from PDF", "PDF to Text", "Extract Images", "text", "images"];
+
+test("search shows one PDF extraction tool for old and new names", async ({ page }) => {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    for (const term of extractSearchTerms) {
+        await search.fill(term);
+        await expect(page.locator('button[data-command-result="pdf-extract"]'), term).toHaveCount(1);
+        await expect(page.getByRole("button", { name: /^Open (PDF to Text|Extract Images from PDF)$/ }), term).toHaveCount(0);
+    }
 });
 
 test("Lock sends a mixed PDF, Word, Excel and PowerPoint batch in one protect_files request and shows one locked row per file", async ({ page }) => {
@@ -905,7 +986,10 @@ for (const tool of [
     test(`${tool.title} without qpdf shows the native Unavailable message in plain language`, async ({ page }) => {
         await open(page, "Merge PDF");
         await drop(page, tool.paths);
-        if (tool.title === "Split PDF") await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+        if (tool.title === "Split PDF") {
+            await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+            await page.getByRole("textbox", { name: "Page ranges" }).fill("1");
+        }
         await page.evaluate(({ paths, message }) => {
             (window as unknown as IntakeWindow).__failures = Object.fromEntries(paths.map((path) => [path, { kind: "unavailable", message }]));
         }, { paths: tool.paths, message: qpdfUnavailableMessage });
@@ -1159,7 +1243,7 @@ test("OCR takes a mixed drop of PDFs and images, refuses other files, and notes 
     await expect(results).toHaveCount(5);
     const heic = results.nth(1);
     await expect(heic).toHaveAttribute("data-tone", "note");
-    await expect(heic.locator(".result-row-detail")).toHaveText(`${note} Test output`);
+    await expect(heic.locator(".result-row-detail")).toHaveText([note, "Test output"]);
     await expect(heic.locator(".result-row-state .sr-only")).toHaveText("Recognised with a note");
     await expect(heic.locator(".result-row-icon svg")).toHaveClass(/lucide-info/);
     for (const index of [0, 2, 3, 4]) await expect(results.nth(index)).toHaveAttribute("data-tone", "ok");
@@ -1173,4 +1257,296 @@ test("OCR with one image in the list asks for no thumbnails and can run", async 
     await expect(page.getByText("With one PDF in the list, its pages appear here as thumbnails to pick from.", { exact: true })).toBeVisible();
     await expect(page.locator(".workspace-primary-action")).toBeEnabled();
     expect(await requestFor(page, "inspect_pdf")).toEqual([]);
+});
+
+test("Convert Image Format sends the batch with one target and shows Skipped, converted and failed rows", async ({ page }) => {
+    const alreadyJpeg = "Already JPEG. JPG and JPEG count as one format.";
+    const paths = ["/local/a.png", "/local/IMG_4013.jpeg", "/local/broken.webp", "/local/d.heic"];
+    await open(page, "Convert Image Format");
+    await drop(page, paths);
+    await page.evaluate((alreadyJpeg) => {
+        const win = window as unknown as IntakeWindow;
+        win.__skippedPaths = { "/local/IMG_4013.jpeg": { code: "alreadyInTargetFormat", message: alreadyJpeg } };
+        win.__failures = { "/local/broken.webp": { kind: "invalidInput", message: "This image could not be read." } };
+    }, alreadyJpeg);
+    const target = page.getByRole("radiogroup", { name: "Convert to" });
+    await target.getByRole("radio", { name: "PNG", exact: true }).click();
+    await target.getByRole("radio", { name: "JPEG", exact: true }).click();
+    await expect(target.getByRole("radio", { name: "JPEG", exact: true })).toBeChecked();
+    await expect(page.getByText("Transparent areas become white, because JPEG has no transparency.")).toBeVisible();
+    await expect(page.getByText(/shared quality of 90/)).toBeVisible();
+    await run(page).click();
+
+    const requests = await requestFor(page, "convert_images");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ paths, format: "jpg" });
+    expect(await requestFor(page, "export_image_edit_plan")).toHaveLength(0);
+
+    await expect(results(page)).toHaveCount(4);
+    await expect(page.locator(".result-summary strong")).toContainText("1 skipped, 1 failed");
+    const skipped = results(page).filter({ hasText: "IMG_4013.jpeg" });
+    await expect(skipped).toHaveAttribute("data-state", "skipped");
+    await expect(skipped).toHaveAttribute("data-tone", "skip");
+    await expect(skipped).toContainText(alreadyJpeg);
+    await expect(skipped.locator(".result-row-state")).toContainText("Skipped");
+    await expect(skipped.getByRole("button")).toHaveCount(0);
+    for (const name of ["a.png", "d.heic"]) {
+        const converted = results(page).filter({ hasText: name });
+        await expect(converted).toHaveAttribute("data-state", "succeeded");
+        await expect(converted.getByRole("button", { name: `Open ${name}.out`, exact: true })).toBeVisible();
+        await expect(converted.getByRole("button", { name: new RegExp(`^Show in .*: ${name.replace(".", "\\.")}\\.out$`) })).toBeVisible();
+    }
+    const failed = results(page).filter({ hasText: "broken.webp" });
+    await expect(failed).toHaveAttribute("data-state", "failed");
+    await expect(failed).toHaveAttribute("data-tone", "fail");
+    await expect(failed).toContainText("This image could not be read.");
+    await expect(failed.getByRole("button", { name: "Open broken.webp.out", exact: true })).toHaveCount(0);
+});
+
+test("Convert Image Format reports flattened transparency and reduced bit depth on the converted rows", async ({ page }) => {
+    await open(page, "Convert Image Format");
+    await drop(page, ["/local/logo.png", "/local/floorplan.heic", "/local/plain.png"]);
+    await page.evaluate(() => {
+        (window as unknown as IntakeWindow).__warnings = {
+            "/local/logo.png": [{ code: "transparencyFlattened", message: "Transparent areas were flattened onto white, because JPEG has none." }],
+            "/local/floorplan.heic": [{ code: "precisionReduced", message: "Reduced from 10-bit to 8-bit sRGB." }],
+        };
+    });
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "WebP", exact: true }).click();
+    await expect(page.getByText("Follows each source. PNG and TIFF stay lossless. JPEG and HEIC are lossy.")).toBeVisible();
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "JPEG", exact: true }).click();
+    await run(page).click();
+
+    await expect(results(page)).toHaveCount(3);
+    const flattened = results(page).filter({ hasText: "logo.png" });
+    // Flattening says how the file was saved, so the row stays done rather than warned.
+    await expect(flattened).toHaveAttribute("data-tone", "ok");
+    await expect(flattened).toContainText("Transparent areas were flattened onto white, because JPEG has none.");
+    const reduced = results(page).filter({ hasText: "floorplan.heic" });
+    await expect(reduced).toHaveAttribute("data-tone", "warn");
+    await expect(reduced).toContainText("Reduced from 10-bit to 8-bit sRGB.");
+    const plain = results(page).filter({ hasText: "plain.png" });
+    await expect(plain).toHaveAttribute("data-tone", "ok");
+    await expect(plain).not.toContainText("flattened");
+});
+
+test("Convert Image Format accepts .tif and .tiff files and sends them with the batch", async ({ page }) => {
+    const paths = ["/local/scan-0042.tif", "/local/fax-0007.TIFF", "/local/a.png"];
+    await open(page, "Convert Image Format");
+    await drop(page, paths);
+    for (const name of ["scan-0042.tif", "fax-0007.TIFF", "a.png"]) await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Not added" })).toHaveCount(0);
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "PNG", exact: true }).click();
+    await run(page).click();
+
+    const requests = await requestFor(page, "convert_images");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ paths, format: "png" });
+    await expect(results(page)).toHaveCount(3);
+});
+
+test("Convert Image Format offers TIFF with a compression choice that defaults to LZW and is sent only for a TIFF target", async ({ page }) => {
+    const paths = ["/local/a.png", "/local/scan-16bit.png"];
+    await open(page, "Convert Image Format");
+    await drop(page, paths);
+    const target = page.getByRole("radiogroup", { name: "Convert to" });
+    await expect(target.getByRole("radio")).toHaveText(["JPEG", "PNG", "WebP", "HEIC", "TIFF"]);
+    const compression = page.getByRole("radiogroup", { name: "TIFF compression" });
+    await expect(compression).toHaveCount(0);
+
+    await target.getByRole("radio", { name: "TIFF", exact: true }).click();
+    await expect(page.getByText("Lossless. Transparency is kept.")).toBeVisible();
+    await expect(compression.getByRole("radio")).toHaveText(["LZW", "None", "Deflate"]);
+    await expect(compression.getByRole("radio", { name: "LZW", exact: true })).toBeChecked();
+    await expect(compression).toHaveAccessibleDescription("All three are lossless. LZW is the default. 16-bit sources stay 16-bit, and 8-bit sources stay 8-bit.");
+    await run(page).click();
+    await expect(results(page)).toHaveCount(2);
+
+    await compression.getByRole("radio", { name: "Deflate", exact: true }).click();
+    await expect(compression.getByRole("radio", { name: "Deflate", exact: true })).toBeChecked();
+    await run(page).click();
+    await expect.poll(async () => (await requestFor(page, "convert_images")).length).toBe(2);
+
+    await target.getByRole("radio", { name: "PNG", exact: true }).click();
+    await expect(compression).toHaveCount(0);
+    await run(page).click();
+    await expect.poll(async () => (await requestFor(page, "convert_images")).length).toBe(3);
+
+    const requests = await requestFor(page, "convert_images");
+    expect(requests[0]).toMatchObject({ paths, format: "tiff", tiffCompression: "lzw" });
+    expect(requests[1]).toMatchObject({ paths, format: "tiff", tiffCompression: "deflate" });
+    expect(requests[2]).toMatchObject({ paths, format: "png" });
+    expect(requests[2]).not.toHaveProperty("tiffCompression");
+});
+
+test("Convert Image Format lists every page output of a multi-page TIFF on its one row, each with Open and Reveal", async ({ page }) => {
+    const pages = ["/local/scan-0042-converted-p1.png", "/local/scan-0042-converted-p2.png", "/local/scan-0042-converted-p3.png"];
+    await open(page, "Convert Image Format");
+    await drop(page, ["/local/scan-0042.tif", "/local/fax-0007.tif", "/local/a.png"]);
+    await page.evaluate((pages) => {
+        const win = window as unknown as IntakeWindow;
+        win.__outputs = {
+            "/local/scan-0042.tif": { outputPaths: pages, detail: "3 files, one per page." },
+            "/local/fax-0007.tif": { outputPaths: ["/local/fax-0007-converted-p1.png"], detail: "" },
+        };
+        win.__failures = { "/local/fax-0007.tif": { kind: "invalidInput", message: "TIFF page 2 of 3 can't be read. Page 1 was saved as fax-0007-converted-p1.png." } };
+    }, pages);
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "PNG", exact: true }).click();
+    await run(page).click();
+
+    const rowsList = page.getByRole("list", { name: "Results" });
+    await expect(rowsList.locator(":scope > li")).toHaveCount(3);
+    const scan = rowsList.locator(":scope > li").filter({ hasText: "scan-0042.tif" });
+    await expect(scan).toHaveAttribute("data-state", "succeeded");
+    await expect(scan).toContainText("3 files, one per page.");
+    await expect(scan.getByRole("button", { name: /^Open first/ })).toHaveCount(0);
+    const toggle = scan.getByRole("button", { name: "Show 3 files", exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
+    await expect(scan.getByRole("button", { name: "Hide files", exact: true })).toHaveAttribute("aria-expanded", "true");
+    const outputs = scan.getByRole("list", { name: "Files from scan-0042.tif" });
+    await expect(outputs.getByRole("listitem")).toHaveText([/scan-0042-converted-p1\.png/, /scan-0042-converted-p2\.png/, /scan-0042-converted-p3\.png/]);
+    for (const path of pages) {
+        const name = path.split("/").pop() ?? path;
+        await outputs.getByRole("button", { name: `Open ${name}`, exact: true }).click();
+        await outputs.getByRole("button", { name: `Show in Finder: ${name}`, exact: true }).click();
+    }
+    const invocations = await page.evaluate(() => (window as unknown as IntakeWindow).__invocations);
+    const opened = (command: string) => invocations.filter((invocation) => invocation.command === command).map(({ args }) => (args as { path: string }).path);
+    expect(opened("open_output_path")).toEqual(pages);
+    expect(opened("reveal_output_path")).toEqual(pages);
+
+    const fax = rowsList.locator(":scope > li").filter({ hasText: "fax-0007.tif" });
+    await expect(fax).toHaveAttribute("data-state", "failed");
+    await expect(fax).toContainText("Page 1 was saved as fax-0007-converted-p1.png.");
+    await fax.getByRole("button", { name: "Show 1 file", exact: true }).click();
+    const saved = fax.getByRole("list", { name: "Files from fax-0007.tif" });
+    await expect(saved.getByRole("listitem")).toHaveCount(1);
+    await expect(saved.getByRole("button", { name: "Open fax-0007-converted-p1.png", exact: true })).toBeVisible();
+    await expect(saved.getByRole("button", { name: "Show in Finder: fax-0007-converted-p1.png", exact: true })).toBeVisible();
+
+    const single = rowsList.locator(":scope > li").filter({ hasText: "a.png" });
+    await expect(single.getByRole("button", { name: "Open a.png.out", exact: true })).toBeVisible();
+    await expect(single.getByRole("button", { name: /^Show \d/ })).toHaveCount(0);
+});
+
+test("Convert Image Format keeps a GIF out of the list and its pointer opens Extract GIF Frames", async ({ page }) => {
+    await open(page, "Convert Image Format");
+    await drop(page, ["/local/party-invite.gif", "/local/a.png"]);
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    const gif = notAdded.locator("li").filter({ hasText: "party-invite.gif" });
+    await expect(gif).toContainText("Converting a GIF would drop its animation. Extract GIF Frames saves every frame.");
+    await expect(page.getByText("a.png", { exact: true })).toBeVisible();
+
+    await gif.getByRole("button", { name: "Extract GIF Frames", exact: true }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("Media");
+    await expect(page.locator(".workspace-command").filter({ hasText: "Extract GIF Frames" })).toHaveAttribute("aria-pressed", "true");
+    expect(await requestFor(page, "convert_images")).toHaveLength(0);
+});
+
+test("only Convert Image Format points a refused GIF at Extract GIF Frames", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await drop(page, ["/local/party-invite.gif"]);
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded).toContainText("party-invite.gif");
+    await expect(notAdded).not.toContainText("Converting a GIF");
+    await expect(notAdded.getByRole("button", { name: "Extract GIF Frames" })).toHaveCount(0);
+});
+
+test("Images to PDF takes HEIC and HEIF, refuses GIF, sends no quality setting and shows the precision note", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await drop(page, ["/local/IMG_0001.heic", "/local/IMG_0002.HEIF", "/local/receipt.jpg", "/local/animation.gif"]);
+
+    await expect(rows(page)).toHaveText([/^1IMG_0001\.heic/, /^2IMG_0002\.HEIF/, /^3receipt\.jpg/]);
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded.getByRole("listitem")).toHaveText([/animation\.gif.*only takes .*files\./]);
+    await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
+    await expect(page.getByText("JPEGs go in as they are. Other images are stored without loss, and transparency is kept. A multi-page TIFF adds one page per TIFF page.")).toBeVisible();
+    await page.evaluate(() => {
+        (window as unknown as IntakeWindow).__warnings = { "/local/IMG_0001.heic": [{ code: "precisionReduced", message: "Reduced to 8-bit sRGB to fit in the PDF: page 1 (10-bit)." }] };
+    });
+
+    await runAndSave(page);
+
+    const [request] = await requestFor(page, "images_to_pdf");
+    expect(request.paths).toEqual(["/local/IMG_0001.heic", "/local/IMG_0002.HEIF", "/local/receipt.jpg"]);
+    expect(Object.keys(request).sort()).toEqual(["outputLocation", "outputPath", "pageSize", "paths"]);
+    expect(request.pageSize).toBe("matchImage");
+    expect(request).not.toHaveProperty("quality");
+    const reduced = results(page).filter({ hasText: "IMG_0001.heic" });
+    await expect(reduced).toHaveAttribute("data-tone", "warn");
+    // The row shows the native note (#637), which carries the page and bit depth.
+    await expect(reduced).toContainText("Reduced to 8-bit sRGB to fit in the PDF: page 1 (10-bit).");
+});
+
+test("Images to PDF names the unreadable image when the combine fails", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await drop(page, ["/local/cover.png", "/local/broken.heic", "/local/back.jpg"]);
+    const reason = "Could not process /local/broken.heic: HEIC decode failed: Invalid input";
+    await page.evaluate((reason) => {
+        const stopped = { kind: "processing", message: `Aggregate operation stopped because /local/broken.heic failed: ${reason}` };
+        (window as unknown as IntakeWindow).__failures = {
+            "/local/cover.png": stopped,
+            "/local/broken.heic": { kind: "processing", message: reason },
+            "/local/back.jpg": stopped,
+        };
+    }, reason);
+
+    await runAndSave(page);
+
+    await expect(results(page)).toHaveCount(3);
+    for (const [index, name] of ["cover.png", "broken.heic", "back.jpg"].entries()) {
+        const row = results(page).nth(index);
+        await expect(row).toContainText(name);
+        await expect(row).toHaveAttribute("data-state", "failed");
+        await expect(row).toContainText("/local/broken.heic");
+        await expect(row.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    }
+});
+
+test("Images to PDF takes TIFF and shows how many pages each multi-page TIFF adds", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__pageCounts = { "/local/scan-0042.tiff": 3, "/local/receipt.TIF": 1 }; });
+    await drop(page, ["/local/cover.png", "/local/scan-0042.tiff", "/local/receipt.TIF"]);
+
+    await expect(rows(page)).toHaveText([/^1cover\.png/, /^2scan-0042\.tiff.*TIFF, 3 pages/, /^3receipt\.TIF/]);
+    await expect(rows(page).filter({ hasText: "Won't run" })).toHaveCount(0);
+    await expect(rows(page).filter({ hasText: "receipt.TIF" })).not.toContainText("pages");
+    await expect(rows(page).filter({ hasText: "cover.png" })).not.toContainText("pages");
+    const [inspection] = await requestFor(page, "inspect_image_pages");
+    expect(inspection.paths).toEqual(["/local/scan-0042.tiff", "/local/receipt.TIF"]);
+
+    await page.getByRole("button", { name: "Move scan-0042.tiff up" }).click();
+    await expect(rows(page)).toHaveText([/^1scan-0042\.tiff.*TIFF, 3 pages/, /^2cover\.png/, /^3receipt\.TIF/]);
+
+    await runAndSave(page);
+
+    const [request] = await requestFor(page, "images_to_pdf");
+    expect(request.paths).toEqual(["/local/scan-0042.tiff", "/local/cover.png", "/local/receipt.TIF"]);
+    await expect(results(page)).toHaveCount(3);
+});
+
+test("Images to PDF names the unreadable TIFF page when the combine fails", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__pageCounts = { "/local/scan-0042.tiff": 3 }; });
+    await drop(page, ["/local/cover.png", "/local/scan-0042.tiff"]);
+    await expect(rows(page).filter({ hasText: "scan-0042.tiff" })).toContainText("TIFF, 3 pages");
+    const reason = "Could not process /local/scan-0042.tiff: TIFF page 2 of 3 can't be read. Unsupported TIFF page: unsupported compression method";
+    await page.evaluate((reason) => {
+        (window as unknown as IntakeWindow).__failures = {
+            "/local/cover.png": { kind: "processing", message: `Aggregate operation stopped because /local/scan-0042.tiff failed: ${reason}` },
+            "/local/scan-0042.tiff": { kind: "processing", message: reason },
+        };
+    }, reason);
+
+    await runAndSave(page);
+
+    await expect(results(page)).toHaveCount(2);
+    const failed = results(page).filter({ hasText: "scan-0042.tiff" }).filter({ hasText: "TIFF page 2 of 3 can't be read" });
+    await expect(failed.first()).toHaveAttribute("data-state", "failed");
+    for (const row of await results(page).all()) {
+        await expect(row).toHaveAttribute("data-state", "failed");
+        await expect(row).toContainText("TIFF page 2 of 3 can't be read");
+        await expect(row.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    }
 });

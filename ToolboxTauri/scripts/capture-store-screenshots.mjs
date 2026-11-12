@@ -337,7 +337,7 @@ async function run() {
       await driver.wait(until.elementLocated(By.css(".image-editor-crop-overlay")), 10_000, "Crop selection did not appear");
     }],
     ["compress-images", async () => {
-      await openTool("Compress Images");
+      await openTool("Compress Files");
       await dropIntoTool([samples.dusk, samples.morning, samples.autumn]);
       await waitForText("Autumn valley");
     }],
