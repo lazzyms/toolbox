@@ -1,4 +1,5 @@
 pub mod common;
+pub mod compress;
 pub mod contracts;
 pub mod images;
 pub mod office;

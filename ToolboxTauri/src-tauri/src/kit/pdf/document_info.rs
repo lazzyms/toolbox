@@ -6,18 +6,18 @@ use lopdf::{Document, LoadOptions, Object};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::{escape::unescape, NsReader, XmlVersion};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::kit::contracts::ToolError;
 use crate::kit::password::WRONG_PASSWORD;
 
-const XMP_MAX_BYTES: usize = 4 * 1024 * 1024;
-const RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
-const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
+pub(crate) const XMP_MAX_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+pub(crate) const DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
+pub(crate) const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
 const PDF: &[u8] = b"http://ns.adobe.com/pdf/1.3/";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DocumentProperty {
     Title,
@@ -33,7 +33,7 @@ pub enum DocumentProperty {
 impl DocumentProperty {
     const ALL: [Self; 8] = [Self::Title, Self::Author, Self::Subject, Self::Keywords, Self::Creator, Self::Producer, Self::CreationDate, Self::ModificationDate];
 
-    fn info_key(self) -> &'static str {
+    pub(crate) fn info_key(self) -> &'static str {
         match self {
             Self::Title => "Title",
             Self::Author => "Author",
@@ -46,7 +46,7 @@ impl DocumentProperty {
         }
     }
 
-    fn xmp_name(self) -> (&'static [u8], &'static [u8]) {
+    pub(crate) fn xmp_name(self) -> (&'static [u8], &'static [u8]) {
         match self {
             Self::Title => (DC, b"title"),
             Self::Author => (DC, b"creator"),
@@ -63,7 +63,7 @@ impl DocumentProperty {
         Self::ALL.into_iter().find(|property| property.xmp_name() == (namespace, local))
     }
 
-    fn is_date(self) -> bool {
+    pub(crate) fn is_date(self) -> bool {
         matches!(self, Self::CreationDate | Self::ModificationDate)
     }
 }
@@ -116,7 +116,14 @@ impl Serialize for PdfDate {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+impl<'de> Deserialize<'de> for PdfDate {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        parse_xmp_date(&text).ok_or_else(|| serde::de::Error::custom(format!("invalid date {text:?}")))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PdfProperties {
     pub title: Option<String>,
@@ -183,7 +190,7 @@ impl PdfProperties {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XmpSummary {
     #[serde(flatten)]
@@ -191,7 +198,7 @@ pub struct XmpSummary {
     pub properties: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PropertyConflict {
     pub property: DocumentProperty,
@@ -209,20 +216,32 @@ pub struct PdfDocumentInfo {
 }
 
 pub fn read(path: &Path, password: Option<&str>) -> Result<PdfDocumentInfo, ToolError> {
-    let bytes = std::fs::read(path).map_err(|error| ToolError::processing(format!("Could not read the PDF: {error}")))?;
+    load(&read_bytes(path)?, password).map(|document| from_document(&document))
+}
+
+pub(crate) fn read_bytes(path: &Path) -> Result<Vec<u8>, ToolError> {
+    std::fs::read(path).map_err(|error| ToolError::processing(format!("Could not read the PDF: {error}")))
+}
+
+/// Opens a PDF held in memory, decrypting it with the open password when it needs one.
+pub(crate) fn load(bytes: &[u8], password: Option<&str>) -> Result<Document, ToolError> {
     let options = LoadOptions { password: password.map(str::to_owned), ..LoadOptions::default() };
-    let document = Document::load_mem_with_options(&bytes, options).map_err(super::pdf_load_error)?;
+    let document = Document::load_mem_with_options(bytes, options).map_err(super::pdf_load_error)?;
     if document.is_encrypted() {
         return Err(match password {
             Some(_) => ToolError::wrong_password(WRONG_PASSWORD),
             None => ToolError::invalid_input("Enter the PDF password."),
         });
     }
+    Ok(document)
+}
+
+pub(crate) fn from_document(document: &Document) -> PdfDocumentInfo {
     let mut unsupported = Vec::new();
-    let info = read_info(&document, &mut unsupported);
-    let xmp = read_xmp(&document, &mut unsupported);
+    let info = read_info(document, &mut unsupported);
+    let xmp = read_xmp(document, &mut unsupported);
     let conflicts = xmp.as_ref().map(|xmp| conflicts(&info, &xmp.values)).unwrap_or_default();
-    Ok(PdfDocumentInfo { info, xmp, conflicts, unsupported })
+    PdfDocumentInfo { info, xmp, conflicts, unsupported }
 }
 
 fn conflicts(info: &PdfProperties, xmp: &PdfProperties) -> Vec<PropertyConflict> {
@@ -255,7 +274,7 @@ fn read_info(document: &Document, unsupported: &mut Vec<String>) -> PdfPropertie
     properties
 }
 
-fn decode_text(object: &Object) -> Option<String> {
+pub(crate) fn decode_text(object: &Object) -> Option<String> {
     let bytes = object.as_str().ok()?;
     if let Some(utf16) = bytes.strip_prefix(b"\xFE\xFF") {
         if utf16.len() % 2 != 0 {
@@ -453,7 +472,7 @@ impl Cursor<'_> {
     }
 }
 
-fn parse_pdf_date(text: &str) -> Option<PdfDate> {
+pub(crate) fn parse_pdf_date(text: &str) -> Option<PdfDate> {
     let text = text.trim();
     let mut cursor = Cursor(text.strip_prefix("D:").unwrap_or(text).as_bytes());
     let year = cursor.digits(4)?;
@@ -492,7 +511,7 @@ fn pdf_offset(cursor: &mut Cursor<'_>) -> Option<i32> {
     offset_minutes(hours, minutes)
 }
 
-fn parse_xmp_date(text: &str) -> Option<PdfDate> {
+pub(crate) fn parse_xmp_date(text: &str) -> Option<PdfDate> {
     let mut cursor = Cursor(text.as_bytes());
     let year = cursor.digits(4)?;
     let mut fields = [1, 1, 0, 0, 0];
