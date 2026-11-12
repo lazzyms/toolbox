@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -8,10 +10,11 @@ use lopdf::Document;
 
 use crate::kit::common::limits::{self, HelperDeadline, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{LimitKind, ToolError};
+use crate::kit::contracts::{LimitKind, OutcomePointer, PackNeed, ToolError};
 use crate::kit::pdf::metadata::page_bounds;
 use crate::kit::pdf::page_ranges::{validate_page_ranges, PageRanges};
 use crate::kit::resources;
+use crate::packs::uninstall::{RequiredPack, RunPacks};
 
 const OCR_MAX_INPUT_BYTES: u64 = 100 * 1024 * 1024;
 const OCR_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
@@ -20,7 +23,15 @@ const OCR_MAX_SINGLE_PIXELS: u64 = 40_000_000;
 const OCR_MAX_TOTAL_PIXELS: u64 = 120_000_000;
 const OCR_MAX_RENDERED_BYTES: u64 = 50 * 1024 * 1024;
 const OCR_DEADLINE: HelperDeadline = HelperDeadline { per_file: Duration::from_secs(30), per_page: Duration::from_secs(30) };
-const OCR_LANGUAGES: &[&str] = &["eng"];
+/// The language OCR reads with the data bundled in the app. Every other language needs a pack.
+const ENGLISH: &str = crate::packs::BUILT_IN_OCR_LANGUAGE.0;
+/// Development builds read `<code>.traineddata` from this folder when the language's pack is not installed.
+const OCR_LANGUAGE_DIR_ENV: &str = "TOOLBOX_OCR_LANGUAGE_DIR";
+const OCR_LANGUAGES: &[&str] = &[ENGLISH];
+const OCR_TEXT_SUFFIX: &str = "-ocr";
+const OCR_PAGE_SEGMENTATION: &str = "3";
+const OCR_NO_TEXT: &str = "OCR completed but found no readable text.";
+const OCR_PASSWORD_PROTECTED: &str = "It's password-protected. Remove its password in File Security, then run OCR again.";
 
 #[derive(Debug, Clone, Copy)]
 struct OcrPage {
@@ -46,6 +57,8 @@ pub struct OcrRequest {
     #[serde(default)] pub force: bool,
     pub languages: Vec<String>,
     pub output_location: OutputLocation,
+    /// Files read in another language than `languages`, by Tesseract code, as in `hin`.
+    #[serde(default)] pub language_overrides: HashMap<PathBuf, String>,
 }
 
 impl OcrRequest {
@@ -56,6 +69,14 @@ impl OcrRequest {
             "searchablePdf" => Ok(OcrMode::SearchablePdf),
             "text" => Ok(OcrMode::Text),
             other => Err(format!("\"{other}\" is not an OCR output. Choose a searchable PDF or a text file.")),
+        }
+    }
+
+    /// The languages `path` is read in: its override when it has one, else the request's languages.
+    pub fn languages_for(&self, path: &Path) -> Vec<String> {
+        match self.language_overrides.get(path) {
+            Some(code) => vec![code.clone()],
+            None => self.languages.clone(),
         }
     }
 
@@ -76,17 +97,80 @@ pub fn validate_ocr_request(request: &OcrRequest) -> Result<(), Vec<JobOutcome>>
     Err(request.paths.iter().cloned().map(|path| JobOutcome::failure(path, error.clone())).collect())
 }
 
-pub fn ocr_pdf(request: &OcrRequest, input: PathBuf) -> JobOutcome {
-    ocr_pdf_within(request, input, OCR_DEADLINE)
+pub struct OcrRun {
+    pub request: OcrRequest,
+    pub packs: RunPacks,
 }
 
-fn ocr_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
+/// One language's recognition data and the name the result names it by.
+#[derive(Debug)]
+struct OcrLanguage {
+    data: PathBuf,
+    name: String,
+}
+
+/// The language data for `code`: English from the app, any other language from its pack. A pack
+/// that is not installed, is damaged or does not fit this app fails with a pointer to it.
+fn ocr_language(packs: &RunPacks, code: &str) -> Result<OcrLanguage, ToolError> {
+    if code == ENGLISH {
+        let data = find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &ocr_resource_root()).map_err(|_| ToolError::unavailable(OcrComponent::EnglishData.to_string()))?;
+        return Ok(OcrLanguage { data, name: "English".into() });
+    }
+    let (pack, language) = packs.catalog()?.packs.iter()
+        .find_map(|pack| pack.ocr_language.as_ref().filter(|language| language.code == code).map(|language| (pack, language)))
+        .ok_or_else(|| ToolError::invalid_input(format!("Toolbox can't read text in language {code:?}.")))?;
+    let file_name = format!("{code}.traineddata");
+    let development_override = cfg!(debug_assertions).then(|| std::env::var_os(OCR_LANGUAGE_DIR_ENV)).flatten()
+        .map(|folder| PathBuf::from(folder).join(&file_name));
+    let required = RequiredPack { id: &pack.id, name: &language.name };
+    let resolved = packs.resolve(&format!("tessdata/{file_name}"), required, Some(ocr_resource_root()), development_override)
+        .map_err(|mut error| {
+            if matches!(error.pointer, Some(OutcomePointer::Pack { reason: PackNeed::NotInstalled, .. })) {
+                error.message = format!("Needs the {} text recognition pack, which isn't installed. Nothing was saved.", language.name);
+            }
+            error
+        })?;
+    // Tesseract reads `<code>.traineddata` from the folder it is given.
+    if resolved.path.file_name() != Some(OsStr::new(&file_name)) {
+        return Err(ToolError::unavailable(format!("The {} pack has no {file_name}.", language.name)));
+    }
+    Ok(OcrLanguage { data: resolved.path, name: language.name.clone() })
+}
+
+/// The folder Tesseract reads every language of one file from, and the languages' names.
+fn ocr_languages(packs: &RunPacks, codes: &[String]) -> Result<(PathBuf, Vec<String>), ToolError> {
+    let languages = codes.iter().map(|code| ocr_language(packs, code)).collect::<Result<Vec<_>, _>>()?;
+    let mut folders = languages.iter().map(|language| language.data.parent());
+    let folder = folders.next().flatten().ok_or_else(|| ToolError::processing("OCR language data has no parent directory."))?;
+    if folders.any(|other| other != Some(folder)) {
+        return Err(ToolError::unavailable("These recognition languages can't be read together yet. Choose one language."));
+    }
+    Ok((folder.to_path_buf(), languages.into_iter().map(|language| language.name).collect()))
+}
+
+pub fn ocr_pdf(run: &OcrRun, input: PathBuf) -> JobOutcome {
+    ocr_pdf_within(run, input, OCR_DEADLINE)
+}
+
+fn ocr_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
+    let request = &run.request;
     if request.mode() != Ok(OcrMode::Text) {
         return unavailable(input, "Searchable PDF output is not available yet. Choose a text file.".to_string());
     }
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-ocr-text", "txt") {
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, OCR_TEXT_SUFFIX, "txt") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve OCR output: {error}")),
+    };
+    // A missing engine affects every file the same way, so it is reported before anything is read from the file.
+    let resources = match OcrResources::resolve() {
+        Ok(resources) => resources,
+        Err(error) => return unavailable(input, error.to_string()),
+    };
+    // A language whose pack is missing, damaged or does not fit points at that pack. Nothing is saved.
+    let languages = request.languages_for(&input);
+    let (tessdata_dir, language_names) = match ocr_languages(&run.packs, &languages) {
+        Ok(found) => found,
+        Err(error) => return JobOutcome::failure(input, error),
     };
     let input_size = match std::fs::metadata(&input) {
         Ok(metadata) => metadata.len(),
@@ -95,35 +179,36 @@ fn ocr_pdf_within(request: &OcrRequest, input: PathBuf, deadline: HelperDeadline
     if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
     let pages = match selected_ocr_pages(&input, request.page_range()) {
         Ok(pages) => pages,
-        Err(error) => return failure(input, error),
+        Err(error) => return JobOutcome::failure(input, error),
     };
-    let resources = match OcrResources::resolve() {
-        Ok(resources) => resources,
-        Err(error) => return unavailable(input, error),
+    let text = match run_ocr(&resources, &tessdata_dir, &input, &pages, &languages, deadline).and_then(|pages| ocr_text(&pages).map_err(ToolError::processing)) {
+        Ok(text) => text,
+        Err(error) => return JobOutcome::failure(input, error),
     };
-    match run_ocr(&resources, &input, &pages, &request.languages, deadline) {
-        Ok(stdout) => {
-            if stdout.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
-            let text = match normalize_ocr_text(&stdout) {
-                Ok(text) => text,
-                Err(error) => return failure(input, error),
-            };
-            if text.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
-            if text.is_empty() { return failure(input, "OCR completed but found no readable text.".to_string()); }
-            match std::fs::write(output.path(), text) {
-                Ok(_) => match output.publish() {
-                    Ok(path) => success(input, path, "OCR text extracted in page order"),
-                    Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
-                },
-                Err(error) => failure(input, format!("Could not write OCR output: {error}")),
-            }
-        }
-        Err(error) => JobOutcome::failure(input, error),
+    if text.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
+    if text.is_empty() { return failure(input, OCR_NO_TEXT.to_string()); }
+    match std::fs::write(output.path(), text) {
+        Ok(_) => match output.publish() {
+            Ok(path) => success(input, path, &recognized_detail(pages.len(), &language_names)),
+            Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
+        },
+        Err(error) => failure(input, format!("Could not write OCR output: {error}")),
     }
 }
 
-fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>, String> {
-    let document = Document::load(input).map_err(|error| format!("Could not inspect PDF for OCR: {error}"))?;
+fn recognized_detail(pages: usize, languages: &[String]) -> String {
+    format!("{pages} {} recognized. {}.", if pages == 1 { "page" } else { "pages" }, languages.join(", "))
+}
+
+fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>, ToolError> {
+    let document = Document::load(input).map_err(|error| ToolError::processing(format!("Could not inspect PDF for OCR: {error}")))?;
+    if document.is_encrypted() {
+        return Err(ToolError::invalid_input(OCR_PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+    }
+    selected_document_pages(&document, range).map_err(ToolError::processing)
+}
+
+fn selected_document_pages(document: &Document, range: Option<&str>) -> Result<Vec<OcrPage>, String> {
     let pages = document.get_pages();
     if pages.is_empty() { return Err("PDF has no pages to OCR.".to_string()); }
     let requested = range.map(|range| PageRanges::parse(range).and_then(|ranges| ranges.within(pages.len()))).transpose()?;
@@ -131,7 +216,7 @@ fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>,
     let mut selected = Vec::new();
     for (number, page_id) in pages {
         if requested.as_ref().is_some_and(|spans| !spans.iter().any(|&(first, last)| (first..=last).contains(&(number as usize)))) { continue; }
-        let (left, bottom, right, top) = page_bounds(&document, page_id)?;
+        let (left, bottom, right, top) = page_bounds(document, page_id)?;
         let width = right - left;
         let height = top - bottom;
         let pixels = rendered_pixels(width, height)?;
@@ -187,39 +272,69 @@ impl Drop for OcrWorkspace {
 
 struct OcrResources {
     engine: PathBuf,
-    tessdata: PathBuf,
     renderer: PathBuf,
 }
 
-impl OcrResources {
-    fn resolve() -> Result<Self, String> {
-        let root = ocr_resource_root();
-        Ok(Self {
-            engine: resources::resolve("tesseract", &root, "TOOLBOX_TESSERACT_PATH", "tesseract")?.path,
-            tessdata: find_resource("engTraineddata", "TOOLBOX_TESSDATA_PATH", &root)?,
-            renderer: find_pdf_renderer()?,
+/// The OCR pieces a file needs. Each one names itself when it is missing, so the
+/// person knows reinstalling is the fix rather than trying another file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OcrComponent { Engine, Renderer, EnglishData }
+
+impl std::fmt::Display for OcrComponent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Engine => "The text recognition engine is missing. Reinstall Toolbox.",
+            Self::Renderer => "The PDF page renderer is missing. Reinstall Toolbox.",
+            Self::EnglishData => "The English recognition data is missing. Reinstall Toolbox.",
         })
     }
 }
 
-fn run_ocr(resources: &OcrResources, input: &Path, pages: &[OcrPage], languages: &[String], deadline: HelperDeadline) -> Result<Vec<u8>, ToolError> {
+impl OcrResources {
+    fn resolve() -> Result<Self, OcrComponent> {
+        let root = ocr_resource_root();
+        Ok(Self {
+            engine: resources::resolve("tesseract", &root, "TOOLBOX_TESSERACT_PATH", "tesseract").map_err(|_| OcrComponent::Engine)?.path,
+            renderer: find_pdf_renderer().map_err(|_| OcrComponent::Renderer)?,
+        })
+    }
+}
+
+/// Recognises each page on its own, so the text keeps page order and page breaks.
+/// The engine runs on one thread with a fixed segmentation mode, resolution and
+/// language data, so the same file gives the same text every time.
+fn run_ocr(resources: &OcrResources, tessdata_dir: &Path, input: &Path, pages: &[OcrPage], languages: &[String], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
     let limit = deadline.limit(1, pages.len());
     let stop_at = Instant::now() + limit;
     let timed_out = format!("Recognising took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
     let workspace = OcrWorkspace::new().map_err(ToolError::processing)?;
-    let tessdata_dir = resources.tessdata.parent().ok_or_else(|| ToolError::processing("OCR language data has no parent directory."))?;
-    let mut text = Vec::new();
+    let mut recognized = Vec::with_capacity(pages.len());
+    let mut total = 0usize;
     for page in pages {
         let image = render_ocr_page(&resources.renderer, input, &workspace, *page, stop_at, &timed_out)?;
         let mut command = Command::new(&resources.engine);
-        command.arg(&image).arg("stdout").arg("--tessdata-dir").arg(tessdata_dir).arg("-l").arg(languages.join("+")).arg("--psm").arg("3");
+        command.env("OMP_THREAD_LIMIT", "1")
+            .arg(&image).arg("stdout")
+            .arg("--tessdata-dir").arg(tessdata_dir)
+            .arg("-l").arg(languages.join("+"))
+            .arg("--psm").arg(OCR_PAGE_SEGMENTATION)
+            .arg("--dpi").arg(OCR_RENDER_DPI.to_string());
         let result = run_ocr_helper(command, stop_at, &timed_out)?;
         if !result.status.success() { return Err(ToolError::processing(stderr(result, "OCR engine failed."))); }
-        if text.len().saturating_add(result.stdout.len()).saturating_add(1) > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
-        text.extend_from_slice(&result.stdout);
-        text.push(b'\n');
+        total = total.saturating_add(result.stdout.len()).saturating_add(1);
+        if total > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
+        recognized.push(result.stdout);
     }
-    Ok(text)
+    Ok(recognized)
+}
+
+/// Joins recognised pages with a form feed between them. Lines end in LF. A page
+/// with no text stays an empty page, so page numbers still line up. When no page
+/// has text the result is empty.
+fn ocr_text(pages: &[Vec<u8>]) -> Result<String, String> {
+    let pages = pages.iter().map(|page| normalize_ocr_text(page)).collect::<Result<Vec<_>, _>>()?;
+    if pages.iter().all(String::is_empty) { return Ok(String::new()); }
+    Ok(pages.iter().map(|page| if page.is_empty() { String::new() } else { format!("{page}\n") }).collect::<Vec<_>>().join("\u{c}"))
 }
 
 fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: OcrPage, deadline: Instant, timed_out: &str) -> Result<PathBuf, ToolError> {
@@ -391,10 +506,11 @@ fn stderr(result: std::process::Output, fallback: &str) -> String { String::from
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_ocr_text, ocr_pdf, ocr_pdf_within, validate_cutout, validate_face_blur, validate_ocr_request, OcrRequest, OCR_DEADLINE};
+    use super::{normalize_ocr_text, ocr_pdf, ocr_pdf_within, validate_cutout, validate_face_blur, validate_ocr_request, OcrRequest, OcrRun, OCR_DEADLINE};
     use crate::kit::common::limits::HelperDeadline;
+    use crate::packs::uninstall::RunPacks;
     use crate::kit::common::OutputLocation;
-    use crate::kit::contracts::{ErrorKind, LimitKind};
+    use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer, PackNeed};
     use image::{Rgba, RgbaImage};
     use lopdf::{dictionary, Document, Object, Stream};
     use std::fs;
@@ -414,7 +530,206 @@ mod tests {
             force: false,
             languages: vec!["eng".to_string()],
             output_location: OutputLocation::CustomFolder(output_root.to_path_buf()),
+            language_overrides: Default::default(),
         }
+    }
+
+    /// A run of `request` with no packs to find, so it reads English only.
+    fn run_of(request: OcrRequest) -> OcrRun {
+        OcrRun { request, packs: RunPacks::new(Err("No packs in this test.".into()), "1.0.14", Err("No catalog in this test.".into())) }
+    }
+
+    #[cfg(unix)]
+    fn executable(path: &Path, script: &str) {
+        fs::write(path, script).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(unix)]
+    /// Sets environment variables for one test and puts the old values back when dropped.
+    struct Env(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    #[cfg(unix)]
+    impl Env {
+        fn set(values: &[(&'static str, Option<&Path>)]) -> Self {
+            let old = values.iter().map(|(name, _)| (*name, std::env::var_os(name))).collect();
+            for (name, value) in values {
+                match value { Some(value) => std::env::set_var(name, value), None => std::env::remove_var(name) }
+            }
+            Self(old)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Env {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                match value { Some(value) => std::env::set_var(name, value), None => std::env::remove_var(name) }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    struct MixedBatch {
+        root: PathBuf,
+        english: PathBuf,
+        hindi: PathBuf,
+        output: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl MixedBatch {
+        /// One English and one Hindi PDF, an engine that prints the language it was asked for and
+        /// the language file it read, and a renderer that needs no PDF tools.
+        fn new(name: &str) -> Self {
+            let root = crate::packs::install::tests::sandbox(&format!("ocr-{name}"));
+            let batch = Self { english: root.join("english.pdf"), hindi: root.join("hindi.pdf"), output: root.join("output"), root };
+            make_pdf(&batch.english, 1);
+            make_pdf(&batch.hindi, 1);
+            fs::create_dir_all(&batch.output).unwrap();
+            fs::create_dir_all(batch.root.join("eng")).unwrap();
+            fs::write(batch.root.join("eng/eng.traineddata"), "english data").unwrap();
+            executable(&batch.root.join("engine.sh"), "#!/bin/sh\ndata=''\nlanguage=''\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --tessdata-dir) data=\"$2\"; shift ;;\n    -l) language=\"$2\"; shift ;;\n  esac\n  shift\ndone\nprintf '%s: ' \"$language\"\ncat \"$data/$language.traineddata\"\nprintf '\\n'\n");
+            executable(&batch.root.join("renderer.sh"), "#!/bin/sh\n: > \"${10}.png\"\n");
+            batch
+        }
+
+        /// Runs the English file in English and the Hindi file in Hindi as one batch, and checks
+        /// the originals are untouched. The outcomes come back in input order.
+        fn run(&self, app_data: &Path, app_version: &str, language_dir: Option<&Path>) -> Vec<crate::kit::common::JobOutcome> {
+            let originals = [fs::read(&self.english).unwrap(), fs::read(&self.hindi).unwrap()];
+            let outcomes = {
+                let _guard = crate::kit::lock_process_env();
+                let _env = Env::set(&[
+                    ("TOOLBOX_TESSERACT_PATH", Some(&self.root.join("engine.sh"))),
+                    ("TOOLBOX_PDFTOPPM_PATH", Some(&self.root.join("renderer.sh"))),
+                    ("TOOLBOX_TESSDATA_PATH", Some(&self.root.join("eng/eng.traineddata"))),
+                    (super::OCR_LANGUAGE_DIR_ENV, language_dir),
+                ]);
+                let request = OcrRequest {
+                    paths: vec![self.english.clone(), self.hindi.clone()],
+                    page_range: None,
+                    mode: "text".into(),
+                    force: false,
+                    languages: vec!["eng".into()],
+                    output_location: OutputLocation::CustomFolder(self.output.clone()),
+                    language_overrides: [(self.hindi.clone(), "hin".to_string())].into_iter().collect(),
+                };
+                let packs = RunPacks::new(Ok(app_data.to_path_buf()), app_version, Ok(crate::packs::install::tests::Fixture::new().catalog()));
+                // One run for the whole batch, each file through the job the batch runner calls. The
+                // runner itself refuses ocr_pdf while the tool is unavailable in this build.
+                let run = OcrRun { request, packs };
+                run.request.paths.iter().map(|input| ocr_pdf(&run, input.clone())).collect::<Vec<_>>()
+            };
+            assert_eq!([fs::read(&self.english).unwrap(), fs::read(&self.hindi).unwrap()], originals, "originals are never modified");
+            assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [self.english.clone(), self.hindi.clone()]);
+            outcomes
+        }
+
+        fn assert_english_read(&self, outcome: &crate::kit::common::JobOutcome) {
+            assert!(outcome.error().is_none(), "{outcome:?}");
+            let text = fs::read_to_string(&outcome.output_paths()[0]).unwrap();
+            assert_eq!(text, "eng: english data\n");
+        }
+
+        /// The Hindi file failed with the pointer and saved nothing.
+        fn assert_needs_pack(&self, outcome: &crate::kit::common::JobOutcome, reason: PackNeed, message: &str) {
+            let error = outcome.error().unwrap_or_else(|| panic!("{outcome:?}"));
+            assert_eq!(error.kind, ErrorKind::Unavailable);
+            assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: "ocr-hindi".into(), name: "Hindi".into(), reason }));
+            assert_eq!(error.message, message);
+            assert!(outcome.output_paths().is_empty());
+            let saved: Vec<_> = fs::read_dir(&self.output).unwrap().flatten().map(|entry| entry.file_name()).collect();
+            assert!(saved.iter().all(|name| name.to_string_lossy().starts_with("english")), "nothing was saved for the Hindi file: {saved:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    /// Installs the fixture Hindi pack into a fresh app-data folder.
+    fn install_hindi(root: &Path) -> PathBuf {
+        use crate::packs::install::{install, tests::{Fixture, TestKey}, InstallContext, PackLimits};
+        let (fixture, key) = (Fixture::new(), TestKey::new(1));
+        let file = root.join("hindi.toolboxpack");
+        fs::write(&file, fixture.file(&key)).unwrap();
+        let app_data = root.join("app-data");
+        let target = crate::packs::current_target();
+        install(&file, &InstallContext { catalog: &fixture.catalog(), app_data: &app_data, target: &target, app_version: "1.0.14", public_key: &key.public_key(), limits: PackLimits::DEFAULT, cancel: None, changed: None }).unwrap();
+        app_data
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_language_whose_pack_is_not_installed_fails_with_a_pointer_while_english_in_the_same_batch_succeeds() {
+        let batch = MixedBatch::new("not-installed");
+        let outcomes = batch.run(&batch.root.join("app-data"), "1.0.14", None);
+        batch.assert_english_read(&outcomes[0]);
+        batch.assert_needs_pack(&outcomes[1], PackNeed::NotInstalled, "Needs the Hindi text recognition pack, which isn't installed. Nothing was saved.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_development_override_stands_in_for_the_language_pack_and_its_language_is_read() {
+        let batch = MixedBatch::new("override");
+        let language_dir = batch.root.join("languages");
+        fs::create_dir_all(&language_dir).unwrap();
+        fs::write(language_dir.join("hin.traineddata"), "fixture hindi").unwrap();
+        let outcomes = batch.run(&batch.root.join("app-data"), "1.0.14", Some(&language_dir));
+        batch.assert_english_read(&outcomes[0]);
+        assert!(outcomes[1].error().is_none(), "{:?}", outcomes[1]);
+        assert_eq!(fs::read_to_string(&outcomes[1].output_paths()[0]).unwrap(), "hin: fixture hindi\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_installed_language_pack_is_read_and_a_damaged_or_incompatible_one_names_its_own_reason() {
+        let batch = MixedBatch::new("installed");
+        let app_data = install_hindi(&batch.root);
+        let outcomes = batch.run(&app_data, "1.0.14", None);
+        assert_eq!(fs::read_to_string(&outcomes[1].output_paths()[0]).unwrap(), format!("hin: {}\n", "hindi model".repeat(100)));
+
+        // The fixture pack fits apps from 1.0.0. A development override does not stand in for it.
+        let language_dir = batch.root.join("languages");
+        fs::create_dir_all(&language_dir).unwrap();
+        fs::write(language_dir.join("hin.traineddata"), "fixture hindi").unwrap();
+        let incompatible = MixedBatch::new("incompatible");
+        let outcomes = incompatible.run(&install_hindi(&incompatible.root), "0.9.0", Some(&language_dir));
+        incompatible.assert_english_read(&outcomes[0]);
+        incompatible.assert_needs_pack(&outcomes[1], PackNeed::Incompatible, "Needs a newer Hindi pack. The installed one doesn't work with this version of Toolbox. Nothing was saved.");
+
+        let damaged = MixedBatch::new("damaged");
+        let app_data = install_hindi(&damaged.root);
+        let model = crate::packs::installed_pack_root(&app_data, "ocr-hindi").unwrap().join("tessdata/hin.traineddata");
+        fs::write(&model, "changed after install").unwrap();
+        let outcomes = damaged.run(&app_data, "1.0.14", Some(&language_dir));
+        damaged.assert_english_read(&outcomes[0]);
+        damaged.assert_needs_pack(&outcomes[1], PackNeed::Damaged, "The Hindi pack is damaged, so it was not used. Nothing was saved.");
+    }
+
+    #[test]
+    fn a_pack_pointer_names_the_catalog_pack_for_its_language_and_a_language_no_pack_reads_has_none() {
+        // The development override is read from the environment.
+        let _guard = crate::kit::lock_process_env();
+        let root = std::env::temp_dir().join(format!("toolbox-ocr-pointer-{}", std::process::id()));
+        let catalogs = [
+            ("built-in", include_str!("../../../shared/pack-catalog.json").to_string()),
+            ("fixture", fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/pack-catalog.json")).unwrap()),
+        ];
+        for (name, text) in catalogs {
+            let catalog = crate::packs::parse_catalog(&text).unwrap();
+            let packs = RunPacks::new(Ok(root.join(name)), "1.0.14", Ok(catalog.clone()));
+            for pack in &catalog.packs {
+                let Some(language) = &pack.ocr_language else { continue };
+                let error = super::ocr_language(&packs, &language.code).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Unavailable, "{name} {}", pack.id);
+                assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: pack.id.clone(), name: language.name.clone(), reason: PackNeed::NotInstalled }), "{name} {}", pack.id);
+            }
+            let error = super::ocr_language(&packs, "xyz").unwrap_err();
+            assert_eq!(error.kind, ErrorKind::InvalidInput);
+            assert_eq!(error.pointer, None, "a language no {name} pack reads points nowhere");
+        }
+        assert!(!root.exists(), "looking for a pack creates nothing");
     }
 
     fn make_pdf(path: &PathBuf, page_count: usize) {
@@ -474,13 +789,16 @@ mod tests {
         document.save(&input).unwrap();
 
         let error = super::selected_ocr_pages(&input, None).unwrap_err();
-        assert!(error.contains("pixel"), "{error}");
+        assert_eq!(error.kind, ErrorKind::Processing);
+        assert!(error.message.contains("pixel"), "{error}");
         let _ = fs::remove_file(input);
     }
 
     #[cfg(unix)]
     #[test]
     fn oversized_rendered_page_is_rejected_before_ocr_runs() {
+        // Holds the lock because sibling tests count private OCR workspaces.
+        let _guard = crate::kit::lock_process_env();
         let renderer = path("oversized-renderer.sh");
         let engine = path("oversized-engine.sh");
         let input = path("oversized-render.pdf");
@@ -520,7 +838,7 @@ mod tests {
         std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
         std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
 
-        let outcome = ocr_pdf(&ocr_request(&input, Some("1"), &output_root), input.clone());
+        let outcome = ocr_pdf(&run_of(ocr_request(&input, Some("1"), &output_root)), input.clone());
         let text = outcome.output_paths().first().and_then(|path| fs::read_to_string(path).ok());
         let output_path = outcome.output_paths().first().cloned();
         let input_after = fs::read(&input).unwrap();
@@ -539,7 +857,7 @@ mod tests {
         let _ = fs::remove_dir_all(&output_root);
 
         assert!(outcome.error().is_none(), "selected OCR failed: {:?}", outcome.error());
-        assert_eq!(text.as_deref(), Some("selected page one"));
+        assert_eq!(text.as_deref(), Some("selected page one\n"));
         assert_eq!(output_path.as_deref().and_then(Path::parent), Some(output_root.as_path()));
         assert_eq!(input_after, original);
     }
@@ -562,7 +880,7 @@ mod tests {
         std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
         std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
 
-        let outcome = ocr_pdf(&ocr_request(&input, Some("2"), &output_root), input.clone());
+        let outcome = ocr_pdf(&run_of(ocr_request(&input, Some("2"), &output_root)), input.clone());
         let after_workspaces = ocr_workspaces();
         let input_after = fs::read(&input).unwrap();
         let output_entries = fs::read_dir(&output_root).unwrap().count();
@@ -652,6 +970,20 @@ mod tests {
     }
 
     #[test]
+    fn ocr_text_ends_lines_in_lf_and_separates_pages_with_a_form_feed() {
+        let pages = [b"first  page\r\nline two\r\n".to_vec(), b" \n\n".to_vec(), b"third\n".to_vec()];
+        assert_eq!(super::ocr_text(&pages).unwrap(), "first page\nline two\n\u{c}\u{c}third\n");
+        assert_eq!(super::ocr_text(&[b"\n".to_vec(), b"  \x0c".to_vec()]).unwrap(), "");
+    }
+
+    #[test]
+    fn missing_ocr_components_name_themselves() {
+        assert_eq!(super::OcrComponent::Engine.to_string(), "The text recognition engine is missing. Reinstall Toolbox.");
+        assert_eq!(super::OcrComponent::Renderer.to_string(), "The PDF page renderer is missing. Reinstall Toolbox.");
+        assert_eq!(super::OcrComponent::EnglishData.to_string(), "The English recognition data is missing. Reinstall Toolbox.");
+    }
+
+    #[test]
     fn rejects_invalid_utf8_ocr_output() {
         assert!(normalize_ocr_text(b"valid\xfftext").is_err());
     }
@@ -695,7 +1027,7 @@ mod tests {
         let output_root = path("searchable-mode-output");
         let mut request = ocr_request(&input, None, &output_root);
         request.mode = "searchablePdf".into();
-        let outcome = ocr_pdf(&request, input.clone());
+        let outcome = ocr_pdf(&run_of(request), input.clone());
         assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(ErrorKind::Unavailable));
         assert!(!output_root.exists());
     }
@@ -762,7 +1094,7 @@ mod tests {
         let deadline = HelperDeadline { per_file: Duration::from_millis(500), per_page: Duration::from_secs(2) };
 
         let started = Instant::now();
-        let outcome = ocr_pdf_within(&ocr_request(&input, None, &output_root), input.clone(), deadline);
+        let outcome = ocr_pdf_within(&run_of(ocr_request(&input, None, &output_root)), input.clone(), deadline);
         let elapsed = started.elapsed();
         let text = outcome.output_paths().first().and_then(|path| fs::read_to_string(path).ok());
         drop(helpers);
@@ -770,7 +1102,7 @@ mod tests {
         let _ = fs::remove_dir_all(&output_root);
 
         assert!(outcome.error().is_none(), "budgeted OCR failed: {:?}", outcome.error());
-        assert_eq!(text.as_deref(), Some("page\npage\npage"));
+        assert_eq!(text.as_deref(), Some("page\n\u{c}page\n\u{c}page\n"));
         assert!(elapsed > deadline.limit(1, 1), "three pages ran longer than one page's budget, so a single shared deadline would have stopped them: {elapsed:?}");
     }
 
@@ -787,7 +1119,7 @@ mod tests {
         let helpers = TimedOcrHelpers::install("page-over-budget", ":", "case \"$1\" in *page-2.png) exec sleep 30 ;; esac\nprintf 'page one\\n'");
 
         let started = Instant::now();
-        let outcome = ocr_pdf_within(&ocr_request(&input, None, &output_root), input.clone(), HelperDeadline { per_file: Duration::from_millis(300), per_page: Duration::from_millis(200) });
+        let outcome = ocr_pdf_within(&run_of(ocr_request(&input, None, &output_root)), input.clone(), HelperDeadline { per_file: Duration::from_millis(300), per_page: Duration::from_millis(200) });
         let elapsed = started.elapsed();
         let after_workspaces = ocr_workspaces();
         let output_entries = fs::read_dir(&output_root).unwrap().count();

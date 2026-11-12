@@ -146,7 +146,7 @@ fn page_number(entry: &str, value: &str) -> Result<usize, String> {
     }
 }
 
-fn pages_label(count: usize) -> String {
+pub(crate) fn pages_label(count: usize) -> String {
     if count == 1 { "1 page".to_string() } else { format!("{count} pages") }
 }
 
