@@ -150,12 +150,12 @@ test("OCR counts pages as the board shows: the file being read, its page, and pa
     await expect(page.getByText("Each file is recognized on its own, so one that fails doesn't stop the others.")).toBeVisible();
 
     await emit({ index: 0, phase: "started" });
-    await emit({ index: 0, phase: "pages", done: 0, total: 31 });
-    await emit({ index: 0, phase: "pages", done: 31, total: 31 });
+    await emit({ index: 0, phase: "progress", completed: 0, total: 31 });
+    await emit({ index: 0, phase: "progress", completed: 31, total: 31 });
     await emit({ index: 0, phase: "finished", outcome: searchable(paths[0], "31 pages recognized.") });
     await emit({ index: 1, phase: "started" });
-    await emit({ index: 1, phase: "pages", done: 0, total: 9 });
-    await emit({ index: 1, phase: "pages", done: 3, total: 9 });
+    await emit({ index: 1, phase: "progress", completed: 0, total: 9 });
+    await emit({ index: 1, phase: "progress", completed: 3, total: 9 });
 
     await expect(status.locator("strong")).toHaveText("Recognizing file 2 of 3");
     await expect(status).toContainText("board-minutes-q3.pdf, page 4 of 9");
@@ -172,8 +172,8 @@ test("OCR counts pages as the board shows: the file being read, its page, and pa
     await expect(rows.nth(2)).toHaveText(/^receipt\.jpgPage count unknownWaiting/);
 
     // A page report for another run, or one that counts past its total, changes nothing.
-    await page.evaluate(() => (window as unknown as OcrWindow).__emit({ runId: "another-run", index: 1, phase: "pages", done: 8, total: 9 }));
-    await emit({ index: 1, phase: "pages", done: 10, total: 9 });
+    await page.evaluate(() => (window as unknown as OcrWindow).__emit({ runId: "another-run", index: 1, phase: "progress", completed: 8, total: 9 }));
+    await emit({ index: 1, phase: "progress", completed: 10, total: 9 });
     await expect(minibar).toHaveAttribute("aria-valuetext", "Page 4 of 9, 3 done");
 
     await finish(page, [searchable(paths[0], "31 pages recognized."), searchable(paths[1], "9 pages recognized."), searchable(paths[2])]);
@@ -188,10 +188,10 @@ test("OCR shows over-limit files failed on their own rows while the others finis
     const rows = page.getByRole("list", { name: "Files and results" }).getByRole("listitem");
 
     await emit({ index: 1, phase: "started" });
-    await emit({ index: 1, phase: "pages", done: 211, total: 480 });
+    await emit({ index: 1, phase: "progress", completed: 211, total: 480 });
     await emit({ index: 1, phase: "finished", outcome: overLimit(paths[1], "time", TIME_LIMIT) });
     await emit({ index: 0, phase: "started" });
-    await emit({ index: 0, phase: "pages", done: 1, total: 2 });
+    await emit({ index: 0, phase: "progress", completed: 1, total: 2 });
     await expect(rows.nth(1)).toHaveAttribute("data-tone", "fail");
     await expect(rows.nth(1)).toContainText(TIME_LIMIT);
     await expect(rows.nth(0)).toContainText("Page 2 of 2");

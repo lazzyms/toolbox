@@ -15,14 +15,32 @@ pub struct BatchRunner;
 #[serde(tag = "phase", rename_all = "camelCase")]
 pub enum FileEvent {
     Started { index: usize },
-    /// Pages of a multi-page file finished so far, for tools that report them.
-    Pages { index: usize, done: usize, total: usize },
     Finished { index: usize, outcome: JobOutcome },
+    /// How far a long single-file job has got, such as the page a PDF export is on.
+    Progress { index: usize, completed: usize, total: usize },
+}
+
+pub(crate) type Sink = Arc<dyn Fn(FileEvent) + Send + Sync>;
+
+thread_local! {
+    static PROGRESS: std::cell::RefCell<Option<(usize, Sink)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Sends progress this thread reports to `sink` as the file at `index`. Each job runs on its own thread, so the reporter belongs to that file alone.
+pub(crate) fn report_progress_to(index: usize, sink: Option<Sink>) {
+    PROGRESS.with(|progress| *progress.borrow_mut() = sink.map(|sink| (index, sink)));
+}
+
+/// Reports progress for the file the current job is processing. Outside a batch run, such as a preview, it does nothing.
+pub fn report_progress(completed: usize, total: usize) {
+    PROGRESS.with(|progress| {
+        if let Some((index, sink)) = &*progress.borrow() { sink(FileEvent::Progress { index: *index, completed, total }) }
+    });
 }
 
 /// A run's link to the view that started it. Progress goes out through the sink and a cancel comes back in by run id.
 pub struct RunEvents {
-    sink: Option<Arc<dyn Fn(FileEvent) + Send + Sync>>,
+    sink: Option<Sink>,
     cancel: RunCancel,
 }
 
@@ -72,10 +90,6 @@ impl RunEvents {
         Self { sink: Some(Arc::new(sink)), cancel: RunCancel::register(run_id) }
     }
     fn emit(&self, event: FileEvent) { if let Some(sink) = &self.sink { sink(event) } }
-    fn page_sink(&self, index: usize) -> Option<limits::PageSink> {
-        let sink = Arc::clone(self.sink.as_ref()?);
-        Some(Arc::new(move |done, total| sink(FileEvent::Pages { index, done, total })))
-    }
     fn settled(&self, index: usize, outcome: &JobOutcome) {
         self.emit(FileEvent::Started { index });
         self.emit(FileEvent::Finished { index, outcome: outcome.clone() });
@@ -100,11 +114,37 @@ impl BatchRunner {
         Self::run_with_limits(events, command, inputs, location, limits::recorded(command), request, job)
     }
 
+    /// Runs a job that only reads its inputs. It saves nothing, so no output folder is probed and nothing is created.
+    pub fn inspect<R, F>(events: &RunEvents, command: &str, inputs: Vec<PathBuf>, request: &Arc<R>, job: F) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        Self::run_batch(events, command, inputs, None, limits::recorded(command), request, job)
+    }
+
     pub fn run_with_limits<R, F>(
         events: &RunEvents,
         command: &str,
         inputs: Vec<PathBuf>,
         location: &OutputLocation,
+        limits: Option<ToolLimits>,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        Self::run_batch(events, command, inputs, Some(location), limits, request, job)
+    }
+
+    /// `location` is where outputs go; `None` means the job writes nothing.
+    fn run_batch<R, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: Option<&OutputLocation>,
         limits: Option<ToolLimits>,
         request: &Arc<R>,
         job: F,
@@ -122,8 +162,10 @@ impl BatchRunner {
                 let mut writable = HashMap::new();
                 let mut runnable = Vec::with_capacity(validation.accepted.len());
                 for (index, path) in validation.accepted {
-                    let directory = location.directory_for(&path).to_path_buf();
-                    let is_writable = *writable.entry(directory).or_insert_with_key(|directory| !is_read_only(directory));
+                    let is_writable = location.is_none_or(|location| {
+                        let directory = location.directory_for(&path).to_path_buf();
+                        *writable.entry(directory).or_insert_with_key(|directory| !is_read_only(directory))
+                    });
                     if is_writable {
                         runnable.push((index, path));
                     } else {
@@ -146,8 +188,11 @@ impl BatchRunner {
                     events.emit(FileEvent::Started { index });
                     let outcome = match limits {
                         Some(limits) => {
-                            let (job, request) = (Arc::clone(&job), Arc::clone(request));
-                            limits.run_each(path, events.cancel.flag(), events.page_sink(index), move |path| job(&request, path))
+                            let (job, request, sink) = (Arc::clone(&job), Arc::clone(request), events.sink.clone());
+                            limits.run_each(path, events.cancel.flag(), move |path| {
+                                report_progress_to(index, sink);
+                                job(&request, path)
+                            })
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
                     };
@@ -210,8 +255,8 @@ mod tests {
         assert_eq!(finished["index"], 0);
         assert_eq!(finished["outcome"], serde_json::to_value(&outcome).unwrap());
         assert_eq!(
-            serde_json::to_value(FileEvent::Pages { index: 1, done: 3, total: 9 }).unwrap(),
-            serde_json::json!({ "phase": "pages", "index": 1, "done": 3, "total": 9 }),
+            serde_json::to_value(FileEvent::Progress { index: 0, completed: 4, total: 9 }).unwrap(),
+            serde_json::json!({ "phase": "progress", "index": 0, "completed": 4, "total": 9 })
         );
     }
 
