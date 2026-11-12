@@ -1,7 +1,10 @@
-import { useState, type ComponentType } from 'react';
+import { useRef, useState, type ComponentType } from 'react';
 import { TypedSignature } from './SceneCanvas';
-import { Bold, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart } from 'lucide-react';
+import { Bold, Check, Info, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart, TriangleAlert } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
+import { Checkbox } from '../../components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { NativeSelect } from '../../components/ui/native-select';
@@ -10,9 +13,12 @@ import { Slider } from '../../components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
 import type { WatermarkOptions, WatermarkPlacement } from '../../contracts';
-import { pagesInRange, WATERMARK_DEFAULT_SIZE } from './scene';
-import type { PageNumberFormat, PageNumberOptions, PageNumberPosition, SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
+import type { PdfEditRun, PdfFlattenChoice, PdfFormEntry, PdfFormField, PdfFormInspection, PdfTextEdit } from './contracts';
+import { formChoiceText, isFormEntryEmpty } from './form-checks';
+import { headerFooterBands, headerFooterSlots, notEditableReasons, pagesInRange, substituteFamily, textOverflowWords, WATERMARK_DEFAULT_SIZE } from './scene';
+import type { HeaderFooterBand, HeaderFooterOptions, HeaderFooterSlot, HeaderFooterText, PageNumberFormat, PageNumberOptions, PageNumberPosition, SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
 import type { SubToolId } from './subtools';
+import { TokenField, tokenLabels, type TokenFieldHandle, type TokenName } from './TokenField';
 
 export interface SubToolInspectorProps {
   page: ScenePage;
@@ -38,6 +44,21 @@ export interface SubToolInspectorProps {
   chooseWatermarkPicture: () => Promise<void>;
   watermarkPictureError: string | null;
   addPageNumbers: () => void;
+  addHeaderFooter: () => void;
+  headerFooterOverlap: boolean;
+  form: PdfFormInspection | null;
+  formValue: (field: PdfFormField) => PdfFormEntry;
+  formFlag: (field: PdfFormField) => string | null;
+  goToField: (field: PdfFormField) => void;
+  goToNextRequired: () => void;
+  flatten: PdfFlattenChoice | null; setFlatten: (value: PdfFlattenChoice | null) => void;
+  switchToAddText: () => void;
+  selectedRun: PdfEditRun | undefined;
+  textEdits: PdfTextEdit[];
+  pageNumberOf: (sourceIndex: number) => number;
+  showEdit: (edit: PdfTextEdit) => void;
+  revertEdit: (edit: PdfTextEdit) => void;
+  chooseTool: (tool: SceneTool) => void;
 }
 type Panel = ComponentType<SubToolInspectorProps>;
 
@@ -354,6 +375,93 @@ const PageNumberFields: Panel = ({ selected, updateObject, endGroup, pageNumber,
   </>;
 };
 
+type HeaderFooterVariant = 'main' | 'firstPage' | 'even';
+const headerFooterSizes = [7, 8, 8.5, 9, 10, 11, 12, 14];
+const slotLabels: Record<HeaderFooterSlot, string> = { left: 'Left', center: 'Centre', right: 'Right' };
+const bandLabels: Record<HeaderFooterBand, string> = { header: 'Header', footer: 'Footer' };
+
+const HeaderFooterFields: Panel = ({ selected, updateObject, endGroup, pageNumber, pageCount, headerFooterOverlap }) => {
+  const [variant, setVariant] = useState<HeaderFooterVariant>('main');
+  const fields = useRef(new Map<string, TokenFieldHandle>());
+  const lastField = useRef('footer-center');
+  if (selected?.kind !== 'headerFooter' || !selected.headerFooter) return null;
+  const options = selected.headerFooter;
+  const editing = variant !== 'main' && options[variant] ? variant : 'main';
+  const text: HeaderFooterText = editing === 'main' ? options : options[editing]!;
+  const update = (patch: Partial<HeaderFooterOptions>, field: string) => updateObject({ headerFooter: { ...options, ...patch } }, field);
+  const setSlot = (band: HeaderFooterBand, slot: HeaderFooterSlot, value: string) => {
+    const next = { header: { ...text.header }, footer: { ...text.footer } };
+    next[band][slot] = value;
+    update(editing === 'main' ? next : { [editing]: next }, `header-footer-${editing}-${band}-${slot}`);
+  };
+  const toggleVariant = (key: 'firstPage' | 'even', on: boolean, field: string) => {
+    update({ [key]: on ? { header: { ...options.header }, footer: { ...options.footer } } : null }, field);
+    setVariant(on ? key : 'main');
+  };
+  const mainLabel = options.even ? 'Odd pages' : 'Other pages';
+  return <>
+    <div className="scene-inspector-field gap-2">
+      <span className="settings-radio"><Checkbox id="scene-header-footer-first" checked={Boolean(options.firstPage)}
+        onCheckedChange={(checked) => toggleVariant('firstPage', checked === true, 'header-footer-first')} /><Label htmlFor="scene-header-footer-first">Different first page</Label></span>
+      <span className="settings-radio"><Checkbox id="scene-header-footer-even" checked={Boolean(options.even)}
+        onCheckedChange={(checked) => toggleVariant('even', checked === true, 'header-footer-even')} /><Label htmlFor="scene-header-footer-even">Different odd and even pages</Label></span>
+    </div>
+    {(options.firstPage || options.even) && <ToggleGroup type="single" variant="outline" size="sm" className="w-full" aria-label="Text for" value={editing}
+      onValueChange={(value) => { if (value) setVariant(value as HeaderFooterVariant); }}>
+      {options.firstPage && <ToggleGroupItem value="firstPage" className="flex-1">First page</ToggleGroupItem>}
+      {options.even && <ToggleGroupItem value="even" className="flex-1">Even pages</ToggleGroupItem>}
+      <ToggleGroupItem value="main" className="flex-1">{mainLabel}</ToggleGroupItem>
+    </ToggleGroup>}
+    {headerFooterBands.map((band) => <fieldset key={band} className="scene-inspector-field">
+      <legend className="mb-1.5 text-sm font-medium">{bandLabels[band]}</legend>
+      {headerFooterSlots.map((slot) => {
+        const key = `${band}-${slot}`;
+        return <div key={slot} className="grid grid-cols-[46px_1fr] items-center gap-2">
+          <span className="text-xs text-muted-foreground" aria-hidden="true">{slotLabels[slot]}</span>
+          <TokenField key={`${editing}-${key}`} label={`${bandLabels[band]} ${slotLabels[slot].toLowerCase()}`} value={text[band][slot]}
+            ref={(handle) => { if (handle) fields.current.set(key, handle); else fields.current.delete(key); }}
+            onChange={(value) => setSlot(band, slot, value)} onFocus={() => { lastField.current = key; }} onBlur={endGroup} />
+        </div>;
+      })}
+    </fieldset>)}
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-header-footer-insert">Insert</span>
+      <div role="group" aria-labelledby="scene-header-footer-insert" className="flex flex-wrap gap-1.5">
+        {(Object.keys(tokenLabels) as TokenName[]).map((token) => <Button key={token} variant="outline" size="sm"
+          onMouseDown={(event) => event.preventDefault()} onClick={() => { fields.current.get(lastField.current)?.insert(token); endGroup(); }}>{tokenLabels[token]}</Button>)}
+      </div>
+      <p className="scene-property-note">Inserts into the box you last selected. Inserted items show as tags and fill in per page; Backspace removes a whole tag.</p>
+    </div>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-size">Size</Label>
+        <NativeSelect id="scene-header-footer-size" size="sm" value={String(selected.fontSize)} onChange={(event) => updateObject({ fontSize: Number(event.target.value) }, 'header-footer-size')}>
+          {headerFooterSizes.map((value) => <option key={value} value={String(value)}>{value} pt</option>)}
+        </NativeSelect>
+      </div>
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-color">Colour</Label>
+        <input id="scene-header-footer-color" type="color" value={selected.color} onChange={(event) => updateObject({ color: event.target.value }, 'header-footer-color')} onBlur={endGroup} />
+      </div>
+    </div>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-margin">Distance from edge</Label>
+        <NativeSelect id="scene-header-footer-margin" size="sm" value={String(options.margin)} onChange={(event) => update({ margin: Number(event.target.value) }, 'header-footer-margin')}>
+          {pageNumberMargins.map(({ value, label }) => <option key={value} value={String(value)}>{label}</option>)}
+        </NativeSelect>
+      </div>
+      <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-font">Font</Label>
+        <NativeSelect id="scene-header-footer-font" size="sm" value={selected.fontFamily ?? 'Noto Sans'} onChange={(event) => updateObject({ fontFamily: event.target.value }, 'header-footer-font')}>
+          {textFonts.map((family) => <option key={family} value={family}>{family}</option>)}
+        </NativeSelect>
+      </div>
+    </div>
+    <div className="scene-inspector-field"><Label htmlFor="scene-header-footer-date">Date</Label>
+      <Input id="scene-header-footer-date" type="date" value={options.date} onChange={(event) => { if (event.target.value) update({ date: event.target.value }, 'header-footer-date'); }} onBlur={endGroup} />
+    </div>
+    <PageRangeFields selected={selected} updateObject={updateObject} pageNumber={pageNumber} pageCount={pageCount} noun="Header and footer" />
+    {headerFooterOverlap && <p role="alert" className="scene-error">Header or footer text overlaps existing text on this page. Increase the distance from the edge or move the text to another box.</p>}
+    <p className="scene-property-note">Text that is too long for its box is cut off. The preview shows exactly what will be exported.</p>
+  </>;
+};
+
 const TextGuide: Panel = () =>
   <p className="scene-property-note">Click the page to add a text box. Double-click a box or press Enter to edit it.</p>;
 
@@ -380,6 +488,14 @@ const PageNumberGuide: Panel = ({ selected, addPageNumbers }) => {
   </> : null;
 };
 
+const HeaderFooterGuide: Panel = ({ selected, addHeaderFooter }) => {
+  const availability = useToolAvailability();
+  return availability.allows('pdf-edit') && !selected ? <>
+    <p className="scene-property-note">One header and footer, applied to every page in the range. Edit it once, on any page.</p>
+    <Button size="sm" onClick={addHeaderFooter}>Add header and footer</Button>
+  </> : null;
+};
+
 const CropGuide: Panel = ({ page, commitPage }) => {
   const availability = useToolAvailability();
   return availability.allows('pdf-crop') ? <>
@@ -388,13 +504,158 @@ const CropGuide: Panel = ({ page, commitPage }) => {
   </> : null;
 };
 
+const pageList = (pages: number[]) => pages.length === 1 ? `page ${pages[0]}`
+  : `pages ${pages.slice(0, -1).join(', ')} and ${pages[pages.length - 1]}`;
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+const flattenChoices: { value: PdfFlattenChoice; label: string }[] = [
+  { value: 'both', label: 'Fields and comments' }, { value: 'forms', label: 'Fields only' }, { value: 'annotations', label: 'Comments only' },
+];
+
+// Flattening can't be undone in the copy, so turning it on always asks first; turning it off doesn't.
+const FlattenSection = ({ form, formValue, flatten, setFlatten }: Pick<SubToolInspectorProps, 'formValue' | 'flatten' | 'setFlatten'> & { form: PdfFormInspection }) => {
+  const fields = form.unsupported ? 0 : form.fields.length;
+  const comments = form.comments;
+  const [choice, setChoice] = useState<PdfFlattenChoice>(fields && comments ? 'both' : fields ? 'forms' : 'annotations');
+  const [confirming, setConfirming] = useState(false);
+  const formsOnly = !comments || choice === 'forms';
+  const things = formsOnly ? 'fields' : choice === 'annotations' ? 'comments' : 'fields and comments';
+  const unavailable = !fields && !comments
+    ? form.unsupported ? "Toolbox can't read this form's fields, and the PDF has no comments to flatten." : 'This PDF has no form fields or comments to flatten.'
+    : null;
+  const missing = choice === 'annotations' ? 0 : form.fields.filter((field) => field.required && isFormEntryEmpty(formValue(field))).length;
+  const [fieldCount, commentCount] = [choice === 'annotations' ? 0 : fields, choice === 'forms' ? 0 : comments];
+  const counted = [fieldCount ? plural(fieldCount, 'field', 'fields') : '', commentCount ? plural(commentCount, 'comment', 'comments') : ''].filter(Boolean).join(' and ');
+  const consequences = [
+    `${fieldCount + commentCount === 1 ? 'The' : 'All'} ${counted} ${fieldCount + commentCount === 1 ? 'becomes' : 'become'} part of the page in the exported copy. Nobody will be able to change ${fieldCount + commentCount === 1 ? 'it' : 'them'} there.`,
+    missing ? `${plural(missing, 'required field is', 'required fields are')} still empty.` : '',
+    'You can turn this off before exporting.',
+  ].filter(Boolean).join(' ');
+  const label = !fields && comments ? 'Flatten comments when exporting' : 'Flatten fields when exporting';
+  return <div className="scene-inspector-field border-t pt-3.5">
+    <span className="text-sm font-medium" id="scene-flatten">Flatten</span>
+    <p className="scene-property-note">{unavailable
+      ? <>Flatten is unavailable. {unavailable}</>
+      : `Turns the ${fields ? 'fields' : 'comments'} into plain page content in the exported copy, so they can't be changed later.`}</p>
+    {fields > 0 && comments > 0 && <RadioGroup className="gap-1.5" aria-label="What to flatten" value={choice} disabled={flatten !== null}
+      onValueChange={(value) => setChoice(value as PdfFlattenChoice)}>
+      {flattenChoices.map((item) => <span key={item.value} className="settings-radio">
+        <RadioGroupItem id={`scene-flatten-${item.value}`} value={item.value} /><Label htmlFor={`scene-flatten-${item.value}`}>{item.label}</Label>
+      </span>)}
+    </RadioGroup>}
+    <span className="settings-radio">
+      <Checkbox id="scene-flatten-on" checked={flatten !== null} disabled={Boolean(unavailable)}
+        onCheckedChange={(checked) => checked ? setConfirming(true) : setFlatten(null)} />
+      <Label htmlFor="scene-flatten-on">{label}</Label>
+    </span>
+    <Dialog open={confirming} onOpenChange={setConfirming}>
+      <DialogContent role="alertdialog" showCloseButton={false} className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>{`Flatten ${things} in the copy?`}</DialogTitle>
+          <DialogDescription>{consequences}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirming(false)}>{`Keep ${choice === 'annotations' || !fields ? 'comments' : 'fields'} editable`}</Button>
+          <Button onClick={() => { setFlatten(choice); setConfirming(false); }}>Flatten when exporting</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </div>;
+};
+
+const FormGuide: Panel = ({ page, form, formValue, formFlag, goToField, goToNextRequired, flatten, setFlatten, switchToAddText }) => {
+  if (!form) return <p className="scene-property-note" role="status">Reading the form fields…</p>;
+  if (form.unsupported || !form.fields.length) {
+    const [headline, ...rest] = (form.unsupported ?? 'This PDF has no form fields to fill.').split(/(?<=\.) /);
+    return <>
+      <p className="scene-property-note">{form.unsupported ? 'This PDF has a form, but not one Toolbox can fill.' : 'Fill form is unavailable for this PDF.'}</p>
+      <Card className="scene-form-note py-0" role="note"><CardContent className="scene-form-note-content">
+        <TriangleAlert aria-hidden="true" /><p><strong>{headline}</strong> {rest.join(' ')}</p>
+      </CardContent></Card>
+      <p className="scene-property-note">{form.unsupported ? 'To fill it anyway, open it in Adobe Acrobat or Reader. Or type your answers onto the page with Add text.' : 'Type your answers onto the page with Add text instead.'}</p>
+      <Button variant="outline" size="sm" className="self-start" onClick={switchToAddText}>Use Add text instead</Button>
+      <FlattenSection form={form} formValue={formValue} flatten={flatten} setFlatten={setFlatten} />
+    </>;
+  }
+  const pages = [...new Set(form.fields.map((field) => field.widgets[0].page + 1))].sort((a, b) => a - b);
+  const missing = form.fields.filter((field) => field.required && isFormEntryEmpty(formValue(field))).length;
+  const invalid = form.fields.filter((field) => (formFlag(field) ?? 'Required') !== 'Required').length;
+  const status = (field: PdfFormField) => {
+    const value = formValue(field);
+    const flag = formFlag(field);
+    const flagged = (text: string) => flag ? <span className="text-destructive">{text}</span> : text;
+    if (flag && flag !== 'Required') return flagged(flag);
+    if (field.type === 'checkbox') return value ? 'Checked' : field.required ? flagged('Required, not checked') : null;
+    if (!isFormEntryEmpty(value)) return field.type === 'text' ? <Check aria-label="Filled" /> : formChoiceText(field, value);
+    if (field.widgets[0].page !== page.sourceIndex) return `Page ${field.widgets[0].page + 1}${field.required ? ', required' : ''}`;
+    return field.required ? flagged('Required, empty') : field.readOnly ? 'Read-only' : null;
+  };
+  const problems = [
+    invalid ? `${plural(invalid, "field has an entry that isn't valid", "fields have entries that aren't valid")}` : '',
+    missing ? `${plural(missing, 'required field is', 'required fields are')} still empty` : '',
+  ].filter(Boolean).join(', and ');
+  return <>
+    <p className="scene-property-note">Type into the fields on the page. Tab moves to the next field in the order below.</p>
+    <Card className="scene-form-note py-0" role="note"><CardContent className="scene-form-note-content">
+      <Info aria-hidden="true" /><p>{`${plural(form.fields.length, 'field', 'fields')} on ${pageList(pages)}.`}{problems ? ` ${problems}.` : ''}</p>
+    </CardContent></Card>
+    <Button variant="outline" size="sm" className="self-start" disabled={!missing} onClick={goToNextRequired}>Go to next empty required field</Button>
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-form-fields">Fields</span>
+      <ol className="scene-form-fields" aria-labelledby="scene-form-fields">
+        {form.fields.map((field) => <li key={field.name}>
+          <Button variant="ghost" size="sm" className="w-full justify-between" onClick={() => goToField(field)}>
+            <span className="truncate">{field.label || field.name}</span><span className="scene-property-note">{status(field)}</span>
+          </Button>
+        </li>)}
+      </ol>
+    </div>
+    <FlattenSection form={form} formValue={formValue} flatten={flatten} setFlatten={setFlatten} />
+  </>;
+};
+
+const EditTextGuide: Panel = ({ page, selectedRun, textEdits, pageNumberOf, showEdit, revertEdit, chooseTool }) => {
+  const availability = useToolAvailability();
+  const selectedEdit = selectedRun && textEdits.find((edit) => edit.pageIndex === page.sourceIndex && edit.run === selectedRun.index);
+  const overflow = selectedEdit ? textOverflowWords(selectedEdit.original, selectedEdit.replacement) : 0;
+  const substitute = selectedRun && selectedEdit ? substituteFamily(selectedRun, selectedEdit.replacement) : null;
+  return <>
+    {selectedRun?.reason && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text can't be edited.</CardTitle>
+        <CardDescription>{notEditableReasons[selectedRun.reason].detail}</CardDescription></CardHeader>
+      {availability.allows('pdf-edit') && <CardContent className="px-3">
+        <Button variant="ghost" size="sm" onClick={() => chooseTool('text')}>Cover it with Add text instead</Button>
+      </CardContent>}
+    </Card>}
+    {selectedRun && !selectedRun.reason && <div className="scene-inspector-field" role="group" aria-label="Selected text">
+      <Label>Selected text</Label>
+      <p className="scene-property-note">{selectedRun.fontName} · {Math.round(selectedRun.fontSize * 10) / 10} pt</p>
+      {substitute
+        ? <p className="scene-property-note" role="note"><strong>{selectedRun.fontName} isn't embedded in this PDF.</strong> Edited lines use {substitute}, which looks close. Untouched text keeps its original font.</p>
+        : <p className="scene-property-note">Edited text keeps this font, size and colour.</p>}
+    </div>}
+    {overflow > 0 && <Card role="alert" className="gap-2 py-3">
+      <CardHeader className="gap-1 px-3"><CardTitle className="text-sm">This text is too long for its space.</CardTitle>
+        <CardDescription>Shorten it so it fits the original line.</CardDescription></CardHeader>
+    </Card>}
+    {textEdits.length > 0 && <div className="scene-inspector-field" role="group" aria-label="Edits on this document">
+      <Label>Edits on this document</Label>
+      {textEdits.map((edit) => <Button key={`${edit.pageIndex}-${edit.run}`} variant="ghost" size="sm" className="h-auto justify-start whitespace-normal text-left"
+        onClick={() => showEdit(edit)}>Page {pageNumberOf(edit.pageIndex)}: “{edit.original}” to “{edit.replacement}”</Button>)}
+    </div>}
+    {selectedEdit && <Button variant="ghost" size="sm" onClick={() => revertEdit(selectedEdit)}>Revert this text</Button>}
+  </>;
+};
+
 // Fields edit the selected object or the next new one; Guide shows while the sub-tool is active.
 export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?: Panel; Guide?: Panel }>> = {
+  'edit-text': { Guide: EditTextGuide },
   text: { Fields: TextFields, Guide: TextGuide },
   highlight: { Guide: HighlightGuide },
   shape: { Fields: ShapeFields },
   signature: { Fields: SignatureFields, Guide: SignatureGuide },
   watermark: { Fields: WatermarkFields, Guide: WatermarkGuide },
   pageNumbers: { Fields: PageNumberFields, Guide: PageNumberGuide },
+  headerFooter: { Fields: HeaderFooterFields, Guide: HeaderFooterGuide },
   crop: { Guide: CropGuide },
+  form: { Guide: FormGuide },
 };
