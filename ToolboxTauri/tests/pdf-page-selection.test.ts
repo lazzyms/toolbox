@@ -67,10 +67,10 @@ test("a malformed, reversed, zero or out-of-range typed range returns the parser
     assert.ok(result !== null && "message" in result, `${value} should be rejected`);
     return result.message;
   };
-  assert.equal(message("1-3, abc"), "Invalid page selection: abc.");
-  assert.equal(message("0"), "Page numbers start at 1.");
-  assert.equal(message("5-3"), "Write 5-3 from low to high, like 3-5.");
-  assert.equal(message("1-3, 250"), "Page 250 isn't in this PDF. It has 7 pages, so use numbers from 1 to 7.");
+  assert.equal(message("1-3, abc"), '"abc" isn\'t a page or range. Use pages and ranges like 1-3, 5, 8-.');
+  assert.equal(message("0"), '"0" uses page 0. Page numbers start at 1.');
+  assert.equal(message("5-3"), '"5-3" runs backwards. Put the lower page first, for example 3-5.');
+  assert.equal(message("1-3, 250"), "The PDF has 7 pages, so page 250 can't be used.");
 });
 
 test("an empty typed range is not a selection", () => {
