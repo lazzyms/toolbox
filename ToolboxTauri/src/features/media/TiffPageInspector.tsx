@@ -11,7 +11,11 @@ export type TiffInspection =
   | { kind: "ready"; key: string; frames: TiffPage[] }
   | { kind: "error"; key: string; message: string };
 
+/** Split writes each file's pages separately; Combine joins every page into one TIFF. Never inferred from file count. */
+export type TiffMode = "split" | "combine";
+
 export interface TiffPagesState {
+  mode: TiffMode;
   inspection: TiffInspection;
   selectedIndex: number;
 }
@@ -37,11 +41,11 @@ export const TiffPageInspector = ({
 
   useEffect(() => {
     if (!frameKey) {
-      setState(() => ({ inspection: { kind: "idle" }, selectedIndex: 0 }));
+      setState((latest) => ({ ...latest, inspection: { kind: "idle" }, selectedIndex: 0 }));
       return;
     }
     let current = true;
-    setState(() => ({ inspection: { kind: "loading", key: frameKey }, selectedIndex: 0 }));
+    setState((latest) => ({ ...latest, inspection: { kind: "loading", key: frameKey }, selectedIndex: 0 }));
     void Promise.all(files.map(async (path) => {
       const pages = await invoke<ImagePreview[]>("inspect_tiff_pages", { request: { path } });
       return pages.map((preview, page) => ({ key: path + "\u0000" + page, path, page, preview }));
@@ -64,7 +68,7 @@ export const TiffPageInspector = ({
     if (nextIndex < 0 || nextIndex >= latest.inspection.frames.length) return latest;
     const frames = [...latest.inspection.frames];
     [frames[latest.selectedIndex], frames[nextIndex]] = [frames[nextIndex], frames[latest.selectedIndex]];
-    return { inspection: { ...latest.inspection, frames }, selectedIndex: nextIndex };
+    return { ...latest, inspection: { ...latest.inspection, frames }, selectedIndex: nextIndex };
   });
 
   const pages = isCurrentTiffInspection(inspection, files) ? inspection.frames : [];

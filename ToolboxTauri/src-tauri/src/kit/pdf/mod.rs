@@ -4,10 +4,16 @@ pub mod page_ranges;
 pub mod privacy;
 pub mod hidden_content;
 pub mod scene;
+pub mod bates;
 pub mod script_text;
+pub mod text_edit;
 pub mod editor;
 pub mod remaining;
 pub mod text_layer;
+pub mod page_text;
+#[cfg(test)]
+pub(crate) mod jbig2_fixtures;
+pub(crate) mod qpdf;
 pub mod unicode_font;
 pub mod font_resolver;
 pub mod layout;
@@ -32,11 +38,9 @@ pub mod xls;
 pub mod ppt;
 pub mod convert;
 pub mod properties;
-pub(crate) mod qpdf;
 mod embedded_image;
 mod inline_image;
-#[cfg(test)]
-pub(crate) mod jbig2_fixtures;
+pub mod recompress;
 
 use std::collections::HashSet;
 use std::fs;
@@ -61,6 +65,20 @@ pub(crate) const PDF_PREVIEW_MAX_DIMENSION: u32 = 1_600;
 pub(crate) const PDF_PREVIEW_MAX_PIXELS: u64 = 2_560_000;
 pub(crate) const PDF_PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const PDF_PREVIEW_TIMEOUT: Duration = Duration::from_secs(15);
+// Organize grid thumbnails come straight from the source page, one pdftoppm run per page, so one bad page fails alone.
+// Each run gets the per-file budget (opening and parsing the PDF) plus the per-page budget (rasterising one page).
+pub(crate) const PDF_THUMBNAIL_MAX_DIMENSION: u32 = 320;
+pub(crate) const PDF_THUMBNAIL_MAX_BATCH: usize = 12;
+pub(crate) const PDF_THUMBNAIL_FILE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const PDF_THUMBNAIL_PAGE_TIMEOUT: Duration = Duration::from_secs(3);
+// "Select blank pages" in Organize. A source page is blank only when it has no extractable text and, on a render
+// scaled to fit PDF_BLANK_RENDER_DIMENSION, fewer than PDF_BLANK_MAX_INK_BASIS_POINTS / 10,000 of its pixels are ink:
+// luma below PDF_BLANK_INK_LUMA_THRESHOLD. Light paper tone and specks of scanner noise stay under both thresholds.
+// Each helper run (text, then render) gets the thumbnail deadline for one page.
+pub(crate) const PDF_BLANK_MAX_BATCH: usize = 12;
+pub(crate) const PDF_BLANK_RENDER_DIMENSION: u32 = 320;
+pub(crate) const PDF_BLANK_INK_LUMA_THRESHOLD: u8 = 192;
+pub(crate) const PDF_BLANK_MAX_INK_BASIS_POINTS: u64 = 20;
 pub(crate) const PDF_HELPER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PDF_TEXT_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const PDF_TEXT_MAX_ERROR_BYTES: usize = 1024 * 1024;
@@ -219,7 +237,6 @@ pub(crate) fn read_preview_png(path: &Path) -> Result<(Vec<u8>, u32, u32), Strin
 pub(crate) struct PdfMutationPreflight {
     pub(crate) pages_root: ObjectId,
     pub(crate) pages: Vec<ObjectId>,
-    pub(crate) annotated_pages: HashSet<ObjectId>,
     pub(crate) has_navigation: bool,
     pub(crate) has_form_structure: bool,
     pub(crate) has_tagged_structure: bool,
@@ -228,7 +245,6 @@ pub(crate) struct PdfMutationPreflight {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PdfMutationIntent {
     General,
-    ReorderOnly,
     ValidateOnly,
 }
 
@@ -255,7 +271,11 @@ pub(crate) fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Resu
     Ok(value)
 }
 
-pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+pub(crate) fn inherited(document: &Document, id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+    Ok(inherited_ref(document, id, key)?.cloned())
+}
+
+pub(crate) fn inherited_ref<'a>(document: &'a Document, mut id: ObjectId, key: &[u8]) -> Result<Option<&'a Object>, String> {
     let mut seen = HashSet::new();
     loop {
         if !seen.insert(id) {
@@ -263,7 +283,7 @@ pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Re
         }
         let page_tree = document.get_dictionary(id).map_err(|error| error.to_string())?;
         if let Ok(value) = page_tree.get(key) {
-            return Ok(Some(resolve(document, value)?.clone()));
+            return Ok(Some(resolve(document, value)?));
         }
         match page_tree.get(b"Parent") {
             Ok(parent) => id = parent.as_reference().map_err(|error| error.to_string())?,
@@ -751,8 +771,7 @@ fn collect_signed_fields(document: &Document, value: &Object, inherited_type: Op
 }
 
 /// Removes every signature value, the permissions that refer to them and the form's signature flags,
-/// leaving empty signature fields. Returns whether the document was signed. Unlike [`remove_signatures`],
-/// which drops signature fields so a page edit can go ahead, this keeps the form's structure intact.
+/// leaving empty signature fields. Returns whether the document was signed.
 pub fn remove_signature_values(document: &mut Document) -> Result<bool, String> {
     if !has_signed_signature_field(document) {
         return Ok(false);
@@ -829,6 +848,16 @@ fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<b
 }
 
 pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, false)
+}
+
+/// The scene export accepts a signed source, because it removes the signature and reports it with the shared warning.
+/// Other signature evidence without a signed field still fails closed, as it does for every other mutation.
+pub(crate) fn signed_mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, true)
+}
+
+fn preflight(document: &Document, intent: PdfMutationIntent, allow_signed: bool) -> Result<PdfMutationPreflight, String> {
     if document.is_encrypted() {
         return Err("Unlock the PDF before editing".to_string());
     }
@@ -868,17 +897,17 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
             return Err(format!("Page {} has a missing or wrong /Parent, so the PDF page-tree is malformed; mutation was rejected before output", index + 1));
         }
     }
-    if document_has_signature(document, catalog, &pages)? {
+    if document_has_signature(document, catalog, &pages)? && !(allow_signed && has_signed_signature_field(document)) {
         return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
     }
-    let annotated_pages = validate_page_annotations(document, &pages)?;
+    validate_page_annotations(document, &pages)?;
     let page_navigation = pages.iter().map(|page| page_has_internal_navigation(document, *page)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
         .into_iter().map(|key| has_catalog_entry(document, catalog, key)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = has_navigation || page_navigation;
     let has_form_structure = has_catalog_entry(document, catalog, b"AcroForm")?;
     let has_tagged_structure = has_catalog_entry(document, catalog, b"StructTreeRoot")?;
-    let preflight = PdfMutationPreflight { pages_root, pages, annotated_pages, has_navigation, has_form_structure, has_tagged_structure };
+    let preflight = PdfMutationPreflight { pages_root, pages, has_navigation, has_form_structure, has_tagged_structure };
     preflight.enforce_policy(intent)?;
     Ok(preflight)
 }
@@ -1288,6 +1317,28 @@ pub(crate) mod tests {
         let field = document.add_object(field);
         attach_widget(document, field);
         set_form_fields(document, vec![Object::Reference(field)]);
+    }
+
+    /// Encrypts the PDF at `path` in place with a user password, so it opens but reads as encrypted.
+    pub(crate) fn encrypt_pdf(path: &Path) {
+        let mut document = Document::load(path).expect("fixture should load");
+        document.trailer.set(
+            "ID",
+            Object::Array(vec![
+                Object::String(b"toolbox-test-id-1".to_vec(), lopdf::StringFormat::Literal),
+                Object::String(b"toolbox-test-id-2".to_vec(), lopdf::StringFormat::Literal),
+            ]),
+        );
+        let encryption_state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
+            document: &document,
+            owner_password: "owner",
+            user_password: "user",
+            key_length: 128,
+            permissions: lopdf::Permissions::all(),
+        })
+        .expect("encryption fixture should create an encryption state");
+        document.encrypt(&encryption_state).expect("fixture should encrypt");
+        document.save(path).expect("encrypted fixture should save");
     }
 
     pub(crate) fn sign(document: &mut Document) {

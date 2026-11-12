@@ -134,7 +134,7 @@ test("the release workflow checks every artifact and compares snapshots before p
   assert.match(workflow, /cargo test command_tests::release_artifact_converts_every_family_with_its_own_fonts -- --exact --nocapture/);
   assert.match(workflow, /name: convert-outputs-\$\{\{ matrix\.artifact \}\}/);
   for (const target of ["macos-aarch64", "windows-x86_64", "windows-arm64"]) assert.ok(workflow.includes(`${target}=convert-outputs/${target}`), target);
-  assert.match(workflow, /publish:\n\s+needs: \[version, build, compare-ocr, compare-convert\]/);
+  assert.match(workflow, /publish:\n\s+needs: \[version, packs, build, compare-ocr, compare-convert\]/);
 });
 
 test("the snapshot families are the release test's fixtures and cover every available family", () => {
