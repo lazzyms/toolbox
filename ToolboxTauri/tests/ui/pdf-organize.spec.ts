@@ -523,10 +523,10 @@ test('a typed page range selects those positions, and a bad range explains itsel
   await expect(count(page)).toHaveText('3 pages selected');
 
   for (const [value, message] of [
-    ['1-3, 250', 'Page 250 isn\'t in this PDF. It has 5 pages, so use numbers from 1 to 5.'],
-    ['4-2', 'Write 4-2 from low to high, like 2-4.'],
-    ['0', 'Page numbers start at 1.'],
-    ['two', 'Invalid page selection: two.'],
+    ['1-3, 250', 'The PDF has 5 pages, so page 250 can\'t be used.'],
+    ['4-2', '"4-2" runs backwards. Put the lower page first, for example 2-4.'],
+    ['0', '"0" uses page 0. Page numbers start at 1.'],
+    ['two', '"two" isn\'t a page or range. Use pages and ranges like 1-3, 5, 8-.'],
   ]) {
     await range.fill(value);
     await range.press('Enter');
@@ -1493,7 +1493,7 @@ test('Reset asks first: Cancel keeps the edits, Reset restores the opened file a
   expect(await pageStates(page)).toEqual(edited);
 });
 
-test('opening another PDF with unexported changes asks first: Cancel, Don’t export and Export', async ({ page }) => {
+test('opening another PDF with unexported changes asks first: Cancel, Discard changes and Export…', async ({ page }) => {
   await setPlatform(page, 'MacIntel');
   await openReport(page);
   // Without changes, a dropped PDF simply replaces the open one.
@@ -1504,27 +1504,29 @@ test('opening another PDF with unexported changes asks first: Cancel, Don’t ex
   await grid(page, 'clean.pdf').getByRole('option').nth(1).click();
   await page.keyboard.press('h');
   await drop(page, ['/local/other.pdf']);
-  const dialog = page.getByRole('alertdialog', { name: 'Export your changes first?' });
-  await expect(dialog).toContainText('clean.pdf has 1 change that isn’t exported. If you open another PDF now, it’s lost. Your original isn’t affected either way.');
+  const dialog = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await expect(dialog).toContainText('clean.pdf has 1 change');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(grid(page, 'clean.pdf')).toBeVisible();
   await expect(grid(page, 'clean.pdf').getByRole('option').nth(1)).toHaveAccessibleName(/mirrored left to right/);
 
   await drop(page, ['/local/other.pdf']);
-  await dialog.getByRole('button', { name: 'Don’t export', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Discard changes', exact: true }).click();
   await expect(grid(page, 'other.pdf')).toBeVisible();
   expect(await exportCalls(page)).toBe(0);
 
-  // Export writes the edited copy first, then opens the new PDF.
+  // Export… keeps the open PDF and exports its edited copy.
   await grid(page, 'other.pdf').getByRole('option').nth(0).click();
   await page.keyboard.press('v');
   await grid(page, 'other.pdf').getByRole('option').nth(2).click();
   await page.keyboard.press('Backspace');
+  await expect(exportButton(page)).toBeEnabled();
   await drop(page, ['/local/third.pdf']);
-  await expect(dialog).toContainText('other.pdf has 2 changes that aren’t exported. If you open another PDF now, they’re lost.');
-  await dialog.getByRole('button', { name: 'Export', exact: true }).click();
-  await expect(grid(page, 'third.pdf')).toBeVisible();
+  await expect(dialog).toContainText('other.pdf has 2 changes');
+  await dialog.getByRole('button', { name: 'Export…', exact: true }).click();
+  await expect(grid(page, 'other.pdf')).toBeVisible();
+  await expect.poll(() => exportCalls(page)).toBe(1);
   const exported = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').map((call: any) => call.args.request));
   expect(exported).toHaveLength(1);
   expect(exported[0].paths).toEqual(['/local/other.pdf']);
@@ -1540,19 +1542,19 @@ test('choosing one of several dropped PDFs also warns about unexported changes',
   const chooser = page.getByRole('dialog', { name: 'Organize works on one PDF at a time' });
   await chooser.getByRole('radio', { name: 'b.pdf' }).click();
   await chooser.getByRole('button', { name: 'Open', exact: true }).click();
-  const dialog = page.getByRole('alertdialog', { name: 'Export your changes first?' });
-  await expect(dialog).toContainText('report.pdf has 1 change that isn’t exported.');
+  const dialog = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await expect(dialog).toContainText('report.pdf has 1 change');
   await expect(chooser).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(grid(page)).toBeVisible();
   await drop(page, ['/local/a.pdf', '/local/b.pdf']);
   await chooser.getByRole('radio', { name: 'b.pdf' }).click();
   await chooser.getByRole('button', { name: 'Open', exact: true }).click();
-  await dialog.getByRole('button', { name: 'Don’t export', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Discard changes', exact: true }).click();
   await expect(grid(page, 'b.pdf')).toBeVisible();
 });
 
-test('closing with unexported changes asks first: Cancel stays, Discard leaves, Export exports and leaves', async ({ page }) => {
+test('closing with unexported changes asks first: Cancel stays, Discard leaves, Export… exports and stays', async ({ page }) => {
   await setPlatform(page, 'MacIntel');
   await openReport(page);
   await option(page, 2).click();
@@ -1562,7 +1564,7 @@ test('closing with unexported changes asks first: Cancel stays, Discard leaves, 
   const dialog = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
 
   await page.getByRole('button', { name: '← All tools' }).first().click();
-  await expect(dialog).toContainText('report.pdf has 2 changes that haven’t been exported. If you close now, they’re lost.');
+  await expect(dialog).toContainText("report.pdf has 2 changes that haven't been exported. If you close now, they're lost.");
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(grid(page)).toBeVisible();
@@ -1580,11 +1582,13 @@ test('closing with unexported changes asks first: Cancel stays, Discard leaves, 
   await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
   await option(page, 1).click();
   await page.keyboard.press('Backspace');
+  await expect(exportButton(page)).toBeEnabled();
   await page.getByRole('button', { name: '← All tools' }).first().click();
-  await expect(dialog).toContainText('report.pdf has 1 change that hasn’t been exported. If you close now, it’s lost.');
-  await dialog.getByRole('button', { name: 'Export', exact: true }).click();
-  await expect(home(page)).toBeVisible();
-  expect(await exportCalls(page)).toBe(1);
+  await expect(dialog).toContainText('report.pdf has 1 change');
+  await dialog.getByRole('button', { name: 'Export…', exact: true }).click();
+  await expect.poll(() => exportCalls(page)).toBe(1);
+  await expect(grid(page)).toBeVisible();
+  await expect(home(page)).toHaveCount(0);
 });
 
 test('after an export, the header says so and leaving needs no warning', async ({ page }) => {
@@ -1690,10 +1694,12 @@ test('every Organize action is reachable from the keyboard alone', async ({ page
 
   // Change destination for this run.
   await page.evaluate(() => (window as any).dialogNext = '/local/out');
-  const destination = page.getByRole('region', { name: 'Destination' });
-  await tabTo(page, destination.getByRole('button', { name: 'Change for this run' }));
+  await toolbarTo(page, page.getByRole('button', { name: /^Save to .*Change for this export$/ }));
   await page.keyboard.press('Enter');
-  await expect(destination.getByRole('button', { name: 'Reset to default' })).toBeVisible();
+  const destination = page.getByRole('dialog', { name: 'Save this export to' });
+  await tabTo(page, destination.getByRole('button', { name: 'Choose folder…' }));
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: /this export only\. Change for this export$/ })).toBeVisible();
 
   // Export.
   await toolbarTo(page, exportButton(page));
@@ -1722,6 +1728,6 @@ for (const theme of ['light', 'dark']) test(`the Reset, unexported-changes and s
   await page.getByRole('button', { name: '← All tools' }).first().click();
   const leave = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
   await expect(leave).toBeVisible();
-  await expect(leave.getByRole('button', { name: 'Export', exact: true })).toBeEnabled();
+  await expect(leave.getByRole('button', { name: 'Export…', exact: true })).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath(`organize-unexported-${theme}.png`) });
 });

@@ -21,8 +21,13 @@ const errorText = (reason: unknown) => {
   return text.replace(/^(?:Error:\s*)+/i, '').trim();
 };
 
+/** The native refusal for a password-protected PDF (kit/pdf/scene.rs `LOCKED_PDF_MESSAGE`). It is already plain, so it is shown as is. */
+export const LOCKED_PDF_MESSAGE = 'This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy here.';
+export const isLockedPdfError = (reason: unknown) => /password-protected/i.test(errorText(reason));
+
 export const pdfEditorErrorMessage = (reason: unknown, phase: PdfEditorErrorPhase) => {
   const text = errorText(reason);
+  if (isLockedPdfError(text)) return LOCKED_PDF_MESSAGE;
   if (/bookmarks? or destinations?/i.test(text)) {
     return 'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop, rotation or mirror, or use a copy without them.';
   }
