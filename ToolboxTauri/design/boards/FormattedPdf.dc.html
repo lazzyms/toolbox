@@ -10,41 +10,94 @@
 <helmet>
 <style>
 body{margin:0}
-.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased}
-.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6)}
-.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28)}
+.tb{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--fg);background:var(--bg);-webkit-font-smoothing:antialiased;position:relative}
+.tb.dark{--bg:#0a0a0a;--side:#111111;--panel:#0f0f0f;--raise:#1c1c1c;--fg:#fafafa;--mut:#a3a3a3;--faint:#8a8a8a;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.16);--sel:#262626;--pri:#ebebeb;--prifg:#171717;--bad:#ff6b6b;--warn:#f2b552;--ring:#a3a3a3;--scrim:rgba(0,0,0,.6);--seg-ok:#d4d4d4;--seg-wait:#2a2a2a;--hl:rgba(255,255,255,.18)}
+.tb.light{--bg:#ffffff;--side:#f7f7f7;--panel:#fcfcfc;--raise:#f2f2f2;--fg:#0a0a0a;--mut:#525252;--faint:#666666;--line:#e8e8e8;--line2:#d4d4d4;--sel:#ebebeb;--pri:#171717;--prifg:#fafafa;--bad:#c10007;--warn:#9a5800;--ring:#525252;--scrim:rgba(0,0,0,.28);--seg-ok:#262626;--seg-wait:#e5e5e5;--hl:rgba(0,0,0,.12)}
 .tb button,.tb input,.tb select{font:inherit;color:inherit}
 .btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);color:var(--fg);font-weight:500;cursor:pointer;white-space:nowrap;box-sizing:border-box;text-decoration:none}
 .btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
 .btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.xs{height:22px;padding:0 7px;font-size:12px}
+.btn.ic-only{width:28px;height:28px;padding:0;justify-content:center}
+.btn.ghost[aria-pressed=true]{background:var(--sel);color:var(--fg)}
 .btn[disabled]{opacity:.45;cursor:default}
+.btn.ghost.link{color:var(--fg)}
 .kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
 .btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
 .nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
 .nav.on{background:var(--sel);color:var(--fg);font-weight:500}
+.rh{padding:12px 10px 4px;font-size:11px;font-weight:600;color:var(--faint)}
 .field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.pick{display:flex;align-items:center;gap:6px;text-align:left;cursor:pointer}
+.pick span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lbl{font-size:12px;font-weight:600}
 .hint{font-size:12px;color:var(--mut)}
-.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
-.row.sel{background:var(--sel)}
-.badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
 svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
-a{color:inherit}a:hover{color:var(--mut)}
-.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+a{color:inherit}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}
+.seg button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);font-weight:500}
+.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.25)}
+.seg.wide{display:flex}.seg.wide button{flex:1;justify-content:center}
 .note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
-.opt{display:flex;flex-direction:column;gap:6px}
-fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+.tbar{display:flex;align-items:center;gap:4px;padding:8px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap;position:relative}
+.sep{width:1px;height:20px;background:var(--line2);margin:0 4px}
+.doc{flex:1;min-height:0;overflow:hidden;padding:14px 20px 20px;display:flex;flex-direction:column;gap:4px}
+.blk{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:8px;align-items:start;padding:6px 8px;border-radius:8px;border:1px solid transparent}
+.blk[aria-selected=true]{border-color:var(--ring);background:var(--raise)}
+.blk.bad{border-color:var(--bad)}
+.blk.warnb{border-color:var(--warn)}
+.gut{font-size:11px;color:var(--faint);padding-top:3px;font-weight:600}
+.bact{display:flex;gap:2px}
+.caret{display:inline-block;width:1.5px;height:1.05em;background:var(--fg);vertical-align:text-bottom;margin-left:1px}
+.selrun{background:var(--hl);border-radius:2px}
+.ttab{border-collapse:collapse;width:100%;font-size:12px}
+.ttab th,.ttab td{border:1px solid var(--line2);padding:3px 8px;text-align:left}
+.ttab th{background:var(--sel);font-weight:600}
+.panel{flex:1 1 340px;max-width:400px;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;position:relative}
+.pv{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 20px 14px;border-bottom:1px solid var(--line);background:var(--side)}
+.pgwrap{position:relative;flex:none;box-shadow:0 2px 10px rgba(0,0,0,.35);border-radius:2px;overflow:hidden}
+.pg{position:absolute;left:0;top:0;width:595px;height:842px;background:#fff;color:#111;transform-origin:0 0;font-family:Georgia,"Times New Roman",serif;font-size:11px;line-height:1.5;padding:58px 71px;box-sizing:border-box}
+.pg h1{font-size:24px;margin:0 0 10px;line-height:1.2}
+.pg h2{font-size:16px;margin:16px 0 6px}
+.pg p{margin:0 0 8px}
+.pg ul{margin:0 0 8px;padding-left:18px}
+.pg table{border-collapse:collapse;width:100%;margin:6px 0 10px}
+.pg th,.pg td{border:1px solid #999;padding:3px 6px;text-align:left}
+.pg th{background:#eee}
+.pg .run{position:absolute;left:71px;right:71px;font-size:9px;color:#666;display:flex;justify-content:space-between}
+.pg .imgph{height:150px;width:70%;background:repeating-linear-gradient(45deg,#e6e6e6 0 8px,#f2f2f2 8px 16px);border:1px solid #ccc;display:flex;align-items:center;justify-content:center;color:#666;font-family:system-ui,sans-serif;font-size:10px}
+.chip{position:absolute;left:50%;top:12px;transform:translateX(-50%);display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;background:var(--panel);color:var(--fg);border:1px solid var(--line2);font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.secs{flex:1;min-height:0;overflow:hidden;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+.sec{border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.sechd{display:grid;grid-template-columns:16px auto minmax(0,1fr);column-gap:8px;align-items:center;width:100%;min-height:34px;padding:0 10px;border:0;background:none;text-align:left;cursor:pointer;box-sizing:border-box}
+.sechd .hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.tb input[type=checkbox]{accent-color:var(--pri)}
+.secbody{padding:8px 12px 10px;display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line)}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stack{display:flex;flex-direction:column;gap:4px;min-width:0}
 .chk{display:flex;gap:8px;align-items:center}
-
+.pop{position:absolute;right:22px;width:340px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.4);padding:6px;display:flex;flex-direction:column;gap:2px;z-index:5}
+.pop .gh{padding:8px 8px 4px;font-size:11px;font-weight:600;color:var(--faint)}
+.opt{display:flex;align-items:center;gap:8px;min-height:26px;padding:0 8px;border-radius:6px}
+.opt[aria-selected=true]{background:var(--sel)}
+.tag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:999px;border:1px solid var(--line2);font-size:11px;color:var(--mut);white-space:nowrap}
+.est{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin:0}
+.used{display:grid;grid-template-columns:100px minmax(0,1fr);gap:6px 10px;margin:0}
+.used dt{color:var(--mut);font-size:12px}.used dd{margin:0}
+.ftab{width:100%;border-collapse:collapse}
+.ftab th{font-size:12px;font-weight:500;color:var(--mut);text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
+.ftab td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.card{border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+footer .btn{flex:none}
 </style>
 </helmet>
-<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
+<div class="{{themeClass}}" style="min-height: 800px; height: 800px; overflow: hidden; display: flex">
 <aside aria-label="PDF Conversion" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
 <a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
-<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Conversion</div>
-<nav aria-label="PDF Conversion tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>PDF to Images</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>Extract from PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg>PDF to EPUB</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4"></path><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg>Convert to PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>Images to PDF</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13 7l4 4"></path></svg>OCR</button><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"></path></svg>Formatted PDF</button></nav>
+<div style="padding: 16px 10px 2px; font-size: 12px; font-weight: 600; color: var(--faint)">PDF Conversion</div>
+<nav aria-label="PDF Conversion tools" style="display: flex; flex-direction: column; gap: 2px"><sc-for list="{{railGroups}}" as="g" hint-placeholder-count="3"><div role="group" aria-labelledby="{{g.id}}" style="display: flex; flex-direction: column; gap: 2px"><div id="{{g.id}}" class="rh">{{g.title}}</div><sc-for list="{{g.items}}" as="it" hint-placeholder-count="3"><button class="{{it.cls}}" aria-pressed="{{it.pressed}}" tabindex="{{it.tab}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="{{it.d}}"></path></svg>{{it.name}}</button></sc-for></div></sc-for></nav>
 <div style="flex: 1"></div>
 <a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
 <p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
@@ -52,59 +105,220 @@ fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bo
 <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
 <header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
 <h1 style="margin: 0; font-size: 15px; font-weight: 600">Formatted PDF</h1>
-<span class="hint">Build a simple PDF from headings, text, lists, tables and images.</span>
+<span class="hint">Write or paste text, format it, and save a new PDF.</span>
 <div style="flex: 1"></div>
+<span role="status" aria-live="polite" class="hint" style="display: inline-flex; align-items: center; gap: 6px; white-space: nowrap"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="{{savedIcon}}"></path></svg>{{saved}}</span>
 <button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
 </header>
-<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
-<section aria-label="Document blocks" style="flex: 999 1 420px; min-width: 0; display: flex; flex-direction: column">
-<div role="toolbar" aria-label="Add a block" style="display: flex; align-items: center; gap: 6px; padding: 12px 20px; flex-wrap: wrap"><span class="lbl" style="margin-right: 4px">Add</span>
-<button class="btn sm">Heading</button><button class="btn sm">Paragraph</button><button class="btn sm">List</button><button class="btn sm">Table</button><button class="btn sm">Image…</button><button class="btn sm">Page break</button>
-<div style="flex: 1"></div><span class="hint" role="status">{{saved}}</span></div>
-<sc-if value="{{restored}}" hint-placeholder-val="{{ false }}"><div class="note" role="status" style="margin: 0 20px 10px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span class="hint" style="flex: 1"><strong style="font-weight: 600; color: var(--fg)">Restored your draft from yesterday, 6:42 pm.</strong> Drafts are kept on this computer until you discard them.</span><button class="btn sm">Start over</button></div></sc-if>
-<ol role="listbox" aria-label="Blocks, in order" style="list-style: none; margin: 0; padding: 0 20px 20px; display: flex; flex-direction: column; gap: 8px; overflow: auto"><li role="option" aria-selected="true" tabindex="0" aria-label="Block 1, Heading" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--ring); background: var(--panel)">
-<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Heading</span><input class="field" aria-label="Heading text" value="Move-out checklist" style="font-size: 15px; font-weight: 600"></span>
-<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 1 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 1 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 1" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 2, Paragraph" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
-<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Paragraph</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Return all keys to the front desk by 5 pm on the last day of the lease…</span></span>
-<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 2 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 2 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 2" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 3, List" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
-<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">List</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">3 items: Clean appliances, Patch nail holes, Photograph each room</span></span>
-<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 3 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 3 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 3" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 4, Table" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
-<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Table</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">3 columns, 4 rows: Room, Condition, Notes</span></span>
-<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 4 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 4 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 4" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 5, Page break" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
-<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Page break</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span class="hint">Starts a new page</span></span></span>
-<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 5 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 5 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 5" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li><li role="option" aria-selected="false" tabindex="-1" aria-label="Block 6, Image" style="display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel)">
-<span aria-hidden="true" style="color: var(--mut); margin-top: 2px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg></span>
-<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px"><span class="hint">Image</span><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">floorplan.png, 1200 × 900</span></span>
-<span style="display: flex; gap: 2px"><button class="btn sm ghost" aria-label="Move block 6 up" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn sm ghost" aria-label="Move block 6 down" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn sm ghost" aria-label="Delete block 6" style="padding: 0 6px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></li></ol>
-<p class="hint" style="margin: 0; padding: 0 20px 16px">Select a block and press {{mod}}+Up or {{mod}}+Down to move it. Delete removes it, {{mod}}+Z brings it back.</p></section><section aria-label="Preview" style="flex: 1 1 340px; max-width: 420px; border-left: 1px solid var(--line); background: var(--raise); display: flex; flex-direction: column">
-<div style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap"><span class="lbl">Preview</span><span class="hint">Page 1 of 2</span><div style="flex: 1"></div>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Page<select class="field" style="height: 26px; width: auto"><option>A4</option><option>Letter</option></select></label>
-<label class="hint" style="display: flex; gap: 6px; align-items: center">Font<select class="field" style="height: 26px; width: auto"><option>Sans</option><option>Serif</option></select></label></div>
-<div style="flex: 1; padding: 20px; display: grid; place-items: start center; overflow: auto">
-<div role="img" aria-label="Page 1 preview: heading, paragraph, list and table" style="width: 260px; height: 368px; background: #fff; color: #222; border-radius: 3px; box-shadow: 0 2px 10px rgba(0,0,0,.3); padding: 24px 22px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; font-size: 7px; line-height: 1.4">
-<strong style="font-size: 13px; outline: 2px solid #1d5fd1; outline-offset: 2px">Move-out checklist</strong><span>Return all keys to the front desk by 5 pm on the last day of the lease. Leave the parking fob in the kitchen drawer.</span>
-<span>• Clean appliances<br>• Patch nail holes<br>• Photograph each room</span>
-<span style="display: grid; grid-template-columns: 1fr 1fr 1.4fr; border: 1px solid #bbb"><span style="border: 1px solid #ddd; padding: 2px 3px; font-weight: 600">Room</span><span style="border: 1px solid #ddd; padding: 2px 3px; font-weight: 600">Condition</span><span style="border: 1px solid #ddd; padding: 2px 3px; font-weight: 600">Notes</span><span style="border: 1px solid #ddd; padding: 2px 3px">Kitchen</span><span style="border: 1px solid #ddd; padding: 2px 3px">Good</span><span style="border: 1px solid #ddd; padding: 2px 3px"></span><span style="border: 1px solid #ddd; padding: 2px 3px">Bath</span><span style="border: 1px solid #ddd; padding: 2px 3px">Fair</span><span style="border: 1px solid #ddd; padding: 2px 3px">Grout</span><span style="border: 1px solid #ddd; padding: 2px 3px">Bedroom</span><span style="border: 1px solid #ddd; padding: 2px 3px">Good</span><span style="border: 1px solid #ddd; padding: 2px 3px"></span></span></div></div>
-<footer style="padding: 14px 16px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; flex-wrap: wrap"><button class="btn ghost">Discard draft…</button><div style="flex: 1"></div><button class="btn pri">Save PDF…<span class="kbd">{{runKey}}</span></button></footer>
+<div style="flex: 1; display: flex; min-height: 0">
+
+<sc-if value="{{showEditor}}" hint-placeholder-val="{{ true }}"><section aria-label="Document" style="flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column">
+<div role="toolbar" aria-label="Formatting" class="tbar">
+<button class="btn sm field pick" style="width: 132px" aria-haspopup="listbox" aria-label="Block type: {{blockType}}"><span>{{blockType}}</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M6 9l6 6 6-6"></path></svg></button>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn ghost ic-only" aria-pressed="{{boldOn}}" aria-label="Bold" aria-keyshortcuts="{{bKeyAria}}" style="font-weight: 700; font-family: Georgia, serif; font-size: 14px">B</button>
+<button class="btn ghost ic-only" aria-pressed="false" aria-label="Italic" aria-keyshortcuts="{{iKeyAria}}" style="font-style: italic; font-family: Georgia, serif; font-size: 14px">I</button>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn ghost ic-only" aria-pressed="false" aria-label="Bulleted list"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"></path></svg></button>
+<button class="btn ghost ic-only" aria-pressed="false" aria-label="Numbered list"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10M4 4.5h1.2v4M4 14.5a1.3 1.3 0 1 1 2 1.2L4 18.5h2.4"></path></svg></button>
+<span class="sep" aria-hidden="true"></span>
+<button class="btn sm ghost" style="color: var(--fg)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zM3 10h18M9 5v14"></path></svg>Table</button>
+<button class="btn sm ghost" style="color: var(--fg)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4"></path></svg>Image…</button>
+<button class="btn sm ghost" style="color: var(--fg)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3v6h14V3M5 21v-6h14v6M3 12h2M8 12h2M13 12h2M18 12h3"></path></svg>Page break</button>
+<div style="flex: 1"></div>
+<button class="btn ghost ic-only" aria-label="Undo" aria-keyshortcuts="{{undoAria}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"></path></svg></button>
+<button class="btn ghost ic-only" aria-label="Redo" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3"></path></svg></button>
+<sc-if value="{{tip}}" hint-placeholder-val="{{ false }}"><div role="tooltip" style="position: absolute; left: 168px; top: 42px; display: inline-flex; gap: 8px; align-items: center; padding: 4px 8px; border-radius: 6px; background: var(--pri); color: var(--prifg); font-size: 12px; white-space: nowrap; z-index: 3">Bold<span style="opacity: .7">{{bKey}}</span></div></sc-if>
+</div>
+
+<sc-if value="{{restored}}" hint-placeholder-val="{{ false }}"><div class="note" role="status" style="margin: 12px 20px 0"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"></path></svg><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><strong style="font-weight: 600">Restored your draft from yesterday at 18:42</strong><span class="hint">It stays on this device until you save the PDF or discard it. Nothing is sent anywhere.</span></span><button class="btn sm">Discard draft…</button><button class="btn sm ghost" aria-label="Dismiss restored-draft note">Dismiss</button></div></sc-if>
+<sc-if value="{{missing}}" hint-placeholder-val="{{ false }}"><div class="note" role="alert" style="margin: 12px 20px 0; border-color: var(--bad)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--bad); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg><span style="flex: 1; display: flex; flex-direction: column; gap: 2px"><strong style="font-weight: 600">The PDF wasn't saved: floorplan.png is missing</strong><span class="hint">It was at {{imgPath}} when you added it. Nothing was written and your draft is kept. Choose the image again or remove its block, then save.</span></span></div></sc-if>
+
+<div class="doc" role="listbox" aria-label="Document blocks, in order" aria-multiselectable="false">
+<sc-if value="{{isEmpty}}" hint-placeholder-val="{{ false }}"><div class="blk" role="option" aria-selected="true" aria-label="Block 1, Paragraph, empty"><span class="gut">Text</span><span style="color: var(--faint)"><span class="caret" style="margin: 0 2px 0 0"></span>Type or paste text here</span><span></span></div>
+<div style="margin: 18px 52px 0; display: flex; flex-direction: column; gap: 6px; max-width: 460px"><span class="hint">Pasted text keeps its paragraphs, headings, lists and bold or italic. Other formatting is dropped.</span><span class="hint">Use the toolbar for headings, lists, a table, an image from your disk or a page break. Drop an image from {{finder}} to add it where you drop.</span></div></sc-if>
+
+<sc-if value="{{hasDoc}}" hint-placeholder-val="{{ true }}">
+<div class="blk" role="option" aria-selected="false" aria-label="Block 1, Heading 1"><span class="gut">H1</span><span style="font-size: 20px; font-weight: 650; line-height: 1.25">Move-out checklist</span><span></span></div>
+<div class="blk" role="option" aria-selected="{{selPara}}" aria-label="Block 2, Paragraph"><span class="gut">Text</span><span style="line-height: 1.55">Return <b class="{{runCls}}">all keys</b><sc-if value="{{caretPara}}" hint-placeholder-val="{{ false }}"><span class="caret"></span></sc-if> to the front desk by 5 pm on the <i>last day</i> of the lease. Leave a forwarding address with the building manager.</span><sc-if value="{{actPara}}" hint-placeholder-val="{{ false }}"><span class="bact"><button class="btn xs ghost" aria-label="Move block 2 up"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M12 19V5M6 11l6-6 6 6"></path></svg></button><button class="btn xs ghost" aria-label="Move block 2 down"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M12 5v14M6 13l6 6 6-6"></path></svg></button><button class="btn xs ghost" aria-label="Delete block 2"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button></span></sc-if><sc-if value="{{noActPara}}" hint-placeholder-val="{{ true }}"><span></span></sc-if></div>
+<sc-if value="{{script}}" hint-placeholder-val="{{ false }}"><div class="blk warnb" role="option" aria-selected="true" aria-label="Block 3, Paragraph, has Japanese text that needs the Unicode script pack"><span class="gut">Text</span><span style="display: flex; flex-direction: column; gap: 4px"><span lang="ja">鍵は管理人室に返却してください。<span class="caret"></span></span><span class="hint" style="color: var(--warn); display: flex; gap: 6px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg>Japanese text needs the Unicode script pack to be drawn in the PDF.</span></span><span></span></div></sc-if>
+<div class="blk" role="option" aria-selected="false" aria-label="Block, Heading 2"><span class="gut">H2</span><span style="font-size: 15px; font-weight: 600">Before you leave</span><span></span></div>
+<div class="blk" role="option" aria-selected="false" aria-label="Block, Bulleted list, 3 items"><span class="gut">List</span><ul style="margin: 0; padding-left: 18px; line-height: 1.6"><li>Clean the oven and the fridge</li><li>Patch nail holes and touch up the paint</li><li>Photograph <i>each room</i> before handing back the keys</li></ul><span></span></div>
+<div class="blk" role="option" aria-selected="{{selTable}}" aria-label="Block, Table, 3 columns, header row"><span class="gut">Table</span><table class="ttab"><thead><tr><th>Room</th><th>Condition</th><th>Notes</th></tr></thead><tbody><tr><td>Kitchen</td><td>Good</td><td>Oven cleaned</td></tr><tr><td>Bathroom</td><td>Fair</td><td>{{tableCell}}<sc-if value="{{caretTable}}" hint-placeholder-val="{{ false }}"><span class="caret"></span></sc-if></td></tr></tbody></table><span></span></div>
+<div class="blk {{imgCls}}" role="option" aria-selected="{{selImg}}" aria-label="Block, Image, floorplan.png"><span class="gut">Image</span><span style="display: flex; gap: 12px; align-items: center"><span style="width: 96px; height: 64px; flex: none; border-radius: 6px; border: 1px solid var(--line2); background: {{imgBg}}; display: flex; align-items: center; justify-content: center; color: var(--mut)"><sc-if value="{{missing}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--bad)"><path d="M4 4h16v16H4zM4 4l16 16"></path></svg></sc-if></span><span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span>floorplan.png</span><span class="hint" style="color: {{imgHintColor}}">{{imgHint}}</span><sc-if value="{{missing}}" hint-placeholder-val="{{ false }}"><span style="display: flex; gap: 6px; margin-top: 4px"><button class="btn sm">Choose image…</button><button class="btn sm ghost">Remove block</button></span></sc-if></span></span><span></span></div>
+<div class="blk" role="option" aria-selected="false" aria-label="Block, Page break"><span class="gut">Break</span><span style="display: flex; align-items: center; gap: 10px; color: var(--mut); font-size: 12px; padding-top: 2px"><span style="flex: 1; border-top: 1px dashed var(--line2)"></span>Page break<span style="flex: 1; border-top: 1px dashed var(--line2)"></span></span><span></span></div>
+<div class="blk" role="option" aria-selected="false" aria-label="Block, Heading 2"><span class="gut">H2</span><span style="font-size: 15px; font-weight: 600">Contacts</span><span></span></div>
+</sc-if>
+</div>
+</section></sc-if>
+
+<sc-if value="{{isSaved}}" hint-placeholder-val="{{ false }}"><section aria-label="Saved" style="flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 16px; padding: 20px 24px; overflow: hidden">
+<div role="status" aria-live="polite" style="display: flex; gap: 12px; align-items: flex-start"><span style="width: 28px; height: 28px; border-radius: 999px; background: var(--raise); border: 1px solid var(--line2); display: flex; align-items: center; justify-content: center; flex: none"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></span><span style="display: flex; flex-direction: column; gap: 2px"><strong style="font-size: 15px">Saved Move-out checklist-1.pdf</strong><span class="hint">2 pages, A4, 184 KB. Renamed to avoid replacing Move-out checklist.pdf.</span></span></div>
+<div class="card" style="display: flex; gap: 10px; align-items: center; padding: 10px 12px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"></path></svg><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span>Move-out checklist-1.pdf</span><span class="hint">{{saveDir}}</span></span><button class="btn sm" aria-label="Open Move-out checklist-1.pdf">Open</button><button class="btn sm ghost" aria-label="{{reveal}}: Move-out checklist-1.pdf">{{revealShort}}</button></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="fu">Fonts used</span>
+<table class="ftab card" aria-labelledby="fu" style="border-collapse: separate; border-spacing: 0; overflow: hidden"><thead><tr><th scope="col">You chose</th><th scope="col">Used in the PDF</th><th scope="col">From</th></tr></thead><tbody><tr><td>{{fontAsked}}</td><td>{{fontUsed}}</td><td><span style="display: flex; flex-direction: column; gap: 2px"><span>{{fontFrom}}</span><span class="hint">{{fontWhy}}</span></span></td></tr><tr><td style="border-bottom: 0">Header and page numbers</td><td style="border-bottom: 0">{{fontUsed}}</td><td style="border-bottom: 0">Same as the text</td></tr></tbody></table></div>
+<sc-if value="{{platNote}}" hint-placeholder-val="{{ false }}"><div class="note" role="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span style="display: flex; flex-direction: column; gap: 2px"><strong style="font-weight: 600">{{fontAsked}} came from this computer</strong><span class="hint">{{platText}}</span></span></div></sc-if>
+<sc-if value="{{subNote}}" hint-placeholder-val="{{ false }}"><div class="note" role="note"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7.5v.5"></path></svg><span style="display: flex; flex-direction: column; gap: 2px"><strong style="font-weight: 600">Calibri isn't installed, so Carlito was used</strong><span class="hint">Carlito comes with Toolbox and has the same letter widths, so lines break in the same places. Bundled fonts give the same PDF on every computer.</span></span></div></sc-if>
+<div style="border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Draft</span><span class="hint">The draft was cleared from this device now that the PDF is saved. The PDF is the copy to keep.</span></div>
+</section></sc-if>
+
+<section aria-label="{{panelLabel}}" class="panel">
+<div class="pv"><div style="display: flex; align-items: center; gap: 8px; width: 100%"><span class="lbl">{{pvTitle}}</span><span role="status" aria-live="polite" class="hint">{{pvStatus}}</span><div style="flex: 1"></div><button class="btn xs ghost" aria-label="Previous page" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M15 6l-6 6 6 6"></path></svg></button><span class="hint" style="font-variant-numeric: tabular-nums">{{pageOf}}</span><button class="btn xs ghost" aria-label="Next page"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M9 6l6 6-6 6"></path></svg></button></div>
+<sc-if value="{{script}}" hint-placeholder-val="{{ false }}"><div class="note" role="status" style="width: 100%; box-sizing: border-box; border-color: var(--warn)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--warn); margin-top: 1px"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg><span style="flex: 1; display: flex; flex-direction: column; gap: 6px"><strong style="font-weight: 600">Japanese text needs the Unicode script pack</strong><span class="hint">Install it to preview and save block 3, or remove that text. Nothing downloads until you choose Install.</span><span style="display: flex; gap: 8px; align-items: center"><button class="btn sm">Install script pack</button><span class="hint">38 MB download</span></span></span></div></sc-if>
+<div class="pgwrap" style="width: {{pgW}}px; height: {{pgH}}px" aria-label="{{pgLabel}}" role="img">
+<div class="pg" style="transform: scale({{pgScale}}); opacity: {{pgOp}}">
+<sc-if value="{{pgFull}}" hint-placeholder-val="{{ true }}">
+<sc-if value="{{hasHeader}}" hint-placeholder-val="{{ true }}"><div class="run" style="top: 28px"><span>Flat 4B, 12 Elm Street</span><span>Move-out checklist</span></div></sc-if>
+<h1>Move-out checklist</h1>
+<p>Return <b>all keys</b> to the front desk by 5 pm on the <i>last day</i> of the lease. Leave a forwarding address with the building manager.</p>
+<h2>Before you leave</h2>
+<ul><li>Clean the oven and the fridge</li><li>Patch nail holes and touch up the paint</li><li>Photograph <i>each room</i> before handing back the keys</li></ul>
+<table><thead><tr><th>Room</th><th>Condition</th><th>Notes</th></tr></thead><tbody><tr><td>Kitchen</td><td>Good</td><td>Oven cleaned</td></tr><tr><td>Bathroom</td><td>Fair</td><td>Grout stained</td></tr></tbody></table>
+<div class="imgph">floorplan.png</div>
+<div class="run" style="bottom: 28px; justify-content: center"><span>Page 1 of 2</span></div>
+</sc-if>
+</div>
+<sc-if value="{{pgChip}}" hint-placeholder-val="{{ false }}"><span class="chip"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="{{chipIcon}}"></path></svg>{{pgChipText}}</span></sc-if>
+</div>
+<sc-if value="{{pgBlank}}" hint-placeholder-val="{{ false }}"><span class="hint">Nothing to preview yet. The page fills in as you type.</span></sc-if>
+</div>
+
+<sc-if value="{{showOpts}}" hint-placeholder-val="{{ true }}"><div class="secs">
+<div class="sec"><button class="sechd" aria-expanded="{{secPage}}" aria-controls="sp"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="{{chevPage}}"></path></svg><span class="lbl">Page</span><span class="hint">A4, portrait, normal margins</span></button>
+<sc-if value="{{secPageOn}}" hint-placeholder-val="{{ false }}"><div id="sp" class="secbody"><label class="stack"><span class="hint" style="color: var(--fg)">Size</span><button class="field pick" aria-haspopup="listbox"><span>A4, 210 × 297 mm</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M6 9l6 6 6-6"></path></svg></button></label><div class="stack"><span class="hint" style="color: var(--fg)" id="orl">Orientation</span><div role="radiogroup" aria-labelledby="orl" class="seg wide"><button role="radio" aria-checked="true" tabindex="0">Portrait</button><button role="radio" aria-checked="false" tabindex="-1">Landscape</button></div></div>
+<div class="stack"><span class="hint" style="color: var(--fg)" id="mgl">Margins</span><div role="radiogroup" aria-labelledby="mgl" aria-describedby="mgh" class="seg wide"><button role="radio" aria-checked="false" tabindex="-1">Narrow</button><button role="radio" aria-checked="true" tabindex="0">Normal</button><button role="radio" aria-checked="false" tabindex="-1">Wide</button></div><span id="mgh" class="hint">Normal is 25 mm on every side.</span></div></div></sc-if></div>
+
+<div class="sec"><button class="sechd" aria-expanded="{{secFont}}" aria-controls="sf"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="{{chevFont}}"></path></svg><span class="lbl">Font</span><span class="hint">{{fontSummary}}</span></button>
+<sc-if value="{{secFontOn}}" hint-placeholder-val="{{ false }}"><div id="sf" class="secbody"><div style="display: grid; grid-template-columns: minmax(0,1fr) 92px; gap: 8px"><label class="stack"><span class="hint" style="color: var(--fg)">Family</span><button class="field pick" aria-haspopup="listbox" aria-expanded="{{pickerOpen}}"><span>{{fontName}}</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M6 9l6 6 6-6"></path></svg></button></label><label class="stack"><span class="hint" style="color: var(--fg)">Base size</span><span style="display: flex; align-items: center; gap: 6px"><input class="field" type="number" min="8" max="24" value="11" aria-label="Base size in points"><span class="hint">pt</span></span></label></div><span class="hint">Headings scale from the base size. Bold and italic use the same family.</span></div></sc-if></div>
+
+<div class="sec"><button class="sechd" aria-expanded="{{secHead}}" aria-controls="sh"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="{{chevHead}}"></path></svg><span class="lbl">Header and footer</span><span class="hint">Header, page numbers</span></button>
+<sc-if value="{{secHeadOn}}" hint-placeholder-val="{{ false }}"><div id="sh" class="secbody"><div class="pair"><label class="stack"><span class="hint" style="color: var(--fg)">Header text</span><input class="field" value="Flat 4B, 12 Elm Street"></label><label class="stack"><span class="hint" style="color: var(--fg)">Footer text</span><input class="field" placeholder="None"></label></div><label class="chk"><input type="checkbox" checked>Page numbers at the bottom</label></div></sc-if></div>
+
+<div class="sec"><button class="sechd" aria-expanded="{{secHead}}" aria-controls="sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="{{chevHead}}"></path></svg><span class="lbl">Title and author</span><span class="hint">Move-out checklist, Asha Rao</span></button>
+<sc-if value="{{secHeadOn}}" hint-placeholder-val="{{ false }}"><div id="sm" class="secbody"><div class="pair"><label class="stack"><span class="hint" style="color: var(--fg)">Title</span><input class="field" value="Move-out checklist"></label><label class="stack"><span class="hint" style="color: var(--fg)">Author</span><input class="field" value="Asha Rao"></label></div><span class="hint">Saved in the PDF's details. The title is also the suggested file name.</span></div></sc-if></div>
+</div></sc-if>
+
+<sc-if value="{{isSaved}}" hint-placeholder-val="{{ false }}"><div style="padding: 14px 20px; display: flex; flex-direction: column; gap: 8px; flex: 1"><span class="lbl" id="usedl">This PDF used</span><dl class="used" aria-labelledby="usedl"><dt>Page</dt><dd>A4, portrait, normal margins</dd><dt>Font</dt><dd>{{fontSummary}}</dd><dt>Header</dt><dd>Flat 4B, 12 Elm Street</dd><dt>Page numbers</dt><dd>At the bottom</dd><dt>Title</dt><dd>Move-out checklist, Asha Rao</dd></dl></div></sc-if>
+
+<footer style="padding: 12px 20px 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; margin-top: auto; background: var(--panel)">
+<p id="est" class="est" role="status" aria-live="polite"><strong style="color: {{estColor}}">{{estMain}}</strong><span class="hint">{{estSub}}</span></p>
+<div style="display: flex; align-items: center; gap: 10px">
+<sc-if value="{{showDiscard}}" hint-placeholder-val="{{ true }}"><button class="btn ghost">Discard draft…</button></sc-if>
+<span id="savewhy" class="hint">{{footHint}}</span>
+<div style="flex: 1"></div>
+<sc-if value="{{saveOff}}" hint-placeholder-val="{{ false }}"><button class="btn pri" aria-describedby="savewhy" disabled>Save PDF…<span class="kbd">{{runKey}}</span></button></sc-if>
+<sc-if value="{{saveOn}}" hint-placeholder-val="{{ true }}"><button class="btn pri" aria-describedby="est">Save PDF…<span class="kbd">{{runKey}}</span></button></sc-if>
+<sc-if value="{{isSaved}}" hint-placeholder-val="{{ false }}"><button class="btn pri">New document</button></sc-if>
+</div></footer>
 </section>
 </div>
 </div>
+
+<sc-if value="{{pickerOpen}}" hint-placeholder-val="{{ false }}"><div class="pop" role="listbox" aria-label="Font family" style="bottom: 388px">
+<div class="gh" id="fb">Bundled with Toolbox</div>
+<div role="group" aria-labelledby="fb"><sc-for list="{{bundled}}" as="f" hint-placeholder-count="5"><div class="opt" role="option" aria-selected="{{f.sel}}"><span style="flex: 1; font-family: {{f.css}}">{{f.name}}</span><sc-if value="{{f.isSel}}" hint-placeholder-val="{{ false }}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M5 12l5 5L20 7"></path></svg></sc-if></div></sc-for></div>
+<div class="gh" id="fs">On this computer</div>
+<div role="group" aria-labelledby="fs"><sc-for list="{{system}}" as="f" hint-placeholder-count="4"><div class="opt" role="option" aria-selected="false" aria-label="{{f.name}}, this computer only"><span style="flex: 1; font-family: {{f.css}}">{{f.name}}</span><span class="tag">This computer only</span></div></sc-for></div>
+<p class="hint" style="margin: 4px 8px 6px">Bundled fonts look the same on every computer. Fonts from this computer can space text differently on {{otherOs}}.</p>
+</div></sc-if>
+
+<sc-if value="{{discard}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
+<div role="alertdialog" aria-modal="true" aria-labelledby="dt" aria-describedby="dd" style="position: absolute; left: 50%; top: 42%; transform: translate(-50%,-50%); width: 440px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 12px">
+<h2 id="dt" style="margin: 0; font-size: 15px; font-weight: 600">Discard this draft?</h2>
+<p id="dd" style="margin: 0; color: var(--mut)">Move-out checklist has 9 blocks and was last saved a moment ago. It will be removed from this device and can't be brought back. floorplan.png and other files on your disk aren't touched.</p>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn" autofocus>Keep editing<span class="kbd">Esc</span></button><button class="btn" style="color: var(--bad)">Discard draft</button></div></div></sc-if>
+
+<sc-if value="{{saveDlg}}" hint-placeholder-val="{{ false }}"><div aria-hidden="true" style="position: absolute; inset: 0; background: var(--scrim)"></div>
+<div role="dialog" aria-modal="true" aria-labelledby="st" style="position: absolute; left: 50%; top: 40%; transform: translate(-50%,-50%); width: 500px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.35); padding: 22px; display: flex; flex-direction: column; gap: 12px">
+<h2 id="st" style="margin: 0; font-size: 15px; font-weight: 600">Save the PDF</h2>
+<div style="display: flex; flex-direction: column; gap: 6px"><label class="lbl" for="fn">File name</label><input id="fn" class="field" value="Move-out checklist.pdf"></div>
+<div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl" id="dl">Save to</span><div style="display: flex; gap: 8px; align-items: center"><span aria-labelledby="dl" style="flex: 1; display: flex; gap: 8px; align-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg>{{saveDir}}</span><button class="btn sm">Change…</button></div></div>
+<p class="hint" style="margin: 0">2 pages, A4. The name comes from the title. This is a placeholder for the system save dialog: it opens in the last folder you saved to from Formatted PDF, or in Documents the first time.</p>
+<div style="display: flex; gap: 8px; justify-content: flex-end"><button class="btn">Cancel</button><button class="btn pri">Save</button></div></div></sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "draft": {"editor": "enum", "options": ["New", "Restored"], "default": "New"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Editing", "Empty", "Draft restored", "Preview updating", "Page setup", "Font picker", "Header and details", "Discard draft", "Script pack needed", "Save dialog", "Saved", "Saved with substitute font", "Missing image"], "default": "Editing"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
 const light = (this.props.theme ?? 'dark') === 'light';
-const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
-const r = (this.props.draft ?? 'New') === 'Restored';
-const extra = { restored: r, saved: r ? 'Draft restored' : 'Draft saved on this computer, just now' };
-return Object.assign(base, extra);
+const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', runKey: win ? 'Ctrl+Enter' : '⌘↵', bKey: win ? 'Ctrl+B' : '⌘B', bKeyAria: win ? 'Control+B' : 'Meta+B', iKeyAria: win ? 'Control+I' : 'Meta+I', undoAria: win ? 'Control+Z' : 'Meta+Z', finder: win ? 'File Explorer' : 'Finder', reveal: win ? 'Show in File Explorer' : 'Show in Finder', revealShort: win ? 'Show in Explorer' : 'Show in Finder', otherOs: win ? 'a Mac' : 'Windows' };
+const railFor = (active) => [['Combine and split', [['Merge PDFs', 'M7 3v5l5 4 5-4V3M12 12v9'], ['Split PDF', 'M12 3v7M12 10l-6 5v6M12 10l6 5v6'], ['Images to PDF', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4']]], ['From PDF', [['PDF to Images', 'M4 4h16v16H4zM4 15l5-5 4 4 3-3 4 4'], ['Extract from PDF', 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5'], ['PDF to EPUB', 'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM9 8h6']]], ['Make PDFs', [['OCR', 'M4 20h4L19 9l-4-4L4 16zM13 7l4 4'], ['Formatted PDF', 'M5 6V4h14v2M12 4v16M9 20h6'], ['Convert to PDF', 'M14 3v5h5M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z']]]].map((g, gi) => ({ id: 'rg' + gi, title: g[0], items: g[1].map((it) => ({ name: it[0], d: it[1], cls: it[0] === active ? 'nav on' : 'nav', pressed: it[0] === active ? 'true' : 'false', tab: it[0] === active ? '0' : '-1' })) }));
+const S = this.props.state ?? 'Editing';
+const x = { railGroups: railFor('Formatted PDF') };
+x.isEmpty = S === 'Empty';
+x.isSaved = S === 'Saved' || S === 'Saved with substitute font';
+x.showEditor = !x.isSaved;
+x.hasDoc = !x.isEmpty && !x.isSaved;
+x.restored = S === 'Draft restored';
+x.missing = S === 'Missing image';
+x.script = S === 'Script pack needed';
+x.discard = S === 'Discard draft';
+x.saveDlg = S === 'Save dialog';
+x.tip = S === 'Editing';
+const updating = S === 'Preview updating';
+x.selPara = (S === 'Editing' || S === 'Draft restored' || S === 'Discard draft' || S === 'Save dialog' || S === 'Page setup' || S === 'Font picker' || S === 'Header and details') ? 'true' : 'false';
+x.caretPara = x.selPara === 'true' && S !== 'Editing';
+x.runCls = S === 'Editing' ? 'selrun' : '';
+x.actPara = x.selPara === 'true'; x.noActPara = !x.actPara;
+x.boldOn = S === 'Editing' ? 'true' : 'false';
+x.selTable = updating ? 'true' : 'false';
+x.caretTable = updating;
+x.tableCell = updating ? 'Grout stained, tap drips' : 'Grout stained';
+x.selImg = x.missing ? 'true' : 'false';
+x.imgCls = x.missing ? 'bad' : '';
+x.imgBg = x.missing ? 'var(--bg)' : 'repeating-linear-gradient(45deg,var(--sel) 0 6px,var(--raise) 6px 12px)';
+x.imgPath = win ? 'C:\\Users\\Asha\\Pictures\\Move\\floorplan.png' : '~/Pictures/Move/floorplan.png';
+x.imgHint = x.missing ? 'Not found at ' + x.imgPath : 'Fits the page width. Read from your disk when you save.';
+x.imgHintColor = x.missing ? 'var(--bad)' : 'var(--mut)';
+x.blockType = x.isEmpty || x.selPara === 'true' ? 'Paragraph' : x.script ? 'Paragraph' : updating ? 'Table' : x.missing ? 'Image' : 'Paragraph';
+x.saved = x.isSaved ? 'Draft cleared' : x.isEmpty ? 'No draft yet' : updating ? 'Saving draft…' : 'Draft saved on this device';
+x.savedIcon = updating ? 'M12 3a9 9 0 1 0 9 9' : x.isSaved || x.isEmpty ? 'M5 12h14' : 'M5 12l5 5L20 7';
+// panel
+const secPage = S === 'Page setup', secFont = S === 'Font picker', secHead = S === 'Header and details';
+const chev = (on) => on ? 'M6 9l6 6 6-6' : 'M9 6l6 6-6 6';
+x.secPage = secPage ? 'true' : 'false'; x.secPageOn = secPage; x.chevPage = chev(secPage);
+x.secFont = secFont ? 'true' : 'false'; x.secFontOn = secFont; x.chevFont = chev(secFont);
+x.secHead = secHead ? 'true' : 'false'; x.secHeadOn = secHead; x.chevHead = chev(secHead);
+x.pickerOpen = S === 'Font picker';
+const compact = secPage || secFont || secHead || x.script;
+const scale = compact ? 0.2 : 0.46;
+x.pgScale = String(scale); x.pgW = String(Math.round(595 * scale)); x.pgH = String(Math.round(842 * scale));
+x.pgFull = !x.isEmpty; x.pgBlank = x.isEmpty;
+x.hasHeader = true;
+x.pgOp = updating || x.script ? '0.45' : '1';
+x.pgChip = updating || x.script; x.pgChipText = updating ? 'Updating preview…' : 'Preview paused';
+x.chipIcon = updating ? 'M12 3a9 9 0 1 0 9 9' : 'M9 6v12M15 6v12';
+x.pgLabel = x.isEmpty ? 'Blank A4 page' : 'Page 1 of 2, A4 portrait';
+x.showOpts = !x.isSaved;
+x.panelLabel = x.isSaved ? 'Saved PDF' : 'Preview and page settings';
+x.pvTitle = x.isSaved ? 'Saved PDF' : 'Preview';
+x.pvStatus = updating ? 'Updating…' : x.script ? 'Paused' : '';
+x.pageOf = x.isEmpty ? '1 of 1' : '1 of 2';
+const sub = S === 'Saved with substitute font';
+x.fontName = 'Liberation Serif';
+x.fontSummary = sub ? 'Calibri, 11 pt' : x.isSaved ? 'Georgia, 11 pt' : 'Liberation Serif, 11 pt';
+x.bundled = [['Liberation Sans', 'Arial, sans-serif'], ['Liberation Serif', 'Georgia, serif'], ['Liberation Mono', 'Menlo, Consolas, monospace'], ['Carlito', 'system-ui, sans-serif'], ['Noto Sans', 'system-ui, sans-serif']].map((f) => ({ name: f[0], css: f[1], sel: f[0] === 'Liberation Serif' ? 'true' : 'false', isSel: f[0] === 'Liberation Serif' }));
+x.system = (win ? [['Calibri', 'Calibri, sans-serif'], ['Cambria', 'Cambria, serif'], ['Georgia', 'Georgia, serif'], ['Segoe UI', '"Segoe UI", sans-serif']] : [['Avenir Next', '"Avenir Next", sans-serif'], ['Georgia', 'Georgia, serif'], ['Helvetica Neue', '"Helvetica Neue", sans-serif'], ['Palatino', 'Palatino, serif']]).map((f) => ({ name: f[0], css: f[1] }));
+x.saveDir = win ? 'C:\\Users\\Asha\\Documents\\Lease' : '~/Documents/Lease';
+x.fontAsked = sub ? 'Calibri' : 'Georgia';
+x.fontUsed = sub ? 'Carlito Regular, Bold, Italic' : 'Georgia Regular, Bold, Italic';
+x.fontFrom = sub ? 'Bundled with Toolbox' : 'This computer';
+x.fontWhy = sub ? 'Stands in for Calibri, which isn\'t installed here' : 'Installed on this computer';
+x.platNote = x.isSaved && !sub; x.subNote = sub;
+x.platText = win ? 'Saving the same document on a Mac can space or wrap text slightly differently. Pick a bundled font when the PDF must match everywhere.' : 'Saving the same document on Windows can space or wrap text slightly differently. Pick a bundled font when the PDF must match everywhere.';
+// footer
+x.showDiscard = !x.isEmpty && !x.isSaved;
+x.saveOff = x.isEmpty || x.script;
+x.saveOn = !x.saveOff && !x.isSaved;
+x.estColor = 'var(--fg)';
+x.footHint = '';
+if (x.isEmpty) { x.estMain = 'Empty document'; x.estSub = 'Add some text to save a PDF'; x.footHint = 'Nothing to save yet'; }
+else if (x.script) { x.estMain = 'Can\'t save yet'; x.estSub = 'Install the script pack, or remove the Japanese text'; x.estColor = 'var(--warn)'; }
+else if (x.missing) { x.estMain = 'Save failed, nothing written'; x.estSub = 'Fix the image block, then save again'; x.estColor = 'var(--bad)'; }
+else if (x.isSaved) { x.estMain = 'Saved in Lease'; x.estSub = 'New document starts from a blank page'; }
+else { x.estMain = '2 pages, A4'; x.estSub = 'Opens the save dialog. Nothing is replaced.'; }
+return Object.assign(base, x);
 }
 }
 </script>

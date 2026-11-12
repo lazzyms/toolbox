@@ -15,7 +15,7 @@
 
 use super::health::{self, Health};
 use super::install::{self, unavailable, PackInstallError, PackInstallErrorKind, INSTALL_LOCK};
-use super::{list_packs_in, load_catalog, read_record, PackList, PACKS_DIR};
+use super::{list_packs_in, load_catalog, read_record, Catalog, PackList, PACKS_DIR};
 use crate::kit::contracts::{OutcomePointer, PackNeed, ToolError};
 use crate::kit::resources::{resolve_pack_backed, PackBackedLocations, ResolvedResource, ResourceSource};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -196,6 +196,39 @@ fn resolve_checked(name: &str, app_data: &Path, pack: RequiredPack, app_version:
             _ => ToolError::unavailable(error),
         }
     })
+}
+
+/// Where one run finds packs, and the packs it holds. The packs a run reads stay held until the run
+/// ends, so they cannot be uninstalled under it.
+pub struct RunPacks {
+    source: Result<PackSource, String>,
+    holds: Mutex<PackHolds>,
+}
+
+struct PackSource {
+    app_data: PathBuf,
+    app_version: String,
+    catalog: Catalog,
+}
+
+impl RunPacks {
+    pub fn new(app_data: Result<PathBuf, String>, app_version: impl Into<String>, catalog: Result<Catalog, String>) -> Self {
+        let app_version = app_version.into();
+        let source = app_data.and_then(|app_data| catalog.map(|catalog| PackSource { app_data, app_version, catalog }));
+        Self { source, holds: Mutex::default() }
+    }
+
+    /// The catalog this run reads packs from, or why there is none.
+    pub fn catalog(&self) -> Result<&Catalog, ToolError> {
+        self.source.as_ref().map(|source| &source.catalog).map_err(|error| ToolError::unavailable(error.clone()))
+    }
+
+    /// [`resolve_pack_resource`] for this run, holding the pack until the run ends.
+    pub fn resolve(&self, name: &str, pack: RequiredPack, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>) -> Result<ResolvedResource, ToolError> {
+        let source = self.source.as_ref().map_err(|error| ToolError::unavailable(error.clone()))?;
+        let mut holds = self.holds.lock().unwrap_or_else(PoisonError::into_inner);
+        resolve_pack_resource(name, &source.app_data, pack, &source.app_version, bundled_root, development_override, &mut holds)
+    }
 }
 
 /// Removes the pack and returns the refreshed pack list. Refused while a run holds the pack.

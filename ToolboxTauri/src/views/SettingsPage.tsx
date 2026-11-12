@@ -349,7 +349,7 @@ const AboutSection = () => {
   );
 };
 
-const shortcutGroups = ["Everywhere", "Batch tools"] as const;
+const shortcutGroups = ["Everywhere", "Batch tools", "PDF Editor"] as const;
 
 const KeyboardShortcutsSection = () => {
   const [query, setQuery] = useState("");

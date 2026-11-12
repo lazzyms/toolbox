@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold, type RunHandler } from "../components/ToolScaffold";
-import { BatchPasswordFields, FilePasswordCell, passwordReadiness, passwordRequest, usePasswordSet, type PasswordMode, type PasswordState } from "../components/PasswordFields";
+import { BatchPasswordFields, FilePasswordCell, ForgetClosedFiles, passwordReadiness, passwordRequest, usePasswordSet, type PasswordMode } from "../components/PasswordFields";
 import type { PasswordSet, ToolCommand, ToolDefinition, ToolResult } from "../contracts";
 import { capabilityFor } from "../registry/capabilities";
 import { extensionOf, type IntakeCopy } from "../components/intake";
@@ -15,14 +15,6 @@ const commandFor = (mode: PasswordMode): ToolCommand => mode === "lock" ? "prote
 
 const runWith = (command: ToolCommand, passwords: PasswordSet): RunHandler => (paths, outputLocation, { runId }) =>
   invoke<ToolResult>(command, { runId, request: passwordRequest(paths, passwords, outputLocation) });
-
-// Closing a file drops its own password, and closing every file drops them all.
-const ForgetClosedFiles = ({ files, passwords }: { files: string[]; passwords: PasswordState }) => {
-  useEffect(() => {
-    passwords.keepOnly(files);
-  }, [files]);
-  return null;
-};
 
 const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
 
