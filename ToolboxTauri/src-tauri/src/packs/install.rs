@@ -271,7 +271,7 @@ pub fn trusted_public_key() -> std::result::Result<PublicKey, String> {
 }
 
 /// Base64 of the minisign public key file, the format the updater configuration uses.
-fn decode_public_key(encoded: &str) -> std::result::Result<PublicKey, String> {
+pub(crate) fn decode_public_key(encoded: &str) -> std::result::Result<PublicKey, String> {
     let text = base64::engine::general_purpose::STANDARD.decode(encoded.trim()).map_err(|error| error.to_string())?;
     PublicKey::decode(&String::from_utf8(text).map_err(|error| error.to_string())?).map_err(|error| error.to_string())
 }
@@ -657,7 +657,7 @@ pub(crate) mod tests {
         pub(crate) target: String,
         pack_format: u32,
         app_versions: serde_json::Value,
-        files: Vec<(String, Vec<u8>)>,
+        pub(crate) files: Vec<(String, Vec<u8>)>,
         /// Manifest entries per file: (path, sha256, maxBytes). Defaults to the real files.
         specs: Option<Vec<(String, String, u64)>>,
         extra_entries: Vec<(String, Vec<u8>)>,
@@ -721,11 +721,20 @@ pub(crate) mod tests {
         }
 
         fn catalog_with_checksum(&self, sha256: String) -> Catalog {
-            super::super::parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [{
+            super::super::parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [self.catalog_entry_with_checksum(sha256)] }).to_string()).unwrap()
+        }
+
+        /// This pack's catalog entry, with the payload's real checksum, for a test to change.
+        pub(crate) fn catalog_entry(&self) -> serde_json::Value {
+            self.catalog_entry_with_checksum(digest_hex(&self.payload()))
+        }
+
+        fn catalog_entry_with_checksum(&self, sha256: String) -> serde_json::Value {
+            serde_json::json!({
                 "id": self.id, "name": "Text recognition, Hindi", "description": "Reads Hindi.", "toolIds": ["pdf-ocr"], "ocrLanguage": { "code": "hin", "name": "Hindi" },
                 "license": "Apache-2.0", "version": self.version, "minPackFormat": 1, "appVersions": { "from": "1.0.0" },
                 "payloads": [{ "target": self.target, "downloadBytes": 1000, "installedBytes": 32505856, "sha256": sha256, "path": "packs/ocr-hindi.toolboxpack" }]
-            }]}).to_string()).unwrap()
+            })
         }
 
         fn installed_bytes(&self) -> u64 {

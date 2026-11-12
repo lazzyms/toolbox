@@ -11,7 +11,7 @@ export type BlockedDestination = { folder: string; check: Exclude<FolderCheck, '
 
 const ALONGSIDE_LABEL = 'Next to each original';
 
-const describe = (location: OutputLocation, home: string | null) =>
+export const describeLocation = (location: OutputLocation, home: string | null) =>
     location === 'alongsideInput' ? ALONGSIDE_LABEL : shortenHomePath(location.customFolder, home);
 
 const folderName = (folder: string) => folder.split(/[\\/]/).filter(Boolean).pop() ?? folder;
@@ -21,8 +21,7 @@ export const sameLocation = (a: OutputLocation, b: OutputLocation) =>
 
 // Commands that always write a different file type than they read, as named by the native output code.
 const FIXED_OUTPUT_EXTENSIONS: Partial<Record<ToolCommand, string>> = {
-    pdf_to_text: 'txt',
-    extract_pdf_images: 'jpg',
+    extract_from_pdf: 'txt',
     remove_image_background: 'png',
     blur_faces: 'png',
     generate_icon_set: 'png',
@@ -42,24 +41,28 @@ interface RunDestinationProps {
     defaultLocation: OutputLocation;
     overridden: boolean;
     toolTitle: string;
-    exampleName: string | null;
+    /** One example output name, or several when each input makes more than one kind of file. */
+    exampleName: string | readonly string[] | null;
+    exampleHint?: string;
     savesOneFile?: boolean;
+    label?: string;
+    note?: string;
     onChange: () => void;
     onReset: () => void;
 }
 
-export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, savesOneFile = false, onChange, onReset }: RunDestinationProps) => {
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, exampleHint, savesOneFile = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
     const home = useHomeDir();
     return (
     <section aria-label="Destination" className="run-destination">
         <div className="run-destination-heading">
-            <span className="run-destination-label">Save to</span>
+            <span className="run-destination-label">{label}</span>
             {overridden && <Badge variant="outline">This run only</Badge>}
         </div>
         {!savesOneFile && <>
         <div className="run-destination-path">
             <FolderIcon aria-hidden="true" />
-            <span data-testid="run-destination-path">{describe(location, home)}</span>
+            <span data-testid="run-destination-path">{describeLocation(location, home)}</span>
         </div>
         <div className="run-destination-actions">
             {overridden ? <>
@@ -73,16 +76,20 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
             </p>
         )}
         </>}
+        {note && <p className="run-destination-hint">{note}</p>}
         {savesOneFile && (
             <p className="run-destination-hint">You choose a name and folder when you start, because this makes one file.</p>
         )}
         {exampleName && (
             <div className="run-destination-example">
                 <span className="run-destination-hint">Example</span>
-                <span data-testid="run-destination-example">{exampleName}</span>
+                <span data-testid="run-destination-example" className="run-destination-example-names">
+                    {typeof exampleName === 'string' ? exampleName : exampleName.map((name) => <span key={name}>{name}</span>)}
+                </span>
             </div>
         )}
-        {exampleName && !overridden && (
+        {exampleName && exampleHint && <p className="run-destination-hint">{exampleHint}</p>}
+        {exampleName && !exampleHint && !overridden && (
             <p className="run-destination-hint">An existing name gets -1, -2 and so on. Nothing is replaced.</p>
         )}
     </section>

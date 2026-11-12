@@ -4,6 +4,7 @@
   --pdf-document-page: oklch(1 0 0);
   --pdf-document-text: #1b1b1b;
   --pdf-document-highlight: #fbdd67;
+  --pdf-document-watermark: #c62828;
   --pdf-scene-placeholder: oklch(0.205 0 0);
   --pdf-scene-overlay: color-mix(in oklch, var(--primary) 12%, transparent);
   --pdf-scene-selection: var(--primary);
@@ -11,12 +12,22 @@
 body[data-theme="light"] {
   --pdf-scene-canvas: oklch(0.94 0 0);
 }
-@font-face { font-family: "Toolbox Satisfy"; src: url("/fonts/Satisfy-Regular.ttf") format("truetype"); font-display: swap; }
 @font-face { font-family: "Toolbox Pacifico"; src: url("/fonts/Pacifico-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-Italic.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans"; src: url("/fonts/NotoSans-BoldItalic.ttf") format("truetype"); font-weight: 700; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-Italic.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Serif"; src: url("/fonts/NotoSerif-BoldItalic.ttf") format("truetype"); font-weight: 700; font-style: italic; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans Mono"; src: url("/fonts/NotoSansMono-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Toolbox Noto Sans Mono"; src: url("/fonts/NotoSansMono-Bold.ttf") format("truetype"); font-weight: 700; font-style: normal; font-display: swap; }
+.scene-text-draft { width: 100%; height: 100%; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.2; }
 .scene-canvas-page { flex: none; overflow: hidden; touch-action: none; user-select: none; filter: drop-shadow(0 1px 4px rgb(0 0 0 / 14%)); }
 .scene-tool-select { cursor: default; }
 .scene-tool-text, .scene-tool-highlight, .scene-tool-shape, .scene-tool-signature, .scene-tool-crop { cursor: crosshair; }
-.scene-tool-watermark { cursor: default; }
+.scene-tool-watermark, .scene-tool-edit-text { cursor: default; }
 .scene-object-hit { fill: transparent; stroke: none; cursor: move; pointer-events: all; }
 .scene-object-watermark { cursor: default; }
 .scene-object-hit:focus-visible { outline: none; stroke: var(--pdf-scene-selection); stroke-width: 2px; vector-effect: non-scaling-stroke; }
@@ -26,4 +37,18 @@ body[data-theme="light"] {
 .scene-crop-outline { fill: var(--pdf-scene-overlay); stroke: var(--pdf-scene-selection); stroke-dasharray: 6 4; }
 .scene-text-layer { user-select: text; pointer-events: all; }
 .scene-text-run { user-select: text; cursor: text; }
-.scene-inline-text-editor { overflow: visible; pointer-events: all; }
+.scene-inline-text-editor, .scene-form-field { overflow: visible; pointer-events: all; }
+/* Form fields sit on the white document page, so their controls use document colors in either theme. */
+.scene-form-field { color: var(--pdf-document-text); color-scheme: light; --foreground: var(--pdf-document-text); --input: oklch(0.55 0.12 255 / 40%); --ring: oklch(0.55 0.12 255); --primary: oklch(0.205 0 0); --primary-foreground: oklch(0.985 0 0); --muted-foreground: oklch(0.556 0 0); --destructive: oklch(0.577 0.245 27.325); }
+.scene-form-error { margin: 1px 0 0; font-size: 7px; line-height: 1.2; color: var(--destructive); white-space: nowrap; }
+.scene-tool-redact { cursor: crosshair; }
+.scene-redaction { fill: rgb(0 0 0 / 18%); stroke: #111111; stroke-width: 1.5px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.scene-redaction[data-preview="true"] { stroke: none; }
+.scene-search-match { fill: rgb(255 196 0 / 40%); stroke: #c99a00; stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.scene-tool-redact .scene-redaction { pointer-events: all; cursor: pointer; }
+.scene-redaction[aria-pressed="true"], .scene-redaction:focus-visible { outline: none; stroke: var(--pdf-scene-selection); stroke-width: 2px; stroke-dasharray: none; }
+.scene-edit-run { fill: transparent; stroke: var(--pdf-scene-selection); stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; cursor: text; pointer-events: all; }
+.scene-edit-run-changed { fill: var(--pdf-scene-overlay); }
+.scene-edit-run-blocked { fill: transparent; stroke: #e5484d; vector-effect: non-scaling-stroke; cursor: not-allowed; pointer-events: all; }
+.scene-edit-run:focus-visible, .scene-edit-run-blocked:focus-visible, .scene-edit-run[aria-pressed="true"], .scene-edit-run-blocked[aria-pressed="true"] { outline: none; stroke-dasharray: none; stroke-width: 2px; }
+.scene-edit-overflow { fill: #e5484d; font-family: var(--font-sans, sans-serif); }

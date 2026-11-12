@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { JobOutcome, ToolResult } from "../../../contracts";
-import type { ConversionTool } from "../tool";
 import { failedOutcome, parseToolResult } from "../../../jobOutcome";
 import { isPastedHtml, pastedHtml } from "../../../components/pastedHtml";
 import { ConvertToPdfOptionsPanel, convertToPdfIntakeCopy, convertToPdfRequest, defaultConvertToPdfOptions, type ConvertToPdfOptions } from "../../../views/ConvertToPdfControls";
+import type { ConversionTool } from "../tool";
 
 /** Pasted markup has no file: it goes over as text with the path the user chose, and its result keeps the list's name for it. */
 const convertPasted = async (path: string, options: ConvertToPdfOptions): Promise<JobOutcome[]> => {
