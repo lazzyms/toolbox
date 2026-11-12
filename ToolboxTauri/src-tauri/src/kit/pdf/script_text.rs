@@ -1,10 +1,11 @@
 //! Writing text in any script into a PDF: script itemization, bidi reordering, shaping, and
 //! embedded subset fonts.
 //!
-//! The code is built into the app. Latin, Cyrillic and Greek are written with the font bundled in
-//! the app. Every other script is written with a font from the script pack the catalog names for
-//! it (`scriptFonts`); without that pack the text is refused before anything is written, with a
-//! pointer to the pack. Each output embeds a subset of every font it uses, so it never depends on
+//! The code is built into the app. Latin, Cyrillic and Greek are written with the fonts bundled in
+//! the app. Every other script that a pack in the catalog writes (`scriptFonts`) is written with
+//! that pack's font; without that pack the text is refused before anything is written, with a
+//! pointer to the pack. Scripts no pack writes are left to the bundled fonts, which name the
+//! characters they can't show. Each output embeds a subset of every font it uses, so it never depends on
 //! the pack staying installed.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,7 +40,13 @@ pub fn pack_script(name: &str) -> Option<Script> {
     Script::from_full_name(name).filter(|script| !is_base_script(*script) && *script != Script::Unknown)
 }
 
+/// The scripts in `text` that a pack may write, by name, skipping characters in no script.
+fn known_pack_scripts(text: &str) -> BTreeSet<&'static str> {
+    text.chars().map(|character| character.script()).filter(|script| !is_base_script(*script) && *script != Script::Unknown).map(|script| script.full_name()).collect()
+}
+
 /// The scripts in `text` that need a pack, by name.
+#[cfg(test)]
 fn pack_scripts(text: &str) -> Result<BTreeSet<&'static str>, String> {
     let mut scripts = BTreeSet::new();
     for character in text.chars() {
@@ -131,19 +138,23 @@ impl ScriptFonts {
     }
 
     /// The fonts `texts` need. A script whose pack is not installed, is damaged or does not fit this
-    /// app fails with a pointer to that pack. Each font is read whole, so the run never reads the
+    /// app fails with a pointer to that pack. A script no pack in the catalog writes is skipped, so
+    /// the bundled fonts name its characters. Each font is read whole, so the run never reads the
     /// pack again.
     pub fn resolve<'a>(texts: impl IntoIterator<Item = &'a str>, packs: &RunPacks) -> Result<Self, ToolError> {
         let mut scripts = BTreeSet::new();
         for text in texts {
-            scripts.extend(pack_scripts(text).map_err(ToolError::invalid_input)?);
+            scripts.extend(known_pack_scripts(text));
         }
         let mut fonts = Self::base();
         if scripts.is_empty() {
             return Ok(fonts);
         }
+        let catalog = packs.catalog()?;
         let mut by_file: BTreeMap<(String, String), usize> = BTreeMap::new();
         for script in scripts {
+            // A script no pack writes is left to the bundled fonts.
+            if !catalog.packs.iter().any(|pack| pack.script_fonts.contains_key(script)) { continue }
             let font = pack_font(script, packs)?;
             if let Some(index) = by_file.get(&font.file) {
                 fonts.by_script.insert(script, *index);
@@ -154,6 +165,13 @@ impl ScriptFonts {
             fonts.by_script.insert(script, fonts.fonts.len() - 1);
         }
         Ok(fonts)
+    }
+
+    /// Whether `text` has a script only a pack writes, and this set has a pack font for each such
+    /// script. Other text is written with the bundled fonts.
+    pub fn writes_with_packs(&self, text: &str) -> bool {
+        let scripts = known_pack_scripts(text);
+        !scripts.is_empty() && scripts.iter().all(|script| self.by_script.contains_key(script))
     }
 
     /// How many fonts the scene can use.
