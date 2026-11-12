@@ -5691,7 +5691,7 @@ mod tests {
         assert!(outcome.error().is_none(),"{:?}",outcome.error());
         assert_eq!(fs::read(&input).unwrap(),original);
         let output=outcome.output_paths()[0].clone();
-        assert_eq!(outcome.detail,"Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.");
+        assert_eq!(outcome.detail,"3 pages kept, 0 removed, 0 rotated, 0 mirrored. Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed.");
 
         let bytes=fs::read(&output).unwrap().to_ascii_lowercase();
         for secret in ["asha","patel"] { assert!(!bytes.windows(secret.len()).any(|window|window==secret.as_bytes()),"{secret} survived in the file bytes"); }
