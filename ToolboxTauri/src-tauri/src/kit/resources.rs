@@ -26,7 +26,7 @@ pub struct ResourceSpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResourceSource { Bundled, DevelopmentOverride, Path }
+pub enum ResourceSource { Bundled, InstalledPack, DevelopmentOverride, Path }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedResource { pub path: PathBuf, pub source: ResourceSource }
@@ -54,6 +54,16 @@ pub(crate) struct Helper {
     bundled_dir: &'static str,
     probe: &'static str,
     unavailable: &'static str,
+    discovery: Discovery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Discovery {
+    /// Development override, then the bundled locations, then the system PATH.
+    OverrideBundledOrPath,
+    /// The bundled locations, then the Development override in tests and development
+    /// builds only. The system PATH is never searched.
+    BundledOnly,
 }
 
 pub(crate) const PDF_RENDERER: Helper = Helper {
@@ -62,6 +72,7 @@ pub(crate) const PDF_RENDERER: Helper = Helper {
     bundled_dir: "pdf-bin",
     probe: "-h",
     unavailable: "pdftoppm is required for PDF previews. Set TOOLBOX_PDFTOPPM_PATH or add it to PATH.",
+    discovery: Discovery::OverrideBundledOrPath,
 };
 
 pub(crate) const QPDF: Helper = Helper {
@@ -70,6 +81,16 @@ pub(crate) const QPDF: Helper = Helper {
     bundled_dir: "qpdf-bin",
     probe: "--version",
     unavailable: "This PDF tool is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it.",
+    discovery: Discovery::OverrideBundledOrPath,
+};
+
+pub(crate) const PDF_TEXT_EXTRACTOR: Helper = Helper {
+    name: "pdftotext",
+    override_var: "TOOLBOX_PDFTOTEXT_PATH",
+    bundled_dir: "pdf-bin",
+    probe: "-h",
+    unavailable: "PDF text extraction is unavailable because a helper it needs is missing from this copy of Toolbox. Reinstall Toolbox to restore it.",
+    discovery: Discovery::BundledOnly,
 };
 
 struct HelperLocations {
@@ -81,11 +102,13 @@ struct HelperLocations {
 
 impl HelperLocations {
     fn of_process(helper: &Helper) -> Self {
+        let bundled_only = helper.discovery == Discovery::BundledOnly;
+        let override_allowed = !bundled_only || cfg!(debug_assertions);
         Self {
-            development_override: std::env::var_os(helper.override_var).filter(|path| !path.is_empty()).map(PathBuf::from),
+            development_override: std::env::var_os(helper.override_var).filter(|path| override_allowed && !path.is_empty()).map(PathBuf::from),
             executable_dir: std::env::current_exe().ok().and_then(|executable| executable.parent().map(Path::to_path_buf)),
             resource_root: application_resource_root(),
-            system_path: std::env::var_os("PATH"),
+            system_path: if bundled_only { None } else { std::env::var_os("PATH") },
         }
     }
 }
@@ -95,22 +118,37 @@ pub(crate) fn resolve_helper(helper: &Helper) -> Result<PathBuf, String> {
 }
 
 fn locate_helper(helper: &Helper, locations: &HelperLocations) -> Result<PathBuf, String> {
-    if let Some(path) = &locations.development_override {
-        if path.is_file() { return Ok(path.clone()); }
-        return Err(format!("{} does not point to a file.", helper.override_var));
+    let development_override = || match &locations.development_override {
+        Some(path) if path.is_file() => Some(Ok(path.clone())),
+        Some(_) => Some(Err(format!("{} does not point to a file.", helper.override_var))),
+        None => None,
+    };
+    if helper.discovery == Discovery::OverrideBundledOrPath {
+        if let Some(result) = development_override() { return result; }
     }
-    let executable = if cfg!(windows) { format!("{}.exe", helper.name) } else { helper.name.to_string() };
-    let beside_executable = locations.executable_dir.iter().map(|dir| dir.join(&executable));
-    let bundled = locations.resource_root.iter()
-        .flat_map(|root| [root.join(helper.bundled_dir).join(&executable), root.join("resources").join(&executable), root.join(&executable)]);
-    let on_path = locations.system_path.iter().flat_map(std::env::split_paths).map(|dir| dir.join(&executable));
-    beside_executable.chain(bundled).chain(on_path)
+    let found = helper_candidates(helper, locations, std::env::consts::OS).into_iter()
         .find(|path| path.is_file() && {
             let mut command = Command::new(path);
             command.arg(helper.probe);
             crate::kit::pdf::helper_available(command)
-        })
-        .ok_or_else(|| helper.unavailable.to_string())
+        });
+    match (found, helper.discovery) {
+        (Some(path), _) => Ok(path),
+        (None, Discovery::BundledOnly) => development_override().unwrap_or_else(|| Err(helper.unavailable.to_string())),
+        (None, Discovery::OverrideBundledOrPath) => Err(helper.unavailable.to_string()),
+    }
+}
+
+/// The paths a helper is looked for at, in order, for one target operating system.
+fn helper_candidates(helper: &Helper, locations: &HelperLocations, target_os: &str) -> Vec<PathBuf> {
+    let executable = if target_os == "windows" { format!("{}.exe", helper.name) } else { helper.name.to_string() };
+    let beside_executable = locations.executable_dir.iter().map(|dir| dir.join(&executable));
+    let bundled = locations.resource_root.iter()
+        .flat_map(|root| [root.join(helper.bundled_dir).join(&executable), root.join("resources").join(&executable), root.join(&executable)]);
+    let on_path = locations.system_path.iter()
+        .filter(|_| helper.discovery == Discovery::OverrideBundledOrPath)
+        .flat_map(std::env::split_paths).map(|dir| dir.join(&executable));
+    beside_executable.chain(bundled).chain(on_path).collect()
 }
 
 pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &str) -> Result<ResolvedResource, String> {
@@ -122,12 +160,11 @@ pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &
 pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var: &str) -> Result<Option<ResolvedResource>, String> {
     let manifest_path = bundled_root.join("manifest.json");
     if manifest_path.is_file() {
-        let manifest: ResourceManifest = serde_json::from_slice(&fs::read(&manifest_path).map_err(|e| format!("Cannot read resource manifest: {e}"))?)
-            .map_err(|e| format!("Invalid resource manifest: {e}"))?;
+        let manifest = read_manifest(&manifest_path)?;
         let spec = manifest.resources.get(name).ok_or_else(|| format!("Resource {name} is missing from the bundled manifest."))?;
-        if manifest.version != 1 || (manifest.architecture != "all" && manifest.architecture != std::env::consts::ARCH) { return Err("Bundled resource manifest does not match this application.".to_string()); }
+        if !manifest.matches_this_application() { return Err("Bundled resource manifest does not match this application.".to_string()); }
         let path = bundled_root.join(&spec.path);
-        verify(&path, spec)?;
+        verify_resource(&path, spec).map_err(|failure| failure.bundled_message())?;
         return Ok(Some(ResolvedResource { path, source: ResourceSource::Bundled }));
     }
     if let Ok(path) = std::env::var(override_var) {
@@ -138,13 +175,103 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
     Ok(None)
 }
 
-fn verify(path: &Path, spec: &ResourceSpec) -> Result<(), String> {
-    let bytes = fs::read(path).map_err(|e| format!("Bundled resource is unavailable: {e}"))?;
-    if spec.version.trim().is_empty() { return Err("Bundled resource has no version metadata.".to_string()); }
-    if spec.license.trim().is_empty() { return Err("Bundled resource has no license metadata.".to_string()); }
-    if bytes.len() as u64 > spec.max_bytes { return Err("Bundled resource exceeds its declared size limit.".to_string()); }
-    let digest = digest_hex(&bytes);
-    if digest != spec.sha256 { return Err("Bundled resource checksum does not match its manifest.".to_string()); }
+#[cfg_attr(not(test), allow(dead_code))]
+pub struct PackBackedLocations {
+    pub bundled_root: Option<PathBuf>,
+    pub installed_pack_root: Option<PathBuf>,
+    pub development_override: Option<PathBuf>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn resolve_pack_backed(name: &str, locations: &PackBackedLocations) -> Result<ResolvedResource, String> {
+    let manifest_roots = [(&locations.bundled_root, ResourceSource::Bundled), (&locations.installed_pack_root, ResourceSource::InstalledPack)];
+    for (root, source) in manifest_roots {
+        let Some(root) = root else { continue };
+        let manifest_path = root.join("manifest.json");
+        if !manifest_path.is_file() {
+            // An installed pack always has a manifest. Without it the pack is damaged, and nothing
+            // past it may stand in for its files.
+            if source == ResourceSource::InstalledPack { return Err(format!("The installed pack for {name} has no manifest.")); }
+            continue;
+        }
+        let manifest = read_manifest(&manifest_path)?;
+        let Some(spec) = manifest.resources.get(name) else { continue };
+        if !manifest.matches_this_application() { return Err(format!("The manifest for {name} does not match this application.")); }
+        let path = root.join(&spec.path);
+        verify_resource(&path, spec).map_err(|failure| format!("Resource {name} failed verification: {failure:?}."))?;
+        return Ok(ResolvedResource { path, source });
+    }
+    match &locations.development_override {
+        Some(path) if path.is_file() => Ok(ResolvedResource { path: path.clone(), source: ResourceSource::DevelopmentOverride }),
+        Some(_) => Err(format!("Development override for {name} does not point to a file.")),
+        None => Err(format!("Resource {name} is unavailable.")),
+    }
+}
+
+/// Verifies every resource the manifest under `root` lists, as discovery would before using it.
+/// Returns why the first one that fails does.
+pub fn verify_manifest_root(root: &Path) -> Result<(), String> {
+    let manifest = read_manifest(&root.join("manifest.json"))?;
+    if !manifest.matches_this_application() { return Err("The manifest does not match this application.".to_string()); }
+    for (name, spec) in &manifest.resources {
+        if !spec.path.components().all(|component| matches!(component, std::path::Component::Normal(_))) {
+            return Err(format!("The manifest lists {name} outside its folder."));
+        }
+        verify_resource(&root.join(&spec.path), spec).map_err(|failure| format!("Resource {name} failed verification: {failure:?}."))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_manifest_matches_application(version: u32, architecture: &str) -> Result<(), String> {
+    if version != 1 || (architecture != "all" && architecture != std::env::consts::ARCH) { return Err("Bundled resource manifest does not match this application.".to_string()); }
+    Ok(())
+}
+
+/// Checks a bundled file against its manifest entry (version, license, size limit and SHA-256) and returns its path.
+pub(crate) fn verify_bundled(bundled_root: &Path, spec: &ResourceSpec) -> Result<PathBuf, String> {
+    let path = bundled_root.join(&spec.path);
+    verify_resource(&path, spec).map_err(|failure| failure.bundled_message())?;
+    Ok(path)
+}
+
+fn read_manifest(manifest_path: &Path) -> Result<ResourceManifest, String> {
+    serde_json::from_slice(&fs::read(manifest_path).map_err(|e| format!("Cannot read resource manifest: {e}"))?)
+        .map_err(|e| format!("Invalid resource manifest: {e}"))
+}
+
+impl ResourceManifest {
+    fn matches_this_application(&self) -> bool {
+        ensure_manifest_matches_application(self.version, &self.architecture).is_ok()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerificationFailure {
+    Missing(String),
+    MissingVersion,
+    MissingLicense,
+    OverSizeLimit,
+    ChecksumMismatch,
+}
+
+impl VerificationFailure {
+    fn bundled_message(&self) -> String {
+        match self {
+            Self::Missing(error) => format!("Bundled resource is unavailable: {error}"),
+            Self::MissingVersion => "Bundled resource has no version metadata.".to_string(),
+            Self::MissingLicense => "Bundled resource has no license metadata.".to_string(),
+            Self::OverSizeLimit => "Bundled resource exceeds its declared size limit.".to_string(),
+            Self::ChecksumMismatch => "Bundled resource checksum does not match its manifest.".to_string(),
+        }
+    }
+}
+
+pub fn verify_resource(path: &Path, spec: &ResourceSpec) -> Result<(), VerificationFailure> {
+    let bytes = fs::read(path).map_err(|e| VerificationFailure::Missing(e.to_string()))?;
+    if spec.version.trim().is_empty() { return Err(VerificationFailure::MissingVersion); }
+    if spec.license.trim().is_empty() { return Err(VerificationFailure::MissingLicense); }
+    if bytes.len() as u64 > spec.max_bytes { return Err(VerificationFailure::OverSizeLimit); }
+    if digest_hex(&bytes) != spec.sha256 { return Err(VerificationFailure::ChecksumMismatch); }
     Ok(())
 }
 
@@ -188,6 +315,86 @@ mod tests {
         resources.insert("adapter".to_string(), ResourceSpec { path: PathBuf::from("bin"), version: "test".to_string(), sha256: "bad".to_string(), license: "MIT".to_string(), source_url: "https://example.test/adapter".to_string(), max_bytes: 100 });
         fs::write(root.join("manifest.json"), serde_json::to_vec(&ResourceManifest { version: 1, architecture: std::env::consts::ARCH.to_string(), resources }).unwrap()).unwrap();
         assert!(resolve("adapter", &root, "TOOLBOX_TEST_OVERRIDE", "adapter").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn spec_for(path: &str, bytes: &[u8]) -> ResourceSpec {
+        ResourceSpec { path: PathBuf::from(path), version: "1.0".to_string(), sha256: digest_hex(bytes), license: "MIT".to_string(), source_url: String::new(), max_bytes: 100 }
+    }
+
+    fn write_manifest_root(root: &Path, name: &str, file: &str, bytes: &[u8]) {
+        fs::create_dir_all(root).unwrap();
+        fs::write(root.join(file), bytes).unwrap();
+        let resources = BTreeMap::from([(name.to_string(), spec_for(file, bytes))]);
+        fs::write(root.join("manifest.json"), serde_json::to_vec(&ResourceManifest { version: 1, architecture: "all".to_string(), resources }).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn verifier_reports_a_distinct_reason_for_each_failure() {
+        let root = root();
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("pack.bin");
+        fs::write(&file, b"pack bytes").unwrap();
+        let good = spec_for("pack.bin", b"pack bytes");
+        assert_eq!(verify_resource(&file, &good), Ok(()));
+        assert!(matches!(verify_resource(&root.join("absent.bin"), &good), Err(VerificationFailure::Missing(_))));
+        assert_eq!(verify_resource(&file, &ResourceSpec { sha256: digest_hex(b"other"), ..good.clone() }), Err(VerificationFailure::ChecksumMismatch));
+        assert_eq!(verify_resource(&file, &ResourceSpec { max_bytes: 3, ..good.clone() }), Err(VerificationFailure::OverSizeLimit));
+        assert_eq!(verify_resource(&file, &ResourceSpec { version: " ".to_string(), ..good.clone() }), Err(VerificationFailure::MissingVersion));
+        assert_eq!(verify_resource(&file, &ResourceSpec { license: String::new(), ..good.clone() }), Err(VerificationFailure::MissingLicense));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pack_backed_lookup_prefers_bundled_then_installed_pack_then_override_and_never_path() {
+        let root = root();
+        let name = "toolbox-pack-backed-test-resource";
+        write_manifest_root(&root.join("bundled"), name, "bundled.bin", b"bundled");
+        write_manifest_root(&root.join("pack"), name, "pack.bin", b"pack");
+        let development_override = root.join("override.bin");
+        fs::write(&development_override, b"override").unwrap();
+        let on_path = root.join("system");
+        fs::create_dir_all(&on_path).unwrap();
+        fs::write(on_path.join(name), b"system").unwrap();
+        struct RestorePath(Option<std::ffi::OsString>);
+        impl Drop for RestorePath {
+            fn drop(&mut self) { match self.0.take() { Some(value) => std::env::set_var("PATH", value), None => std::env::remove_var("PATH") } }
+        }
+        let original_path = RestorePath(std::env::var_os("PATH"));
+        let mut search = vec![on_path.clone()];
+        search.extend(original_path.0.iter().flat_map(std::env::split_paths));
+        std::env::set_var("PATH", std::env::join_paths(search).unwrap());
+        assert_eq!(find_on_path(name), Some(on_path.join(name)));
+
+        let mut locations = PackBackedLocations { bundled_root: Some(root.join("bundled")), installed_pack_root: Some(root.join("pack")), development_override: Some(development_override.clone()) };
+        assert_eq!(resolve_pack_backed(name, &locations), Ok(ResolvedResource { path: root.join("bundled/bundled.bin"), source: ResourceSource::Bundled }));
+        fs::remove_file(root.join("bundled/manifest.json")).unwrap();
+        assert_eq!(resolve_pack_backed(name, &locations), Ok(ResolvedResource { path: root.join("pack/pack.bin"), source: ResourceSource::InstalledPack }));
+        locations.installed_pack_root = None;
+        assert_eq!(resolve_pack_backed(name, &locations), Ok(ResolvedResource { path: development_override, source: ResourceSource::DevelopmentOverride }));
+        locations.development_override = None;
+        assert_eq!(resolve_pack_backed(name, &locations), Err(format!("Resource {name} is unavailable.")));
+        drop(original_path);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pack_backed_lookup_does_not_fall_back_past_a_pack_that_fails_verification() {
+        let root = root();
+        let name = "ocrLanguage";
+        write_manifest_root(&root.join("pack"), name, "pack.bin", b"pack");
+        fs::write(root.join("pack/pack.bin"), b"changed").unwrap();
+        let development_override = root.join("override.bin");
+        fs::write(&development_override, b"override").unwrap();
+        let locations = PackBackedLocations { bundled_root: Some(root.join("bundled")), installed_pack_root: Some(root.join("pack")), development_override: Some(development_override) };
+        assert_eq!(resolve_pack_backed(name, &locations), Err("Resource ocrLanguage failed verification: ChecksumMismatch.".to_string()));
+        assert_eq!(verify_manifest_root(&root.join("pack")), Err("Resource ocrLanguage failed verification: ChecksumMismatch.".to_string()));
+        // An installed pack that lost its manifest is not skipped either.
+        fs::remove_file(root.join("pack/manifest.json")).unwrap();
+        assert_eq!(resolve_pack_backed(name, &locations), Err("The installed pack for ocrLanguage has no manifest.".to_string()));
+        fs::write(root.join("pack/pack.bin"), b"pack").unwrap();
+        write_manifest_root(&root.join("pack"), name, "pack.bin", b"pack");
+        assert_eq!(verify_manifest_root(&root.join("pack")), Ok(()));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -244,10 +451,103 @@ mod tests {
     }
 
     #[test]
+    fn qpdf_candidates_use_the_platform_executable_name_for_each_target() {
+        let locations = HelperLocations {
+            development_override: None,
+            executable_dir: Some(PathBuf::from("app")),
+            resource_root: Some(PathBuf::from("Resources")),
+            system_path: Some(std::env::join_paths([PathBuf::from("system")]).unwrap()),
+        };
+        for (target_os, executable) in [("macos", "qpdf"), ("windows", "qpdf.exe"), ("linux", "qpdf")] {
+            assert_eq!(helper_candidates(&QPDF, &locations, target_os), [
+                PathBuf::from("app").join(executable),
+                PathBuf::from("Resources/qpdf-bin").join(executable),
+                PathBuf::from("Resources/resources").join(executable),
+                PathBuf::from("Resources").join(executable),
+                PathBuf::from("system").join(executable),
+            ], "{target_os}");
+        }
+    }
+
+    #[test]
     fn qpdf_override_that_is_not_a_file_does_not_fall_back() {
         let root = root();
         let locations = HelperLocations { development_override: Some(root.join("missing/qpdf")), executable_dir: None, resource_root: None, system_path: std::env::var_os("PATH") };
         assert!(locate_helper(&QPDF, &locations).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdftotext_lookup_finds_the_bundled_helper_with_an_empty_path() {
+        let root = root();
+        let bundled = fake_executable(&root.join("Resources/pdf-bin/pdftotext"));
+        let locations = HelperLocations { development_override: None, executable_dir: Some(root.join("app")), resource_root: Some(root.join("Resources")), system_path: Some(std::ffi::OsString::new()) };
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Ok(bundled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdftotext_lookup_prefers_the_bundled_helper_over_the_development_override() {
+        let root = root();
+        let bundled = fake_executable(&root.join("Resources/pdf-bin/pdftotext"));
+        let development_override = fake_executable(&root.join("override/pdftotext"));
+        let mut locations = HelperLocations { development_override: Some(development_override.clone()), executable_dir: None, resource_root: Some(root.join("Resources")), system_path: None };
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Ok(bundled.clone()));
+        fs::remove_file(&bundled).unwrap();
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Ok(development_override));
+        locations.development_override = Some(root.join("override/missing"));
+        assert!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdftotext_lookup_never_searches_the_system_path_and_reports_unavailable_in_plain_language() {
+        let root = root();
+        let on_path = fake_executable(&root.join("system/pdftotext"));
+        fs::create_dir_all(root.join("Resources")).unwrap();
+        let locations = HelperLocations {
+            development_override: None,
+            executable_dir: Some(root.join("app")),
+            resource_root: Some(root.join("Resources")),
+            system_path: Some(std::env::join_paths([root.join("system")]).unwrap()),
+        };
+        assert!(!helper_candidates(&PDF_TEXT_EXTRACTOR, &locations, std::env::consts::OS).contains(&on_path));
+        let missing = locate_helper(&PDF_TEXT_EXTRACTOR, &locations).unwrap_err();
+        assert_eq!(missing, PDF_TEXT_EXTRACTOR.unavailable);
+        for wording in ["TOOLBOX_", "PATH", "environment", "variable"] {
+            assert!(!missing.contains(wording), "{missing}");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdftotext_unavailable_without_any_location() {
+        let locations = HelperLocations { development_override: None, executable_dir: None, resource_root: None, system_path: std::env::var_os("PATH") };
+        assert_eq!(locate_helper(&PDF_TEXT_EXTRACTOR, &locations), Err(PDF_TEXT_EXTRACTOR.unavailable.to_string()));
+    }
+
+    #[test]
+    fn pdftotext_candidates_use_the_platform_executable_name_for_each_supported_target() {
+        let locations = HelperLocations {
+            development_override: Some(PathBuf::from("override/pdftotext")),
+            executable_dir: Some(PathBuf::from("app")),
+            resource_root: Some(PathBuf::from("Resources")),
+            system_path: Some(std::env::join_paths([PathBuf::from("system")]).unwrap()),
+        };
+        for (target, target_os, executable) in [
+            ("aarch64-apple-darwin", "macos", "pdftotext"),
+            ("x86_64-pc-windows-msvc", "windows", "pdftotext.exe"),
+            ("aarch64-pc-windows-msvc", "windows", "pdftotext.exe"),
+        ] {
+            assert_eq!(helper_candidates(&PDF_TEXT_EXTRACTOR, &locations, target_os), [
+                PathBuf::from("app").join(executable),
+                PathBuf::from("Resources/pdf-bin").join(executable),
+                PathBuf::from("Resources/resources").join(executable),
+                PathBuf::from("Resources").join(executable),
+            ], "{target}");
+        }
     }
 
     fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
