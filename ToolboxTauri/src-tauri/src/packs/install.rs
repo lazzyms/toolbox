@@ -271,7 +271,7 @@ pub fn trusted_public_key() -> std::result::Result<PublicKey, String> {
 }
 
 /// Base64 of the minisign public key file, the format the updater configuration uses.
-fn decode_public_key(encoded: &str) -> std::result::Result<PublicKey, String> {
+pub(crate) fn decode_public_key(encoded: &str) -> std::result::Result<PublicKey, String> {
     let text = base64::engine::general_purpose::STANDARD.decode(encoded.trim()).map_err(|error| error.to_string())?;
     PublicKey::decode(&String::from_utf8(text).map_err(|error| error.to_string())?).map_err(|error| error.to_string())
 }

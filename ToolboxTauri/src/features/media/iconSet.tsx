@@ -174,5 +174,5 @@ export const iconSetTool: MediaTool<IconSetOptions> = {
     command: "generate_icon_set",
     request: { paths, preset, sizes, squareRule, outputLocation },
   }),
-  runLabel: (fileCount) => fileCount === 0 ? "Make icon sets" : fileCount === 1 ? "Make 1 icon set" : `Make ${fileCount} icon sets`,
+  runLabel: (_options, files) => files.length === 0 ? "Make icon sets" : files.length === 1 ? "Make 1 icon set" : `Make ${files.length} icon sets`,
 };

@@ -42,7 +42,9 @@ interface RunDestinationProps {
     defaultLocation: OutputLocation;
     overridden: boolean;
     toolTitle: string;
-    exampleName: string | null;
+    /** One example output name, or several when each input makes more than one kind of file. */
+    exampleName: string | readonly string[] | null;
+    exampleHint?: string;
     savesOneFile?: boolean;
     /** Ends the per-run hint by saying the saved setting is unchanged, where the tool's board says so. */
     mentionsSettingKept?: boolean;
@@ -52,7 +54,7 @@ interface RunDestinationProps {
     onReset: () => void;
 }
 
-export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, savesOneFile = false, mentionsSettingKept = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, exampleHint, savesOneFile = false, mentionsSettingKept = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
     const home = useHomeDir();
     return (
     <section aria-label="Destination" className="run-destination">
@@ -84,10 +86,13 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
         {exampleName && (
             <div className="run-destination-example">
                 <span className="run-destination-hint">Example</span>
-                <span data-testid="run-destination-example">{exampleName}</span>
+                <span data-testid="run-destination-example" className="run-destination-example-names">
+                    {typeof exampleName === 'string' ? exampleName : exampleName.map((name) => <span key={name}>{name}</span>)}
+                </span>
             </div>
         )}
-        {exampleName && !overridden && (
+        {exampleName && exampleHint && <p className="run-destination-hint">{exampleHint}</p>}
+        {exampleName && !exampleHint && !overridden && (
             <p className="run-destination-hint">An existing name gets -1, -2 and so on. Nothing is replaced.</p>
         )}
     </section>

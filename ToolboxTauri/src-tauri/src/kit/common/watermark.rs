@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub struct WatermarkOptions {
     #[serde(default)] pub text: Option<String>,
     #[serde(default)] pub logo_path: Option<PathBuf>,
-    /// Height of the mark as a fraction of the target's shorter side.
+    /// Width of the mark, before it is turned, as a fraction of the target's width.
     #[serde(default)] pub size: Option<f32>,
     pub opacity: u8,
     #[serde(default)] pub color: Option<String>,
@@ -21,6 +21,12 @@ pub enum WatermarkPosition {
     Placement(WatermarkPlacement),
     /// Distance in target pixels (images) or points (PDF pages) from the top-left corner.
     Offset { x: u32, y: u32 },
+    /// Where the mark sits in the space it can move in, from 0 (left or top edge) to 1 (right or
+    /// bottom edge), inside a small margin. It lands in the same place on every size of target.
+    Anchor {
+        #[serde(rename = "anchorX")] anchor_x: f32,
+        #[serde(rename = "anchorY")] anchor_y: f32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -42,6 +48,11 @@ impl WatermarkOptions {
             }
             if self.text().is_none() { return Err("Watermark colour applies to text only.".to_string()); }
         }
+        if let Some(WatermarkPosition::Anchor { anchor_x, anchor_y }) = self.position {
+            if !((0.0..=1.0).contains(&anchor_x) && (0.0..=1.0).contains(&anchor_y)) {
+                return Err("Watermark position must be between 0 and 1.".to_string());
+            }
+        }
         if !(-180.0..=180.0).contains(&self.rotation) { return Err("Watermark rotation must be between -180 and 180 degrees.".to_string()); }
         Ok(())
     }
@@ -49,8 +60,8 @@ impl WatermarkOptions {
 
 #[cfg(test)]
 mod tests {
-    use crate::kit::images::tools::{ImageEditPlan, WatermarkRequest};
-    use crate::kit::pdf::remaining::PdfWatermarkRequest;
+    use crate::kit::images::tools::{ImageEditPlan, ImageEditStackRequest};
+    use super::WatermarkOptions;
     use serde_json::{json, Value};
 
     fn with(base: Value, options: &Value) -> Value {
@@ -59,9 +70,9 @@ mod tests {
         value
     }
 
-    fn image_request(options: &Value) -> Result<(), String> {
-        let request: WatermarkRequest = serde_json::from_value(with(json!({ "paths": [], "outputLocation": "alongsideInput" }), options)).map_err(|error| error.to_string())?;
-        request.options.validate()
+    fn image_stack(options: &Value) -> Result<(), String> {
+        let request: ImageEditStackRequest = serde_json::from_value(json!({ "paths": [], "steps": { "watermark": options }, "outputLocation": "alongsideInput" })).map_err(|error| error.to_string())?;
+        request.steps.watermark.expect("the stack keeps its watermark step").validate()
     }
 
     fn image_plan(options: &Value) -> Result<(), String> {
@@ -69,9 +80,10 @@ mod tests {
         plan.validate()
     }
 
+    // Edit PDF scene objects carry the options as their `watermark` field.
     fn pdf_request(options: &Value) -> Result<(), String> {
-        let request: PdfWatermarkRequest = serde_json::from_value(with(json!({ "paths": [], "outputLocation": "alongsideInput" }), options)).map_err(|error| error.to_string())?;
-        request.options.validate()
+        let options: WatermarkOptions = serde_json::from_value(options.clone()).map_err(|error| error.to_string())?;
+        options.validate()
     }
 
     #[test]
@@ -95,6 +107,8 @@ mod tests {
             json!({ "text": "DRAFT", "opacity": 40, "rotation": 180 }),
             json!({ "text": "DRAFT", "opacity": 40, "rotation": -180 }),
             json!({ "text": "DRAFT", "opacity": 40, "rotation": 22.5 }),
+            json!({ "text": "DRAFT", "opacity": 40, "position": { "anchorX": 0, "anchorY": 1 } }),
+            json!({ "text": "DRAFT", "opacity": 40, "position": { "anchorX": 0.25, "anchorY": 0.5 } }),
         ];
         let invalid = [
             (json!({ "text": "DRAFT", "opacity": 101 }), "Watermark opacity must be between 0 and 100."),
@@ -109,6 +123,8 @@ mod tests {
             (json!({ "logoPath": "/local/logo.png", "opacity": 20, "color": "#000000" }), "Watermark colour applies to text only."),
             (json!({ "text": "DRAFT", "opacity": 20, "rotation": 181 }), "Watermark rotation must be between -180 and 180 degrees."),
             (json!({ "text": "DRAFT", "opacity": 20, "rotation": -360 }), "Watermark rotation must be between -180 and 180 degrees."),
+            (json!({ "text": "DRAFT", "opacity": 20, "position": { "anchorX": 1.5, "anchorY": 0 } }), "Watermark position must be between 0 and 1."),
+            (json!({ "text": "DRAFT", "opacity": 20, "position": { "anchorX": 0.5, "anchorY": -0.1 } }), "Watermark position must be between 0 and 1."),
             (json!({ "text": "DRAFT", "opacity": 300 }), ""),
             (json!({ "text": "DRAFT" }), ""),
             (json!({ "text": "DRAFT", "opacity": 20, "position": "middle" }), ""),
@@ -116,17 +132,18 @@ mod tests {
         ];
 
         for options in &valid {
-            for (target, result) in [("image request", image_request(options)), ("image edit plan", image_plan(options)), ("pdf request", pdf_request(options))] {
+            for (target, result) in [("image edit stack", image_stack(options)), ("image edit plan", image_plan(options)), ("pdf request", pdf_request(options))] {
                 assert_eq!(result, Ok(()), "{target} rejected {options}");
             }
         }
         for (options, message) in &invalid {
             let pdf = pdf_request(options).expect_err(&format!("pdf request accepted {options}"));
-            assert_eq!(image_request(options).expect_err(&format!("image request accepted {options}")), pdf, "{options}");
             if !message.is_empty() {
                 assert_eq!(pdf, *message, "{options}");
+                assert_eq!(image_stack(options), Err(pdf.clone()), "{options}");
                 assert_eq!(image_plan(options), Err(pdf), "{options}");
             } else {
+                assert!(image_stack(options).is_err(), "image edit stack accepted {options}");
                 assert!(image_plan(options).is_err(), "image edit plan accepted {options}");
             }
         }
