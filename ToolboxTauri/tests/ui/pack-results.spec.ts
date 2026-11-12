@@ -101,9 +101,9 @@ test.beforeEach(async ({ page }) => {
 const runBatch = async (page: Page, results: JobOutcome[]) => {
     await page.goto("/");
     await page.evaluate((results) => { (window as unknown as PackResultsWindow).__results = results; }, results);
-    await openToolBySearch(page, "Compress Images");
+    await openToolBySearch(page, "Compress");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("button", { name: "Export Compress Images" }).click();
+    await page.getByRole("button", { name: "Compress 1 file", exact: true }).click();
     return page.getByRole("list", { name: "Results" }).getByRole("listitem");
 };
 

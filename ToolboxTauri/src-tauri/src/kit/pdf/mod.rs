@@ -1,11 +1,19 @@
 pub mod metadata;
 pub mod document_info;
 pub mod page_ranges;
+pub mod privacy;
+pub mod hidden_content;
 pub mod scene;
+pub mod bates;
 pub mod script_text;
+pub mod text_edit;
 pub mod editor;
 pub mod remaining;
 pub mod text_layer;
+pub mod page_text;
+#[cfg(test)]
+pub(crate) mod jbig2_fixtures;
+pub(crate) mod qpdf;
 pub mod unicode_font;
 pub mod font_resolver;
 pub mod layout;
@@ -28,6 +36,10 @@ pub mod doc;
 pub mod xls;
 pub mod ppt;
 pub mod convert;
+pub mod properties;
+mod embedded_image;
+mod inline_image;
+pub mod recompress;
 
 use std::collections::HashSet;
 use std::fs;
@@ -52,6 +64,20 @@ pub(crate) const PDF_PREVIEW_MAX_DIMENSION: u32 = 1_600;
 pub(crate) const PDF_PREVIEW_MAX_PIXELS: u64 = 2_560_000;
 pub(crate) const PDF_PREVIEW_MAX_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const PDF_PREVIEW_TIMEOUT: Duration = Duration::from_secs(15);
+// Organize grid thumbnails come straight from the source page, one pdftoppm run per page, so one bad page fails alone.
+// Each run gets the per-file budget (opening and parsing the PDF) plus the per-page budget (rasterising one page).
+pub(crate) const PDF_THUMBNAIL_MAX_DIMENSION: u32 = 320;
+pub(crate) const PDF_THUMBNAIL_MAX_BATCH: usize = 12;
+pub(crate) const PDF_THUMBNAIL_FILE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const PDF_THUMBNAIL_PAGE_TIMEOUT: Duration = Duration::from_secs(3);
+// "Select blank pages" in Organize. A source page is blank only when it has no extractable text and, on a render
+// scaled to fit PDF_BLANK_RENDER_DIMENSION, fewer than PDF_BLANK_MAX_INK_BASIS_POINTS / 10,000 of its pixels are ink:
+// luma below PDF_BLANK_INK_LUMA_THRESHOLD. Light paper tone and specks of scanner noise stay under both thresholds.
+// Each helper run (text, then render) gets the thumbnail deadline for one page.
+pub(crate) const PDF_BLANK_MAX_BATCH: usize = 12;
+pub(crate) const PDF_BLANK_RENDER_DIMENSION: u32 = 320;
+pub(crate) const PDF_BLANK_INK_LUMA_THRESHOLD: u8 = 192;
+pub(crate) const PDF_BLANK_MAX_INK_BASIS_POINTS: u64 = 20;
 pub(crate) const PDF_HELPER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PDF_TEXT_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const PDF_TEXT_MAX_ERROR_BYTES: usize = 1024 * 1024;
@@ -210,7 +236,6 @@ pub(crate) fn read_preview_png(path: &Path) -> Result<(Vec<u8>, u32, u32), Strin
 pub(crate) struct PdfMutationPreflight {
     pub(crate) pages_root: ObjectId,
     pub(crate) pages: Vec<ObjectId>,
-    pub(crate) annotated_pages: HashSet<ObjectId>,
     pub(crate) has_navigation: bool,
     pub(crate) has_form_structure: bool,
     pub(crate) has_tagged_structure: bool,
@@ -219,7 +244,6 @@ pub(crate) struct PdfMutationPreflight {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PdfMutationIntent {
     General,
-    ReorderOnly,
     ValidateOnly,
 }
 
@@ -246,7 +270,11 @@ pub(crate) fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Resu
     Ok(value)
 }
 
-pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+pub(crate) fn inherited(document: &Document, id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+    Ok(inherited_ref(document, id, key)?.cloned())
+}
+
+pub(crate) fn inherited_ref<'a>(document: &'a Document, mut id: ObjectId, key: &[u8]) -> Result<Option<&'a Object>, String> {
     let mut seen = HashSet::new();
     loop {
         if !seen.insert(id) {
@@ -254,7 +282,7 @@ pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Re
         }
         let page_tree = document.get_dictionary(id).map_err(|error| error.to_string())?;
         if let Ok(value) = page_tree.get(key) {
-            return Ok(Some(resolve(document, value)?.clone()));
+            return Ok(Some(resolve(document, value)?));
         }
         match page_tree.get(b"Parent") {
             Ok(parent) => id = parent.as_reference().map_err(|error| error.to_string())?,
@@ -687,7 +715,8 @@ pub(crate) fn remove_signatures(document: &mut Document) -> Result<bool, String>
     Ok(true)
 }
 
-pub const SIGNATURE_REMOVED: &str ="Saved. The digital signature was removed, because changing the file breaks it.";
+pub const SIGNATURE_REMOVED: &str = "Saved. The digital signature was removed, because changing the file breaks it.";
+const SIGNATURE_NOT_REMOVED: &str = "The digital signature could not be removed, so nothing was saved.";
 
 pub fn has_signed_signature_field(document: &Document) -> bool {
     let mut seen = HashSet::new();
@@ -723,6 +752,76 @@ fn field_is_signed<'a>(document: &'a Document, value: &'a Object, inherited_type
         .is_some_and(|kids| kids.iter().any(|kid| field_is_signed(document, kid, field_type, seen)))
 }
 
+fn collect_signed_fields(document: &Document, value: &Object, inherited_type: Option<Vec<u8>>, seen: &mut HashSet<ObjectId>, signed: &mut Vec<ObjectId>) {
+    let Object::Reference(id) = value else { return };
+    if !seen.insert(*id) {
+        return;
+    }
+    let Ok(field) = document.get_dictionary(*id) else { return };
+    let field_type = field.get(b"FT").ok().and_then(|value| value.as_name().ok()).map(<[u8]>::to_vec).or(inherited_type);
+    if field_type.as_deref() == Some(b"Sig") && field.get(b"V").ok().and_then(|value| resolve(document, value).ok()).is_some_and(|value| value.as_dict().is_ok()) {
+        signed.push(*id);
+    }
+    if let Some(kids) = field.get(b"Kids").ok().and_then(|kids| resolve(document, kids).ok()?.as_array().ok()) {
+        for kid in kids.clone() {
+            collect_signed_fields(document, &kid, field_type.clone(), seen, signed);
+        }
+    }
+}
+
+/// Removes every signature value, the permissions that refer to them and the form's signature flags,
+/// leaving empty signature fields. Returns whether the document was signed.
+pub fn remove_signature_values(document: &mut Document) -> Result<bool, String> {
+    if !has_signed_signature_field(document) {
+        return Ok(false);
+    }
+    let mut seen = HashSet::new();
+    let mut signed = Vec::new();
+    let form = document.catalog().ok().and_then(|catalog| resolve(document, catalog.get(b"AcroForm").ok()?).ok()?.as_dict().ok());
+    let fields = form.and_then(|form| resolve(document, form.get(b"Fields").ok()?).ok()?.as_array().ok()).cloned().unwrap_or_default();
+    let widgets = document.get_pages().values()
+        .filter_map(|page| resolve(document, document.get_dictionary(*page).ok()?.get(b"Annots").ok()?).ok()?.as_array().ok().cloned())
+        .flatten()
+        .collect::<Vec<_>>();
+    for field in fields.iter().chain(&widgets) {
+        collect_signed_fields(document, field, None, &mut seen, &mut signed);
+    }
+    for id in signed {
+        let value = document.get_dictionary_mut(id).map_err(|error| error.to_string())?.remove(b"V");
+        if let Some(Object::Reference(value)) = value {
+            if document.objects.get(&value).is_some_and(is_signature_dictionary) {
+                document.objects.remove(&value);
+            }
+        }
+    }
+    let catalog = document.catalog_mut().map_err(|error| error.to_string())?;
+    catalog.remove(b"Perms");
+    let form = catalog.get(b"AcroForm").ok().cloned();
+    match form {
+        Some(Object::Reference(id)) => {
+            if let Ok(form) = document.get_dictionary_mut(id) {
+                form.remove(b"SigFlags");
+            }
+        }
+        Some(Object::Dictionary(_)) => {
+            if let Ok(Object::Dictionary(form)) = document.catalog_mut().map_err(|error| error.to_string())?.get_mut(b"AcroForm") {
+                form.remove(b"SigFlags");
+            }
+        }
+        _ => {}
+    }
+    if has_signed_signature_field(document) {
+        return Err(SIGNATURE_NOT_REMOVED.to_string());
+    }
+    Ok(true)
+}
+
+fn remove_signatures_in_place(path: &Path) -> Result<(), String> {
+    let mut document = Document::load(path).map_err(|_| SIGNATURE_NOT_REMOVED.to_string())?;
+    remove_signature_values(&mut document)?;
+    document.save(path).map(|_| ()).map_err(|_| SIGNATURE_NOT_REMOVED.to_string())
+}
+
 pub fn note_signature_removed(outcome: JobOutcome, signed: bool) -> JobOutcome {
     if !signed {
         return outcome;
@@ -748,6 +847,16 @@ fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<b
 }
 
 pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, false)
+}
+
+/// The scene export accepts a signed source, because it removes the signature and reports it with the shared warning.
+/// Other signature evidence without a signed field still fails closed, as it does for every other mutation.
+pub(crate) fn signed_mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, true)
+}
+
+fn preflight(document: &Document, intent: PdfMutationIntent, allow_signed: bool) -> Result<PdfMutationPreflight, String> {
     if document.is_encrypted() {
         return Err("Unlock the PDF before editing".to_string());
     }
@@ -787,17 +896,17 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
             return Err(format!("Page {} has a missing or wrong /Parent, so the PDF page-tree is malformed; mutation was rejected before output", index + 1));
         }
     }
-    if document_has_signature(document, catalog, &pages)? {
+    if document_has_signature(document, catalog, &pages)? && !(allow_signed && has_signed_signature_field(document)) {
         return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
     }
-    let annotated_pages = validate_page_annotations(document, &pages)?;
+    validate_page_annotations(document, &pages)?;
     let page_navigation = pages.iter().map(|page| page_has_internal_navigation(document, *page)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
         .into_iter().map(|key| has_catalog_entry(document, catalog, key)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = has_navigation || page_navigation;
     let has_form_structure = has_catalog_entry(document, catalog, b"AcroForm")?;
     let has_tagged_structure = has_catalog_entry(document, catalog, b"StructTreeRoot")?;
-    let preflight = PdfMutationPreflight { pages_root, pages, annotated_pages, has_navigation, has_form_structure, has_tagged_structure };
+    let preflight = PdfMutationPreflight { pages_root, pages, has_navigation, has_form_structure, has_tagged_structure };
     preflight.enforce_policy(intent)?;
     Ok(preflight)
 }
@@ -868,7 +977,10 @@ impl PDFProcessor {
                 }
                 let mut doc = doc;
                 let page_count = doc.get_pages().len();
-                let signed = has_signed_signature_field(&doc);
+                let signed = match remove_signature_values(&mut doc) {
+                    Ok(signed) => signed,
+                    Err(message) => return JobOutcome::failure(input_path, ToolError::processing(message)),
+                };
                 // Loading an encrypted PDF can leave the original trailer's
                 // `/Size` higher than the surviving object table. Keep the
                 // rewritten xref table truthful so strict PDF validators do
@@ -926,6 +1038,11 @@ impl PDFProcessor {
         if !matches!(output.status.code(), Some(0 | 3)) {
             return JobOutcome::failure(input_path, unreadable(ProtectedFormat::Pdf));
         }
+        if signed {
+            if let Err(message) = remove_signatures_in_place(output_path.path()) {
+                return JobOutcome::failure(input_path, ToolError::processing(message));
+            }
+        }
         if !unlocked_pdf_is_verified(output_path.path(), page_count) {
             return JobOutcome::failure(input_path, ToolError::processing(UNLOCK_NOT_VERIFIED));
         }
@@ -946,7 +1063,7 @@ impl PDFProcessor {
             return JobOutcome::failure(input_path, ToolError::invalid_input("A non-empty password is required."));
         }
         if password.contains(['\n', '\r']) {
-            return JobOutcome::failure(input_path, ToolError::invalid_input("Passwords can't contain line breaks."));
+            return JobOutcome::failure(input_path, ToolError::invalid_input(qpdf::PASSWORD_LINE_BREAK));
         }
         let raw = match read_and_probe(&input_path) {
             Ok((raw, state)) => match lock_skip_reason(state) {
@@ -969,11 +1086,10 @@ impl PDFProcessor {
         };
 
         let mut command = Command::new(&qpdf);
-        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", "@-", "--bits=256", "--"]);
-        let options = format!("--user-password={password}\n--owner-password={password}\n").into_bytes();
+        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", qpdf::PASSWORDS_FROM_STDIN, "--bits=256", "--"]);
         let limit = pdf_lock_time_limit(page_count);
         let timed_out = format!("Locking took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
-        let output = match run_bounded_helper_with_input(command, Some(options), Instant::now() + limit, PDF_TEXT_MAX_ERROR_BYTES, PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+        let output = match qpdf::run_with_passwords(command, &[("--user-password", password), ("--owner-password", password)], Instant::now() + limit, &timed_out) {
             Ok(output) => output,
             Err(message) if message == timed_out => return JobOutcome::failure(input_path, ToolError::limit_exceeded(crate::kit::contracts::LimitKind::Time, message)),
             Err(message) => return JobOutcome::failure(input_path, ToolError::unavailable(message)),
@@ -1036,7 +1152,7 @@ pub(crate) mod tests {
         false
     }
 
-    fn make_pdf(path: &PathBuf) {
+    pub(crate) fn make_pdf(path: &PathBuf) {
         let mut doc = Document::with_version("1.7");
         let pages_id = doc.new_object_id();
         let font_id = doc.add_object(dictionary! {
@@ -1202,6 +1318,28 @@ pub(crate) mod tests {
         set_form_fields(document, vec![Object::Reference(field)]);
     }
 
+    /// Encrypts the PDF at `path` in place with a user password, so it opens but reads as encrypted.
+    pub(crate) fn encrypt_pdf(path: &Path) {
+        let mut document = Document::load(path).expect("fixture should load");
+        document.trailer.set(
+            "ID",
+            Object::Array(vec![
+                Object::String(b"toolbox-test-id-1".to_vec(), lopdf::StringFormat::Literal),
+                Object::String(b"toolbox-test-id-2".to_vec(), lopdf::StringFormat::Literal),
+            ]),
+        );
+        let encryption_state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
+            document: &document,
+            owner_password: "owner",
+            user_password: "user",
+            key_length: 128,
+            permissions: lopdf::Permissions::all(),
+        })
+        .expect("encryption fixture should create an encryption state");
+        document.encrypt(&encryption_state).expect("fixture should encrypt");
+        document.save(path).expect("encrypted fixture should save");
+    }
+
     pub(crate) fn sign(document: &mut Document) {
         add_signature_field(document, Some(signature_value()));
     }
@@ -1213,6 +1351,47 @@ pub(crate) mod tests {
         let _ = std::fs::remove_file(&path);
         build(&mut document);
         (name, document)
+    }
+
+    pub(crate) fn holds_a_signature(document: &Document) -> bool {
+        let catalog = document.catalog().unwrap();
+        let sig_flags = catalog.get(b"AcroForm").ok()
+            .and_then(|form| resolve(document, form).ok()?.as_dict().ok()?.get(b"SigFlags").ok())
+            .is_some();
+        has_signed_signature_field(document) || document.objects.values().any(is_signature_dictionary) || catalog.has(b"Perms") || sig_flags
+    }
+
+    #[test]
+    fn removing_signatures_empties_every_signed_field_and_leaves_unsigned_pdfs_alone() {
+        let signed_kid = |document: &mut Document| {
+            let value = document.add_object(signature_value());
+            let parent = document.new_object_id();
+            let kid = document.add_object(dictionary! { "Parent" => parent, "Subtype" => "Widget", "V" => value });
+            document.objects.insert(parent, dictionary! { "FT" => "Sig", "T" => "Approval", "Kids" => vec![Object::Reference(kid)] }.into());
+            attach_widget(document, kid);
+            set_form_fields(document, vec![Object::Reference(parent)]);
+        };
+        let certified = |document: &mut Document| {
+            sign(document);
+            let value = document.objects.iter().find(|(_, object)| is_signature_dictionary(object)).map(|(id, _)| *id).unwrap();
+            document.catalog_mut().unwrap().set("Perms", dictionary! { "DocMDP" => value });
+        };
+        let outside_tree = |document: &mut Document| {
+            let value = document.add_object(signature_value());
+            let widget = document.add_object(dictionary! { "Subtype" => "Widget", "FT" => "Sig", "V" => value });
+            attach_widget(document, widget);
+        };
+        for (name, mut document) in [fixture("signed field", sign), fixture("kid inherits the signature type", signed_kid), fixture("certified", certified), fixture("signed widget outside the field tree", outside_tree)] {
+            let pages = document.get_pages().len();
+            assert_eq!(remove_signature_values(&mut document), Ok(true), "{name}");
+            assert!(!holds_a_signature(&document), "{name}");
+            assert_eq!(document.get_pages().len(), pages, "{name}");
+        }
+        for (name, mut document) in [fixture("plain", |_| {}), fixture("empty signature field", |document| add_signature_field(document, None))] {
+            let before = format!("{:?}", document.objects);
+            assert_eq!(remove_signature_values(&mut document), Ok(false), "{name}");
+            assert_eq!(format!("{:?}", document.objects), before, "{name} is left as it was");
+        }
     }
 
     #[test]
