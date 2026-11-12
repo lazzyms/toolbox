@@ -116,7 +116,7 @@ test("English reads scans with no language packs installed", async ({ page }) =>
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Export OCR PDF" }).click();
-    expect(await lastOcrRequest(page)).toMatchObject({ request: { paths: ["/scans/ration-card.pdf"], language: "eng" } });
+    expect(await lastOcrRequest(page)).toMatchObject({ request: { paths: ["/scans/ration-card.pdf"], languages: ["eng"] } });
 });
 
 test("a language from a pack installs from the picker and then runs in that language", async ({ page }) => {
@@ -151,7 +151,7 @@ test("a language from a pack installs from the picker and then runs in that lang
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Export OCR PDF" }).click();
-    expect(await lastOcrRequest(page)).toMatchObject({ request: { paths: ["/scans/ration-card.pdf"], language: "hin" } });
+    expect(await lastOcrRequest(page)).toMatchObject({ request: { paths: ["/scans/ration-card.pdf"], languages: ["hin"] } });
 });
 
 test("a damaged language pack offers Repair", async ({ page }) => {
