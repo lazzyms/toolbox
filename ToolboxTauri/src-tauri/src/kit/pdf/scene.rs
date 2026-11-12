@@ -2566,7 +2566,7 @@ mod tests {
             // Content, notes, links and form fields are the same objects, byte for byte; only the page tree's order changes.
             assert_only_page_tree_order_changed(&composed, &original, pages_root, &reordered);
 
-            let request = ExportRequest { paths: vec![input.clone()], scene: scene(&order), output_location: OutputLocation::AlongsideInput };
+            let request = ExportRequest { paths: vec![input.clone()], scene: scene(&order), output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() };
             let first = export(&request, input.clone());
             let second = export(&request, input.clone());
             assert!(first.error().is_none(), "{:?}", first.error());
