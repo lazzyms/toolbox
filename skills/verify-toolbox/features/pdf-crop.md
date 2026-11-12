@@ -1,3 +1,3 @@
 # Crop PDF
 
-Choose `Crop`, inspect a PDF, select a rectangle and scope, and run it. Verify the output MediaBox matches the plan, remains readable, and never overwrites the input.
+Open `Crop PDF`, select a PDF, drag over the rendered page to select a crop rectangle (a foreground mouse drag; there is no numeric entry), pick the page scope, and press `Crop`. Verify a `{stem}-cropped.pdf` whose MediaBox matches the selection, that it remains readable, and that the input is never overwritten.

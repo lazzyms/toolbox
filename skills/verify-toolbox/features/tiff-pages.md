@@ -1,3 +1,3 @@
-# TIFF Pages
+# Split and Combine TIFF
 
-Choose `TIFF Pages`, select TIFF input, and run it. Verify valid TIFF output, expected page handling, and no source overwrite.
+Open `Split and Combine TIFF`, select a TIFF, and press `TIFF Pages`. Expect `TIFF pages saved` and outputs `{stem}-page-N.tiff`. Verify valid TIFF output, one file per source page, and no source overwrite.

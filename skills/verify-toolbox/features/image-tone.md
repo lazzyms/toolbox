@@ -1,5 +1,3 @@
-# Image Tone
+# Colour and Tone Adjustments
 
-Choose `Tone`, select an image, adjust brightness, saturation, or exposure, and
-run it. Verify pixel values change as requested, the output is a collision-safe
-`-tone` copy, and the source remains unchanged.
+Open `Colour and Tone Adjustments`, select an image, move `Brightness`, `Saturation`, or `Exposure`, and press `Tone`. Verify pixel values change as requested, the output is a collision-safe `{stem}-tone.png`, and the source remains unchanged.

@@ -1,3 +1,3 @@
 # Watermark PDF
 
-Choose `Watermark`, select a PDF, enter text, and run it. Verify a `-watermarked.pdf` has a visible overlay and the source is unchanged.
+Open `Watermark PDF`, select a PDF, enter `Watermark text`, choose position, opacity, and pages, and press `Watermark`. Verify a `{stem}-watermarked.pdf` with a visible overlay and an unchanged source.

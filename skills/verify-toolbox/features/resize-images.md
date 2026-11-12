@@ -1,3 +1,3 @@
 # Resize Images
 
-Choose `Resize`, select an image, set dimensions, and run it. Verify expected pixel dimensions, output suffix, and unchanged input bytes.
+Open `Resize Images`, select an image, choose `Resize mode` and set width, height, or percentage, and press `Resize`. Expect `Image saved` and a `{stem}-resized.png`. Verify the expected pixel dimensions and unchanged input bytes.

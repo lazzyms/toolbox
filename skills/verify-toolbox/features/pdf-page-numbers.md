@@ -1,3 +1,3 @@
-# PDF Page Numbers
+# Add PDF Page Numbers
 
-Choose `Page Numbers`, select a PDF, and run it. Verify a collision-safe `-numbered.pdf` preserves page count, dimensions, and original bytes while adding a visible number overlay.
+Open `Add PDF Page Numbers`, select a PDF, choose position, font size, starting number, and page scope, and press `Page Numbers`. Expect `PDF saved` and a collision-safe `{stem}-numbered.pdf`. Verify page count, dimensions, and original bytes are preserved while a visible number overlay is added.

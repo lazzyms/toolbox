@@ -1,3 +1,3 @@
-# Image Watermark
+# Watermark Images
 
-Choose `Watermark`, select an image, set opacity, and run it. Verify a visibly changed output, requested opacity behavior, and unchanged source.
+Open `Watermark Images`, select an image, enter `Watermark text`, set `Watermark opacity`, and press `Watermark`. Verify a visibly changed `{stem}-watermarked.png`, requested opacity behavior, and an unchanged source.

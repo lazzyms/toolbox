@@ -4,15 +4,15 @@
 
 - Select images through the native Tauri file dialog or drag-and-drop.
 - Choose PNG, JPEG, WebP, or HEIC in the target-format buttons.
-- Report per-file results and write `-converted` outputs in the target format.
+- Report per-file results such as `Saved as png` and write `{stem}-converted.<ext>` outputs in the target format.
 
 ## How to get to it (user POV)
 
-Launch Toolbox, then choose `Convert` in the Images section of the sidebar.
+Launch Toolbox, press the `Images` category, then open the `Convert Image Format` card.
 
 ## Driving it with Tauri desktop UI
 
-Choose a PNG fixture, click the `JPEG` target-format button, and click `Convert Images`. Assert success, a `.jpg` output with valid JPEG bytes, and unchanged original bytes.
+Choose a PNG fixture, press the `📷 JPEG` target-format button (the label includes the emoji), and press `Convert Images`. Assert success, a `.jpg` output with valid JPEG bytes, and unchanged original bytes.
 
 ## Gotchas
 

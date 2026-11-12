@@ -1,3 +1,3 @@
 # Organize PDF
 
-Choose `Organize`, reorder thumbnails, rotate or delete pages, and run it. Verify the typed plan is reflected in output order and page count.
+Open `Organize PDF`, select a PDF, use `Move left`, `Move right`, `Rotate 90°`, or `Delete page` on the page thumbnails, and press `Organize`. Verify the `{stem}-organized.pdf` reflects the planned order, rotation, and page count, and the source is unchanged.
