@@ -1,0 +1,11 @@
+{
+  "baseScripts": ["Latin", "Cyrillic", "Greek"],
+  "baseFont": "DejaVu Sans, bundled with the app",
+  "downloadBudgetBytes": 41943040,
+  "budgetRule": "Each script pack's download is at most 40 MiB. The fonts are TrueType outlines, which Edit PDF subsets into each output. The board offers the pack as a 38 MB download.",
+  "pack": { "id": "unicode-scripts", "name": "Unicode scripts" },
+  "splitRule": "If the fonts for every script would put the pack over budget, the scripts of a family below move into that family's own pack, and text in them points at that pack. No family is split yet.",
+  "families": [
+    { "id": "unicode-scripts-cjk", "name": "Unicode scripts: Chinese, Japanese and Korean", "scripts": ["Han", "Hiragana", "Katakana", "Hangul", "Bopomofo"] }
+  ]
+}
