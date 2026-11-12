@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
-use image::{DynamicImage, ImageBuffer, ImageEncoder, Luma, Rgb, Rgba};
+use image::{DynamicImage, ImageEncoder, Rgba};
 use image::AnimationDecoder;
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -125,8 +125,9 @@ impl ImageEditPlan {
 pub fn inspect_edit_preview(request: &ImageEditPreviewRequest) -> Result<ImagePreview, String> {
     let plan = request.plan.canonicalized();
     plan.validate()?;
-    let (source, _) = crate::kit::images::load_upright_image(&request.path)?;
-    let (edited, format, quality) = apply_edit_plan(&plan, source, crate::kit::images::detect_format(&request.path))?;
+    let source = crate::kit::images::load_upright_image(&request.path)?;
+    let format = source.family.output_format();
+    let (edited, format, quality) = apply_edit_plan(&plan, source.image, format)?;
     let encoded = crate::kit::images::encode(&edited, format, quality)?;
     let preview_source = match format {
         crate::kit::images::OutputFormat::Heic => heif::decode(&encoded)
@@ -141,10 +142,11 @@ pub fn export_edit_plan(plan: &ImageEditPlan, input: PathBuf) -> JobOutcome {
     let plan = plan.canonicalized();
     if let Err(error) = plan.validate() { return failure(input, error); }
     let source = match crate::kit::images::load_upright_image(&input) {
-        Ok((image, _)) => image,
+        Ok(source) => source,
         Err(error) => return failure(input, error),
     };
-    let (edited, format, quality) = match apply_edit_plan(&plan, source, crate::kit::images::detect_format(&input)) {
+    let format = source.family.output_format();
+    let (edited, format, quality) = match apply_edit_plan(&plan, source.image, format) {
         Ok(value) => value,
         Err(error) => return failure(input, error),
     };
@@ -289,22 +291,22 @@ pub fn export_edit_stack(request: &ImageEditStackRequest, input: PathBuf) -> Job
         Ok(suffix) => suffix,
         Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
-    let format = match request.format.as_deref() {
-        Some(requested) => match parse_output_format(requested) {
-            Ok(format) => format,
-            Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
-        },
-        None => crate::kit::images::detect_format(&input),
+    let requested = match request.format.as_deref().map(parse_output_format).transpose() {
+        Ok(requested) => requested,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
     // Editing keeps one picture, so an animated GIF would lose its other frames. It fails before
     // anything is decoded or reserved and points to the tool that saves every frame.
     if crate::kit::images::is_animated_gif(&input) {
         return JobOutcome::failure(input, ToolError::invalid_input(ANIMATED_GIF).with_pointer(OutcomePointer::Tool { tool_id: "gif-extract".into() }));
     }
-    let (source, oriented) = match crate::kit::images::load_upright_image(&input) {
+    let decoded = match crate::kit::images::load_upright_image(&input) {
         Ok(decoded) => decoded,
         Err(error) => return failure(input, error),
     };
+    let format = requested.unwrap_or_else(|| decoded.family.output_format());
+    let oriented = decoded.oriented;
+    let source = decoded.image;
     // Removing metadata starts from what the original holds, so a file whose metadata can't be
     // read fails rather than being saved with something left in it.
     let found = match request.steps.metadata {
@@ -403,7 +405,7 @@ fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
 }
 
 fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: crate::kit::images::OutputFormat) -> Result<(DynamicImage, crate::kit::images::OutputFormat, u8), String> {
-    let mut quality = 90;
+    let mut quality = crate::kit::images::DEFAULT_QUALITY;
     let source_width = image.width();
     let source_height = image.height();
     let mut geometry = Vec::new();
@@ -492,7 +494,7 @@ pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::Ou
 }
 
 pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, String> {
-    let (image, _) = crate::kit::images::load_upright_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?;
+    let image = crate::kit::images::load_upright_image(&request.path).map_err(|error| format!("Could not preview image: {error}"))?.image;
     let width = image.width();
     let height = image.height();
     let preview = image.thumbnail(1200, 900).to_rgba8();
@@ -513,10 +515,15 @@ pub fn inspect_preview(request: &ImagePreviewRequest) -> Result<ImagePreview, St
 }
 
 pub fn inspect_tiff_pages(request: &TiffPreviewRequest) -> Result<Vec<ImagePreview>, String> {
-    read_tiff_pages(&request.path)?
-        .iter()
-        .map(|page| tiff_page_to_dynamic(page).and_then(encode_preview))
+    crate::kit::images::decode(&request.path)?
+        .pages
+        .into_iter()
+        .map(encode_preview)
         .collect()
+}
+
+pub fn inspect_image_pages(request: &ImagePagesRequest) -> Vec<Option<usize>> {
+    request.paths.iter().map(|path| crate::kit::images::source::page_count(path).ok()).collect()
 }
 
 /// How to size each image: a width-and-height box (fitted inside unless the aspect lock is off),
@@ -580,9 +587,14 @@ pub struct GifExtractRequest { pub paths: Vec<PathBuf>, pub output_location: Out
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffPageRef { pub path: PathBuf, pub page: usize }
+/// The person picks the mode; it is never inferred from how many files were chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TiffMode { Split, Combine }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffRequest {
+    pub mode: TiffMode,
     pub paths: Vec<PathBuf>,
     #[serde(default)]
     pub pages: Option<Vec<TiffPageRef>>,
@@ -593,6 +605,9 @@ pub struct TiffRequest {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TiffPreviewRequest { pub path: PathBuf }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePagesRequest { pub paths: Vec<PathBuf> }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetadataRequest { pub paths: Vec<PathBuf> }
@@ -756,7 +771,7 @@ fn watermark_mark(options: &WatermarkOptions, target_width: u32) -> Result<(imag
     };
     let logo = match options.logo_path.as_ref() {
         Some(path) => {
-            let mut logo = crate::kit::images::load_image(path)?.to_rgba8();
+            let mut logo = crate::kit::images::decode(path)?.into_first_page().to_rgba8();
             if let Some(target) = target {
                 let width = target.round().max(1.0) as u32;
                 let height = ((logo.height() as f32 * width as f32 / logo.width().max(1) as f32).round() as u32).max(1);
@@ -884,7 +899,7 @@ fn tile_mark(canvas: &mut image::RgbaImage, mark: &image::RgbaImage) {
 const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
 const WATERMARK_FONT_FILE: &str = "DejaVuSans.ttf";
 const WATERMARK_FONT_SIZE: f32 = 32.0;
-const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
+pub(crate) const INCLUDED_WATERMARK_FONT: &[u8] = include_bytes!("../../../resources/fonts/DejaVuSans.ttf");
 
 fn watermark_font_bytes() -> Result<Vec<u8>, String> {
     let bundled_root = crate::kit::resources::application_resource_root()
@@ -1012,8 +1027,9 @@ fn unsupported_watermark_characters(characters: impl IntoIterator<Item = char>) 
     format!("The watermark font can't draw {details}.")
 }
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
-    let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let source = match crate::kit::images::load_upright_image(&input) { Ok(source) => source, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let (prefix, sizes) = match icon_plan(&request.preset, &request.sizes) { Ok(plan) => plan, Err(error) => return failure(input, error) };
+    let image = match source.high_bit_depth { Some(_) => to_8bit(&source.image), None => source.image };
     let mut outputs = Vec::new();
     for &size in &sizes {
         let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png") {
@@ -1048,7 +1064,21 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
         "android" => "Android PNG icon set saved.",
         _ => "Custom PNG icon set saved.",
     };
-    JobOutcome::succeeded(input, outputs, detail.to_string())
+    let outcome = JobOutcome::succeeded(input, outputs, detail.to_string());
+    match source.high_bit_depth {
+        Some(bits) => outcome.with_warning(precision_reduced(format!("{bits}-bit HEIC saved as 8-bit sRGB."))),
+        None => outcome,
+    }
+}
+
+// Icon and GIF outputs are 8-bit; a high-bit-depth HEIC source is reduced once,
+// keeping its alpha channel when it has one.
+fn to_8bit(image: &image::DynamicImage) -> image::DynamicImage {
+    if image.color().has_alpha() { image::DynamicImage::ImageRgba8(image.to_rgba8()) } else { image::DynamicImage::ImageRgb8(image.to_rgb8()) }
+}
+
+fn precision_reduced(message: String) -> crate::kit::contracts::OutcomeWarning {
+    crate::kit::contracts::OutcomeWarning { kind: crate::kit::contracts::WarningKind::PrecisionReduced, message }
 }
 
 fn write_icns(output: &Path, sizes: &[u32], pngs: &[PathBuf]) -> Result<(), String> {
@@ -1096,36 +1126,82 @@ fn icon_plan(preset: &str, custom_sizes: &[u32]) -> Result<(&'static str, Vec<u3
     Ok(sizes)
 }
 
+/// Names an unreadable frame the way the Create GIF results show it.
+fn unreadable_frame(number: usize, path: &Path) -> String {
+    if !path.is_file() {
+        return format!("Frame {number} is no longer at {}. Replace or remove frame {number}, then make the GIF again. Nothing was saved.", path.display());
+    }
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+    let kind = path.extension().map(|extension| format!("{} image", extension.to_string_lossy().to_uppercase())).unwrap_or_else(|| "image".to_string());
+    format!("Frame {number}, {name}, isn't a readable {kind}. Replace or remove frame {number}, then make the GIF again. Nothing was saved.")
+}
+
+/// Writes the frames as a GIF the size of the first frame. Every frame is
+/// centred, larger ones scaled down to fit, and quantised to its own palette
+/// with a reserved transparent index, so the same frames always give the same bytes.
+fn encode_gif<W: std::io::Write>(writer: W, frames: &[image::RgbaImage], request: &GifCreateRequest) -> Result<W, String> {
+    use crate::kit::images::gif_frames::{place_on_canvas, quantise, TRANSPARENT_INDEX};
+    let canvas = frames[0].dimensions();
+    let (Ok(width), Ok(height)) = (u16::try_from(canvas.0), u16::try_from(canvas.1)) else {
+        return Err(format!("Frame 1 is {} × {} pixels, larger than a GIF can hold (65535 × 65535).", canvas.0, canvas.1));
+    };
+    let mut encoder = gif::Encoder::new(writer, width, height, &[]).map_err(|error| format!("Could not create GIF: {error}"))?;
+    if request.loop_forever { encoder.set_repeat(gif::Repeat::Infinite).map_err(|error| format!("Could not configure GIF loop: {error}"))?; }
+    // GIF delays are hundredths of a second.
+    let delay = (request.frame_delay_ms.clamp(1, 60_000) / 10) as u16;
+    for frame in frames {
+        let quantised = quantise(&place_on_canvas(frame, canvas));
+        let frame = gif::Frame {
+            width,
+            height,
+            delay,
+            dispose: gif::DisposalMethod::Background,
+            transparent: Some(TRANSPARENT_INDEX),
+            palette: Some(quantised.palette),
+            buffer: std::borrow::Cow::Owned(quantised.indices),
+            ..gif::Frame::default()
+        };
+        encoder.write_frame(&frame).map_err(|error| format!("Could not create GIF: {error}"))?;
+    }
+    encoder.into_inner().map_err(|error| format!("Could not create GIF: {error}"))
+}
+
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
+    // Read every frame before reserving the output, so an unreadable frame publishes nothing.
+    let mut reduced = Vec::new();
+    let mut images = Vec::with_capacity(request.paths.len());
+    for (index, path) in request.paths.iter().enumerate() {
+        match crate::kit::images::load_upright_image(path) {
+            Ok(source) => {
+                if let Some(bits) = source.high_bit_depth { reduced.push((index + 1, path, bits)); }
+                images.push(source.image.to_rgba8());
+            }
+            Err(_) => return failure(path.clone(), unreadable_frame(index + 1, path)),
+        }
+    }
     let (output, file) = match OutputNaming::create_single_output(request.output_path.as_deref(), &input, &request.output_location, "-animated", "gif") {
         Ok(destination) => destination,
         Err(error) => return failure(input, error.to_string()),
     };
-    let encode_result = {
-        let mut encoder = image::codecs::gif::GifEncoder::new(file);
-        if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { return failure(input, format!("Could not configure GIF loop: {error}")); } }
-        let mut images = Vec::with_capacity(request.paths.len());
-        for path in &request.paths {
-            match image::open(path) {
-                Ok(image) => images.push(image.to_rgba8()),
-                Err(error) => {
-                    return failure(path.clone(), format!("Could not create GIF from {}: {error}", path.display()));
-                }
-            }
-        }
-        let width = images.iter().map(|image| image.width()).max().unwrap_or(0);
-        let height = images.iter().map(|image| image.height()).max().unwrap_or(0);
-        let delay = image::Delay::from_numer_denom_ms(request.frame_delay_ms.clamp(1, 60_000), 1);
-        let frames = images.into_iter().map(|image| { let mut canvas = image::RgbaImage::new(width, height); image::imageops::overlay(&mut canvas, &image, 0, 0); image::Frame::from_parts(canvas, 0, 0, delay) }).collect::<Vec<_>>();
-        encoder.encode_frames(frames)
-    };
+    let encode_result = encode_gif(std::io::BufWriter::new(file), &images, request)
+        .and_then(|writer| writer.into_inner().map_err(|error| format!("Could not create GIF: {}", error.error())).map(drop));
     match encode_result {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome::succeeded(input, vec![path], "GIF saved"),
+            Ok(path) => {
+                let outcome = JobOutcome::succeeded(input, vec![path], "GIF saved");
+                match reduced.as_slice() {
+                    [] => outcome,
+                    [(frame, path, bits)] => {
+                        let name = path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+                        outcome.with_warning(precision_reduced(format!("Frame {frame} ({name}) is {bits}-bit HEIC, saved as 8-bit sRGB.")))
+                    }
+                    frames => outcome.with_warning(precision_reduced(format!("{} frames are high-bit-depth HEIC, saved as 8-bit sRGB.", frames.len()))),
+                }
+            }
             Err(error) => failure(input, format!("Could not publish GIF output: {error}")),
         },
-        Err(error) => failure(input, format!("Could not create GIF: {error}")),
+        Err(error) => failure(input, error),
     }
 }
 
@@ -1133,47 +1209,44 @@ fn default_gif_delay_ms() -> u32 { 100 }
 fn default_gif_loop() -> bool { true }
 
 pub fn gif_extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
-    let file = match File::open(&input) { Ok(file) => file, Err(error) => return failure(input, error.to_string()) };
-    let decoder = match image::codecs::gif::GifDecoder::new(BufReader::new(file)) { Ok(decoder) => decoder, Err(error) => return failure(input, error.to_string()) };
-    let frames = match decoder.into_frames().collect_frames() { Ok(frames) => frames, Err(error) => return failure(input, error.to_string()) };
-    let mut outputs = Vec::new();
-    let mut timing = Vec::new();
-    for (index, frame) in frames.into_iter().enumerate() {
-        let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-frame-{}", index + 1), "png") {
-            Ok(output) => output,
-            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF frame output: {error}"))),
-        };
-        let (numerator, denominator) = frame.delay().numer_denom_ms();
-        let delay_ms = (numerator as u64 * 1000 / denominator.max(1) as u64).max(1);
-        if let Err(error) = frame.into_buffer().save(output.path()) {
-            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(error.to_string()));
-        }
-        let output = match output.publish() {
-            Ok(output) => output,
-            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF frame output: {error}"))),
-        };
-        timing.push(serde_json::json!({ "file": output, "delayMs": delay_ms }));
-        outputs.push(output);
-    }
-    let timing_path = match OutputNaming::reserve_destination(&input, &request.output_location, "-frame-timing", "json") {
-        Ok(output) => output,
-        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve GIF timing output: {error}"))),
-    };
-    let timing_bytes = match serde_json::to_vec_pretty(&timing) {
-        Ok(bytes) => bytes,
-        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not encode GIF timing manifest: {error}"))),
-    };
-    if let Err(error) = std::fs::write(timing_path.path(), timing_bytes) {
-        return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not save GIF timing manifest: {error}")));
-    }
-    outputs.push(match timing_path.publish() {
-        Ok(path) => path,
-        Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish GIF timing manifest: {error}"))),
-    });
-    JobOutcome::succeeded(input, outputs, "GIF frames saved")
+    super::gif_extract::extract(request, input)
 }
 
-pub fn tiff(request: &TiffRequest) -> JobOutcome {
+pub const TIFF_SINGLE_PAGE_SKIP: &str = "Only 1 page, so there's nothing to split. No file was made.";
+
+/// Split mode, one input at a time: each page becomes its own TIFF named with a padded page
+/// number so the names sort. A one-page TIFF is skipped rather than copied.
+pub fn tiff_split(request: &TiffRequest, input: PathBuf) -> JobOutcome {
+    if request.pages.is_some() {
+        return JobOutcome::failure(input, ToolError::invalid_input("Split mode writes every page of each TIFF; choosing pages belongs to Combine mode."));
+    }
+    let pages = match crate::kit::images::decode(&input) {
+        Ok(decoded) => decoded.pages,
+        Err(error) => return failure(input.clone(), format!("Could not process {}: {error}", input.display())),
+    };
+    if pages.len() == 1 {
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, TIFF_SINGLE_PAGE_SKIP));
+    }
+    let width = pages.len().to_string().len().max(2);
+    let mut outputs = Vec::with_capacity(pages.len());
+    for (index, page) in pages.iter().enumerate() {
+        let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-page-{:0width$}", index + 1), "tif") {
+            Ok(output) => output,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve TIFF page output: {error}"))),
+        };
+        if let Err(error) = write_tiff_page(output.path(), page) {
+            return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not write TIFF page: {error}")));
+        }
+        outputs.push(match output.publish() {
+            Ok(path) => path,
+            Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish TIFF page: {error}"))),
+        });
+    }
+    JobOutcome::succeeded(input, outputs, "TIFF pages saved")
+}
+
+/// Combine mode: every chosen page goes into one TIFF, even when only one file was chosen.
+pub fn tiff_combine(request: &TiffRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one TIFF file.".to_string()); };
     let pages = if let Some(page_refs) = &request.pages {
         if page_refs.is_empty() { return failure(input, "Select at least one TIFF page.".to_string()); }
@@ -1182,8 +1255,8 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
             if !request.paths.iter().any(|path| path == &page_ref.path) {
                 return failure(page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string());
             }
-            let decoded = match read_tiff_pages(&page_ref.path) {
-                Ok(decoded) => decoded,
+            let decoded = match crate::kit::images::decode(&page_ref.path) {
+                Ok(decoded) => decoded.pages,
                 Err(error) => return failure(page_ref.path.clone(), format!("Could not process {}: {error}", page_ref.path.display())),
             };
             let Some(page) = decoded.get(page_ref.page) else {
@@ -1195,34 +1268,16 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     } else {
         let mut pages = Vec::new();
         for path in &request.paths {
-            match read_tiff_pages(path) {
-                Ok(mut decoded) => pages.append(&mut decoded),
+            match crate::kit::images::decode(path) {
+                Ok(mut decoded) => pages.append(&mut decoded.pages),
                 Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())),
             }
         }
         pages
     };
-    let output = if request.paths.len() == 1 {
-        let mut outputs = Vec::new();
-        for (index, page) in pages.iter().enumerate() {
-            let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-page-{}", index + 1), "tiff") {
-                Ok(output) => output,
-                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve TIFF page output: {error}"))),
-            };
-            if let Err(error) = write_tiff_page(output.path(), page) {
-                return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not write TIFF page: {error}")));
-            }
-            outputs.push(match output.publish() {
-                Ok(path) => path,
-                Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not publish TIFF page: {error}"))),
-            });
-        }
-        return JobOutcome::succeeded(input, outputs, "TIFF pages saved");
-    } else {
-        match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", "tiff") {
-            Ok(output) => output,
-            Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
-        }
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", "tiff") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
     };
     if let Err(error) = write_tiff_pages(output.path(), &pages) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
     match output.publish() {
@@ -1231,58 +1286,27 @@ pub fn tiff(request: &TiffRequest) -> JobOutcome {
     }
 }
 
-#[derive(Clone)]
-enum TiffPage { Gray { width: u32, height: u32, data: Vec<u8> }, Rgb { width: u32, height: u32, data: Vec<u8> }, Rgba { width: u32, height: u32, data: Vec<u8> } }
-
-fn tiff_page_to_dynamic(page: &TiffPage) -> Result<DynamicImage, String> {
-    match page {
-        TiffPage::Gray { width, height, data } => ImageBuffer::<Luma<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageLuma8),
-        TiffPage::Rgb { width, height, data } => ImageBuffer::<Rgb<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgb8),
-        TiffPage::Rgba { width, height, data } => ImageBuffer::<Rgba<u8>, _>::from_raw(*width, *height, data.clone()).map(DynamicImage::ImageRgba8),
-    }
-    .ok_or_else(|| "TIFF page pixel data has an invalid length.".to_string())
-}
-
-fn read_tiff_pages(path: &std::path::Path) -> Result<Vec<TiffPage>, String> {
-    let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
-    let mut decoder = tiff::decoder::Decoder::new(file).map_err(|error| format!("Could not read TIFF: {error}"))?;
-    let mut pages = Vec::new();
-    loop {
-        let (width, height) = decoder.dimensions().map_err(|error| format!("Could not read TIFF dimensions: {error}"))?;
-        let color = decoder.colortype().map_err(|error| format!("Could not read TIFF color type: {error}"))?;
-        let data = decoder.read_image().map_err(|error| format!("Unsupported TIFF page: {error}"))?;
-        let page = match (color, data) {
-            (tiff::ColorType::Gray(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Gray { width, height, data },
-            (tiff::ColorType::RGB(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgb { width, height, data },
-            (tiff::ColorType::RGBA(8), tiff::decoder::DecodingResult::U8(data)) => TiffPage::Rgba { width, height, data },
-            (color, _) => return Err(format!("Unsupported TIFF color type or bit depth: {color:?}")),
-        };
-        pages.push(page);
-        if !decoder.more_images() { break; }
-        decoder.next_image().map_err(|error| format!("Could not advance to TIFF page: {error}"))?;
-    }
-    Ok(pages)
-}
-
-fn write_tiff_pages(path: &std::path::Path, pages: &[TiffPage]) -> Result<(), String> {
+fn write_tiff_pages(path: &std::path::Path, pages: &[DynamicImage]) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     for page in pages { write_encoded_page(&mut encoder, page)?; }
     Ok(())
 }
 
-fn write_tiff_page(path: &std::path::Path, page: &TiffPage) -> Result<(), String> {
+fn write_tiff_page(path: &std::path::Path, page: &DynamicImage) -> Result<(), String> {
     let file = File::create(path).map_err(|error| error.to_string())?;
     let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
     write_encoded_page(&mut encoder, page)
 }
 
-fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &TiffPage) -> Result<(), String> {
+fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &DynamicImage) -> Result<(), String> {
     match page {
-        TiffPage::Gray { width, height, data } => encoder.write_image::<tiff::encoder::colortype::Gray8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgb { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGB8>(*width, *height, data).map_err(|error| error.to_string()),
-        TiffPage::Rgba { width, height, data } => encoder.write_image::<tiff::encoder::colortype::RGBA8>(*width, *height, data).map_err(|error| error.to_string()),
+        DynamicImage::ImageLuma8(page) => encoder.write_image::<tiff::encoder::colortype::Gray8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgb8(page) => encoder.write_image::<tiff::encoder::colortype::RGB8>(page.width(), page.height(), page.as_raw()),
+        DynamicImage::ImageRgba8(page) => encoder.write_image::<tiff::encoder::colortype::RGBA8>(page.width(), page.height(), page.as_raw()),
+        page => return Err(format!("Unsupported TIFF page color type: {:?}", page.color())),
     }
+    .map_err(|error| error.to_string())
 }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 
@@ -1291,6 +1315,8 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     fn path(name: &str) -> PathBuf { std::env::temp_dir().join(format!("toolbox_tiff_{}_{}", std::process::id(), name)) }
+    fn gray(width: u32, height: u32, data: Vec<u8>) -> DynamicImage { DynamicImage::ImageLuma8(image::ImageBuffer::from_raw(width, height, data).unwrap()) }
+    fn read_pages(path: &Path) -> Result<Vec<DynamicImage>, String> { crate::kit::images::decode(path).map(|decoded| decoded.pages) }
 
     fn text_watermark(input: &Path, text: &str, opacity: u8, offset: u32) -> ImageEditStackRequest {
         let options = WatermarkOptions { text: Some(text.to_string()), logo_path: None, size: None, opacity, color: None, position: Some(WatermarkPosition::Offset { x: offset, y: offset }), rotation: 0.0 };
@@ -1311,34 +1337,124 @@ mod tests {
         }
     }
 
-    #[test]
-    fn splits_and_combines_pages_in_order() {
-        let input = path("source.tiff");
-        let file = File::create(&input).unwrap();
+    fn write_gray_tiff(path: &Path, pages: &[&[u8]]) {
+        let file = File::create(path).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
-        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
-        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
+        for data in pages { encoder.write_image::<tiff::encoder::colortype::Gray8>(data.len() as u32, 1, data).unwrap(); }
+    }
 
-        let split = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        assert_eq!(split.output_paths().len(), 2);
-        assert_eq!(read_tiff_pages(&split.output_paths()[0]).unwrap().len(), 1);
-        assert_eq!(read_tiff_pages(&split.output_paths()[1]).unwrap().len(), 1);
+    fn request(mode: TiffMode, paths: Vec<PathBuf>) -> TiffRequest {
+        TiffRequest { mode, paths, pages: None, output_location: OutputLocation::AlongsideInput, output_path: None }
+    }
 
-        let first = path("first.tiff");
-        let second = path("second.tiff");
-        write_tiff_page(&first, &TiffPage::Gray { width: 1, height: 1, data: vec![1] }).unwrap();
-        write_tiff_page(&second, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
-        let combined = tiff(&TiffRequest { paths: vec![first.clone(), second.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        let pages = read_tiff_pages(&combined.output_paths()[0]).unwrap();
-        assert_eq!(pages.len(), 2);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![1]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
+    fn file_name(path: &Path) -> String { path.file_name().unwrap().to_string_lossy().into_owned() }
+
+    #[test]
+    fn split_writes_each_page_with_padded_sortable_names() {
+        let input = path("split-source.tiff");
+        write_gray_tiff(&input, &[&[10, 20], &[30, 40]]);
+        let stem = file_name(&input).trim_end_matches(".tiff").to_string();
+
+        let split = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        assert!(split.error().is_none(), "split failed: {:?}", split.error());
+        let names = split.output_paths().iter().map(|output| file_name(output)).collect::<Vec<_>>();
+        assert_eq!(names, vec![format!("{stem}-page-01.tif"), format!("{stem}-page-02.tif")]);
+        let first_pages = read_pages(&split.output_paths()[0]).unwrap();
+        assert_eq!(first_pages.len(), 1);
+        assert_eq!(first_pages[0].as_bytes(), &[10, 20]);
+        let second_pages = read_pages(&split.output_paths()[1]).unwrap();
+        assert_eq!(second_pages.len(), 1);
+        assert_eq!(second_pages[0].as_bytes(), &[30, 40]);
+
+        let again = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        assert_eq!(file_name(&again.output_paths()[0]), format!("{stem}-page-01-1.tif"), "a second split must not overwrite the first");
+
+        for output in split.output_paths().iter().chain(again.output_paths()) { let _ = std::fs::remove_file(output); }
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn split_pads_page_numbers_to_the_page_count_width() {
+        let input = path("split-hundred.tiff");
+        let pages = (0..100u8).map(|value| vec![value]).collect::<Vec<_>>();
+        write_gray_tiff(&input, &pages.iter().map(Vec::as_slice).collect::<Vec<_>>());
+
+        let split = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        let names = split.output_paths().iter().map(|output| file_name(output)).collect::<Vec<_>>();
+        assert_eq!(names.len(), 100);
+        assert!(names[0].ends_with("-page-001.tif") && names[99].ends_with("-page-100.tif"), "{:?}", (&names[0], &names[99]));
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, names, "padded page names must sort in page order");
 
         for output in split.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
-        let _ = std::fs::remove_file(first);
-        let _ = std::fs::remove_file(second);
-        let _ = std::fs::remove_file(combined.output_paths()[0].clone());
+    }
+
+    #[test]
+    fn split_skips_a_single_page_tiff_without_writing_anything() {
+        let input = path("split-single.tiff");
+        write_gray_tiff(&input, &[&[7]]);
+        let original = std::fs::read(&input).unwrap();
+
+        let outcome = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        let crate::kit::contracts::OutcomeState::Skipped { reason } = &outcome.state else { panic!("expected skipped, got {outcome:?}") };
+        assert_eq!(reason.code, SkipCode::NoEffectiveChange);
+        assert_eq!(reason.message, TIFF_SINGLE_PAGE_SKIP);
+        assert!(outcome.output_paths().is_empty());
+        let stem = file_name(&input).trim_end_matches(".tiff").to_string();
+        let leftovers = std::fs::read_dir(std::env::temp_dir()).unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| file_name(&entry.path()).starts_with(&format!("{stem}-")))
+            .count();
+        assert_eq!(leftovers, 0, "a skipped TIFF must leave no output behind");
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn split_rejects_a_page_selection() {
+        let input = path("split-selection.tiff");
+        write_gray_tiff(&input, &[&[1], &[2]]);
+        let mut selection = request(TiffMode::Split, vec![input.clone()]);
+        selection.pages = Some(vec![TiffPageRef { path: input.clone(), page: 1 }]);
+        let outcome = tiff_split(&selection, input.clone());
+        assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(crate::kit::contracts::ErrorKind::InvalidInput));
+        assert!(outcome.output_paths().is_empty());
+        let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn combine_follows_combine_mode_for_one_file_and_for_several() {
+        let single = path("combine-single.tiff");
+        write_gray_tiff(&single, &[&[10, 20], &[30, 40]]);
+        let one = tiff_combine(&request(TiffMode::Combine, vec![single.clone()]));
+        assert_eq!(one.output_paths().len(), 1, "one file in Combine mode makes one TIFF, not a split");
+        assert!(file_name(&one.output_paths()[0]).ends_with("-combined.tiff"));
+        assert_eq!(read_pages(&one.output_paths()[0]).unwrap().len(), 2);
+
+        let first = path("first.tiff");
+        let second = path("second.tiff");
+        write_tiff_page(&first, &gray(1, 1, vec![1])).unwrap();
+        write_tiff_page(&second, &gray(1, 1, vec![2])).unwrap();
+        let combined = tiff_combine(&request(TiffMode::Combine, vec![first.clone(), second.clone()]));
+        let pages = read_pages(&combined.output_paths()[0]).unwrap();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].as_bytes(), &[1]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
+
+        for output in one.output_paths().iter().chain(combined.output_paths()) { let _ = std::fs::remove_file(output); }
+        for input in [single, first, second] { let _ = std::fs::remove_file(input); }
+    }
+
+    #[test]
+    fn tiff_requests_require_an_explicit_mode() {
+        let missing = serde_json::json!({ "paths": ["/a.tiff"], "outputLocation": "alongsideInput" });
+        assert!(serde_json::from_value::<TiffRequest>(missing).is_err(), "the mode must never be inferred");
+        for (wire, mode) in [("split", TiffMode::Split), ("combine", TiffMode::Combine)] {
+            let request = serde_json::from_value::<TiffRequest>(serde_json::json!({ "mode": wire, "paths": ["/a.tiff"], "outputLocation": "alongsideInput" })).unwrap();
+            assert_eq!(request.mode, mode);
+        }
     }
 
     #[test]
@@ -1347,8 +1463,10 @@ mod tests {
         let file = File::create(&input).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray16>(1, 1, &[1]).unwrap();
-        let result = tiff(&TiffRequest { paths: vec![input.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: None });
-        assert!(result.error().is_some());
+        let split = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
+        assert!(split.error().is_some());
+        let combined = tiff_combine(&request(TiffMode::Combine, vec![input.clone()]));
+        assert!(combined.error().is_some());
         let _ = std::fs::remove_file(input);
     }
 
@@ -1360,9 +1478,10 @@ mod tests {
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[10, 20]).unwrap();
         encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[30, 40]).unwrap();
-        write_tiff_page(&one_page, &TiffPage::Gray { width: 1, height: 1, data: vec![2] }).unwrap();
+        write_tiff_page(&one_page, &gray(1, 1, vec![2])).unwrap();
 
-        let outcome = tiff(&TiffRequest {
+        let outcome = tiff_combine(&TiffRequest {
+            mode: TiffMode::Combine,
             paths: vec![two_page.clone(), one_page.clone()],
             pages: Some(vec![
                 TiffPageRef { path: two_page.clone(), page: 1 },
@@ -1374,11 +1493,11 @@ mod tests {
 
         assert!(outcome.error().is_none(), "selected TIFF pages failed: {:?}", outcome.error());
         let output = outcome.output_paths().first().unwrap().clone();
-        let pages = read_tiff_pages(&output).unwrap();
+        let pages = read_pages(&output).unwrap();
         assert_eq!(pages.len(), 3);
-        assert!(matches!(&pages[0], TiffPage::Gray { data, .. } if data == &vec![30, 40]));
-        assert!(matches!(&pages[1], TiffPage::Gray { data, .. } if data == &vec![2]));
-        assert!(matches!(&pages[2], TiffPage::Gray { data, .. } if data == &vec![10, 20]));
+        assert_eq!(pages[0].as_bytes(), &[30, 40]);
+        assert_eq!(pages[1].as_bytes(), &[2]);
+        assert_eq!(pages[2].as_bytes(), &[10, 20]);
 
         let _ = std::fs::remove_file(two_page);
         let _ = std::fs::remove_file(one_page);
@@ -1505,12 +1624,136 @@ mod tests {
         let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).unwrap();
         let frames = decoder.into_frames().collect_frames().unwrap();
         assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].buffer().dimensions(), (2, 2));
+        // The canvas is the first frame's size; the larger second frame is scaled down into it.
+        assert_eq!(frames[0].buffer().dimensions(), (1, 1));
         assert_eq!(frames[0].delay().numer_denom_ms(), (250, 1));
-        assert_eq!(frames[1].buffer().get_pixel(0, 0).0[1], 255);
+        assert_eq!(frames[1].buffer().get_pixel(0, 0).0, [0, 255, 0, 255]);
         let _ = std::fs::remove_file(first);
         let _ = std::fs::remove_file(second);
         let _ = std::fs::remove_file(output);
+    }
+
+    fn gif_sandbox(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "toolbox_gif_{name}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("outputs")).unwrap();
+        root
+    }
+
+    /// Frames of different sizes and alpha: a 40×30 first frame with a
+    /// half-transparent strip, a smaller 10×6 frame, a wider 80×20 frame and a
+    /// taller 20×60 frame with a gradient (more than 255 colours).
+    fn mixed_gif_frames(root: &Path) -> Vec<PathBuf> {
+        let frames = [
+            ("1-first.png", image::RgbaImage::from_fn(40, 30, |x, y| image::Rgba([200, 40, (x * 6) as u8, if y < 5 { 60 } else { 255 }]))),
+            ("2-small.png", image::RgbaImage::from_pixel(10, 6, image::Rgba([20, 200, 20, 255]))),
+            ("3-wide.png", image::RgbaImage::from_pixel(80, 20, image::Rgba([20, 20, 200, 255]))),
+            ("4-tall.png", image::RgbaImage::from_fn(20, 60, |x, y| image::Rgba([(x * 12) as u8, (y * 4) as u8, ((x + y) * 3) as u8, if x == 0 { 0 } else { 255 }]))),
+        ];
+        frames.into_iter().map(|(name, frame)| { let path = root.join(name); frame.save(&path).unwrap(); path }).collect()
+    }
+
+    fn decoded_gif_frames(path: &Path) -> Vec<image::RgbaImage> {
+        let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(File::open(path).unwrap())).unwrap();
+        decoder.into_frames().collect_frames().unwrap().into_iter().map(|frame| frame.into_buffer()).collect()
+    }
+
+    fn gif_request(paths: Vec<PathBuf>, root: &Path) -> GifCreateRequest {
+        GifCreateRequest { paths, frame_delay_ms: 120, loop_forever: true, output_location: OutputLocation::CustomFolder(root.join("outputs")), output_path: None }
+    }
+
+    #[test]
+    fn gif_canvas_is_the_first_frame_and_other_frames_are_centred_or_scaled_down() {
+        let root = gif_sandbox("canvas");
+        let inputs = mixed_gif_frames(&root);
+        let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let result = gif_create(&gif_request(inputs.clone(), &root));
+        assert!(result.error().is_none(), "{:?}", result.error());
+        let output = result.output_paths().first().unwrap().clone();
+        assert_eq!(output, root.join("outputs/1-first-animated.gif"));
+        let frames = decoded_gif_frames(&output);
+        assert_eq!(frames.len(), 4);
+        for frame in &frames { assert_eq!(frame.dimensions(), (40, 30)); }
+
+        // Frame 1: half-transparent pixels become transparent, opaque ones keep their colour.
+        assert_eq!(frames[0].get_pixel(3, 2).0[3], 0);
+        assert_eq!(frames[0].get_pixel(3, 20).0, [200, 40, 18, 255]);
+
+        // Frame 2 (10×6) keeps its size, centred at (15, 12), padded with transparency.
+        let opaque = |frame: &image::RgbaImage| {
+            let mut bounds = (u32::MAX, u32::MAX, 0, 0);
+            for (x, y, pixel) in frame.enumerate_pixels() {
+                if pixel.0[3] != 0 { bounds = (bounds.0.min(x), bounds.1.min(y), bounds.2.max(x), bounds.3.max(y)); }
+            }
+            bounds
+        };
+        assert_eq!(opaque(&frames[1]), (15, 12, 24, 17));
+        assert_eq!(frames[1].get_pixel(20, 15).0, [20, 200, 20, 255]);
+        assert_eq!(frames[1].get_pixel(0, 0).0[3], 0);
+
+        // Frame 3 (80×20) is scaled to 40×10 keeping its aspect, centred vertically.
+        assert_eq!(opaque(&frames[2]), (0, 10, 39, 19));
+        assert_eq!(frames[2].get_pixel(20, 15).0, [20, 20, 200, 255]);
+
+        // Frame 4 (20×60) is scaled to 10×30 keeping its aspect, centred horizontally.
+        let (left, top, right, bottom) = opaque(&frames[3]);
+        assert!(left >= 15 && right <= 24 && top == 0 && bottom == 29, "{:?}", (left, top, right, bottom));
+        assert_eq!(frames[3].get_pixel(0, 15).0[3], 0);
+        assert_eq!(frames[3].get_pixel(39, 15).0[3], 0);
+
+        for (path, bytes) in inputs.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), bytes); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gif_bytes_are_identical_across_runs_and_pinned_for_every_target() {
+        let root = gif_sandbox("deterministic");
+        let inputs = mixed_gif_frames(&root);
+        let first = gif_create(&gif_request(inputs.clone(), &root));
+        let second = gif_create(&gif_request(inputs, &root));
+        let (first, second) = (first.output_paths()[0].clone(), second.output_paths()[0].clone());
+        assert_ne!(first, second);
+        let (first_bytes, second_bytes) = (std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap());
+        assert_eq!(first_bytes, second_bytes);
+        // The same digest on every supported target: palette, scaling and encoding use no platform maths or randomness.
+        let digest = Sha256::digest(&first_bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        assert_eq!(digest, PINNED_GIF_SHA256);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    const PINNED_GIF_SHA256: &str = "2c6430b054702737cbb35f4987af9265736ea8d985277a9736e63fb2351ed3bb";
+
+    #[test]
+    fn gif_with_an_unreadable_frame_names_it_and_publishes_nothing() {
+        let root = gif_sandbox("unreadable");
+        let mut inputs = mixed_gif_frames(&root);
+        let broken = root.join("IMG_2212.heic");
+        std::fs::write(&broken, b"not an image at all").unwrap();
+        inputs.insert(2, broken.clone());
+        let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let result = gif_create(&gif_request(inputs.clone(), &root));
+        assert!(result.output_paths().is_empty());
+        assert_eq!(result.input_path, broken);
+        assert_eq!(
+            result.error().map(|error| error.message.as_str()),
+            Some("Frame 3, IMG_2212.heic, isn't a readable HEIC image. Replace or remove frame 3, then make the GIF again. Nothing was saved.")
+        );
+        assert_eq!(std::fs::read_dir(root.join("outputs")).unwrap().count(), 0);
+        for (path, bytes) in inputs.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), bytes); }
+
+        // A frame that was moved away is named by its full path.
+        let gone = root.join("gone.png");
+        let result = gif_create(&gif_request(vec![inputs[0].clone(), gone.clone()], &root));
+        assert_eq!(result.input_path, gone);
+        assert_eq!(
+            result.error().map(|error| error.message.clone()),
+            Some(format!("Frame 2 is no longer at {}. Replace or remove frame 2, then make the GIF again. Nothing was saved.", gone.display()))
+        );
+        assert_eq!(std::fs::read_dir(root.join("outputs")).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1644,6 +1887,96 @@ mod tests {
         assert!(bytes.windows(4).any(|item| item == b"icp4"));
         for output in result.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
+    }
+
+    fn write_fixture(name: &str, bytes: &[u8]) -> PathBuf {
+        let input = path(name);
+        std::fs::write(&input, bytes).unwrap();
+        input
+    }
+
+    fn icon_request(input: &Path, preset: &str) -> IconSetRequest {
+        IconSetRequest { paths: vec![input.to_path_buf()], preset: preset.to_string(), sizes: vec![32, 64], output_location: OutputLocation::AlongsideInput }
+    }
+
+    fn assert_8bit_png(output: &Path) {
+        let color = image::open(output).unwrap().color();
+        assert!(matches!(color, image::ColorType::Rgb8 | image::ColorType::Rgba8), "{} is {color:?}", output.display());
+    }
+
+    #[test]
+    fn heic_masters_make_icon_sets_and_high_bit_depth_is_reduced_with_a_warning() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        for (name, bytes, warning) in [
+            ("icon-master-8bit.heic", fixtures::heic(&source), None),
+            ("icon-master-10bit.heif", fixtures::heic_10bit(&source), Some("10-bit HEIC saved as 8-bit sRGB.")),
+        ] {
+            let input = write_fixture(name, &bytes);
+            for preset in ["custom", "macos"] {
+                let result = icon_set(&icon_request(&input, preset), input.clone());
+                assert!(result.error().is_none(), "{name}: {:?}", result.error());
+                let pngs = result.output_paths().iter().filter(|output| output.extension().is_some_and(|extension| extension == "png")).collect::<Vec<_>>();
+                assert!(!pngs.is_empty());
+                for png in &pngs { assert_8bit_png(png); }
+                assert_eq!(fixtures::red_edge(&image::open(pngs[0]).unwrap()), "left");
+                match warning {
+                    Some(message) => assert_eq!(result.warnings, vec![crate::kit::contracts::OutcomeWarning { kind: crate::kit::contracts::WarningKind::PrecisionReduced, message: message.to_string() }]),
+                    None => assert!(result.warnings.is_empty(), "{name}: {:?}", result.warnings),
+                }
+                for output in result.output_paths() { let _ = std::fs::remove_file(output); }
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), bytes, "{name} must stay byte-identical");
+            let _ = std::fs::remove_file(input);
+        }
+    }
+
+    #[test]
+    fn oriented_icon_masters_are_used_upright() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        for (name, bytes) in [("icon-exif-6.jpg", fixtures::jpeg_with_orientation(&source, 6)), ("icon-irot-3.heic", fixtures::heic_rotated(&source, 3))] {
+            let input = write_fixture(name, &bytes);
+            let result = icon_set(&icon_request(&input, "custom"), input.clone());
+            assert!(result.error().is_none(), "{name}: {:?}", result.error());
+            // Both sources display with the red half on top; a second rotation would move it.
+            for output in result.output_paths() {
+                assert_eq!(fixtures::red_edge(&image::open(output).unwrap()), "top", "{name} -> {}", output.display());
+                let _ = std::fs::remove_file(output);
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), bytes, "{name} must stay byte-identical");
+            let _ = std::fs::remove_file(input);
+        }
+    }
+
+    #[test]
+    fn gif_accepts_heic_and_oriented_frames_upright_and_names_the_reduced_frame() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        let frames = [
+            write_fixture("gif-frame-exif-6.jpg", &fixtures::jpeg_with_orientation(&source, 6)),
+            write_fixture("gif-frame-10bit.heic", &fixtures::heic_10bit(&fixtures::red_left_blue_right(32, 64))),
+            write_fixture("gif-frame-irot-3.heif", &fixtures::heic_rotated(&source, 3)),
+        ];
+        let originals = frames.iter().map(|frame| std::fs::read(frame).unwrap()).collect::<Vec<_>>();
+        let result = gif_create(&GifCreateRequest { paths: frames.to_vec(), frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert!(result.error().is_none(), "{:?}", result.error());
+        assert_eq!(result.warnings, vec![crate::kit::contracts::OutcomeWarning {
+            kind: crate::kit::contracts::WarningKind::PrecisionReduced,
+            message: format!("Frame 2 ({}) is 10-bit HEIC, saved as 8-bit sRGB.", frames[1].file_name().unwrap().to_string_lossy()),
+        }]);
+        let output = result.output_paths()[0].clone();
+        let decoded = image::codecs::gif::GifDecoder::new(BufReader::new(File::open(&output).unwrap())).unwrap().into_frames().collect_frames().unwrap();
+        assert_eq!(decoded.len(), 3);
+        let edges = decoded.into_iter().map(|frame| {
+            assert_eq!(frame.buffer().dimensions(), (32, 64), "every frame is upright portrait, so the canvas is too");
+            fixtures::red_edge(&image::DynamicImage::ImageRgba8(frame.into_buffer()))
+        }).collect::<Vec<_>>();
+        assert_eq!(edges, ["top", "left", "top"]);
+        for (frame, original) in frames.iter().zip(&originals) { assert_eq!(&std::fs::read(frame).unwrap(), original, "{} must stay byte-identical", frame.display()); }
+        let several = gif_create(&GifCreateRequest { paths: vec![frames[1].clone(), frames[1].clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert_eq!(several.warnings[0].message, "2 frames are high-bit-depth HEIC, saved as 8-bit sRGB.");
+        for path in frames.iter().chain(result.output_paths()).chain(several.output_paths()) { let _ = std::fs::remove_file(path); }
     }
 
     #[test]
