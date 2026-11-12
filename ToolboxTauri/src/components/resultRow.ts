@@ -103,12 +103,13 @@ export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: stri
         case "omittedContent":
         case "approximateLayout":
             return warning.message;
+        // The native side says what happened instead: Extract from PDF didn't save the image, PDF to EPUB left it out.
         case "imageUnsupported":
-            return `${imagePlace(warning.details)} — ${warning.details.feature} isn't supported in this version. Not saved.`;
+            return warning.message.trim() || `${imagePlace(warning.details)} — ${warning.details.feature} isn't supported in this version. Not saved.`;
         case "imageDamaged":
-            return `${imagePlace(warning.details)} — The image data is damaged. Not saved.`;
+            return warning.message.trim() || `${imagePlace(warning.details)} — The image data is damaged. Not saved.`;
         case "imageTooLarge":
-            return `${imagePlace(warning.details)} — Would be ${grouped(warning.details.width)} × ${grouped(warning.details.height)} px when decoded, over the size limit. Not saved.`;
+            return warning.message.trim() || `${imagePlace(warning.details)} — Would be ${grouped(warning.details.width)} × ${grouped(warning.details.height)} px when decoded, over the size limit. Not saved.`;
         case "jpegColourKept":
             return jpegColourText(warning.details);
         case "pagesWithoutText":

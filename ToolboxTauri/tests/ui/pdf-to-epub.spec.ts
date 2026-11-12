@@ -208,3 +208,33 @@ test("PDF to EPUB shows each PDF's own result with Open and Reveal on converted 
     await expect(rows.nth(2)).toContainText(locked);
     await expect(rows.nth(2).getByRole("button", { name: /^Show in/ })).toHaveCount(0);
 });
+
+test("PDF to EPUB shows how many images the book kept and names an image it left out", async ({ page }) => {
+    const path = "/Users/test/books/field guide.pdf";
+    const leftOut = "Page 63, image 2 — JBIG2 isn't supported in this version. Left out; the rest of the book converted.";
+    await openToolBySearch(page, "PDF to EPUB");
+    await choose(page, [path]);
+    await page.evaluate(({ path, leftOut }) => {
+        (window as unknown as EpubWindow).__outcomes = [{
+            inputPath: path, outputPaths: ["/Users/test/books/field guide.epub"], state: "succeeded", failure: null, reason: null,
+            detail: "186 pages, 240 of 241 images. 1 image couldn't be read.",
+            warnings: [{ code: "imageUnsupported", message: leftOut, details: { page: 63, image: 2, feature: "JBIG2" } }],
+            pageDetails: [
+                { label: "Images kept", value: "240 of 241" },
+                { label: "Contents", value: "From the bookmarks, 22 entries" },
+                { label: "Cover", value: "Page 1" },
+                { label: "Title and author", value: "Field Guide to Wetland Birds" },
+            ],
+        }];
+    }, { path, leftOut });
+    await page.getByRole("button", { name: "Convert 1 PDF", exact: true }).click();
+
+    const row = page.locator(".result-row");
+    await expect(row).toHaveCount(1);
+    await expect(row).toHaveAttribute("data-state", "succeeded");
+    await expect(row).toContainText("186 pages, 240 of 241 images. 1 image couldn't be read.");
+    await expect(row).toContainText(leftOut);
+    await expect(row).not.toContainText("Not saved.");
+    const details = row.getByRole("list", { name: "Page details for field guide.pdf" });
+    await expect(details.getByRole("listitem").first()).toHaveText("Images kept240 of 241");
+});
