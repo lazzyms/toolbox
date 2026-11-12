@@ -5,6 +5,8 @@
     "pdf-protect": "lock-unlock",
     "office-protect": "lock-unlock",
     "pdf-compress": "compress-files",
+    "pdf-to-text": "pdf-extract",
+    "pdf-image-extract": "pdf-extract",
     "compress": "compress-files"
   }
 }

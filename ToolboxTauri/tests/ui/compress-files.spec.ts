@@ -238,7 +238,7 @@ test("an over-limit PDF fails alone without Retry and points to Split PDF", asyn
     await expect(rows.nth(1)).toContainText("2 MB → 900 KB, 55% smaller");
     await rows.nth(0).getByRole("button", { name: "Open Split PDF" }).click();
     await expect(page.getByRole("button", { name: "Split PDF", pressed: true })).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "Split mode" })).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Split by" })).toBeVisible();
 });
 
 test("the whole Compress flow runs by keyboard: add files, strength, Strip EXIF, run and results", async ({ page }) => {
