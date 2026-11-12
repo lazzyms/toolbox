@@ -515,6 +515,98 @@ body {
   object-fit: contain;
   background: var(--card);
 }
+.media-frame-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.media-frame-heading .workspace-note {
+  margin-top: 0;
+}
+.media-frame-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.media-frame-grid[data-dragging] {
+  cursor: grabbing;
+  user-select: none;
+}
+.media-frame-tile {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.media-frame-tile[data-dragging="true"] {
+  opacity: .35;
+}
+/* The insertion bar sits on the side the dropped frame will land. */
+.media-frame-tile[data-drop-target]::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ring);
+  content: "";
+}
+.media-frame-tile[data-drop-target="before"]::before {
+  left: -5px;
+}
+.media-frame-tile[data-drop-target="after"]::before {
+  right: -5px;
+}
+.media-frame-tile-button {
+  display: grid;
+  width: 100%;
+  height: auto;
+  gap: 4px;
+  padding: 4px;
+  touch-action: none;
+}
+.media-frame-picture {
+  display: grid;
+  aspect-ratio: 1;
+  overflow: hidden;
+  place-items: center;
+  border-radius: 4px;
+  background: var(--card);
+}
+.media-frame-picture img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.media-frame-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.media-frame-meta [data-own="true"] {
+  font-weight: 700;
+}
+.media-frame-meta [data-invalid="true"] {
+  color: var(--destructive);
+}
+.media-frame-tag {
+  justify-self: start;
+}
+.media-delay-input {
+  width: 110px;
+}
+.media-check-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .icon-square-content {
   display: grid;
   gap: 12px;

@@ -6,6 +6,8 @@ import type { IntakeRedirect } from "../../components/intake";
 /** What the shared run hands every Media tool when it builds its request. */
 export interface MediaRunInput {
   paths: string[];
+  /** Each path's list entry key, in the same order; a file added twice has two keys. */
+  keys: string[];
   outputLocation: OutputLocation;
   outputPath: string | null;
 }
@@ -24,6 +26,12 @@ export interface MediaPanelProps<Options> {
   loading: boolean;
   selectedFileIndex: number;
   selectFile: (index: number) => void;
+  /** Each file's list entry key, parallel to `files`. */
+  fileKeys: string[];
+  /** Moves a file through the shared list's ordering. */
+  moveFile: (index: number, toIndex: number) => void;
+  /** Removes a file from the shared list, never from disk. */
+  removeFile: (index: number) => void;
 }
 
 /**
@@ -35,7 +43,7 @@ export interface MediaTool<Options> {
   Panel: (props: MediaPanelProps<Options>) => ReactNode;
   buildRequest: (options: Options, input: MediaRunInput) => MediaRequest;
   /** Whether the options allow a run, beyond having files and not running. */
-  canRun?: (options: Options, files: string[]) => boolean;
+  canRun?: (options: Options, files: string[], keys: string[]) => boolean;
   /** The run button's label when the shared run has none; defaults to the tool's short title. */
   runLabel?: string | ((options: Options, files: string[]) => string);
   /** Whether the shared file list offers reordering; defaults to true. */

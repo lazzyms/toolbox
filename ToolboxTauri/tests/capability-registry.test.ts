@@ -204,7 +204,7 @@ test("every many-to-one tool opens the save step and sends the chosen path", () 
   const mediaRequestFor = <Id extends MediaToolId>(id: Id) => {
     const tool = mediaTools[id];
     const options = (manyToOneMediaOptions[id] ?? tool.initialOptions) as MediaOptions[Id];
-    return tool.buildRequest(options, { paths: ["/a", "/b"], outputLocation: "alongsideInput", outputPath: "/chosen" }).request;
+    return tool.buildRequest(options, { paths: ["/a", "/b"], keys: ["a", "b"], outputLocation: "alongsideInput", outputPath: "/chosen" }).request;
   };
 
   for (const utility of UtilityRegistry) {
@@ -235,14 +235,14 @@ test("TIFF Pages names its mode in every request and is many-to-one only in Comb
   // The registered capability describes Combine; Split is chosen explicitly and runs per file.
   assert.equal(utility.capability.manyToOne, true);
   assert.equal(tool.initialOptions.mode, "split");
-  const input = { paths: ["/scans/a.tiff"], outputLocation: "alongsideInput" as const, outputPath: "/chosen.tiff" };
+  const input = { paths: ["/scans/a.tiff"], keys: ["a"], outputLocation: "alongsideInput" as const, outputPath: "/chosen.tiff" };
 
   const split = { ...tool.initialOptions, mode: "split" as const };
   const splitCapability = tool.capability!(split, utility.capability);
   assert.equal(splitCapability.manyToOne, false);
   assert.equal(splitCapability.inputCardinality, "multiple", "a rejected file in Split fails alone");
   assert.equal(saveStepFor({ command: utility.command, capability: splitCapability }), null, "Split never opens the save step");
-  assert.deepEqual(tool.buildRequest(split, { ...input, paths: ["/scans/a.tiff", "/scans/b.tiff"] }).request, {
+  assert.deepEqual(tool.buildRequest(split, { ...input, paths: ["/scans/a.tiff", "/scans/b.tiff"], keys: ["a", "b"] }).request, {
     mode: "split", paths: ["/scans/a.tiff", "/scans/b.tiff"], outputLocation: "alongsideInput",
   });
 

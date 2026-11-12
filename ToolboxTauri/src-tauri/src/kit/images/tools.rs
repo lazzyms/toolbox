@@ -630,10 +630,17 @@ pub struct GifCreateRequest {
     pub paths: Vec<PathBuf>,
     #[serde(default = "default_gif_delay_ms")] pub frame_delay_ms: u32,
     #[serde(default = "default_gif_loop")] pub loop_forever: bool,
+    /// Sparse per-frame delays by 0-based frame position; every other frame uses `frame_delay_ms`.
+    #[serde(default)] pub frame_delay_overrides: Vec<GifFrameDelay>,
     pub output_location: OutputLocation,
     #[serde(default)]
     pub output_path: Option<PathBuf>,
 }
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GifFrameDelay { pub index: usize, pub delay_ms: u32 }
+/// Frame delays a person can choose, in milliseconds.
+pub const GIF_DELAY_RANGE_MS: std::ops::RangeInclusive<u32> = 1..=60_000;
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GifExtractRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
@@ -1437,9 +1444,8 @@ fn encode_gif<W: std::io::Write>(writer: W, frames: &[image::RgbaImage], request
     };
     let mut encoder = gif::Encoder::new(writer, width, height, &[]).map_err(|error| format!("Could not create GIF: {error}"))?;
     if request.loop_forever { encoder.set_repeat(gif::Repeat::Infinite).map_err(|error| format!("Could not configure GIF loop: {error}"))?; }
-    // GIF delays are hundredths of a second.
-    let delay = (request.frame_delay_ms.clamp(1, 60_000) / 10) as u16;
-    for frame in frames {
+    let delays = gif_frame_delays(request);
+    for (frame, delay) in frames.iter().zip(delays) {
         let quantised = quantise(&place_on_canvas(frame, canvas));
         let frame = gif::Frame {
             width,
@@ -1456,8 +1462,42 @@ fn encode_gif<W: std::io::Write>(writer: W, frames: &[image::RgbaImage], request
     encoder.into_inner().map_err(|error| format!("Could not create GIF: {error}"))
 }
 
+/// Each frame's delay in GIF hundredths of a second, in frame order: its own
+/// delay when it has one, otherwise the delay for every frame. Milliseconds
+/// round to the nearest hundredth, and never to zero, which players ignore.
+fn gif_frame_delays(request: &GifCreateRequest) -> Vec<u16> {
+    let mut delays = vec![request.frame_delay_ms; request.paths.len()];
+    for frame in &request.frame_delay_overrides { delays[frame.index] = frame.delay_ms; }
+    delays.into_iter().map(|ms| ((ms + 5) / 10).max(1) as u16).collect()
+}
+
+/// Rejects delays outside 1 to 60000 ms and overrides that name no frame,
+/// before any frame is read, attributing the failure to the frame it concerns.
+fn validate_gif_timing(request: &GifCreateRequest) -> Result<(), JobOutcome> {
+    let invalid = |path: &PathBuf, message: String| JobOutcome::failure(path.clone(), ToolError::invalid_input(message));
+    let first = &request.paths[0];
+    if !GIF_DELAY_RANGE_MS.contains(&request.frame_delay_ms) {
+        return Err(invalid(first, format!("The delay for every frame is {} ms. Choose 1 to 60000 ms. Nothing was saved.", request.frame_delay_ms)));
+    }
+    let mut seen = BTreeSet::new();
+    for frame in &request.frame_delay_overrides {
+        let number = frame.index + 1;
+        let Some(path) = request.paths.get(frame.index) else {
+            return Err(invalid(first, format!("There's no frame {number} to give its own delay. Nothing was saved.")));
+        };
+        if !seen.insert(frame.index) {
+            return Err(invalid(path, format!("Frame {number} has more than one own delay. Nothing was saved.")));
+        }
+        if !GIF_DELAY_RANGE_MS.contains(&frame.delay_ms) {
+            return Err(invalid(path, format!("Frame {number}'s own delay is {} ms. Choose 1 to 60000 ms. Nothing was saved.", frame.delay_ms)));
+        }
+    }
+    Ok(())
+}
+
 pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
+    if let Err(outcome) = validate_gif_timing(request) { return outcome; }
     // Read every frame before reserving the output, so an unreadable frame publishes nothing.
     let mut reduced = Vec::new();
     let mut images = Vec::with_capacity(request.paths.len());
@@ -1908,7 +1948,7 @@ mod tests {
         let second = path("gif-second.png");
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 128])).save(&first).unwrap();
         image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255])).save(&second).unwrap();
-        let result = gif_create(&GifCreateRequest { paths: vec![first.clone(), second.clone()], frame_delay_ms: 250, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        let result = gif_create(&GifCreateRequest { paths: vec![first.clone(), second.clone()], frame_delay_ms: 250, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: OutputLocation::AlongsideInput, output_path: None });
         let output = result.output_paths().first().unwrap();
         let file = File::open(output).unwrap();
         let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).unwrap();
@@ -1952,7 +1992,7 @@ mod tests {
     }
 
     fn gif_request(paths: Vec<PathBuf>, root: &Path) -> GifCreateRequest {
-        GifCreateRequest { paths, frame_delay_ms: 120, loop_forever: true, output_location: OutputLocation::CustomFolder(root.join("outputs")), output_path: None }
+        GifCreateRequest { paths, frame_delay_ms: 120, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: OutputLocation::CustomFolder(root.join("outputs")), output_path: None }
     }
 
     #[test]
@@ -2011,6 +2051,120 @@ mod tests {
         // The same digest on every supported target: palette, scaling and encoding use no platform maths or randomness.
         let digest = Sha256::digest(&first_bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
         assert_eq!(digest, PINNED_GIF_SHA256);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Decodes a GIF with the `gif` crate: each frame's top-left RGBA pixel
+    /// and delay in milliseconds, and whether it loops forever.
+    fn gif_timeline(path: &Path) -> (Vec<([u8; 4], u32)>, gif::Repeat) {
+        let mut options = gif::DecodeOptions::new();
+        options.set_color_output(gif::ColorOutput::RGBA);
+        let mut decoder = options.read_info(File::open(path).unwrap()).unwrap();
+        let mut frames = Vec::new();
+        while let Some(frame) = decoder.read_next_frame().unwrap() {
+            let pixel = [frame.buffer[0], frame.buffer[1], frame.buffer[2], frame.buffer[3]];
+            frames.push((pixel, u32::from(frame.delay) * 10));
+        }
+        (frames, decoder.repeat())
+    }
+
+    fn solid_gif_frames(root: &Path, colours: &[(&str, [u8; 3])]) -> Vec<PathBuf> {
+        colours.iter().map(|(name, [r, g, b])| {
+            let path = root.join(name);
+            image::RgbaImage::from_pixel(4, 4, image::Rgba([*r, *g, *b, 255])).save(&path).unwrap();
+            path
+        }).collect()
+    }
+
+    fn own_delay(index: usize, delay_ms: u32) -> GifFrameDelay { GifFrameDelay { index, delay_ms } }
+
+    #[test]
+    fn gif_frames_play_in_request_order_with_their_own_delays_and_loop_flag() {
+        let root = gif_sandbox("timeline");
+        let [red, green, blue] = [[255, 0, 0], [0, 255, 0], [0, 0, 255]];
+        let frames = solid_gif_frames(&root, &[("red.png", red), ("green.png", green), ("blue.png", blue)]);
+        // A timing manifest beside the frames is never read.
+        std::fs::write(root.join("red-timings.json"), br#"{"delays":[9990,9990,9990],"loop":false}"#).unwrap();
+        let originals = frames.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        // Blue, red, green, red again: the repeated red frame keeps the global delay.
+        let request = GifCreateRequest {
+            paths: vec![frames[2].clone(), frames[0].clone(), frames[1].clone(), frames[0].clone()],
+            frame_delay_ms: 70,
+            frame_delay_overrides: vec![own_delay(2, 1500), own_delay(0, 40)],
+            ..gif_request(Vec::new(), &root)
+        };
+        let result = gif_create(&request);
+        let output = result.output_paths().first().unwrap().clone();
+        let (timeline, repeat) = gif_timeline(&output);
+        let opaque = |[r, g, b]: [u8; 3]| [r, g, b, 255];
+        assert_eq!(timeline, vec![(opaque(blue), 40), (opaque(red), 70), (opaque(green), 1500), (opaque(red), 70)]);
+        assert_eq!(repeat, gif::Repeat::Infinite);
+
+        // Play once: no loop extension, so players stop on the last frame.
+        let once = gif_create(&GifCreateRequest { loop_forever: false, ..request.clone() });
+        let once_output = once.output_paths().first().unwrap().clone();
+        assert_ne!(once_output, output, "a second run never overwrites the first GIF");
+        let (timeline, repeat) = gif_timeline(&once_output);
+        assert_eq!(timeline.len(), 4);
+        assert_eq!(repeat, gif::Repeat::Finite(0));
+        for (path, bytes) in frames.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), bytes); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn gif_request_reads_the_ui_shape_and_defaults_to_no_overrides() {
+        let request: GifCreateRequest = serde_json::from_value(serde_json::json!({
+            "paths": ["/a.png", "/b.png"], "frameDelayMs": 80, "loopForever": false,
+            "frameDelayOverrides": [{ "index": 1, "delayMs": 1500 }], "outputLocation": "alongsideInput", "outputPath": null,
+        })).unwrap();
+        assert_eq!((request.frame_delay_ms, request.loop_forever), (80, false));
+        assert_eq!(request.frame_delay_overrides.iter().map(|frame| (frame.index, frame.delay_ms)).collect::<Vec<_>>(), vec![(1, 1500)]);
+        let bare: GifCreateRequest = serde_json::from_value(serde_json::json!({ "paths": ["/a.png"], "outputLocation": "alongsideInput" })).unwrap();
+        assert!(bare.frame_delay_overrides.is_empty());
+        assert_eq!((bare.frame_delay_ms, bare.loop_forever), (100, true));
+    }
+
+    #[test]
+    fn gif_delays_cover_the_whole_range_rounded_to_hundredths() {
+        let request = |global, overrides| GifCreateRequest {
+            paths: vec![PathBuf::from("a.png"), PathBuf::from("b.png"), PathBuf::from("c.png")],
+            frame_delay_ms: global,
+            frame_delay_overrides: overrides,
+            loop_forever: true,
+            output_location: OutputLocation::AlongsideInput,
+            output_path: None,
+        };
+        assert_eq!(gif_frame_delays(&request(100, Vec::new())), vec![10, 10, 10]);
+        assert_eq!(gif_frame_delays(&request(1, vec![own_delay(1, 60_000), own_delay(2, 15)])), vec![1, 6000, 2]);
+        assert_eq!(gif_frame_delays(&request(44, vec![own_delay(0, 45)])), vec![5, 4, 4]);
+    }
+
+    #[test]
+    fn gif_rejects_out_of_range_delays_before_reading_frames_and_publishes_nothing() {
+        let root = gif_sandbox("delay_range");
+        let frames = solid_gif_frames(&root, &[("one.png", [1, 2, 3]), ("two.png", [4, 5, 6])]);
+        let cases = [
+            (0, Vec::new(), &frames[0], "The delay for every frame is 0 ms. Choose 1 to 60000 ms. Nothing was saved."),
+            (60_001, Vec::new(), &frames[0], "The delay for every frame is 60001 ms. Choose 1 to 60000 ms. Nothing was saved."),
+            (100, vec![own_delay(1, 0)], &frames[1], "Frame 2's own delay is 0 ms. Choose 1 to 60000 ms. Nothing was saved."),
+            (100, vec![own_delay(1, 60_001)], &frames[1], "Frame 2's own delay is 60001 ms. Choose 1 to 60000 ms. Nothing was saved."),
+            (100, vec![own_delay(2, 500)], &frames[0], "There's no frame 3 to give its own delay. Nothing was saved."),
+            (100, vec![own_delay(0, 500), own_delay(0, 600)], &frames[0], "Frame 1 has more than one own delay. Nothing was saved."),
+        ];
+        for (global, overrides, attributed, message) in cases {
+            let result = gif_create(&GifCreateRequest { frame_delay_ms: global, frame_delay_overrides: overrides, ..gif_request(frames.clone(), &root) });
+            assert!(result.output_paths().is_empty(), "{message}");
+            assert_eq!(&result.input_path, attributed);
+            let error = result.error().unwrap();
+            assert_eq!(error.message, message);
+            assert_eq!(error.kind, ToolError::invalid_input("").kind);
+        }
+        // The boundaries themselves are accepted.
+        let result = gif_create(&GifCreateRequest { frame_delay_ms: 1, frame_delay_overrides: vec![own_delay(1, 60_000)], ..gif_request(frames.clone(), &root) });
+        let (timeline, _) = gif_timeline(result.output_paths().first().unwrap());
+        assert_eq!(timeline.iter().map(|(_, delay)| *delay).collect::<Vec<_>>(), vec![10, 60_000]);
+        assert_eq!(std::fs::read_dir(root.join("outputs")).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2089,7 +2243,7 @@ mod tests {
                     gif_create(&GifCreateRequest {
                         paths: vec![input],
                         frame_delay_ms: 100,
-                        loop_forever: true,
+                        loop_forever: true, frame_delay_overrides: Vec::new(),
                         output_location: OutputLocation::CustomFolder(output_directory), output_path: None,
                     })
                 })
@@ -2145,7 +2299,7 @@ mod tests {
         let result = gif_create(&GifCreateRequest {
             paths: vec![input, input_directory.join("missing.png")],
             frame_delay_ms: 100,
-            loop_forever: true,
+            loop_forever: true, frame_delay_overrides: Vec::new(),
             output_location: OutputLocation::CustomFolder(output_directory.clone()), output_path: None,
         });
 
@@ -2807,7 +2961,7 @@ mod tests {
             write_fixture("gif-frame-irot-3.heif", &fixtures::heic_rotated(&source, 3)),
         ];
         let originals = frames.iter().map(|frame| std::fs::read(frame).unwrap()).collect::<Vec<_>>();
-        let result = gif_create(&GifCreateRequest { paths: frames.to_vec(), frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        let result = gif_create(&GifCreateRequest { paths: frames.to_vec(), frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: OutputLocation::AlongsideInput, output_path: None });
         assert!(result.error().is_none(), "{:?}", result.error());
         assert_eq!(result.warnings, vec![crate::kit::contracts::OutcomeWarning {
             kind: crate::kit::contracts::WarningKind::PrecisionReduced,
@@ -2822,7 +2976,7 @@ mod tests {
         }).collect::<Vec<_>>();
         assert_eq!(edges, ["top", "left", "top"]);
         for (frame, original) in frames.iter().zip(&originals) { assert_eq!(&std::fs::read(frame).unwrap(), original, "{} must stay byte-identical", frame.display()); }
-        let several = gif_create(&GifCreateRequest { paths: vec![frames[1].clone(), frames[1].clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        let several = gif_create(&GifCreateRequest { paths: vec![frames[1].clone(), frames[1].clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: OutputLocation::AlongsideInput, output_path: None });
         assert_eq!(several.warnings[0].message, "2 frames are high-bit-depth HEIC, saved as 8-bit sRGB.");
         for path in frames.iter().chain(result.output_paths()).chain(several.output_paths()) { let _ = std::fs::remove_file(path); }
     }
