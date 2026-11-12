@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { parsePageRange, selectedPageLabel } from "../../shared/workspaceValidation";
 import { pagesWithin, parsePageRanges } from "../../shared/pageRanges";
 import type { PdfDocument } from "../pdf-editor";
-import type { ToolDefinition } from "../../contracts";
+import type { AtomicToolId, ToolDefinition } from "../../contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -11,7 +11,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ShortcutHint } from "../../components/ShortcutHint";
 import { shortcutTarget } from "../../shortcuts";
-import { formatPageRange, type ConversionTool } from "./tool";
+import { listPages } from "./pageRanges";
+import { formatPageRange, type ConversionTool, type PageCount, type PagePicks } from "./tool";
 
 type PdfInspectionState =
   | { kind: "idle" }
@@ -27,6 +28,7 @@ type ConversionPanelProps = {
   options: unknown;
   setOptions: (options: unknown) => void;
   files: string[];
+  selectedFileIndex: number;
   run: () => Promise<void>;
   loading: boolean;
   pageRange: string;
@@ -37,7 +39,12 @@ type ConversionPanelProps = {
   setSelectedPages: (value: number[]) => void;
   inspectError: string;
   setInspectError: (value: string) => void;
+  picks: PagePicks;
+  setPicks: (value: PagePicks) => void;
+  onSelectTool?: (id: AtomicToolId) => void;
 };
+
+const countFailure = (error: unknown): PageCount => /password|encrypt/i.test(String(error)) ? "locked" : "unreadable";
 
 const pagesLabel = (count: number) => `${count} ${count === 1 ? "page" : "pages"}`;
 
@@ -62,6 +69,7 @@ export const ConversionPanel = ({
   options,
   setOptions,
   files,
+  selectedFileIndex,
   run,
   loading,
   pageRange,
@@ -72,13 +80,18 @@ export const ConversionPanel = ({
   setSelectedPages,
   inspectError,
   setInspectError,
+  picks,
+  setPicks,
+  onSelectTool,
 }: ConversionPanelProps) => {
+  const pagesPerPdf = tool.pagesPerPdf;
   const batchRange = tool.batchPageRange === true;
   // A batch-wide range offers thumbnails only while the list holds exactly one PDF, not one image.
   const onePdf = files.length === 1 && files[0].toLowerCase().endsWith(".pdf");
-  const inputPath = batchRange && !onePdf ? undefined : files[0];
+  const inputPath = batchRange ? (onePdf ? files[0] : undefined) : pagesPerPdf ? files[selectedFileIndex] ?? files[0] : files[0];
   const [pageRangeFromPicks, setPageRangeFromPicks] = useState(false);
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
+  const [pageCounts, setPageCounts] = useState<Record<string, PageCount>>({});
   const acceptedExtensions = new Set(activeUtility.capability.acceptedExtensions.map((extension) => extension.toLowerCase()));
   const unsupportedFiles = files.filter((path) => {
     const name = path.split(/[\\/]/).pop() ?? path;
@@ -102,8 +115,8 @@ export const ConversionPanel = ({
     let current = true;
     setDocument(null);
     setSelectedPages([]);
-    // A batch-wide range belongs to the whole list, so it outlives a change of files.
-    if (!batchRange) setPageRange("");
+    // A batch-wide or per-PDF range belongs to the whole list, so it outlives a change of files.
+    if (!pagesPerPdf && !batchRange) setPageRange("");
     setInspectError("");
     if (!inputPath || inputPolicyIssue) {
       setInspection({ kind: "idle" });
@@ -121,7 +134,7 @@ export const ConversionPanel = ({
         if (!current) return;
         setDocument(value);
         setSelectedPages(tool.initialPages?.(value) ?? value.pages.map((page) => page.index));
-        if (!batchRange) setPageRange("");
+        if (!pagesPerPdf && !batchRange) setPageRange("");
         setInspection({ kind: "ready", path: inputPath });
       })
       .catch((error) => {
@@ -132,40 +145,74 @@ export const ConversionPanel = ({
     return () => {
       current = false;
     };
-  }, [tool, batchRange, inputPath, inputPolicyIssue, setDocument, setInspectError, setPageRange, setSelectedPages]);
+  }, [tool, pagesPerPdf, batchRange, inputPath, inputPolicyIssue, setDocument, setInspectError, setPageRange, setSelectedPages]);
 
+  const fileKey = files.join("\0");
+  useEffect(() => {
+    if (!pagesPerPdf) return;
+    let current = true;
+    const paths = fileKey ? fileKey.split("\0") : [];
+    setPageCounts((counts) => Object.fromEntries(paths.map((path) => [path, counts[path] ?? "pending"])));
+    for (const path of new Set(paths)) {
+      void invoke<PdfDocument>("inspect_pdf_scene", { request: { path } })
+        .then((value): PageCount => value.pages.length)
+        .catch(countFailure)
+        .then((count) => { if (current) setPageCounts((counts) => path in counts ? { ...counts, [path]: count } : counts); });
+    }
+    return () => {
+      current = false;
+    };
+  }, [pagesPerPdf, fileKey]);
+
+  const inspectedPicks = inputPath ? picks[inputPath] : undefined;
   const inspectedDocument = inspection.kind === "ready" && inspection.path === inputPath ? document : null;
   // A batch-wide range is checked only for its form here: pages past a file's end are left out natively.
   const typedRange = batchRange && pageRange.trim() ? parsePageRanges(pageRange) : null;
-  const picks = !batchRange ? selectedPages : inspectedDocument && typedRange?.ok ? pagesWithin(typedRange.value, inspectedDocument.pages.length) : [];
+  const rangePicks = !batchRange ? selectedPages : inspectedDocument && typedRange?.ok ? pagesWithin(typedRange.value, inspectedDocument.pages.length) : [];
   const togglePage = (page: number) => {
-    const nextPages = picks.includes(page)
-      ? picks.filter((selected) => selected !== page)
-      : [...picks, page].sort((left, right) => left - right);
+    if (pagesPerPdf) {
+      const current = shownPages;
+      if (inputPath) setPicks({ ...picks, [inputPath]: current.includes(page) ? current.filter((selected) => selected !== page) : [...current, page].sort((left, right) => left - right) });
+      return;
+    }
+    const nextPages = rangePicks.includes(page)
+      ? rangePicks.filter((selected) => selected !== page)
+      : [...rangePicks, page].sort((left, right) => left - right);
     setSelectedPages(nextPages);
     setPageRange(nextPages.length ? formatPageRange(nextPages) : "");
     setPageRangeFromPicks(nextPages.length > 0);
   };
+
   const choosePageRange = (value: string) => {
     setPageRange(value);
     setPageRangeFromPicks(false);
-    if (!inspectedDocument || batchRange) return;
+    if (!inspectedDocument || pagesPerPdf || batchRange) return;
     const parsed = parsePageRange(value, inspectedDocument.pages.length);
     setSelectedPages(Array.isArray(parsed) ? parsed : []);
   };
   const inspectionReady = inspection.kind === "ready" && inspection.path === inputPath && inspectedDocument !== null;
   const parsedSelection = inspectedDocument && !batchRange ? parsePageRange(pageRange, inspectedDocument.pages.length) : [];
   const selectionIssue = Array.isArray(parsedSelection) ? null : parsedSelection;
-  const selectionCount = inspectedDocument ? picks.length : 0;
+  const selectionCount = inspectedDocument ? rangePicks.length : 0;
   const needsPageSelection = activeUtility.capability.supportsPageSelection;
-  const pageSelectionBlocks = batchRange
-    ? typedRange !== null && !typedRange.ok
-    : needsPageSelection && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null);
+  const shownPages = !inspectedDocument ? [] : pagesPerPdf
+    ? inspectedPicks ?? pagesPerPdf(options, pageRange, inspectedDocument.pages.length) ?? []
+    : rangePicks;
+  const emptyPicks = pagesPerPdf ? files.some((path) => picks[path]?.length === 0) : false;
   const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && !tool.exportBlocked?.(options, files, pageRange)
-    && (!tool.inspectsPdf || batchRange || inspectionReady);
+    && (pagesPerPdf ? !emptyPicks : !tool.inspectsPdf || batchRange || inspectionReady);
+  const pageSelectionBlocked = batchRange
+    ? typedRange !== null && !typedRange.ok
+    : needsPageSelection && !pagesPerPdf && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null);
+  const useRangeInstead = () => {
+    if (!inputPath) return;
+    const { [inputPath]: _dropped, ...rest } = picks;
+    setPicks(rest);
+  };
   const outputPreviewLimitation = activeUtility.capability.supportsPreview ? null : tool.outputPreview(options, selectedPages);
   const previewRegionLabel = outputPreviewLimitation ? "Source page selection" : "Conversion preview";
   const OptionsPanel = tool.OptionsPanel;
+  const exportNote = tool.exportNote?.(files) ?? null;
 
   return (
     <Card className="workspace-control-panel py-0">
@@ -186,7 +233,7 @@ export const ConversionPanel = ({
                       <Checkbox
                         id={`conversion-page-${page.index}`}
                         aria-label={`Page ${page.index + 1}`}
-                        checked={picks.includes(page.index)}
+                        checked={shownPages.includes(page.index)}
                         onCheckedChange={() => togglePage(page.index)}
                       />
                       {page.preview ? <img src={page.preview} alt={`Source page preview ${page.index + 1}`} /> : <span className="conversion-page-placeholder">Source preview unavailable</span>}
@@ -201,12 +248,27 @@ export const ConversionPanel = ({
               ? inspectError
               : batchRange && files.length > 0 ? "With one PDF in the list, its pages appear here as thumbnails to pick from." : "Select a PDF to load its page previews."}</p>
           )}
-          {inspectedDocument && !batchRange && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
+          {inspectedDocument && !pagesPerPdf && !batchRange && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
           {inspectedDocument && batchRange && typedRange?.ok !== false && (
             <>
-              <p className="workspace-note" role="status" aria-live="polite">{pickStatus(picks, inspectedDocument.pages.length, pageRange, pageRangeFromPicks)}</p>
+              <p className="workspace-note" role="status">{pickStatus(rangePicks, inspectedDocument.pages.length, pageRange, pageRangeFromPicks)}</p>
               <p className="workspace-panel-copy">Click a page or press Space to pick it. Picked pages always run in page order. Picking nothing means every page.</p>
             </>
+          )}
+          {inspectedDocument && pagesPerPdf && (
+            <div className="grid gap-2">
+              <p className="workspace-note" role="status">
+                {inspectedPicks
+                  ? inspectedPicks.length
+                    ? `${inspectedPicks.length} of ${inspectedDocument.pages.length} pages picked: ${listPages(inspectedPicks)}. These picks replace the range for this PDF only.`
+                    : "No pages picked. Pick at least one page, or use the range instead."
+                  : "Pick pages here to replace the range for this PDF only."}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => inputPath && setPicks({ ...picks, [inputPath]: inspectedDocument.pages.map((page) => page.index) })}>Pick all</Button>
+                {inspectedPicks && <Button variant="ghost" size="sm" onClick={useRangeInstead}>Use the range instead</Button>}
+              </div>
+            </div>
           )}
           </CardContent>
         </Card>
@@ -229,17 +291,24 @@ export const ConversionPanel = ({
           options={options}
           setOptions={setOptions}
           files={files}
+          selectedFileIndex={selectedFileIndex}
           inspectedDocument={inspectedDocument}
           selectedPages={selectedPages}
           pageRange={pageRange}
           choosePageRange={choosePageRange}
           pageRangeFromPicks={pageRangeFromPicks}
+          picks={picks}
+          pageCounts={pageCounts}
+          loading={loading}
+          onSelectTool={onSelectTool}
         />
       )}
       {destination}
+      {tool.RunSummary && <tool.RunSummary options={options} files={files} pageRange={pageRange} picks={picks} pageCounts={pageCounts} />}
+      {exportNote && <p className="workspace-note" role="status">{exportNote}</p>}
       <Button
         variant="default"
-        disabled={loading || !canExport || pageSelectionBlocks}
+        disabled={loading || !canExport || pageSelectionBlocked}
         onClick={run}
         className="workspace-primary-action"
         aria-label={`Export ${activeUtility.title}`}
