@@ -9,6 +9,6 @@ const pagesInOrder = (pageRange: string | null) => {
   return parsed.ok ? formatPageSpans(spansInPageOrder(parsed.value)) : pageRange;
 };
 
-export function ocrRequest(paths: string[], outputLocation: OutputLocation, pageRange: string | null, mode: OcrMode, force = false): OcrRequest {
-  return { paths, pageRange: pagesInOrder(pageRange), mode, force, languages: ["eng"], outputLocation };
+export function ocrRequest(paths: string[], outputLocation: OutputLocation, pageRange: string | null, language: string, mode: OcrMode, force = false): OcrRequest {
+  return { paths, pageRange: pagesInOrder(pageRange), mode, force, languages: [language], outputLocation };
 }

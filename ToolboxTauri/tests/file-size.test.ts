@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatBytes, formatSavings, percentSaved } from "../src/shared/fileSize.ts";
+import { formatBatchSaving, formatBytes, formatSavings, formatSizeChange, percentSaved } from "../src/shared/fileSize.ts";
 
 test("byte sizes read like the design: whole bytes and KB, one decimal from MB", () => {
   assert.equal(formatBytes(0), "0 B");
@@ -29,4 +29,12 @@ test("percentage saved comes from the original and output sizes", () => {
   assert.equal(formatSavings(100_000, 100), "Saved 99%", "a non-empty output never shows as 100%");
   assert.equal(formatSavings(1000, 0), "Saved 100%");
   assert.equal(formatSavings(0, 0), null);
+});
+
+test("a file's size change and a batch saving read as the Compress results board shows them", () => {
+  assert.equal(formatSizeChange(14_600_000, 3_800_000), "14.6 MB → 3.8 MB, 74% smaller");
+  assert.equal(formatSizeChange(640_000, 652_000), "640 KB → 652 KB, no savings");
+  assert.equal(formatSizeChange(100_000, 99_900), "100 KB → 100 KB, 1% smaller");
+  assert.equal(formatBatchSaving(25_400_000, 8_300_000), "Saved 17.1 MB, 67% smaller");
+  assert.equal(formatBatchSaving(1000, 1000), "No savings");
 });

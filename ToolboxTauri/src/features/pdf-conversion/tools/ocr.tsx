@@ -5,13 +5,14 @@ import { ocrRequest } from "../../../ocrRequest";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { BUILT_IN_OCR_LANGUAGE, OcrLanguagePicker } from "../../../views/OcrLanguagePicker";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { parsePageRanges } from "../../../shared/pageRanges";
 import type { ConversionTool } from "../tool";
 
 type PagesScope = "all" | "range";
-type Options = { mode: OcrMode; force: boolean; pages: PagesScope };
+type Options = { mode: OcrMode; language: string; force: boolean; pages: PagesScope };
 
 const modeHints: Record<OcrMode, string> = {
   searchablePdf: "Looks exactly like the scan, with text you can select and search.",
@@ -25,9 +26,9 @@ const rangeHints = {
 };
 
 export const ocr: ConversionTool<Options> = {
-  initialOptions: { mode: "searchablePdf", force: false, pages: "all" },
+  initialOptions: { mode: "searchablePdf", language: BUILT_IN_OCR_LANGUAGE.code, force: false, pages: "all" },
   // Extract from PDF hands scans over because it couldn't read their text, so OCR keeps that ask.
-  handoffOptions: { mode: "text", force: false, pages: "all" },
+  handoffOptions: { mode: "text", language: BUILT_IN_OCR_LANGUAGE.code, force: false, pages: "all" },
   inspectsPdf: true,
   batchPageRange: true,
   outputPreview: ({ mode }) => `Output preview unavailable. Export recognizes the text on each page and saves it as ${mode === "text" ? "a text file" : "a searchable PDF"}.`,
@@ -37,6 +38,7 @@ export const ocr: ConversionTool<Options> = {
     const parsed = pageRange.trim() ? parsePageRanges(pageRange) : null;
     return (
     <>
+    <OcrLanguagePicker value={options.language} onChange={(language) => setOptions({ ...options, language })} />
     <div className="workspace-field">
       <Label id="ocr-save-as-label">Save as</Label>
       <ToggleGroup
@@ -106,6 +108,6 @@ export const ocr: ConversionTool<Options> = {
   },
   exampleName: (inputPath, utility, { mode }) => exampleOutputName(inputPath, "ocr_pdf", utility.capability.outputSuffix, mode === "text" ? "txt" : "pdf"),
   // The Pages range, typed or written by thumbnail picks, applies to every file; an empty one means every page.
-  request: (paths, outputLocation, { runId }, { mode, force }, { pageRange }) =>
-    invoke<ToolResult>("ocr_pdf", { runId, request: ocrRequest(paths, outputLocation, pageRange, mode, force) }),
+  request: (paths, outputLocation, { runId }, { mode, language, force }, { pageRange }) =>
+    invoke<ToolResult>("ocr_pdf", { runId, request: ocrRequest(paths, outputLocation, pageRange, language, mode, force) }),
 };

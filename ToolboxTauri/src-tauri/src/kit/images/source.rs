@@ -38,14 +38,10 @@ impl ImageFamily {
     }
 }
 
-// Facts beyond the pages and family are read by Images to PDF (#550) and the
-// orientation-aware tools that follow it.
-#[allow(dead_code)]
 pub(crate) struct DecodedImage {
     pub pages: Vec<DynamicImage>,
     pub family: ImageFamily,
     pub bits_per_channel: u8,
-    pub has_alpha: bool,
     pub orientation: Option<Orientation>,
     pub baseline_jpeg: Option<Vec<u8>>,
 }
@@ -82,12 +78,11 @@ pub(crate) fn decode(path: &Path) -> Result<DecodedImage, String> {
         }
     };
     let bits_per_channel = source_bits.unwrap_or_else(|| pages.iter().map(|page| channel_bits(page.color())).max().unwrap_or(8));
-    let has_alpha = pages.iter().any(|page| page.color().has_alpha());
     let baseline_jpeg = match family {
         ImageFamily::Jpeg => std::fs::read(path).ok().filter(|bytes| is_baseline_jpeg(bytes)),
         _ => None,
     };
-    Ok(DecodedImage { pages, family, bits_per_channel, has_alpha, orientation, baseline_jpeg })
+    Ok(DecodedImage { pages, family, bits_per_channel, orientation, baseline_jpeg })
 }
 
 // Same steps as image::open, keeping the decoder long enough to read its
@@ -101,7 +96,7 @@ fn read_single_image(path: &Path) -> image::ImageResult<(DynamicImage, Option<Or
     Ok((DynamicImage::from_decoder(decoder)?, orientation))
 }
 
-fn channel_bits(color: ColorType) -> u8 {
+pub(crate) fn channel_bits(color: ColorType) -> u8 {
     color.bytes_per_pixel() / color.channel_count() * 8
 }
 
@@ -140,13 +135,8 @@ pub(crate) struct TiffPages {
 
 impl TiffPages {
     pub(crate) fn open(path: &Path) -> Result<Self, String> {
-        let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
-        let mut decoder = tiff::decoder::Decoder::new(file).map_err(|error| format!("Could not read TIFF: {error}"))?;
-        let mut total = 1;
-        while decoder.more_images() {
-            decoder.next_image().map_err(|error| format!("TIFF page {} can't be read. {error}", total + 1))?;
-            total += 1;
-        }
+        let mut decoder = open_tiff(path)?;
+        let total = count_tiff_pages(&mut decoder)?;
         Ok(Self { decoder, total })
     }
 
@@ -174,9 +164,30 @@ impl TiffPages {
             .flatten()
             .and_then(Orientation::from_exif)
             .filter(|orientation| *orientation != Orientation::NoTransforms);
-        let page = read_tiff_page(&mut self.decoder)?;
+        let page = read_tiff_page(&mut self.decoder).map_err(failed)?;
         Ok((page, orientation))
     }
+}
+
+pub(crate) fn page_count(path: &Path) -> Result<usize, String> {
+    match ImageFamily::of(path) {
+        ImageFamily::Tiff => count_tiff_pages(&mut open_tiff(path)?),
+        _ => Ok(1),
+    }
+}
+
+fn open_tiff(path: &Path) -> Result<tiff::decoder::Decoder<File>, String> {
+    let file = File::open(path).map_err(|error| format!("Could not open TIFF: {error}"))?;
+    tiff::decoder::Decoder::new(file).map_err(|error| format!("Could not read TIFF: {error}"))
+}
+
+fn count_tiff_pages(decoder: &mut tiff::decoder::Decoder<File>) -> Result<usize, String> {
+    let mut total = 1;
+    while decoder.more_images() {
+        decoder.next_image().map_err(|error| format!("TIFF page {} can't be read. {error}", total + 1))?;
+        total += 1;
+    }
+    Ok(total)
 }
 
 fn read_tiff_page(decoder: &mut tiff::decoder::Decoder<File>) -> Result<DynamicImage, String> {
