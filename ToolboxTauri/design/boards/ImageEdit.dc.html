@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Image Editor</title>
+<title>Edit Image</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -18,121 +18,412 @@ body{margin:0}
 .btn.pri{background:var(--pri);color:var(--prifg);border-color:transparent}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--mut)}
 .btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.icon{padding:0 6px}
 .btn[disabled]{opacity:.45;cursor:default}
+.btn.link{background:none;border:0;padding:0;height:auto;color:var(--fg);text-decoration:underline;text-underline-offset:3px;font-weight:500}
 .kbd{font-size:11px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid var(--line2);color:var(--mut);font-weight:500}
 .btn.pri .kbd{border-color:currentColor;color:inherit;opacity:.6}
 .nav{display:flex;align-items:center;gap:9px;min-height:30px;padding:0 10px;border-radius:7px;color:var(--mut);text-decoration:none;border:0;background:none;width:100%;text-align:left;cursor:pointer;box-sizing:border-box}
 .nav.on{background:var(--sel);color:var(--fg);font-weight:500}
 .field{height:30px;border-radius:7px;border:1px solid var(--line2);background:var(--bg);padding:0 10px;width:100%;box-sizing:border-box;min-width:0}
+.field[aria-invalid=true]{border-color:var(--bad)}
 .lbl{font-size:12px;font-weight:600}
 .hint{font-size:12px;color:var(--mut)}
-.row{display:grid;grid-template-columns:20px minmax(0,1fr) 72px 60px 150px;gap:12px;align-items:center;padding:8px 20px;border-bottom:1px solid var(--line)}
-.row.sel{background:var(--sel)}
+.ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .badge{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:999px;border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
 svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+svg.ic.s{width:14px;height:14px}
 .tb :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
 a{color:inherit}a:hover{color:var(--mut)}
-.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut)}.seg button[aria-checked=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
-.note{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise)}
+.seg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raise);border:1px solid var(--line)}.seg button{height:26px;padding:0 10px;border:0;border-radius:6px;background:none;cursor:pointer;color:var(--mut);white-space:nowrap}.seg button[aria-checked=true],.seg button[aria-selected=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.seg.full{display:flex}.seg.full button{flex:1;padding:0 6px}
 .opt{display:flex;flex-direction:column;gap:6px}
-fieldset.opt{border:0;margin:0;padding:0}fieldset.opt legend{padding:0;margin-bottom:6px}
+fieldset.opt{border:0;margin:0;padding:0;min-width:0}fieldset.opt legend{padding:0;margin-bottom:6px}
 .chk{display:flex;gap:8px;align-items:center}
+.num{display:inline-grid;place-items:center;min-width:16px;height:16px;padding:0 3px;box-sizing:border-box;border-radius:999px;background:var(--line2);color:var(--fg);font-size:10px;font-weight:600;line-height:1}
+.stk{display:flex;align-items:center;gap:6px;padding:10px 20px;border-bottom:1px solid var(--line);min-height:48px;box-sizing:border-box}
+.step{display:inline-flex;align-items:center;height:28px;border-radius:7px;border:1px solid var(--line2);background:var(--raise);font-size:12px;box-sizing:border-box;white-space:nowrap;flex:none}
+.step .main{height:26px;border:0;background:none;padding:0 6px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;border-radius:6px;font-size:12px}
+.step .x{width:22px;height:26px;border:0;background:none;color:var(--mut);display:grid;place-items:center;cursor:pointer;border-radius:6px;padding:0}
+.step.on{background:var(--sel);border-color:var(--ring)}.step.on .main{font-weight:600}
+.step.add{border-style:dashed;background:transparent}.step.add .main{color:var(--faint);padding:0 8px}
+.sep{color:var(--faint);font-size:12px;flex:none}
+.vr{width:1px;height:20px;background:var(--line2);flex:none}
+.frow{display:flex;gap:10px;align-items:flex-start;padding:8px 12px 8px 16px;border-bottom:1px solid var(--line)}
+.frow[aria-selected=true]{background:var(--sel);box-shadow:inset 2px 0 0 var(--fg)}
+.msg{display:flex;gap:7px;align-items:flex-start;font-size:12px;line-height:1.45;color:var(--mut)}
+.msg svg.ic{width:14px;height:14px;margin-top:1px}
+.msg.warn{color:var(--warn)}.msg.bad{color:var(--bad)}
+.box{padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--raise);display:flex;flex-direction:column;gap:6px}
+.orow{display:grid;grid-template-columns:64px minmax(0,1fr);gap:10px;align-items:center}
+.sl{display:grid;grid-template-columns:minmax(0,1fr) 64px;gap:10px;align-items:center}.sl input[type=range]{width:100%;margin:0;accent-color:var(--fg)}
+.anchor{display:grid;grid-template-columns:repeat(3,18px);gap:3px}.anchor button{width:18px;height:18px;border-radius:4px;border:1px solid var(--line2);background:var(--bg);padding:0;cursor:pointer}.anchor button[aria-checked=true]{background:var(--fg);border-color:var(--fg)}
+.mrow{display:grid;grid-template-columns:120px minmax(0,1fr) auto;gap:10px;align-items:start;padding:8px 12px;border-bottom:1px solid var(--line)}
+.mrow dt{font-weight:600;font-size:12px}.mrow dd{margin:0}
+.drop{border:1.5px dashed var(--line2);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:24px}
 .tf{position:absolute;pointer-events:none;outline:1.5px solid #1d5fd1;box-sizing:border-box;transform-origin:50% 50%}
 .tf .th{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;background:#fff;border:1.5px solid #1d5fd1;border-radius:2px;box-sizing:border-box;box-shadow:0 1px 2px rgba(0,0,0,.3);pointer-events:auto}
 .tf .th::before{content:'';position:absolute;inset:-6px}
-.tf .th.nwse{cursor:nwse-resize}.tf .th.nesw{cursor:nesw-resize}.tf .th.ns{cursor:ns-resize}.tf .th.ew{cursor:ew-resize}
-.tf .th.lock{background:#1d5fd1;border-color:#fff}
 .tf .stem{position:absolute;left:50%;top:-24px;width:1.5px;height:24px;margin-left:-.75px;background:#1d5fd1}
 .tf .rot{position:absolute;left:50%;top:-32px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#fff;border:1.5px solid #1d5fd1;box-sizing:border-box;cursor:grab;pointer-events:auto;box-shadow:0 1px 2px rgba(0,0,0,.3)}
-.tf .rot::before{content:'';position:absolute;inset:-6px}
 .tf-chip{position:absolute;transform:translateX(-50%);background:#1b1f27;color:#fff;font:500 10.5px/1 system-ui,sans-serif;padding:5px 8px;border-radius:5px;white-space:nowrap;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,.3);z-index:3}
 .tf-guide{position:absolute;background:#e5484d;pointer-events:none;z-index:2}
 .tf-cur{position:absolute;pointer-events:none;z-index:4;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
-.tf-ghost{position:absolute;outline:1px dashed rgba(29,95,209,.7);pointer-events:none}
 .geo{display:grid;grid-template-columns:1fr 1fr;gap:8px}.geo label{display:flex;flex-direction:column;gap:4px}
-.seg button[aria-selected=true]{background:var(--bg);color:var(--fg);font-weight:500;box-shadow:0 1px 2px rgba(0,0,0,.2)}.seg.tabs5 button{padding:0 4px}section[aria-label=Options]{max-height:748px}
-
 </style>
 </helmet>
-<div class="{{themeClass}}" style="min-height: 800px; display: flex; flex-wrap: wrap">
-<aside aria-label="Images" style="flex: 1 1 220px; max-width: 232px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
+<div class="{{themeClass}}" style="height: 800px; display: flex; overflow: hidden">
+<aside aria-label="Edit Image" style="flex: none; width: 244px; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; box-sizing: border-box">
 <a class="nav" href="Main.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg>All tools</a>
+<div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Edit Image</div>
+<nav aria-label="Edit Image tools. Each one adds or shows a step in the edit stack." style="display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{rail}}" as="t"><button class="{{t.cls}}" aria-current="{{t.cur}}" aria-label="{{t.aria}}" tabindex="{{t.ti}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="{{t.d}}"></path></svg><span style="flex: 1">{{t.full}}</span><sc-if value="{{t.inStack}}"><span class="num" aria-hidden="true">{{t.num}}</span></sc-if></button></sc-for>
+</nav>
 <div style="padding: 16px 10px 6px; font-size: 12px; font-weight: 600; color: var(--faint)">Images</div>
-<nav aria-label="Images tools" style="display: flex; flex-direction: column; gap: 2px"><button class="nav on" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"></path><path d="M18 22V8a2 2 0 0 0-2-2H2"></path></svg>Image Editor</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>Convert Image Format</button><button class="nav" aria-pressed="false" tabindex="-1"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"></path></svg>Compress</button></nav>
+<a class="nav" href="ImageConvert.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path></svg>Convert Image Format</a>
+<a class="nav" href="ExtractGif.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect></svg>Extract GIF Frames</a>
 <div style="flex: 1"></div>
 <a class="nav" href="Settings.dc.html"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>Settings<span class="kbd" style="margin-left: auto">{{settingsKey}}</span></a>
 <p class="hint" style="margin: 0; padding: 10px 10px 0">Files stay on this device.</p>
 </aside>
-<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column">
-<header style="min-height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap">
-<h1 style="margin: 0; font-size: 15px; font-weight: 600">Image Editor</h1>
-<span class="hint">Resize, crop, rotate, adjust or watermark many images at once.</span>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<header style="height: 52px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid var(--line); box-sizing: border-box">
+<h1 style="margin: 0; font-size: 15px; font-weight: 600">Edit Image</h1>
+<span class="hint ell">Crop, resize, rotate, tone, watermark and clean many images in one run.</span>
 <div style="flex: 1"></div>
 <button class="btn ghost"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="7"></circle><path d="M21 21l-6-6"></path></svg>Find a tool<span class="kbd">{{findKey}}</span></button>
 </header>
-<div style="flex: 1; display: flex; flex-wrap: wrap; min-height: 0">
-<section aria-label="Files" style="flex: 999 1 480px; min-width: 0; display: flex; flex-direction: column">
-<div style="display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-wrap: wrap"><strong style="font-size: 13px">3 images</strong><span class="hint">All 3 selected</span><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm">Remove from list</button><button class="btn sm ghost">Clear list</button></div>
-<div class="row hint" style="grid-template-columns: 20px minmax(0,1fr) 110px 72px; padding-top: 6px; padding-bottom: 6px; border-top: 1px solid var(--line)"><span></span><span>Name</span><span style="">Size</span><span style="text-align: right">File size</span></div>
-<ul aria-label="Images to edit" style="list-style: none; margin: 0; padding: 0; overflow: auto"><li class="row sel" style="grid-template-columns: 20px minmax(0,1fr) 110px 72px" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">IMG_4012.jpg</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Pictures/Move-out</span></span><span class="hint" style="">4032 × 3024</span><span class="" style="text-align: right">3.1 MB</span></li><li class="row sel" style="grid-template-columns: 20px minmax(0,1fr) 110px 72px" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">IMG_4013.jpg</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Pictures/Move-out</span></span><span class="hint" style="">4032 × 3024</span><span class="" style="text-align: right">2.9 MB</span></li><li class="row sel" style="grid-template-columns: 20px minmax(0,1fr) 110px 72px" aria-selected="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg><span style="min-width: 0; display: flex; flex-direction: column"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">floorplan.heic</span><span class="hint" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">~/Downloads</span></span><span class="hint" style="">3024 × 4032</span><span class="" style="text-align: right">1.8 MB</span></li></ul>
-<div style="padding: 4px 20px 16px; display: flex; flex-direction: column; gap: 8px; flex: none">
-<div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Preview of IMG_4012.jpg</span><span class="hint">1 of 3</span><div style="flex: 1"></div>
-<button class="btn sm ghost icon" aria-label="Previous image"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M5 12l6 6M5 12l6-6"></path></svg></button><button class="btn sm ghost icon" aria-label="Next image"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
-<button class="btn sm" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>Show original</button></div>
-<div style="height: 350px; border-radius: 10px; background: var(--raise); display: grid; place-items: center; position: relative">
-<div role="img" aria-label="{{prevLabel}}" style="position: relative; width: 440px; height: 330px; box-shadow: 0 2px 10px rgba(0,0,0,.35)"><div aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(#d9d2c4, #c9bfae 62%, #8a6d4f 62%, #6f553c); {{rotStyle}}; filter: {{toneFilter}}">
-<span style="position: absolute; left: 170px; top: 40px; width: 120px; height: 120px; background: linear-gradient(#bcd7ee, #e7f0f7); border: 6px solid #f3efe7; box-sizing: border-box"></span>
-<span style="position: absolute; left: 40px; top: 120px; width: 70px; height: 140px; background: #a48a6c; border: 3px solid #8e7558"></span>
-<span style="position: absolute; left: 300px; top: 168px; width: 110px; height: 70px; background: #5f6b5a; border-radius: 6px 6px 2px 2px"></span></div>
-<sc-if value="{{isCrop}}" hint-placeholder-val="{{ true }}"><div aria-hidden="true" style="position: absolute; inset: 0; overflow: hidden; pointer-events: none"><span style="position: absolute; left: 60px; top: 30px; width: 320px; height: 250px; box-shadow: 0 0 0 999px rgba(0,0,0,.52)"></span></div><div role="group" tabindex="0" aria-label="Crop area, 2932 by 2291 pixels. Drag to move it or drag a handle to resize. Arrow keys move it, Shift+arrow moves it further." style="position: absolute; left: 60px; top: 30px; width: 320px; height: 250px; cursor: move"></div><sc-if value="{{isDragging}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" style="position: absolute; left: 167px; top: 30px; width: 1px; height: 250px; background: rgba(255,255,255,.6)"></span><span aria-hidden="true" style="position: absolute; left: 273px; top: 30px; width: 1px; height: 250px; background: rgba(255,255,255,.6)"></span><span aria-hidden="true" style="position: absolute; left: 60px; top: 113px; width: 320px; height: 1px; background: rgba(255,255,255,.6)"></span><span aria-hidden="true" style="position: absolute; left: 60px; top: 197px; width: 320px; height: 1px; background: rgba(255,255,255,.6)"></span></sc-if><div class="tf" aria-hidden="true" style="left: 60px; top: 30px; width: 320px; height: 250px"><span class="th nwse" style="left: 0%; top: 0%"></span><span class="th ns" style="left: 50%; top: 0%"></span><span class="th nesw" style="left: 100%; top: 0%"></span><span class="th ew" style="left: 100%; top: 50%"></span><span class="th nwse" style="left: 100%; top: 100%"></span><span class="th ns" style="left: 50%; top: 100%"></span><span class="th nesw" style="left: 0%; top: 100%"></span><span class="th ew" style="left: 0%; top: 50%"></span></div><sc-if value="{{isDragging}}" hint-placeholder-val="{{ false }}"><span class="tf-chip" aria-hidden="true" style="left: 220px; top: 290px">{{chipText}}</span></sc-if><sc-if value="{{isMoving}}" hint-placeholder-val="{{ false }}"><span class="tf-guide" style="left: 220px; top: 0px; width: 1px; height: 330px"></span><span class="tf-cur" style="left: 209px; top: 144px"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 1.5l3.5 3.5h-2.3v5.8H19V8.5l3.5 3.5-3.5 3.5v-2.3h-5.8V19h2.3L12 22.5 8.5 19h2.3v-5.8H5v2.3L1.5 12 5 8.5v2.3h5.8V5H8.5z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if><sc-if value="{{isResizing}}" hint-placeholder-val="{{ false }}"><span class="tf-cur" style="left: 369px; top: 269px"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M3 3h8l-2.8 2.8 9.6 9.6L20.6 12.6V21h-8l2.8-2.8-9.6-9.6L3 11.4z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if></sc-if><sc-if value="{{isWm}}" hint-placeholder-val="{{ false }}"><button aria-label="Watermark, © Harbour Properties. Selected. Arrow keys move it, Shift+arrow moves it further." style="position: absolute; left: 238px; top: 274px; width: 180px; height: 30px; background: none; border: 0; padding: 0; color: rgba(255,255,255,{{wmAlpha}}); font-family: inherit; font-size: 16px; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,.4); cursor: move; white-space: nowrap">© Harbour Properties</button><div class="tf" aria-hidden="true" style="left: 238px; top: 274px; width: 180px; height: 30px"><span class="th nwse" style="left: 0%; top: 0%"></span><span class="th nesw" style="left: 100%; top: 0%"></span><span class="th nwse" style="left: 100%; top: 100%"></span><span class="th nesw" style="left: 0%; top: 100%"></span></div><sc-if value="{{isDragging}}" hint-placeholder-val="{{ false }}"><span class="tf-chip" aria-hidden="true" style="left: 328px; top: 264px">{{chipText}}</span></sc-if><sc-if value="{{isMoving}}" hint-placeholder-val="{{ false }}"><span class="tf-guide" style="left: 0px; top: 304px; width: 440px; height: 1px"></span><span class="tf-guide" style="left: 418px; top: 0px; width: 1px; height: 330px"></span><span class="tf-cur" style="left: 317px; top: 278px"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 1.5l3.5 3.5h-2.3v5.8H19V8.5l3.5 3.5-3.5 3.5v-2.3h-5.8V19h2.3L12 22.5 8.5 19h2.3v-5.8H5v2.3L1.5 12 5 8.5v2.3h5.8V5H8.5z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if><sc-if value="{{isResizing}}" hint-placeholder-val="{{ false }}"><span class="tf-cur" style="left: 407px; top: 293px"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M3 3h8l-2.8 2.8 9.6 9.6L20.6 12.6V21h-8l2.8-2.8-9.6-9.6L3 11.4z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if></sc-if>
-</div></div>
-<span class="hint">{{stageHint}}</span></div>
-</section><section aria-label="Options" style="flex: 1 1 300px; max-width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column">
-<div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; flex: 1; overflow: auto"><div role="tablist" aria-label="Edit" class="seg tabs5" style="display: grid; grid-template-columns: repeat(5, auto)"><button role="tab" aria-selected="{{tabResize}}" tabindex="{{tiResize}}">Resize</button><button role="tab" aria-selected="{{tabCrop}}" tabindex="{{tiCrop}}">Crop</button><button role="tab" aria-selected="{{tabRotate}}" tabindex="{{tiRotate}}">Rotate</button><button role="tab" aria-selected="{{tabAdjust}}" tabindex="{{tiAdjust}}">Adjust</button><button role="tab" aria-selected="{{tabWatermark}}" tabindex="{{tiWatermark}}">Watermark</button></div>
-<sc-if value="{{isResize}}" hint-placeholder-val="{{ false }}"><div class="opt"><label class="lbl" for="rs">Resize by</label><select id="rs" class="field"><option>Longest side</option><option>Width</option><option>Height</option><option>Percentage</option></select></div>
-<div class="opt"><label class="lbl" for="px">Longest side, pixels</label><input id="px" class="field" value="2048" inputmode="numeric"><span class="hint">Smaller images are not enlarged.</span></div></sc-if><sc-if value="{{isCrop}}" hint-placeholder-val="{{ true }}"><fieldset class="opt"><legend class="lbl">Shape</legend><div role="radiogroup" aria-label="Crop shape" class="seg"><button role="radio" aria-checked="true">Free</button><button role="radio" aria-checked="false" tabindex="-1">Square</button><button role="radio" aria-checked="false" tabindex="-1">4:3</button><button role="radio" aria-checked="false" tabindex="-1">16:9</button><button role="radio" aria-checked="false" tabindex="-1">Original</button></div></fieldset>
-<fieldset class="opt" style="border: 0; margin: 0; padding: 0"><legend class="lbl" style="padding: 0; margin-bottom: 6px">Crop area, pixels</legend><div class="geo"><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">X<input class="field" value="550" inputmode="decimal" aria-label="Crop left edge, pixels"></label><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Y<input class="field" value="275" inputmode="decimal" aria-label="Crop top edge, pixels"></label><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Width<input class="field" value="2932" inputmode="decimal" aria-label="Crop width, pixels"></label><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Height<input class="field" value="2291" inputmode="decimal" aria-label="Crop height, pixels"></label></div>
-<span class="hint">Drag the area or its handles in the preview. Hold Shift to keep the shape. Arrow keys move it, {{altKey}}+arrow resizes it.</span></fieldset>
-<div class="opt"><label class="lbl" for="an">When an image is a different size</label><select id="an" class="field"><option>Keep the centre</option><option>Keep the top</option><option>Keep the bottom</option></select></div></sc-if><sc-if value="{{isRot}}" hint-placeholder-val="{{ false }}"><fieldset class="opt"><legend class="lbl">Rotate and flip</legend><div role="toolbar" aria-label="Rotate and flip" style="display: flex; gap: 6px; flex-wrap: wrap"><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4v6h6"></path><path d="M3.5 10A9 9 0 1 1 6 16.5"></path></svg>Left</button><button class="btn sm" aria-pressed="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 4v6h-6"></path><path d="M20.5 10A9 9 0 1 0 18 16.5"></path></svg>Right</button><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"></path><path d="M9 7L4 12l5 5z"></path><path d="M15 7l5 5-5 5z"></path></svg>Flip across</button><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h18"></path><path d="M7 9l5-5 5 5z"></path><path d="M7 15l5 5 5-5z"></path></svg>Flip down</button></div></fieldset></sc-if><sc-if value="{{isAdj}}" hint-placeholder-val="{{ false }}"><div class="opt"><label class="lbl" for="br" style="display: flex">Brightness<span style="flex: 1"></span><span class="hint">+10</span></label><input id="br" type="range" min="-100" max="100" value="10" aria-valuetext="+10"></div><div class="opt"><label class="lbl" for="ct" style="display: flex">Contrast<span style="flex: 1"></span><span class="hint">+5</span></label><input id="ct" type="range" min="-100" max="100" value="5" aria-valuetext="+5"></div><div class="opt"><label class="lbl" for="sa" style="display: flex">Saturation<span style="flex: 1"></span><span class="hint">0</span></label><input id="sa" type="range" min="-100" max="100" value="0" aria-valuetext="0"></div><div class="opt"><label class="lbl" for="ex" style="display: flex">Exposure<span style="flex: 1"></span><span class="hint">0</span></label><input id="ex" type="range" min="-100" max="100" value="0" aria-valuetext="0"></div><button class="btn sm ghost" style="align-self: flex-start">Reset adjustments</button></sc-if><sc-if value="{{isWm}}" hint-placeholder-val="{{ false }}"><div class="opt"><label class="lbl" for="wt">Text</label><input id="wt" class="field" value="© Harbour Properties"></div>
-<div class="opt"><label class="lbl" for="wo" style="display: flex">Opacity<span style="flex: 1"></span><span class="hint">{{wmPct}}</span></label><input id="wo" type="range" min="5" max="100" value="70" aria-valuetext="{{wmPct}}"></div>
-<fieldset class="opt" style="border: 0; margin: 0; padding: 0"><legend class="lbl" style="padding: 0; margin-bottom: 6px">Position and size, % of the image</legend><div class="geo"><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">X<input class="field" value="54%" inputmode="decimal" aria-label="Distance from left, percent"></label><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Y<input class="field" value="83%" inputmode="decimal" aria-label="Distance from top, percent"></label><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Width<input class="field" value="41%" inputmode="decimal" aria-label="Width, percent"></label><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Height<input class="field" value="9%" inputmode="decimal" aria-label="Height, percent, follows width"></label></div>
-<label class="chk"><input type="checkbox" checked disabled>Keep proportions, so the text never stretches</label>
-<span class="hint">Drag the text in the preview, or a corner to resize it. Percentages keep it in the same place on every image. Arrow keys move it, {{altKey}}+arrow resizes it.</span></fieldset></sc-if>
-<div class="opt"><label class="chk"><input type="checkbox" checked>Remove location and camera details</label></div>
-<div style="border-top: 1px solid var(--line); padding-top: 16px; display: flex; flex-direction: column; gap: 8px">
-<div style="display: flex; align-items: center; gap: 6px"><span class="lbl" id="planl">Edit plan</span><div style="flex: 1"></div>
-<button class="btn sm ghost icon" aria-label="Undo"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button><button class="btn sm ghost icon" aria-label="Redo" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button><button class="btn sm ghost">Reset edits</button></div>
-<ol aria-labelledby="planl" style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px"><li style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--raise)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg><span style="flex: 1">Resize, longest side 2048 px</span><button class="btn sm ghost icon" aria-label="Remove edit 1, Resize, longest side 2048 px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></li><li style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--raise)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="9" cy="6" r="1"></circle><circle cx="15" cy="6" r="1"></circle><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="9" cy="18" r="1"></circle><circle cx="15" cy="18" r="1"></circle></svg><span style="flex: 1">Adjust, brightness +10, contrast +5</span><button class="btn sm ghost icon" aria-label="Remove edit 2, Adjust, brightness +10, contrast +5"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></li></ol>
-<button class="btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add edit to plan</button>
-<span class="hint" role="status">2 edits will be applied to each selected image. Unsaved {{curEdit}} changes are added when you export.</span></div><div style="border-top: 1px solid var(--line); padding-top: 18px; display: flex; flex-direction: column; gap: 8px"><span class="lbl">Save to</span>
-<div style="display: flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span>Next to each original</span></div>
-<button class="btn ghost" style="align-self: flex-start; padding: 0; height: 24px; color: var(--fg); text-decoration: underline; text-underline-offset: 3px">Change for this run</button><div style="display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; background: var(--raise)"><span class="hint">Example</span><span>IMG_4012-edited.jpg</span><span class="hint">An existing name gets -1, -2 and so on. Nothing is replaced.</span></div></div></div>
-<footer style="padding: 14px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px"><span class="hint">Originals stay as they are</span><div style="flex: 1"></div><button class="btn pri">Export edited images<span class="kbd">{{runKey}}</span></button></footer>
+<div class="stk" role="toolbar" aria-label="Edit stack">
+<div role="list" aria-label="Steps, in the order they run" style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0">
+<sc-for list="{{chips}}" as="c"><sc-if value="{{c.sep}}"><span class="sep" aria-hidden="true">›</span></sc-if><sc-if value="{{c.present}}"><span role="listitem" class="{{c.cls}}"><button class="main" aria-pressed="{{c.on}}" aria-label="{{c.aria}}"><span class="num" aria-hidden="true">{{c.num}}</span>{{c.short}}</button><button class="x" aria-label="Remove {{c.full}} step"><svg class="ic s" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"></path></svg></button></span></sc-if><sc-if value="{{c.add}}"><span role="listitem" class="step add"><button class="main" aria-label="Add {{c.full}} step">+ {{c.short}}</button></span></sc-if></sc-for>
+</div>
+<div class="vr" aria-hidden="true"></div>
+<sc-if value="{{canUndo}}"><button class="btn sm ghost icon" aria-label="Undo, {{undoKey}}" title="Undo {{undoKey}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button></sc-if><sc-if value="{{noUndo}}"><button class="btn sm ghost icon" aria-label="Undo, {{undoKey}}" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14L4 9l5-5"></path><path d="M4 9h11a5 5 0 0 1 0 10h-3"></path></svg></button></sc-if>
+<button class="btn sm ghost icon" aria-label="Redo, {{redoKey}}" title="Redo {{redoKey}}" disabled><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l5-5-5-5"></path><path d="M20 9H9a5 5 0 0 0 0 10h3"></path></svg></button>
+<sc-if value="{{hasSteps}}"><button class="btn sm ghost">Reset stack</button></sc-if><sc-if value="{{noSteps}}"><button class="btn sm ghost" disabled>Reset stack</button></sc-if>
+</div>
+<sc-if value="{{hasStackMsg}}"><div role="status" aria-live="polite" style="flex: none; display: flex; align-items: center; gap: 10px; padding: 7px 20px; border-bottom: 1px solid var(--line); background: var(--raise)"><svg class="ic s" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg><span style="font-size: 12px">{{stackMsg}}</span><div style="flex: 1"></div><sc-if value="{{stackMsgUndo}}"><button class="btn sm">Undo<span class="kbd">{{undoKey}}</span></button></sc-if></div></sc-if>
+<div style="flex: 1; display: flex; min-height: 0">
+<section aria-label="Images" style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<sc-if value="{{isEmpty}}"><div style="flex: 1; padding: 20px; display: flex">
+<div class="drop" role="region" aria-label="Drop images here" style="flex: 1">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 32px; height: 32px; color: var(--mut)"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>
+<strong style="font-size: 15px">Drop images here</strong>
+<span class="hint" style="max-width: 380px">JPEG, PNG, WebP, HEIC, TIFF and BMP. Every image gets the same steps, and each one is saved as a new file.</span>
+<button class="btn pri"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Open files<span class="kbd">{{openKey}}</span></button>
+<span class="hint">Saves next to each original. The originals are never changed.</span>
+</div></div></sc-if>
+<sc-if value="{{hasFiles}}">
+<div style="flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--line)"><strong>{{fileCount}}</strong><span class="hint">Every image gets the whole stack</span><div style="flex: 1"></div><button class="btn sm"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"></path></svg>Add files<span class="kbd">{{openKey}}</span></button><button class="btn sm ghost">Clear list</button></div>
+<sc-if value="{{hasRejected}}"><div role="region" aria-label="Not added, 3 files" style="flex: none; padding: 10px 20px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; gap: 8px"><span class="lbl">Not added, 3 files</span><span class="hint">The other 5 were added.</span><div style="flex: 1"></div><button class="btn sm ghost">Dismiss</button></div>
+<sc-for list="{{rejected}}" as="r"><div style="display: grid; grid-template-columns: 180px minmax(0,1fr) auto; gap: 10px; align-items: center; min-height: 26px"><span class="ell">{{r.name}}</span><span class="hint">{{r.reason}}</span><sc-if value="{{r.pointer}}"><button class="btn sm">{{r.pointer}}</button></sc-if><sc-if value="{{r.noPointer}}"><span></span></sc-if></div></sc-for>
+</div></sc-if>
+<div style="flex: 1; display: flex; min-height: 0">
+<ul role="listbox" aria-label="Images to edit. The selected image is the one previewed." style="flex: none; width: 250px; list-style: none; margin: 0; padding: 0; overflow: hidden; border-right: 1px solid var(--line)">
+<sc-for list="{{files}}" as="f"><li role="option" class="frow" aria-selected="{{f.sel}}" tabindex="{{f.ti}}" aria-label="{{f.aria}}">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut); margin-top: 2px"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 16l5-5 4 4 3-3 6 6"></path><circle cx="15.5" cy="8.5" r="1.5"></circle></svg>
+<span style="min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px"><span class="ell">{{f.name}}</span><span class="hint ell">{{f.dims}}</span>
+<sc-if value="{{f.hasMsg}}"><span class="{{f.msgCls}}"><sc-if value="{{f.warn}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{f.info}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></sc-if><span>{{f.msg}}</span></span></sc-if></span>
+<sc-if value="{{f.isSel}}"><svg class="ic s" viewBox="0 0 24 24" aria-hidden="true" style="margin-top: 3px"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></sc-if>
+</li></sc-for>
+<li class="hint" style="padding: 10px 16px">↑ ↓ choose the previewed image. Delete removes it from the list.</li>
+</ul>
+<div style="flex: 1; min-width: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 6px"><span class="lbl ell">Previewing {{prevName}}</span><span class="hint" style="flex: none">{{prevPos}}</span><div style="flex: 1"></div>
+<button class="btn sm ghost icon" aria-label="Previous image"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button><button class="btn sm ghost icon" aria-label="Next image"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button></div>
+<div style="display: flex; align-items: center; gap: 8px"><div role="tablist" aria-label="Preview or metadata" class="seg"><button role="tab" aria-selected="{{tabPrev}}">Preview</button><button role="tab" aria-selected="{{tabMeta}}">Metadata</button></div><div style="flex: 1"></div><sc-if value="{{showImg}}"><button class="btn sm" aria-pressed="false"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>Show original</button></sc-if></div>
+<sc-if value="{{showImg}}"><div style="height: {{boxH}}px; flex: none; border-radius: 10px; background: var(--raise); display: grid; place-items: center; position: relative">
+<div style="position: relative; width: {{imgW}}px; height: {{imgH}}px; box-shadow: 0 2px 10px rgba(0,0,0,.35)">
+<div role="img" aria-label="{{prevLabel}}" style="position: absolute; inset: 0; overflow: hidden; background: #f4f1ea"><div aria-hidden="true" style="position: absolute; left: 50%; top: 50%; width: {{artW}}px; height: {{artH}}px; transform: translate(-50%,-50%) rotate({{artRot}}deg); filter: {{toneFilter}}; background: {{artBg}}">
+<span style="position: absolute; left: 38%; top: 12%; width: 27%; height: 36%; background: linear-gradient(#bcd7ee, #e7f0f7); border: 5px solid #f3efe7; box-sizing: border-box"></span>
+<span style="position: absolute; left: 9%; top: 36%; width: 16%; height: 42%; background: #a48a6c; border: 3px solid #8e7558; box-sizing: border-box"></span>
+<span style="position: absolute; left: 68%; top: 51%; width: 25%; height: 21%; background: #5f6b5a; border-radius: 6px 6px 2px 2px"></span></div></div>
+<sc-if value="{{showCrop}}"><div aria-hidden="true" style="position: absolute; inset: 0; overflow: hidden; pointer-events: none"><span style="position: absolute; left: {{cx}}%; top: {{cy}}%; width: {{cw}}%; height: {{ch}}%; box-shadow: 0 0 0 999px rgba(0,0,0,.52)"></span></div>
+<div role="group" tabindex="0" aria-label="{{cropAria}}" style="position: absolute; left: {{cx}}%; top: {{cy}}%; width: {{cw}}%; height: {{ch}}%; cursor: move"></div>
+<sc-if value="{{isDragging}}"><span aria-hidden="true" style="position: absolute; left: {{t1x}}%; top: {{cy}}%; width: 1px; height: {{ch}}%; background: rgba(255,255,255,.6)"></span><span aria-hidden="true" style="position: absolute; left: {{t2x}}%; top: {{cy}}%; width: 1px; height: {{ch}}%; background: rgba(255,255,255,.6)"></span><span aria-hidden="true" style="position: absolute; left: {{cx}}%; top: {{t1y}}%; width: {{cw}}%; height: 1px; background: rgba(255,255,255,.6)"></span><span aria-hidden="true" style="position: absolute; left: {{cx}}%; top: {{t2y}}%; width: {{cw}}%; height: 1px; background: rgba(255,255,255,.6)"></span></sc-if>
+<div class="tf" aria-hidden="true" style="left: {{cx}}%; top: {{cy}}%; width: {{cw}}%; height: {{ch}}%"><span class="th" style="left: 0%; top: 0%; cursor: nwse-resize"></span><span class="th" style="left: 100%; top: 0%; cursor: nesw-resize"></span><span class="th" style="left: 100%; top: 100%; cursor: nwse-resize"></span><span class="th" style="left: 0%; top: 100%; cursor: nesw-resize"></span><sc-if value="{{cropEdges}}"><span class="th" style="left: 50%; top: 0%; cursor: ns-resize"></span><span class="th" style="left: 100%; top: 50%; cursor: ew-resize"></span><span class="th" style="left: 50%; top: 100%; cursor: ns-resize"></span><span class="th" style="left: 0%; top: 50%; cursor: ew-resize"></span></sc-if></div>
+<sc-if value="{{isDragging}}"><span class="tf-chip" aria-hidden="true" style="left: 50%; top: calc(100% + 8px)">{{chipText}}</span></sc-if>
+<sc-if value="{{isMoving}}"><span class="tf-guide" style="left: 50%; top: 0; width: 1px; height: 100%"></span><span class="tf-cur" style="left: calc(50% - 11px); top: calc(50% - 11px)"><svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 1.5l3.5 3.5h-2.3v5.8H19V8.5l3.5 3.5-3.5 3.5v-2.3h-5.8V19h2.3L12 22.5 8.5 19h2.3v-5.8H5v2.3L1.5 12 5 8.5v2.3h5.8V5H8.5z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if>
+<sc-if value="{{isResizing}}"><span class="tf-cur" style="left: calc({{cx2}}% - 11px); top: calc(100% - 11px)"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M3 3h8l-2.8 2.8 9.6 9.6L20.6 12.6V21h-8l2.8-2.8-9.6-9.6L3 11.4z" fill="#111" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg></span></sc-if>
+</sc-if>
+<sc-if value="{{showWmText}}"><div style="position: absolute; right: 6%; bottom: 8%; transform: rotate({{wmRot}}deg); transform-origin: 50% 50%">
+<button aria-label="{{wmAria}}" style="display: block; background: none; border: 0; padding: 2px 6px; color: rgba(255,255,255,.7); font-weight: 600; font-size: 17px; text-shadow: 0 1px 2px rgba(0,0,0,.45); cursor: move; white-space: nowrap">{{wmText}}</button>
+<sc-if value="{{wmSelected}}"><div class="tf" aria-hidden="true" style="inset: 0"><span class="stem"></span><span class="rot"></span><span class="th" style="left: 0%; top: 0%"></span><span class="th" style="left: 100%; top: 0%"></span><span class="th" style="left: 100%; top: 100%"></span><span class="th" style="left: 0%; top: 100%"></span></div></sc-if>
+</div></sc-if>
+<sc-if value="{{showWmTile}}"><div role="img" aria-label="Logo tiled across the image at 35 percent opacity, turned 30 degrees" style="position: absolute; inset: 0; overflow: hidden; pointer-events: none"><sc-for list="{{tiles}}" as="p"><svg viewBox="0 0 24 24" aria-hidden="true" style="position: absolute; left: {{p.x}}%; top: {{p.y}}%; width: 30px; height: 30px; transform: rotate(-30deg); opacity: .35; fill: none; stroke: #fff; stroke-width: 2"><path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"></path></svg></sc-for></div></sc-if>
+</div></div></sc-if>
+<sc-if value="{{showMeta}}"><div role="tabpanel" aria-label="Metadata in {{prevName}}" style="flex: none; border: 1px solid var(--line2); border-radius: 10px; overflow: hidden">
+<div style="padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--raise); display: flex; align-items: baseline; gap: 8px"><span class="lbl">Found in this image</span><span class="hint">Nothing changes until you run.</span></div>
+<dl style="margin: 0"><sc-for list="{{metaRows}}" as="m"><div class="mrow"><dt>{{m.name}}</dt><dd class="hint">{{m.detail}}</dd><span class="badge" style="color: {{m.fateColor}}">{{m.fate}}</span></div></sc-for></dl>
+</div></sc-if>
+<span class="hint" role="status">{{stageHint}}</span>
+</div>
+</div>
+</sc-if>
+</section>
+<section aria-label="Options" style="flex: none; width: 360px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0">
+<div style="padding: 14px 20px; display: flex; flex-direction: column; gap: 12px; flex: 1; overflow: hidden">
+<sc-if value="{{hasFocus}}"><div style="display: flex; flex-direction: column; gap: 3px">
+<div style="display: flex; align-items: center; gap: 8px"><span class="num">{{fNum}}</span><h2 style="margin: 0; font-size: 14px; font-weight: 600">{{fName}}</h2><div style="flex: 1"></div><button class="btn sm ghost">Remove step</button></div>
+<span class="hint">{{fOrder}}</span></div></sc-if>
+<sc-if value="{{noSteps}}"><div class="box"><strong>No steps in the stack</strong><span class="hint">Pick a tool in the sidebar, or a dashed step above, to add it. Steps always run in the same order, whichever you add first.</span></div></sc-if>
+
+<sc-if value="{{isCrop}}">
+<fieldset class="opt"><legend class="lbl">Crop by</legend><div role="radiogroup" aria-label="Crop by" class="seg full"><button role="radio" aria-checked="{{cropAspect}}">Aspect ratio</button><button role="radio" aria-checked="{{cropPixel}}">Pixel rectangle</button></div></fieldset>
+<sc-if value="{{isCropAspect}}">
+<fieldset class="opt"><legend class="lbl">Ratio</legend><div role="radiogroup" aria-label="Ratio" class="seg full"><button role="radio" aria-checked="false">1:1</button><button role="radio" aria-checked="true">4:5</button><button role="radio" aria-checked="false">4:3</button><button role="radio" aria-checked="false">3:2</button><button role="radio" aria-checked="false">16:9</button></div>
+<label class="chk hint"><input type="checkbox">Swap for portrait images</label></fieldset>
+<div class="opt"><label class="lbl" for="kp">Keep</label><select id="kp" class="field"><option>{{keepVal}}</option><option>Top or left</option><option>Bottom or right</option><option>Where I drag it</option></select><span class="hint">Each image keeps the largest 4:5 area it has, so every size in the batch works. Drag the area in the preview to choose the part to keep. Arrow keys move it.</span></div>
+</sc-if>
+<sc-if value="{{isCropPixel}}">
+<fieldset class="opt"><legend class="lbl">Rectangle, pixels</legend><div class="geo"><label class="lbl">X<input class="field" value="550" inputmode="numeric" aria-label="Left edge, pixels"></label><label class="lbl">Y<input class="field" value="275" inputmode="numeric" aria-label="Top edge, pixels"></label><label class="lbl">Width<input class="field" value="2932" inputmode="numeric" aria-label="Width, pixels"></label><label class="lbl">Height<input class="field" value="2291" inputmode="numeric" aria-label="Height, pixels"></label></div>
+<span class="hint">The same pixels are cut from every image. Drag the area or a handle in the preview. Arrow keys move it, {{altKey}}+arrow resizes it.</span></fieldset>
+<div class="box" role="note" style="border-color: var(--warn)"><div class="msg warn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg><span><strong>2 of 5 images are smaller than this rectangle.</strong> They will fail: IMG_0087.jpg and badge.png.</span></div><button class="btn sm" style="align-self: flex-start">Use aspect ratio instead</button></div>
+</sc-if>
+</sc-if>
+
+<sc-if value="{{isResize}}">
+<fieldset class="opt"><legend class="lbl">Resize by</legend><div role="radiogroup" aria-label="Resize by" class="seg full"><button role="radio" aria-checked="{{rsLong}}">Longest side</button><button role="radio" aria-checked="{{rsExact}}">Exact size</button><button role="radio" aria-checked="{{rsPct}}">Percentage</button></div></fieldset>
+<sc-if value="{{isRsLong}}"><div class="opt"><label class="lbl" for="ls">Longest side, pixels</label><input id="ls" class="field" value="2048" inputmode="numeric" aria-describedby="lsh"><span id="lsh" class="hint">Each image is scaled so its longer edge is 2048 px, keeping its shape. Portrait and landscape images both work. Up to 16384.</span></div></sc-if>
+<sc-if value="{{isRsExact}}"><fieldset class="opt"><legend class="lbl">Size, pixels</legend><div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: end"><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Width<input class="field" value="1600" inputmode="numeric"></label><button class="btn icon" aria-pressed="true" aria-label="Keep aspect ratio" title="Keep aspect ratio"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"></path><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"></path></svg></button><label class="lbl" style="display: flex; flex-direction: column; gap: 4px">Height<input class="field" value="1200" inputmode="numeric"></label></div>
+<span class="hint">Keep aspect ratio is on: each image fits inside 1600 × 1200 and keeps its shape. Turn it off to make every image exactly 1600 × 1200.</span></fieldset></sc-if>
+<sc-if value="{{isRsPct}}"><div class="opt"><label class="lbl" for="pc">Percentage</label><input id="pc" class="field" value="1500" inputmode="numeric" aria-invalid="true" aria-describedby="pce"><span id="pce" class="msg bad"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6M12 16.5v.01"></path></svg><span>Enter a percentage from 1 to 1000.</span></span></div></sc-if>
+<div class="opt"><label class="lbl" for="rsm">Resampling</label><select id="rsm" class="field"><option>Smooth, best for photos</option><option>Sharp, keeps fine detail</option><option>Nearest, for pixel art</option></select></div>
+</sc-if>
+
+<sc-if value="{{isRot}}">
+<fieldset class="opt"><legend class="lbl">Rotate</legend><div role="radiogroup" aria-label="Rotate clockwise" class="seg full"><button role="radio" aria-checked="false">0°</button><button role="radio" aria-checked="true">90°</button><button role="radio" aria-checked="false">180°</button><button role="radio" aria-checked="false">270°</button></div><span class="hint">Clockwise, as you see the image in the preview.</span></fieldset>
+<fieldset class="opt"><legend class="lbl">Flip</legend><div role="radiogroup" aria-label="Flip" class="seg full"><button role="radio" aria-checked="true">None</button><button role="radio" aria-checked="false">Horizontal</button><button role="radio" aria-checked="false">Vertical</button></div></fieldset>
+</sc-if>
+
+<sc-if value="{{isTone}}">
+<sc-for list="{{toneRows}}" as="t"><div class="opt"><label class="lbl" for="{{t.id}}">{{t.name}}</label><div class="sl"><input id="{{t.id}}" type="range" min="-100" max="100" value="{{t.v}}" aria-valuetext="{{t.txt}}"><input class="field" value="{{t.txt}}" inputmode="numeric" aria-label="{{t.name}}, from −100 to 100"></div></div></sc-for>
+<div style="display: flex; align-items: center; gap: 8px"><sc-if value="{{toneDirty}}"><button class="btn sm">Reset tone</button></sc-if><sc-if value="{{toneClean}}"><button class="btn sm" disabled>Reset tone</button></sc-if><span class="hint">Each runs from −100 to 100. 0 leaves it as it is.</span></div>
+</sc-if>
+
+<sc-if value="{{isWm}}">
+<div style="display: flex; align-items: center; gap: 10px"><div role="radiogroup" aria-label="Watermark type" class="seg"><button role="radio" aria-checked="{{wmIsText}}">Text</button><button role="radio" aria-checked="{{wmIsPic}}">Picture</button></div><span class="hint">Same options as the PDF watermark</span></div>
+<sc-if value="{{wmTextMode}}"><div class="opt"><label class="lbl" for="wt">Text</label><input id="wt" class="field" value="{{wmText}}" aria-invalid="{{wmBad}}" aria-describedby="wte"><sc-if value="{{wmBadMsg}}"><span id="wte" class="msg bad"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6M12 16.5v.01"></path></svg><span>The watermark font can't draw “🏡”. Remove it, or use a picture instead.</span></span></sc-if></div></sc-if>
+<sc-if value="{{wmPicMode}}"><div class="opt"><span class="lbl">Picture</span><div style="display: flex; align-items: center; gap: 8px"><span style="width: 30px; height: 30px; border-radius: 6px; background: var(--raise); border: 1px solid var(--line2); display: grid; place-items: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"></path></svg></span><span class="ell" style="flex: 1">logo-mark.png</span><button class="btn sm">Choose…</button></div></div></sc-if>
+<div class="geo">
+<div class="opt"><label class="lbl" for="wsz">Size, % of width</label><input id="wsz" class="field" value="{{wmSize}}" inputmode="numeric"></div>
+<div class="opt"><label class="lbl" for="wop">Opacity</label><input id="wop" class="field" value="{{wmOpacity}}" inputmode="numeric"></div>
+<sc-if value="{{wmTextMode}}"><div class="opt"><label class="lbl" for="wcl">Colour</label><div style="display: flex; gap: 6px"><span aria-hidden="true" style="flex: none; width: 30px; height: 30px; border-radius: 7px; border: 1px solid var(--line2); background: #ffffff"></span><input id="wcl" class="field" value="#FFFFFF"></div></div></sc-if>
+<sc-if value="{{wmPicMode}}"><div class="opt"><span class="lbl">Colour</span><span class="hint">Colour applies to text only. Pictures keep their own colours.</span></div></sc-if>
+<div class="opt"><label class="lbl" for="wan">Angle</label><select id="wan" class="field"><option>{{wmAngle}}</option><option>0°</option><option>45°</option><option>90°</option><option>Custom…</option></select></div>
+</div>
+<fieldset class="opt"><legend class="lbl">Placement</legend><div style="display: flex; gap: 12px; align-items: flex-start"><div role="radiogroup" aria-label="Placement" class="seg"><button role="radio" aria-checked="{{wmPos}}">Position</button><button role="radio" aria-checked="{{wmTile}}">Tile</button></div>
+<sc-if value="{{wmPosMode}}"><div role="radiogroup" aria-label="Position on the image" class="anchor"><button role="radio" aria-checked="false" aria-label="Top left"></button><button role="radio" aria-checked="false" aria-label="Top"></button><button role="radio" aria-checked="false" aria-label="Top right"></button><button role="radio" aria-checked="false" aria-label="Left"></button><button role="radio" aria-checked="false" aria-label="Centre"></button><button role="radio" aria-checked="false" aria-label="Right"></button><button role="radio" aria-checked="false" aria-label="Bottom left"></button><button role="radio" aria-checked="false" aria-label="Bottom"></button><button role="radio" aria-checked="true" aria-label="Bottom right"></button></div></sc-if></div>
+<span class="hint">{{wmPlaceHint}}</span></fieldset>
+</sc-if>
+
+<sc-if value="{{isMeta}}">
+<div class="opt"><span class="lbl">Removes</span><ul class="hint" style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; color: var(--fg)"><li>Camera details (EXIF), including GPS location</li><li>XMP</li><li>IPTC</li><li>Comments</li></ul></div>
+<div class="opt"><span class="lbl">Keeps</span><ul class="hint" style="margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; color: var(--fg)"><li>Orientation, so photos stay upright</li><li>Colour profile, so colours look the same</li></ul></div>
+<span class="hint">Open the Metadata tab beside the preview to see what each image contains before you run.</span>
+</sc-if>
+
+<sc-for list="{{optMsgs}}" as="m"><div class="{{m.cls}}"><sc-if value="{{m.warn}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{m.info}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></sc-if><span>{{m.text}}</span></div></sc-for>
+</div>
+<div style="flex: none; padding: 14px 20px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px">
+<div class="orow"><label class="lbl" for="fmt">Format</label><select id="fmt" class="field"><option>{{fmtVal}}</option><option>Keep original format</option><option>JPEG</option><option>PNG</option><option>WebP</option><option>HEIC</option></select></div>
+<sc-for list="{{fmtMsgs}}" as="m"><div class="{{m.cls}}"><sc-if value="{{m.warn}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17.5v.01"></path></svg></sc-if><sc-if value="{{m.info}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></sc-if><span>{{m.text}}</span></div></sc-for>
+<sc-if value="{{destDefault}}"><div class="orow"><span class="lbl">Save to</span><div style="display: flex; align-items: baseline; gap: 10px; min-width: 0"><span class="ell">Next to each original</span><button class="btn link" style="font-size: 12px">Change for this run</button></div></div></sc-if>
+<sc-if value="{{destRun}}"><div class="orow" style="align-items: start"><span class="lbl" style="padding-top: 3px">Save to</span><div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div style="display: flex; align-items: center; gap: 6px; min-width: 0"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--mut)"><path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2"></path></svg><span class="ell">{{runDir}}</span><span class="badge" style="flex: none">This run only</span></div><div style="display: flex; gap: 6px"><button class="btn sm">Change…</button><button class="btn sm ghost">Reset to default</button></div><span class="hint">Your default in Settings stays Next to each original.</span></div></div></sc-if>
+<span class="hint">Saved as {{exampleName}}, or -1, -2 if taken.</span>
+</div>
+<footer style="flex: none; padding: 12px 20px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px"><span class="hint" style="flex: 1">{{footHint}}</span><sc-if value="{{canRun}}"><button class="btn pri">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if><sc-if value="{{cantRun}}"><button class="btn pri" disabled aria-describedby="rh">{{runLabel}}<span class="kbd">{{runKey}}</span></button></sc-if></footer>
 </section>
 </div>
 </div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "edit": {"editor": "enum", "options": ["Resize", "Crop", "Rotate", "Adjust", "Watermark"], "default": "Crop"}, "drag": {"editor": "enum", "options": ["Selected", "Moving", "Resizing"], "default": "Selected"}, "$preview": {"width": 1280, "height": 800}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["dark", "light"], "default": "dark"}, "platform": {"editor": "enum", "options": ["macOS", "Windows"], "default": "macOS"}, "state": {"editor": "enum", "options": ["Empty", "Files added", "Focused file changed", "Crop, mixed sizes", "Crop, pixel rectangle", "Step added", "Step removed", "Stack reset", "Resize, longest side", "Resize, exact size", "Resize, out of range", "Rotate and Flip", "Colour and Tone", "Colour and Tone, neutral", "Watermark, text", "Watermark, logo tiled", "Watermark, unsupported character", "Remove Image Metadata", "Output format JPEG", "Destination this run"], "default": "Crop, mixed sizes"}, "drag": {"editor": "enum", "options": ["Selected", "Moving", "Resizing"], "default": "Selected"}, "$preview": {"width": 1280, "height": 800}}'>
 class Component extends DCLogic {
 renderVals() {
 const win = (this.props.platform ?? 'macOS') === 'Windows';
 const light = (this.props.theme ?? 'dark') === 'light';
-const base = { themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey: win ? 'Ctrl+Enter' : '⌘↵', mod: win ? 'Ctrl' : '⌘', reveal: win ? 'Show in File Explorer' : 'Show in Finder', docsDir: win ? 'C:\\Users\\Asha\\Documents' : '~/Documents' };
+const st = this.props.state ?? 'Crop, mixed sizes';
 const dg = this.props.drag ?? 'Selected';
-const dragX = { isDragging: dg !== 'Selected', isMoving: dg === 'Moving', isResizing: dg === 'Resizing', isRotating: dg === 'Rotating',
-chipText: dg === 'Moving' ? "" : dg === 'Resizing' ? "" : "", altKey: win ? 'Alt' : 'Option' };
-const e = this.props.edit ?? 'Crop';
-const isC = e === 'Crop', isW = e === 'Watermark';
-dragX.chipText = !dragX.isDragging ? '' : isC ? (dragX.isMoving ? 'X 550, Y 275 px. Centred' : '2932 × 2291 px') : (dragX.isMoving ? 'X 54%, Y 83%. Lined up with the edges' : 'Width 41% of the image');
-const tones = { Adjust: 'brightness(1.1) contrast(1.05)' };
-const hints = { Resize: 'The preview is scaled to fit. Every selected image gets the same edits, in plan order.', Crop: 'Drag inside the area to move it, or drag a handle to resize. The dimmed part is removed.', Rotate: 'Rotation is applied before the other edits in the plan.', Adjust: 'Changes show in the preview straight away.', Watermark: 'Drag the text to place it. Drag a corner to make it bigger or smaller.' };
-const extra = { isResize: e === 'Resize', isCrop: isC, isRot: e === 'Rotate', isAdj: e === 'Adjust', isWm: isW,
-tabResize: String(e === 'Resize'), tiResize: e === 'Resize' ? '0' : '-1', tabCrop: String(e === 'Crop'), tiCrop: e === 'Crop' ? '0' : '-1', tabRotate: String(e === 'Rotate'), tiRotate: e === 'Rotate' ? '0' : '-1', tabAdjust: String(e === 'Adjust'), tiAdjust: e === 'Adjust' ? '0' : '-1', tabWatermark: String(e === 'Watermark'), tiWatermark: e === 'Watermark' ? '0' : '-1',
-prevLabel: 'IMG_4012.jpg preview, ' + e.toLowerCase() + (isC ? ', crop area 2932 by 2291 pixels' : isW ? ', watermark at the bottom right' : ''),
-stageHint: hints[e], curEdit: e.toLowerCase(), rotStyle: e === 'Rotate' ? 'transform: rotate(90deg) scale(.75)' : 'transform: none', toneFilter: tones[e] ?? 'none',
-wmAlpha: '.7', wmPct: '70 percent', ...dragX, isDragging: dragX.isDragging && (isC || isW), isMoving: dragX.isMoving && (isC || isW), isResizing: dragX.isResizing && (isC || isW) };
-return Object.assign(base, extra);
+const ORDER = [
+{ k: 'crop', short: 'Crop', full: 'Crop', d: 'M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2' },
+{ k: 'resize', short: 'Resize', full: 'Resize', d: 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7' },
+{ k: 'rot', short: 'Rotate and Flip', full: 'Rotate and Flip', d: 'M21 4v6h-6M20.5 10A9 9 0 1 0 18 16.5' },
+{ k: 'tone', short: 'Colour and Tone', full: 'Colour and Tone', d: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 3v18' },
+{ k: 'wm', short: 'Watermark', full: 'Watermark', d: 'M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z' },
+{ k: 'meta', short: 'Remove Metadata', full: 'Remove Image Metadata', d: 'M20 13l-7 7-10-10V3h7zM7.5 7.5h.01' }
+];
+const FILES = [
+{ name: 'IMG_4012.jpg', w: 4032, h: 3024, size: '3.1 MB' },
+{ name: 'IMG_4013.jpg', w: 4032, h: 3024, size: '2.9 MB' },
+{ name: 'floorplan.heic', w: 3024, h: 4032, size: '1.8 MB' },
+{ name: 'IMG_0087.jpg', w: 1200, h: 900, size: '0.4 MB' },
+{ name: 'badge.png', w: 1600, h: 1200, size: '0.6 MB', alpha: true }
+];
+// Per-state setup: steps present, focused step, previewed file and flags.
+const C = {
+'Empty': { steps: ['crop'], focus: 'crop', empty: true },
+'Files added': { steps: ['crop'], focus: 'crop', rejected: true },
+'Focused file changed': { steps: ['crop', 'resize', 'wm'], focus: 'crop', prev: 2 },
+'Crop, mixed sizes': { steps: ['crop', 'resize', 'wm'], focus: 'crop' },
+'Crop, pixel rectangle': { steps: ['crop', 'resize', 'wm'], focus: 'crop', pixel: true },
+'Step added': { steps: ['crop', 'resize', 'wm'], focus: 'crop', msg: 'Crop added as step 1. Steps always run Crop, Resize, Rotate and Flip, Colour and Tone, Watermark, then Remove Metadata.', canUndo: true },
+'Step removed': { steps: ['crop', 'wm'], focus: 'wm', msg: 'Resize removed. The other steps keep their settings.', msgUndo: true, canUndo: true },
+'Stack reset': { steps: [], focus: null, msg: 'Stack reset. 3 steps removed. Your images are still in the list.', msgUndo: true, canUndo: true },
+'Resize, longest side': { steps: ['crop', 'resize', 'wm'], focus: 'resize', rs: 'long' },
+'Resize, exact size': { steps: ['resize'], focus: 'resize', rs: 'exact' },
+'Resize, out of range': { steps: ['resize'], focus: 'resize', rs: 'pct', invalid: 'Fix the percentage to run' },
+'Rotate and Flip': { steps: ['rot', 'wm'], focus: 'rot' },
+'Colour and Tone': { steps: ['resize', 'tone'], focus: 'tone' },
+'Colour and Tone, neutral': { steps: ['tone'], focus: 'tone', neutral: true },
+'Watermark, text': { steps: ['crop', 'resize', 'wm'], focus: 'wm', wm: 'text' },
+'Watermark, logo tiled': { steps: ['resize', 'wm'], focus: 'wm', wm: 'tile' },
+'Watermark, unsupported character': { steps: ['wm'], focus: 'wm', wm: 'bad', invalid: 'Fix the text to run' },
+'Remove Image Metadata': { steps: ['meta'], focus: 'meta' },
+'Output format JPEG': { steps: ['resize', 'wm'], focus: 'wm', wm: 'text', jpeg: true },
+'Destination this run': { steps: ['crop', 'resize', 'wm'], focus: 'crop', dest: true }
+};
+const c = C[st] || C['Crop, mixed sizes'];
+const steps = c.steps, f = c.focus, rs = c.rs || 'long', wmMode = c.wm || 'text';
+const has = (k) => steps.includes(k);
+const pos = (k) => steps.indexOf(k) + 1;
+const fo = ORDER.find((o) => o.k === f);
+const runKey = win ? 'Ctrl+Enter' : '⌘↵';
+// Rail: the six tools. A tool in the stack shows its step number.
+const rail = ORDER.map((o) => ({ full: o.full, d: o.d, cls: o.k === f ? 'nav on' : 'nav', cur: o.k === f ? 'true' : 'false', ti: (o.k === f || (!f && o.k === 'crop')) ? '0' : '-1', inStack: has(o.k), num: String(pos(o.k)),
+aria: o.full + (has(o.k) ? ', step ' + pos(o.k) + ' of ' + steps.length + (o.k === f ? ', showing' : '') : ', not in the stack') }));
+// Stack bar: all six slots in run order. Present steps are numbered; absent ones are dashed Add buttons.
+const chips = ORDER.map((o, i) => ({ sep: i > 0, present: has(o.k), add: !has(o.k), short: o.short, full: o.full, num: String(pos(o.k)), on: o.k === f ? 'true' : 'false', cls: o.k === f ? 'step on' : 'step',
+aria: 'Step ' + pos(o.k) + ' of ' + steps.length + ', ' + o.full + (o.k === f ? ', showing its options' : '') }));
+// Output size per file after the stack, in run order.
+const out = (fl) => {
+let w = fl.w, h = fl.h;
+for (const s of steps) {
+if (s === 'crop') { if (c.pixel) { if (w < 3482 || h < 2566) return null; w = 2932; h = 2291; } else { const r = (w > h ? 4 / 5 : 4 / 5); if (w / h > r) w = Math.round(h * r); else h = Math.round(w / r); } }
+if (s === 'resize') { if (rs === 'long') { const k = 2048 / Math.max(w, h); w = Math.round(w * k); h = Math.round(h * k); } else if (rs === 'exact') { const k = Math.min(1600 / w, 1200 / h); w = Math.round(w * k); h = Math.round(h * k); } else return 'x'; }
+if (s === 'rot') { const t = w; w = h; h = t; }
+}
+return w + ' × ' + h;
+};
+const prevIdx = c.prev ?? 0;
+const ext = c.jpeg ? '.jpg' : null;
+const files = c.empty ? [] : FILES.map((fl, i) => {
+const o = out(fl);
+let msg = '', cls = '', warn = false, info = false;
+if (c.pixel && o === null) { msg = 'Smaller than the rectangle. Will fail.'; warn = true; }
+else if (c.jpeg && fl.alpha) { msg = 'Transparent. Will be flattened onto white.'; info = true; }
+else if (c.neutral) { msg = 'No changes. Will be skipped.'; info = true; }
+else if (f === 'meta' && i === 4) { msg = 'No metadata found.'; info = true; }
+else if (fl.name.endsWith('.heic') && (c.jpeg || f === 'rot')) { msg = 'High bit depth. Saved as 8-bit sRGB.'; info = true; }
+cls = warn ? 'msg warn' : 'msg';
+const dims = fl.w + ' × ' + fl.h + (o && o !== 'x' && !c.neutral && steps.some((s) => s === 'crop' || s === 'resize' || s === 'rot') ? '  →  ' + o : '  ·  ' + fl.size);
+return { name: fl.name, dims, sel: i === prevIdx ? 'true' : 'false', isSel: i === prevIdx, ti: i === prevIdx ? '0' : '-1', hasMsg: !!msg, msg, msgCls: cls, warn, info,
+aria: fl.name + ', ' + fl.w + ' by ' + fl.h + (msg ? '. ' + msg : '') + (i === prevIdx ? '. Previewing' : '') };
+});
+const pf = FILES[prevIdx];
+// Preview geometry.
+let artRot = 0, portrait = pf.h > pf.w;
+if (has('rot') && f === 'rot') { artRot = 90; portrait = !portrait; }
+const boxH = c.rejected ? 250 : 360;
+const maxW = 376, maxH = boxH - 50;
+let iw = portrait ? 3 : 4, ih = portrait ? 4 : 3;
+const k = Math.min(maxW / iw, maxH / ih);
+const imgW = Math.round(iw * k), imgH = Math.round(ih * k);
+const artW = artRot ? imgH : imgW, artH = artRot ? imgW : imgH;
+let cx = 20, cy = 0, cw = 60, ch = 100;
+if (portrait) { cx = 0; cw = 100; cy = 3.1; ch = 93.8; }
+if (c.pixel) { cx = 13.6; cy = 9.1; cw = 72.7; ch = 75.8; }
+const showCrop = !c.empty && f === 'crop' && has('crop');
+const isDragging = showCrop && dg !== 'Selected';
+const tones = { tone: 'brightness(1.1) contrast(1.05) saturate(.8)' };
+const toneFilter = has('tone') && !c.neutral ? tones.tone : 'none';
+const showMeta = f === 'meta';
+const showImg = !showMeta;
+const showWmText = has('wm') && !c.empty && (wmMode !== 'tile') && !showCrop;
+const showWmTile = has('wm') && wmMode === 'tile' && f === 'wm';
+const tiles = [];
+if (showWmTile) for (let y = 0; y < 4; y++) for (let x = 0; x < 5; x++) tiles.push({ x: String(4 + x * 20 + (y % 2) * 10), y: String(6 + y * 25) });
+const pDims = pf.w + ' by ' + pf.h;
+const cropAria = c.pixel ? 'Crop area, 2932 by 2291 pixels, from 550, 275. Drag to move it or drag a handle to resize. Arrow keys move it.' : 'Crop area, 4:5, keeping the centre. Drag to choose the part to keep. Arrow keys move it.';
+const stageHints = {
+crop: c.pixel ? 'The dimmed part is removed. Images smaller than the rectangle are marked in the list.' : 'The dimmed part is removed. The 4:5 area is worked out for each image, so the list shows each result size.',
+resize: 'The preview is scaled to fit. Result sizes for every image are in the list.',
+rot: 'Shows the result: turned 90° clockwise. The camera orientation is applied first, so what you see is what turns.',
+tone: c.neutral ? 'All four values are 0, so the preview matches the original.' : 'Changes show in the preview straight away. Show original compares.',
+wm: wmMode === 'tile' ? 'Tiles cover the whole image, so there is nothing to drag.' : 'Drag the text to place it, a corner to resize it, or the top handle to turn it. Arrow keys move it.',
+meta: 'Metadata is read from the previewed image. Choose another image in the list to inspect it.'
+};
+let stageHint = f ? stageHints[f] : 'Add a step to see its effect here.';
+if (st === 'Focused file changed') stageHint = 'Previewing floorplan.heic. The stack still applies to all 5 images.';
+const prevLabel = pf.name + ' preview' + (showCrop ? ', ' + cropAria.split('.')[0].toLowerCase() : '') + (artRot ? ', turned 90 degrees clockwise' : '') + (showWmText ? ', watermark at the bottom right' : '');
+// Options messages.
+const optMsgs = [];
+const m = (cls, text) => optMsgs.push({ cls: cls === 'warn' ? 'msg warn' : 'msg', warn: cls === 'warn', info: cls === 'info', text });
+if (f === 'resize' && rs === 'long') m('info', 'IMG_0087.jpg and badge.png are smaller than 2048 px, so they are scaled up.');
+if (f === 'rot') { m('info', 'Rotated images are always re-encoded at quality 90, even with no other changes.'); m('info', 'Each photo\'s camera orientation is applied to the pixels once, so the result shows upright everywhere.'); }
+if (f === 'tone' && c.neutral) m('info', 'This step changes nothing. With no other step, every image is Skipped as No changes, unless you choose another format below.');
+if (f === 'tone' && !c.neutral) m('info', 'Transparent areas stay transparent.');
+if (f === 'meta') { m('info', 'JPEG and PNG are cleaned without re-encoding. HEIC, WebP and TIFF are re-encoded at quality 90.'); m('info', 'Each copy is checked after saving. If anything removed is still there, that file fails and no copy is kept.'); }
+const fmtMsgs = [];
+if (c.jpeg) { fmtMsgs.push({ cls: 'msg', info: true, text: '1 image, badge.png, has transparent areas. JPEG has none, so they are flattened onto white.' }); fmtMsgs.push({ cls: 'msg', info: true, text: 'JPEG is saved at quality 90.' }); }
+else fmtMsgs.push({ cls: 'msg', info: false, text: 'JPEG and HEIC save at quality 90.' });
+// Watermark values.
+const wmBad = wmMode === 'bad';
+const wmText = wmBad ? 'Harbour Properties 🏡' : '© Harbour Properties';
+// Inspection report for the previewed image.
+const metaRows = [
+{ name: 'Camera', detail: 'Apple iPhone 15 Pro, 24 mm, f/1.8, 1/120 s, taken 12 Mar 2026, 10:42', fate: 'Removed' },
+{ name: 'Location', detail: 'GPS 51.5072° N, 0.1276° W, altitude 18 m', fate: 'Removed' },
+{ name: 'XMP', detail: 'Rating 4, edited with Photos', fate: 'Removed' },
+{ name: 'IPTC', detail: 'None found', fate: 'None found' },
+{ name: 'Comments', detail: 'None found', fate: 'None found' },
+{ name: 'Orientation', detail: 'Rotate 90° clockwise to show upright', fate: 'Kept' },
+{ name: 'Colour profile', detail: 'Display P3', fate: 'Kept' }
+].map((r) => ({ ...r, fateColor: r.fate === 'None found' ? 'var(--mut)' : 'var(--fg)' }));
+const toneRows = [['br', 'Brightness', 10], ['ct', 'Contrast', 5], ['sa', 'Saturation', -20], ['ex', 'Exposure', 0]].map(([id, name, v]) => {
+const val = c.neutral ? 0 : v; const txt = val > 0 ? '+' + val : val < 0 ? '−' + Math.abs(val) : '0';
+return { id, name, v: String(val), txt };
+});
+const suffix = steps.length > 1 ? '-edited' : ({ crop: '-cropped', resize: '-resized', rot: '-rotated', tone: '-tone', wm: '-watermarked', meta: '-stripped' })[steps[0]] || '-edited';
+const fileN = c.empty ? 0 : 5;
+const blocked = c.empty || !steps.length || !!c.invalid;
+const footHint = c.empty ? 'Add images to run' : !steps.length ? 'Add a step to run' : c.invalid ? c.invalid : 'Originals stay as they are';
+const order = f ? ('Step ' + pos(f) + ' of ' + steps.length + '. ' + (steps.length === 1 ? 'The only step.' : pos(f) === 1 ? 'Runs first, before ' + steps.slice(1).map((s) => ORDER.find((o) => o.k === s).full).join(' and ') + '.' : 'Runs after ' + steps.slice(0, pos(f) - 1).map((s) => ORDER.find((o) => o.k === s).full).join(' and ') + '.')) : '';
+const t1 = (a, b, n) => (a + b * n / 3).toFixed(1);
+const chipText = !isDragging ? '' : dg === 'Moving' ? (c.pixel ? 'X 550, Y 275 px' : 'Keeping the centre. Lined up') : (c.pixel ? '2932 × 2291 px' : '4:5, 2419 × 3024 on this image');
+return {
+themeClass: light ? 'tb light' : 'tb dark', findKey: win ? 'Ctrl+K' : '⌘K', settingsKey: win ? 'Ctrl+,' : '⌘,', openKey: win ? 'Ctrl+O' : '⌘O', runKey, undoKey: win ? 'Ctrl+Z' : '⌘Z', redoKey: win ? 'Ctrl+Y' : '⇧⌘Z', altKey: win ? 'Alt' : 'Option',
+rail, chips, hasSteps: steps.length > 0, noSteps: steps.length === 0, canUndo: !!c.canUndo || steps.length > 1, noUndo: !(c.canUndo || steps.length > 1),
+hasStackMsg: !!c.msg, stackMsg: c.msg || '', stackMsgUndo: !!c.msgUndo,
+isEmpty: !!c.empty, hasFiles: !c.empty, fileCount: fileN + ' images', hasRejected: !!c.rejected,
+rejected: [
+{ name: 'listing-notes.docx', reason: 'Not an image.', pointer: '', noPointer: true },
+{ name: 'walkthrough.gif', reason: 'Animated GIF. Edit Image works on still images.', pointer: 'Open Extract GIF Frames', noPointer: false },
+{ name: 'IMG_4012.jpg', reason: 'Already in the list.', pointer: '', noPointer: true }
+],
+files, prevName: pf.name, prevPos: (prevIdx + 1) + ' of 5',
+tabPrev: String(!showMeta), tabMeta: String(showMeta), showImg, showMeta, metaRows,
+boxH: String(boxH), imgW: String(imgW), imgH: String(imgH), artW: String(artW), artH: String(artH), artRot: String(artRot),
+artBg: 'linear-gradient(#d9d2c4, #c9bfae 62%, #8a6d4f 62%, #6f553c)', toneFilter, prevLabel,
+showCrop, cropEdges: !!c.pixel, cx: String(cx), cy: String(cy), cw: String(cw), ch: String(ch), cx2: String(cx + cw), cropAria,
+t1x: t1(cx, cw, 1), t2x: t1(cx, cw, 2), t1y: t1(cy, ch, 1), t2y: t1(cy, ch, 2),
+isDragging, isMoving: isDragging && dg === 'Moving', isResizing: isDragging && dg === 'Resizing', chipText,
+showWmText, wmSelected: f === 'wm', wmRot: f === 'wm' && wmMode === 'text' && !c.jpeg ? '-8' : '0', wmText, wmAria: 'Watermark, ' + wmText + ', bottom right. Selected. Arrow keys move it, ' + (win ? 'Alt' : 'Option') + '+arrow resizes it.',
+showWmTile, tiles, stageHint,
+hasFocus: !!f, fNum: String(pos(f)), fName: fo ? fo.full : '', fOrder: order,
+isCrop: f === 'crop', cropAspect: String(!c.pixel), cropPixel: String(!!c.pixel), isCropAspect: !c.pixel, isCropPixel: !!c.pixel, keepVal: 'Centre',
+isResize: f === 'resize', rsLong: String(rs === 'long'), rsExact: String(rs === 'exact'), rsPct: String(rs === 'pct'), isRsLong: rs === 'long', isRsExact: rs === 'exact', isRsPct: rs === 'pct',
+isRot: f === 'rot', isTone: f === 'tone', toneRows, toneDirty: !c.neutral, toneClean: !!c.neutral,
+isWm: f === 'wm', wmIsText: String(wmMode !== 'tile'), wmIsPic: String(wmMode === 'tile'), wmTextMode: wmMode !== 'tile', wmPicMode: wmMode === 'tile', wmBad: String(wmBad), wmBadMsg: wmBad,
+wmSize: wmMode === 'tile' ? '12%' : '30%', wmOpacity: wmMode === 'tile' ? '35%' : '70%', wmAngle: wmMode === 'tile' ? '−30°' : '−8°',
+wmPos: String(wmMode !== 'tile'), wmTile: String(wmMode === 'tile'), wmPosMode: wmMode !== 'tile',
+wmPlaceHint: wmMode === 'tile' ? 'Repeats across the whole image.' : 'Or drag it in the preview. It lands in the same place on every size.',
+isMeta: f === 'meta', optMsgs, fmtMsgs, fmtVal: c.jpeg ? 'JPEG' : 'Keep original format',
+destDefault: !c.dest, destRun: !!c.dest, runDir: win ? 'Desktop\\Listing photos' : '~/Desktop/Listing photos',
+exampleName: 'IMG_4012' + suffix + (ext || '.jpg'),
+canRun: !blocked, cantRun: blocked, footHint, runLabel: fileN ? 'Run on ' + fileN + ' images' : 'Run'
+};
 }
 }
 </script>
