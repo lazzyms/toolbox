@@ -1,6 +1,9 @@
 import type {
   AtomicToolId,
   ErrorKind,
+  FontSource,
+  FontStyle,
+  FontUse,
   JobOutcome,
   LimitKind,
   OutcomePointer,
@@ -16,7 +19,11 @@ import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
 
-const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression"];
+const fontStyles: readonly FontStyle[] = ["regular", "bold", "italic", "boldItalic"];
+
+const fontSources: readonly FontSource[] = ["embedded", "system", "bundled fallback", "bundled default"];
+
+const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "textLength"];
 
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
@@ -27,6 +34,7 @@ const skipCodes: readonly SkipCode[] = [
   "textAlreadyPresent",
   "noEffectiveChange",
   "unsupportedFormat",
+  "needsOcr",
   "cancelled",
 ];
 
@@ -66,10 +74,24 @@ const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> =
   fontSubstituted: { requestedFamily: text, actualFamily: text },
   renamedToAvoidReplacing: { chosenName: text, finalName: text },
   precisionReduced: null,
+  bookmarksNotCarried: { into: text },
+  tagsNotCarried: { into: text },
+  omittedContent: null,
+  approximateLayout: null,
   imageUnsupported: { ...imagePlace, feature: text },
   imageDamaged: imagePlace,
   imageTooLarge: { ...imagePlace, width: count, height: count },
   jpegColourKept: { colour, pages: counts, images: count },
+};
+
+const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {
+  const sizes: { originalBytes?: number; outputBytes?: number } = {};
+  for (const key of ["originalBytes", "outputBytes"] as const) {
+    const value = outcome[key];
+    if (value === null || value === undefined) continue;
+    sizes[key] = Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : fail(`${path}.${key}`, "a non-negative whole number of bytes");
+  }
+  return sizes;
 };
 
 const parsePointer = (value: unknown, path: string): OutcomePointer | null => {
@@ -116,6 +138,17 @@ const parseWarning = (value: unknown, path: string): OutcomeWarning => {
   } as OutcomeWarning;
 };
 
+const parseFontUse = (value: unknown, path: string): FontUse => {
+  const font = record(value, path);
+  return {
+    requestedFamily: text(font.requestedFamily, `${path}.requestedFamily`),
+    requestedStyle: member(font.requestedStyle, fontStyles, `${path}.requestedStyle`),
+    fontUsed: text(font.fontUsed, `${path}.fontUsed`),
+    styleUsed: member(font.styleUsed, fontStyles, `${path}.styleUsed`),
+    source: member(font.source, fontSources, `${path}.source`),
+  };
+};
+
 export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome => {
   const outcome = record(value, path);
   const base = {
@@ -124,6 +157,14 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
     warnings: Array.isArray(outcome.warnings)
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
+    ...(outcome.fonts === undefined
+      ? {}
+      : {
+          fonts: Array.isArray(outcome.fonts)
+            ? outcome.fonts.map((font, index) => parseFontUse(font, `${path}.fonts[${index}]`))
+            : fail(`${path}.fonts`, "an array"),
+        }),
+    ...byteSizes(outcome, path),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
   const hasFailure = outcome.failure !== null && outcome.failure !== undefined;

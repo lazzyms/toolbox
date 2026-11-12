@@ -24,21 +24,33 @@ pub struct ToolLimits {
     pub max_duration: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HelperDeadline { pub per_file: Duration, pub per_page: Duration }
+
+impl HelperDeadline {
+    pub(crate) fn limit(self, files: usize, pages: usize) -> Duration {
+        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+        self.per_file * count(files) + self.per_page * count(pages)
+    }
+}
+
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
 const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
 const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
-const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(1_000), ..IMAGE };
+pub const MAX_IMAGE_PAGES: u32 = 1_000;
+const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(MAX_IMAGE_PAGES), ..IMAGE };
+pub const SIGNATURE_IMAGE: ToolLimits = ToolLimits { max_bytes: 20 * MB, max_expanded_bytes: 80 * MB, ..IMAGE };
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
-        | "organize_pdf" | "add_pdf_pages" | "add_page_numbers" | "watermark_pdf" | "compress_pdf" | "remove_pdf_pages"
+        | "add_page_numbers" | "watermark_pdf" | "compress_files"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
-        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
+        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" | "edit_pdf_properties" => PDF,
+        "compress_images" | "convert_images" | "export_image_edit_plan" | "export_image_edit_stack" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
-        "extract_gif_frames" | "process_tiff_pages" | "image_metadata" => PAGED_IMAGE,
+        "extract_gif_frames" | "process_tiff_pages" | "image_metadata" | "images_to_pdf" => PAGED_IMAGE,
         _ => return None,
     })
 }
@@ -68,6 +80,16 @@ impl ToolLimits {
         })
     }
 
+    pub fn expansion_error(&self, path: &Path) -> ToolError {
+        ToolError::limit_exceeded(
+            LimitKind::Decompression,
+            format!(
+                "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
+                Format::for_path(path).part(), bytes_label(self.max_expanded_bytes),
+            ),
+        )
+    }
+
     pub fn check(&self, path: &Path) -> Result<(), ToolError> {
         let Ok(metadata) = std::fs::metadata(path) else { return Ok(()) };
         let format = Format::for_path(path);
@@ -80,13 +102,7 @@ impl ToolLimits {
         let Ok(bytes) = std::fs::read(path) else { return Ok(()) };
         let shape = Shape::read(&bytes, self.max_pages.unwrap_or(u32::MAX), self.max_expanded_bytes);
         if shape.largest_part > self.max_expanded_bytes {
-            return Err(ToolError::limit_exceeded(
-                LimitKind::Decompression,
-                format!(
-                    "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
-                    format.part(), bytes_label(self.max_expanded_bytes),
-                ),
-            ));
+            return Err(self.expansion_error(path));
         }
         match self.max_pages {
             Some(max_pages) if shape.pages > u64::from(max_pages) => Err(ToolError::limit_exceeded(
@@ -109,7 +125,8 @@ impl Format {
         let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
         match extension.as_str() {
             "pdf" => Self::Pdf,
-            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" => Self::Document,
+            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "rtf" | "txt" | "md" | "markdown" | "html" | "htm"
+            | "csv" | "tsv" | "epub" | "mobi" => Self::Document,
             "gif" => Self::Gif,
             "tif" | "tiff" => Self::Tiff,
             _ => Self::Image,
@@ -401,7 +418,7 @@ pub(crate) fn duration_label(duration: Duration) -> String {
     }
 }
 
-fn count_label(count: u64) -> String {
+pub(crate) fn count_label(count: u64) -> String {
     let digits = count.to_string();
     let mut label = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
@@ -454,6 +471,32 @@ pub mod fixtures {
             if self.filled > 0 { self.bytes.push(self.current); }
             self.bytes
         }
+    }
+
+    pub fn zip_with_deflated(name: &str, zlib: &[u8], expanded: u32) -> Vec<u8> {
+        let deflated = &zlib[2..zlib.len() - 4];
+        let header = |signature: u32, central: bool| {
+            let mut bytes = signature.to_le_bytes().to_vec();
+            if central { bytes.extend_from_slice(&20u16.to_le_bytes()); }
+            for value in [20u16, 0, 8, 0, 0] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            for value in [0u32, deflated.len() as u32, expanded] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&0u16.to_le_bytes());
+            if central { bytes.extend_from_slice(&[0; 14]); }
+            bytes.extend_from_slice(name.as_bytes());
+            bytes
+        };
+        let mut zip = header(0x0403_4b50, false);
+        zip.extend_from_slice(deflated);
+        let central_at = zip.len() as u32;
+        let central = header(0x0201_4b50, true);
+        let central_len = central.len() as u32;
+        zip.extend(central);
+        zip.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        for value in [0u16, 0, 1, 1] { zip.extend_from_slice(&value.to_le_bytes()); }
+        for value in [central_len, central_at] { zip.extend_from_slice(&value.to_le_bytes()); }
+        zip.extend_from_slice(&0u16.to_le_bytes());
+        zip
     }
 
     pub fn pdf_with_stream(stream: &[u8]) -> Vec<u8> {
@@ -536,9 +579,11 @@ mod tests {
             assert_eq!(limits.max_pages.is_some(), paged, "{}", capability.command);
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
-        assert_eq!(recorded("compress_pdf"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
+        assert_eq!(recorded("compress_files"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
         assert_eq!(recorded("resize_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES }));
         assert_eq!(recorded("extract_gif_frames").and_then(|limits| limits.max_pages), Some(1_000));
+        assert_eq!(recorded("images_to_pdf").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
+        assert_eq!(MAX_IMAGE_PAGES, 1_000);
         assert_eq!(recorded("unknown"), None);
     }
 
