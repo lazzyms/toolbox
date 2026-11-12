@@ -18,16 +18,21 @@ export type ShortcutId =
   | "cancel"
   | "selectAll"
   | "remove"
-  | "move";
+  | "move"
+  | "undo"
+  | "redo"
+  | "export"
+  | "duplicate"
+  | "deleteMark";
 
 // Where a shortcut is listened for. "file-list" fires only while focus is in a file list.
-// "system" is handled by the operating system and is listed for reference only.
-export type ShortcutScope = "window" | "file-list" | "system";
+// "editor" is handled by the PDF editor. "system" is handled by the operating system and is listed for reference only.
+export type ShortcutScope = "window" | "file-list" | "editor" | "system";
 
 export interface Shortcut {
   id: ShortcutId;
   action: string;
-  group: "Everywhere" | "Batch tools";
+  group: "Everywhere" | "Batch tools" | "PDF Editor";
   scope: ShortcutScope;
   // KeyboardEvent.key values, matched without regard to case.
   keys: readonly string[];
@@ -48,6 +53,11 @@ export const shortcuts: readonly Shortcut[] = [
   { id: "selectAll", action: "Select all files", group: "Batch tools", scope: "file-list", keys: ["A"], primary: true, firesInTextFields: false, label: { macos: "⌘A", windows: "Ctrl+A" } },
   { id: "remove", action: "Remove selected files", group: "Batch tools", scope: "file-list", keys: ["Delete", "Backspace"], primary: false, firesInTextFields: false, label: { macos: "Delete", windows: "Delete" } },
   { id: "move", action: "Move through the list", group: "Batch tools", scope: "file-list", keys: ["ArrowUp", "ArrowDown"], primary: false, firesInTextFields: false, label: { macos: "↑ ↓", windows: "↑ ↓" } },
+  { id: "undo", action: "Undo", group: "PDF Editor", scope: "editor", keys: ["Z"], primary: true, firesInTextFields: false, label: { macos: "⌘Z", windows: "Ctrl+Z" } },
+  { id: "redo", action: "Redo", group: "PDF Editor", scope: "editor", keys: ["Y"], primary: true, firesInTextFields: false, label: { macos: "⇧⌘Z", windows: "Ctrl+Y" } },
+  { id: "export", action: "Export a copy", group: "PDF Editor", scope: "editor", keys: ["E"], primary: true, firesInTextFields: false, label: { macos: "⌘E", windows: "Ctrl+E" } },
+  { id: "duplicate", action: "Duplicate the selected mark", group: "PDF Editor", scope: "editor", keys: ["D"], primary: true, firesInTextFields: false, label: { macos: "⌘D", windows: "Ctrl+D" } },
+  { id: "deleteMark", action: "Delete the selected mark", group: "PDF Editor", scope: "editor", keys: ["Delete", "Backspace"], primary: false, firesInTextFields: false, label: { macos: "Delete", windows: "Delete" } },
 ];
 
 const byId = new Map(shortcuts.map((shortcut) => [shortcut.id, shortcut]));

@@ -522,10 +522,10 @@ test('a typed page range selects those positions, and a bad range explains itsel
   await expect(count(page)).toHaveText('3 pages selected');
 
   for (const [value, message] of [
-    ['1-3, 250', 'Page 250 isn\'t in this PDF. It has 5 pages, so use numbers from 1 to 5.'],
-    ['4-2', 'Write 4-2 from low to high, like 2-4.'],
-    ['0', 'Page numbers start at 1.'],
-    ['two', 'Invalid page selection: two.'],
+    ['1-3, 250', 'The PDF has 5 pages, so page 250 can\'t be used.'],
+    ['4-2', '"4-2" runs backwards. Put the lower page first, for example 2-4.'],
+    ['0', '"0" uses page 0. Page numbers start at 1.'],
+    ['two', '"two" isn\'t a page or range. Use pages and ranges like 1-3, 5, 8-.'],
   ]) {
     await range.fill(value);
     await range.press('Enter');
