@@ -32,6 +32,7 @@ pub struct SceneObject {
     #[serde(default)] pub align: TextAlign,
     #[serde(default)] pub page_range: Option<String>,
     #[serde(default)] pub page_numbers: Option<PageNumberOptions>,
+    #[serde(default)] pub header_footer: Option<HeaderFooterOptions>,
 }
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all="kebab-case")]
@@ -42,12 +43,27 @@ pub enum PageNumberPosition { TopLeft, TopCenter, TopRight, MiddleLeft, MiddleCe
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct PageNumberOptions { pub format: PageNumberFormat, pub start: u32, pub position: PageNumberPosition, pub margin: f32 }
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HeaderFooterSlots { #[serde(default)] pub left: String, #[serde(default)] pub center: String, #[serde(default)] pub right: String }
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HeaderFooterText { #[serde(default)] pub header: HeaderFooterSlots, #[serde(default)] pub footer: HeaderFooterSlots }
+/// Slot text is a template with {page}, {pages}, {date} and {file} tags; the date is a fixed yyyy-mm-dd.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct HeaderFooterOptions {
+    #[serde(flatten)] pub text: HeaderFooterText,
+    #[serde(default)] pub first_page: Option<HeaderFooterText>,
+    #[serde(default)] pub even: Option<HeaderFooterText>,
+    pub date: String,
+    #[serde(default)] pub file_name: String,
+    pub margin: f32,
+}
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all="lowercase")]
 pub enum TextAlign { #[default] Left, Center, Right }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="camelCase")]
-pub enum Kind { Text, Highlight, Shape, Signature, Watermark, PageNumbers }
+pub enum Kind { Text, Highlight, Shape, Signature, Watermark, PageNumbers, HeaderFooter }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all="kebab-case")]
 pub enum Shape { Square, Round, Triangle, Line, DottedLine, ArrowLeft, ArrowRight, ArrowUp, ArrowDown }
@@ -306,9 +322,70 @@ impl PageNumberFormat {
     }
 }
 
-/// Mirrors resolvePageTokens in the editor.
-fn page_tokens(template: &str, page: u64, pages: u64) -> String {
-    template.replace("{pages}", &pages.to_string()).replace("{page}", &page.to_string())
+/// Mirrors resolvePageTokens in the editor. Each tag is replaced once, so tag-like text in a file name stays as it is.
+fn page_tokens(template: &str, page: u64, pages: u64, date: Option<&str>, file: Option<&str>) -> String {
+    let tags = [("{page}", Some(page.to_string())), ("{pages}", Some(pages.to_string())), ("{date}", date.map(str::to_owned)), ("{file}", file.map(str::to_owned))];
+    let (mut out, mut rest) = (String::with_capacity(template.len()), template);
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        match tags.iter().find(|(tag, value)| value.is_some() && rest.starts_with(tag)) {
+            Some((tag, value)) => { out.push_str(value.as_deref().unwrap_or_default()); rest = &rest[tag.len()..]; }
+            None => { out.push('{'); rest = &rest[1..]; }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Mirrors tokenDate in the editor: 2026-10-13 shows as 13 October 2026.
+fn token_date(iso: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let bytes = iso.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' { return None; }
+    let number = |range: std::ops::Range<usize>| iso.get(range).filter(|part| part.bytes().all(|b| b.is_ascii_digit()))?.parse::<u32>().ok();
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month { 1 | 3 | 5 | 7 | 8 | 10 | 12 => 31, 4 | 6 | 9 | 11 => 30, 2 if leap => 29, 2 => 28, _ => return None };
+    (1..=days).contains(&day).then(|| format!("{day} {} {year}", MONTHS[month as usize - 1]))
+}
+
+const HEADER_FOOTER_SIZES: std::ops::RangeInclusive<f32> = 6.0..=36.0;
+
+fn header_footer_options(o: &SceneObject) -> Result<&HeaderFooterOptions, ToolError> {
+    let options = o.header_footer.as_ref().ok_or_else(|| ToolError::invalid_input("Add header or footer text."))?;
+    if !HEADER_FOOTER_SIZES.contains(&o.font_size) { return Err(ToolError::invalid_input("Header and footer text must be between 6 and 36 pt.")); }
+    if !options.margin.is_finite() || !(0. ..=PAGE_NUMBER_MAX_MARGIN).contains(&options.margin) {
+        return Err(ToolError::invalid_input("The distance from the edge must be between 0 and 2 inches."));
+    }
+    if token_date(&options.date).is_none() { return Err(ToolError::invalid_input("Choose a valid date for the Date tag.")); }
+    Ok(options)
+}
+
+impl HeaderFooterText {
+    /// Header left, centre and right, then footer left, centre and right.
+    fn parts(&self) -> [&str; 6] {
+        let (h, f) = (&self.header, &self.footer);
+        [&h.left, &h.center, &h.right, &f.left, &f.center, &f.right]
+    }
+}
+
+/// Mirrors headerFooterVariant in the editor: the first page of the range, then even page numbers, then the main text.
+fn header_footer_variant(options: &HeaderFooterOptions, page: usize, first: usize) -> &HeaderFooterText {
+    match (&options.first_page, &options.even) {
+        (Some(text), _) if page == first => text,
+        (_, Some(text)) if (page + 1) % 2 == 0 => text,
+        _ => &options.text,
+    }
+}
+
+/// Mirrors headerFooterRect in the editor: each band is split into thirds between the margins.
+fn header_footer_rect(area: &Rect, margin: f32, font_size: f32, part: usize) -> (Rect, TextAlign) {
+    let width = (area.width - 2. * margin).max(0.) / 3.;
+    let height = font_size * TEXT_LINE_HEIGHT;
+    let y = if part < 3 { area.y + margin } else { area.y + area.height - margin - height };
+    let align = [TextAlign::Left, TextAlign::Center, TextAlign::Right][part % 3];
+    (Rect { x: area.x + margin + width * (part % 3) as f32, y, width, height }, align)
 }
 
 fn page_number_options(o: &SceneObject) -> Result<&PageNumberOptions, ToolError> {
@@ -333,12 +410,15 @@ fn page_number_rect(area: &Rect, options: &PageNumberOptions, width: f32, height
     Rect { x: area.x + m + (area.width - 2. * m - width) * fx, y: area.y + m + (area.height - 2. * m - height) * fy, width, height }
 }
 
-/// A text layout per object; page numbers have one per page they are drawn on.
-type LayoutKey = (usize, usize, Option<usize>);
+/// A text layout per object; page numbers have one per page they are drawn on, and headers and footers one per slot on each page.
+type LayoutKey = (usize, usize, Option<usize>, usize);
 struct TextPlan { placed: Vec<Vec<(usize, usize)>>, layouts: HashMap<LayoutKey, TextLayout>, signatures: HashMap<(usize, usize), SignatureImage> }
 impl TextPlan {
-    fn layout(&self, (origin, index): (usize, usize), page: usize) -> Option<&TextLayout> {
-        self.layouts.get(&(origin, index, Some(page))).or_else(|| self.layouts.get(&(origin, index, None)))
+    fn layout(&self, key: (usize, usize), page: usize) -> Option<&TextLayout> {
+        self.part(key, page, 0)
+    }
+    fn part(&self, (origin, index): (usize, usize), page: usize, part: usize) -> Option<&TextLayout> {
+        self.layouts.get(&(origin, index, Some(page), part)).or_else(|| self.layouts.get(&(origin, index, None, part)))
     }
 }
 
@@ -350,19 +430,19 @@ fn text_plan(scene: &PdfScene) -> Result<TextPlan, ToolError> {
     for (origin, page) in scene.pages.iter().enumerate() {
         for (index, o) in page.objects.iter().enumerate() {
             let targets = match (&o.kind, o.page_range.as_deref()) {
-                (Kind::Text | Kind::Signature | Kind::Watermark | Kind::PageNumbers, Some(range)) => page_range_pages(range, page_count)?,
-                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes, signatures, watermarks and page numbers can be shown on several pages")),
+                (Kind::Text | Kind::Signature | Kind::Watermark | Kind::PageNumbers | Kind::HeaderFooter, Some(range)) => page_range_pages(range, page_count)?,
+                (_, Some(_)) => return Err(ToolError::invalid_input("Only text boxes, signatures, watermarks, page numbers and headers and footers can be shown on several pages")),
                 _ => vec![origin],
             };
             for &target in &targets { placed[target].push((origin, index)); }
             match o.kind {
-                Kind::Text => { layouts.insert((origin, index, None), layout_text(o)?); }
+                Kind::Text => { layouts.insert((origin, index, None, 0), layout_text(o)?); }
                 Kind::Signature => { signatures.insert((origin, index), signature(o)?); }
                 Kind::Watermark => {
                     let options = watermark_options(o)?;
                     if let Some(path) = &options.logo_path { check_watermark_image(path)?; }
                     // Laid out at 1 pt without wrapping; each page scales it to its own size.
-                    if let Some(text) = options.text() { layouts.insert((origin, index, None), layout_lines(text_font(o)?, text, 1., f32::INFINITY, "this watermark")?); }
+                    if let Some(text) = options.text() { layouts.insert((origin, index, None, 0), layout_lines(text_font(o)?, text, 1., f32::INFINITY, "this watermark")?); }
                 }
                 Kind::PageNumbers => {
                     let options = page_number_options(o)?;
@@ -370,8 +450,21 @@ fn text_plan(scene: &PdfScene) -> Result<TextPlan, ToolError> {
                     // Numbers follow the final page order: the page at `target` shows start + target.
                     let start = u64::from(options.start);
                     for &target in &targets {
-                        let text = page_tokens(options.format.template(), start + target as u64, start + page_count as u64 - 1);
-                        layouts.insert((origin, index, Some(target)), layout_lines(font, &text, o.font_size, f32::INFINITY, "these page numbers")?);
+                        let text = page_tokens(options.format.template(), start + target as u64, start + page_count as u64 - 1, None, None);
+                        layouts.insert((origin, index, Some(target), 0), layout_lines(font, &text, o.font_size, f32::INFINITY, "these page numbers")?);
+                    }
+                }
+                Kind::HeaderFooter => {
+                    let options = header_footer_options(o)?;
+                    let font = text_font(o)?;
+                    let date = token_date(&options.date);
+                    // Every slot gets a layout, empty or not, so the page's font resources are found from slot 0.
+                    for &target in &targets {
+                        let text = header_footer_variant(options, target, targets[0]);
+                        for (part, template) in text.parts().into_iter().enumerate() {
+                            let resolved = page_tokens(template, target as u64 + 1, page_count as u64, date.as_deref(), Some(&options.file_name));
+                            layouts.insert((origin, index, Some(target), part), layout_lines(font, &resolved, o.font_size, f32::INFINITY, "this header and footer")?);
+                        }
                     }
                 }
                 _ => {}
@@ -1153,6 +1246,16 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
                     let rect = page_number_rect(&area, options, width, o.font_size * TEXT_LINE_HEIGHT);
                     content.push_str(&text_content(&rect, TextAlign::Left, o.font_size, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1));
                 },
+                Kind::HeaderFooter=>{
+                    let options = o.header_footer.as_ref().ok_or("Header and footer options disappeared")?;
+                    for part in 0..6 {
+                        let layout = text.part(*key, page_index, part).ok_or("Header and footer layout disappeared")?;
+                        if layout.lines.iter().all(|line| line.glyphs.is_empty()) { continue; }
+                        // Each slot clips its own text, so text too long for its box is cut off.
+                        let (rect, align) = header_footer_rect(&area, options.margin, o.font_size, part);
+                        content.push_str(&format!("q\n{}Q\n", text_content(&rect, align, o.font_size, layout, &text_resources[layout.font.name], &text_fonts[layout.font.name].1)));
+                    }
+                },
                 Kind::Watermark=>{
                     let options = watermark.ok_or("Watermark options disappeared")?;
                     let layout = text.layout(*key, page_index);
@@ -1754,7 +1857,7 @@ mod tests {
             shape:None, highlight_mode:None,
             signature_path:None, font_family:None,
             watermark, layer: Layer::Front,
-            bold:false, italic:false, align:TextAlign::Left, page_range:None, page_numbers:None }
+            bold:false, italic:false, align:TextAlign::Left, page_range:None, page_numbers:None, header_footer:None }
     }
     fn text_watermark(text: &str) -> WatermarkOptions {
         WatermarkOptions { text: Some(text.into()), logo_path: None, size: None, opacity: 30, color: Some("#0000FF".into()), position: None, rotation: 0. }
@@ -3061,7 +3164,7 @@ mod tests {
         for page in &pages[1..] { assert!(String::from_utf8_lossy(&doc.get_page_content(*page)).contains("/SceneTextNotoSansRegular 20 Tf")); }
 
         let mut highlight = object(Kind::Highlight); highlight.page_range = Some("1".into());
-        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes, signatures, watermarks and page numbers can be shown on several pages");
+        assert_eq!(compose(&input, &text_scene(vec![highlight])).unwrap_err(), "Only text boxes, signatures, watermarks, page numbers and headers and footers can be shown on several pages");
     }
 
     #[test]
@@ -3338,6 +3441,95 @@ mod tests {
     fn page_number_exports_are_byte_identical_across_runs() {
         let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
         let scene = || { let mut s = text_scene(vec![page_number_object(PageNumberFormat::PageOfTotal, PageNumberPosition::BottomRight, 4, "all")]); s.pages.swap(0, 1); s };
+        let first = export_text(&input, scene());
+        let second = export_text(&input, scene());
+        assert!(first.error().is_none() && second.error().is_none(), "{:?} {:?}", first.error(), second.error());
+        assert_ne!(first.output_paths()[0], second.output_paths()[0]);
+        assert_eq!(fs::read(&first.output_paths()[0]).unwrap(), fs::read(&second.output_paths()[0]).unwrap());
+    }
+
+    fn slots(left: &str, center: &str, right: &str) -> HeaderFooterSlots { HeaderFooterSlots { left: left.into(), center: center.into(), right: right.into() } }
+    fn header_footer_object(range: &str, first_page: Option<HeaderFooterText>, even: Option<HeaderFooterText>) -> SceneObject {
+        SceneObject { font_size: 9., color: "#555555".into(), opacity: 1., page_range: Some(range.into()),
+            header_footer: Some(HeaderFooterOptions {
+                text: HeaderFooterText { header: slots("{file}", "", "{date}"), footer: slots("", "{page} of {pages}", "") },
+                first_page, even, date: "2026-10-13".into(), file_name: "report.pdf".into(), margin: 36. }),
+            ..object(Kind::HeaderFooter) }
+    }
+
+    #[test]
+    fn page_tokens_and_dates_resolve_once_and_reject_impossible_dates() {
+        assert_eq!(page_tokens("{page}/{pages} {date} {file} {other} {", 2, 9, Some("1 March 2024"), Some("{page}.pdf")), "2/9 1 March 2024 {page}.pdf {other} {");
+        assert_eq!(page_tokens("{date}{file}", 1, 1, None, None), "{date}{file}");
+        assert_eq!(token_date("2026-10-13").as_deref(), Some("13 October 2026"));
+        assert_eq!(token_date("2024-02-29").as_deref(), Some("29 February 2024"));
+        for bad in ["2023-02-29", "2026-13-01", "2026-04-31", "2026-1-01", "", "2026-10-1x", "+026-10-13"] { assert_eq!(token_date(bad), None, "{bad}"); }
+    }
+
+    #[test]
+    fn headers_and_footers_resolve_tokens_and_variants_after_a_reorder() {
+        let Some(extractor) = text_extractor() else { return };
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let first = HeaderFooterText { header: slots("Cover", "", ""), footer: slots("", "First", "") };
+        let even = HeaderFooterText { header: slots("", "", "Even {page}"), footer: slots("{file}", "", "") };
+        let mut scene = text_scene(vec![header_footer_object("all", Some(first), Some(even))]);
+        // Organize moved the first source page to the end; the header and footer stay on their origin page.
+        scene.pages.rotate_left(1);
+        let outcome = export_text(&input, scene);
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let pages: Vec<_> = (1..=3).map(|page| page_words(&extractor, &outcome.output_paths()[0], page)).collect();
+        assert_eq!(pages[0], "Cover Second page text First", "the first page of the range uses the first-page text");
+        assert_eq!(pages[1], "Even 2 report.pdf", "even page numbers use the even-page text");
+        for word in ["report.pdf", "13 October 2026", "First page text", "3 of 3"] { assert!(pages[2].contains(word), "{word} missing from {}", pages[2]); }
+        assert!(!pages[2].contains("Even") && !pages[2].contains("Cover"));
+
+        let skipped = export_text(&input, text_scene(vec![header_footer_object("2-", Some(HeaderFooterText { header: slots("Start", "", ""), ..Default::default() }), None)]));
+        assert!(skipped.error().is_none(), "{:?}", skipped.error());
+        let pages: Vec<_> = (1..=3).map(|page| page_words(&extractor, &skipped.output_paths()[0], page)).collect();
+        assert_eq!(pages[0], "First page text", "page 1 is outside 2-");
+        assert_eq!(pages[1], "Start Second page text", "the first page of a range that skips page 1 is page 2");
+        assert!(pages[2].contains("3 of 3") && pages[2].contains("report.pdf"), "{}", pages[2]);
+    }
+
+    #[test]
+    fn header_and_footer_slots_align_in_thirds_between_the_margins() {
+        if text_extractor().is_none() { return; }
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let mut o = header_footer_object("3", None, None);
+        let options = o.header_footer.as_mut().unwrap();
+        options.text = HeaderFooterText { header: slots("L", "C", "R"), footer: slots("", "", "") };
+        let outcome = export_text(&input, text_scene(vec![o]));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let runs = extract_text_runs(&outcome.output_paths()[0], 3, 612., 792., Instant::now() + super::super::PDF_TEXT_TIMEOUT).unwrap();
+        let run = |text: &str| runs.iter().find(|run| run.text == text).unwrap_or_else(|| panic!("{text} missing from {runs:?}"));
+        let near = |a: f32, b: f32| (a - b).abs() < 4.;
+        assert!(near(run("L").x, 36.) && near(run("L").y, 36.));
+        assert!(near(run("C").x + run("C").width / 2., 306.));
+        assert!(near(run("R").x + run("R").width, 576.));
+        let (rect, _) = header_footer_rect(&Rect { x: 0., y: 0., width: 612., height: 792. }, 36., 9., 4);
+        assert_eq!((rect.x, rect.width, rect.y), (36. + 180., 180., 792. - 36. - 9. * TEXT_LINE_HEIGHT));
+    }
+
+    #[test]
+    fn headers_and_footers_refuse_bad_settings_in_plain_language() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let base = || header_footer_object("all", None, None);
+        let refusal = |o: SceneObject| export_text(&input, text_scene(vec![o])).error().map(|e| e.to_string()).unwrap_or_default();
+        assert!(refusal(SceneObject { font_size: 5., ..base() }).contains("between 6 and 36 pt"));
+        assert!(refusal(SceneObject { font_size: 37., ..base() }).contains("between 6 and 36 pt"));
+        let mut far = base(); far.header_footer.as_mut().unwrap().margin = 145.;
+        assert!(refusal(far).contains("between 0 and 2 inches"));
+        let mut undated = base(); undated.header_footer.as_mut().unwrap().date = "2026-02-30".into();
+        assert!(refusal(undated).contains("valid date"));
+        assert!(refusal(SceneObject { header_footer: None, ..base() }).contains("Add header or footer text"));
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1, "refusals write nothing");
+    }
+
+    #[test]
+    fn header_and_footer_exports_with_a_fixed_date_are_byte_identical_across_runs() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("source.pdf"); page_text_fixture(&input);
+        let even = HeaderFooterText { footer: slots("{date}", "", "{page}"), ..Default::default() };
+        let scene = || { let mut s = text_scene(vec![header_footer_object("all", None, Some(even.clone()))]); s.pages.swap(0, 1); s };
         let first = export_text(&input, scene());
         let second = export_text(&input, scene());
         assert!(first.error().is_none() && second.error().is_none(), "{:?} {:?}", first.error(), second.error());

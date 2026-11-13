@@ -503,7 +503,7 @@ fn text_object(field: &FormField, text: &str, size: (f32, f32), multiline: bool)
     SceneObject {
         kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1.,
         shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark: None, layer: Layer::Front,
-        bold: false, italic: false, align: field.align, page_range: None, page_numbers: None,
+        bold: false, italic: false, align: field.align, page_range: None, page_numbers: None, header_footer: None,
     }
 }
 

@@ -26,6 +26,7 @@ test("every Edit PDF sub-tool is declared once with a group and a suffix", () =>
     ["signature", "overlay", "-edited"],
     ["watermark", "overlay", "-edited"],
     ["pageNumbers", "overlay", "-edited"],
+    ["headerFooter", "overlay", "-edited"],
     ["crop", "document", "-edited"],
     ["organize", "document", "-edited"],
     ["flatten", "document", "-flattened"],
