@@ -198,7 +198,7 @@ fn text_file_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> J
     let recognized = plan.recognized();
     if recognized.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
     if let Err(error) = check_render_limits(&document, &recognized) { return failure(input, error); }
-    let mut ocr = match run_ocr(&resources, &tessdata_dir, &input, &recognized, &languages, &[], deadline) {
+    let mut ocr = match run_ocr(&resources, &tessdata_dir, &input, &recognized, &languages, &[], &[], deadline) {
         Ok(pages) => pages.into_iter(),
         Err(error) => return JobOutcome::failure(input, error),
     };
@@ -506,8 +506,9 @@ impl OcrResources {
 /// Recognises each page on its own, so the text keeps page order and page breaks.
 /// The engine runs on one thread with a fixed segmentation mode, resolution and
 /// language data, so the same file gives the same text every time.
+/// `area` is extra renderer arguments, such as `DISPLAYED_PAGE`; none renders the media box.
 /// `settings` are extra engine arguments, such as `WORD_BOX_OUTPUT`; none gives plain text.
-fn run_ocr(resources: &OcrResources, tessdata_dir: &Path, input: &Path, pages: &[OcrPage], languages: &[String], settings: &[&str], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
+fn run_ocr(resources: &OcrResources, tessdata_dir: &Path, input: &Path, pages: &[OcrPage], languages: &[String], area: &[&str], settings: &[&str], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
     let limit = deadline.limit(1, pages.len());
     let stop_at = Instant::now() + limit;
     let timed_out = format!("Recognising took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
@@ -515,7 +516,7 @@ fn run_ocr(resources: &OcrResources, tessdata_dir: &Path, input: &Path, pages: &
     let mut recognized = Vec::with_capacity(pages.len());
     let mut total = 0usize;
     for page in pages {
-        let image = render_ocr_page(&resources.renderer, input, &workspace, *page, stop_at, &timed_out)?;
+        let image = render_ocr_page(&resources.renderer, input, &workspace, *page, area, stop_at, &timed_out)?;
         let mut command = Command::new(&resources.engine);
         command.env("OMP_THREAD_LIMIT", "1")
             .arg(&image).arg("stdout")
@@ -577,18 +578,18 @@ fn searchable_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline)
     };
     let pages = plan.recognized();
     if pages.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
-    let pages = match check_render_limits(&document, &pages).and_then(|()| upright_uncropped_pages(&document, pages)) {
-        Ok(pages) => pages,
+    let page_ids = document.get_pages();
+    let frames = match check_render_limits(&document, &pages).and_then(|()| displayed_pages(&document, &page_ids, &pages)) {
+        Ok(frames) => frames,
         Err(error) => return failure(input, error),
     };
-    let layouts = match run_ocr(&resources, &tessdata_dir, &input, &pages, &languages, WORD_BOX_OUTPUT, deadline)
+    let layouts = match run_ocr(&resources, &tessdata_dir, &input, &pages, &languages, DISPLAYED_PAGE, WORD_BOX_OUTPUT, deadline)
         .and_then(|recognized| recognized.iter().map(|tsv| word_boxes(tsv)).collect::<Result<Vec<_>, _>>().map_err(ToolError::processing))
     {
         Ok(layouts) => layouts,
         Err(error) => return JobOutcome::failure(input, error),
     };
     if layouts.iter().all(|layout| layout.lines.is_empty()) { return failure(input, OCR_NO_TEXT.to_string()); }
-    let page_ids = document.get_pages();
     // An earlier invisible layer goes before the new one is added, so each word is
     // found once. Visible content and every other page stay byte for byte as they were,
     // which the check below holds the output to.
@@ -603,7 +604,7 @@ fn searchable_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline)
         Ok(removed) => removed,
         Err(error) => return failure(input, error),
     };
-    let layered = pages.iter().zip(layouts).filter_map(|(page, layout)| page_ids.get(&page.number).map(|id| (page.number, *id, layout))).collect::<Vec<_>>();
+    let layered = pages.iter().zip(frames).zip(layouts).filter_map(|((page, frame), layout)| page_ids.get(&page.number).map(|id| (page.number, *id, frame, layout))).collect::<Vec<_>>();
     let expected = match crate::kit::images::tools::bundled_text_font_bytes().map_err(ToolError::processing).and_then(|font| add_text_layer(&mut document, &layered, font)) {
         Ok(expected) => expected,
         Err(error) => return JobOutcome::failure(input, error),
@@ -631,18 +632,50 @@ const WORD_BOX_OUTPUT: &[&str] = &["-c", "tessedit_create_tsv=1", "-c", "tessedi
 #[cfg(test)]
 pub(crate) static BREAK_SEARCHABLE_OUTPUT_FOR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
-/// Rotated and cropped pages render to a picture that no longer lines up with the
-/// MediaBox, so their word boxes would land in the wrong place. They come later.
-fn upright_uncropped_pages(document: &Document, pages: Vec<OcrPage>) -> Result<Vec<OcrPage>, String> {
-    let page_ids = document.get_pages();
-    for page in &pages {
-        let id = *page_ids.get(&page.number).ok_or_else(|| "PDF page is missing.".to_string())?;
-        let (left, bottom, right, top) = page_bounds(document, id)?;
-        if page_rotation(document, id) != 0 || effective_crop_bounds(document, id)? != [left, bottom, right, top] {
-            return Err(format!("Page {} is rotated or cropped. Searchable PDFs support upright, uncropped pages for now. Save a text file instead.", page.number));
+/// Renders the page as it is shown, its crop box turned by its /Rotate, so the word
+/// boxes are in the same frame as the page a reader selects text on.
+const DISPLAYED_PAGE: &[&str] = &["-cropbox"];
+
+/// How a page is shown: its visible area in user space (the crop box, kept inside the
+/// media box) and the clockwise quarter turns of its /Rotate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DisplayedPage { index: usize, bounds: [f32; 4], rotation: i64 }
+
+impl DisplayedPage {
+    /// The displayed width and height in user space: a quarter turn swaps the page's sides.
+    fn size(&self) -> (f32, f32) {
+        let [left, bottom, right, top] = self.bounds;
+        if self.rotation % 180 == 90 { (top - bottom, right - left) } else { (right - left, top - bottom) }
+    }
+
+    /// The user-space box drawn at a rectangle given in fractions of the displayed page,
+    /// measured from its displayed top left. Crop's rule maps it, so OCR and Crop agree
+    /// on every rotation.
+    fn user_box(&self, left: f32, top: f32, width: f32, height: f32) -> Result<[f32; 4], ToolError> {
+        crate::kit::pdf::editor::crop_box_within(self.bounds, self.rotation, 1., self.index, &crate::kit::pdf::editor::CropSpec::Rectangle { left, top, width, height })
+    }
+
+    /// The text matrix's `a b c d` and the user-space point of a box's displayed bottom
+    /// left corner, so text starts there, runs to the displayed right and stands upright.
+    fn text_origin(&self, [left, bottom, right, top]: [f32; 4]) -> ([i8; 4], (f32, f32)) {
+        match self.rotation {
+            90 => ([0, 1, -1, 0], (right, bottom)),
+            180 => ([-1, 0, 0, -1], (right, top)),
+            270 => ([0, -1, 1, 0], (left, top)),
+            _ => ([1, 0, 0, 1], (left, bottom)),
         }
     }
-    Ok(pages)
+}
+
+/// Each recognized page's displayed frame. A /Rotate that isn't a quarter turn fails
+/// the file before the engine runs, with Crop's wording.
+fn displayed_pages(document: &Document, page_ids: &std::collections::BTreeMap<u32, ObjectId>, pages: &[OcrPage]) -> Result<Vec<DisplayedPage>, String> {
+    pages.iter().map(|page| {
+        let id = *page_ids.get(&page.number).ok_or_else(|| "PDF page is missing.".to_string())?;
+        let frame = DisplayedPage { index: page.number as usize - 1, bounds: effective_crop_bounds(document, id)?, rotation: page_rotation(document, id) };
+        frame.user_box(0., 0., 1., 1.).map_err(|error| error.message)?;
+        Ok(frame)
+    }).collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -703,26 +736,30 @@ struct ExpectedLayer { page: u32, words: Vec<String> }
 /// is stretched to its box's width, so selecting it highlights the word in the scan.
 /// The page's own content runs first inside q/Q, so its graphics state can't move the
 /// text. Numbers have fixed precision, so the same words always give the same bytes.
-fn add_text_layer(document: &mut Document, pages: &[(u32, ObjectId, OcrLayout)], font: Vec<u8>) -> Result<Vec<ExpectedLayer>, ToolError> {
+fn add_text_layer(document: &mut Document, pages: &[(u32, ObjectId, DisplayedPage, OcrLayout)], font: Vec<u8>) -> Result<Vec<ExpectedLayer>, ToolError> {
     let mut font = UnicodeFont::parse(font)?;
     let (ascent, descent) = font.vertical_metrics();
     let mut layers = Vec::new();
-    for (number, page_id, layout) in pages {
+    for (number, page_id, frame, layout) in pages {
         if layout.lines.is_empty() { continue; }
-        let (left, bottom, right, top) = page_bounds(document, *page_id).map_err(ToolError::processing)?;
-        let (scale_x, scale_y) = ((right - left) / layout.width, (top - bottom) / layout.height);
+        // The raster is the displayed page, so a pixel scales to the displayed size.
+        let (width, height) = frame.size();
+        let (scale_x, scale_y) = (width / layout.width, height / layout.height);
         let name = layer_font_name(document, *page_id).map_err(ToolError::processing)?;
         let mut content = String::new();
         let mut words = Vec::new();
         for line in &layout.lines {
             let size = (line.bottom - line.top) * scale_y / (ascent - descent);
-            let baseline = top - line.bottom * scale_y - descent * size;
+            // From the line's top down to its baseline, which sits above the box's bottom by the font's descent.
+            let (top, baseline) = (line.top / layout.height, (line.bottom * scale_y + descent * size) / height);
             content.push_str(&format!("BT\n3 Tr\n/{name} {size:.2} Tf\n"));
             for word in &line.words {
                 let natural = font.show_unshaped(&word.text, size)?.width;
                 let run = font.show_unshaped(&format!("{} ", word.text), size)?;
                 let stretch = if natural > 0. { 100. * word.width * scale_x / natural } else { 100. };
-                content.push_str(&format!("{stretch:.2} Tz 1 0 0 1 {:.2} {baseline:.2} Tm {}\n", left + word.left * scale_x, run.operators));
+                let drawn = frame.user_box(word.left / layout.width, top, word.width.max(1.) / layout.width, baseline - top)?;
+                let ([a, b, c, d], (x, y)) = frame.text_origin(drawn);
+                content.push_str(&format!("{stretch:.2} Tz {a} {b} {c} {d} {x:.2} {y:.2} Tm {}\n", run.operators));
                 words.push(word.text.clone());
             }
             content.push_str("ET\n");
@@ -801,11 +838,11 @@ fn validate_searchable_pdf(original: &Document, output: &Path, expected: &[Expec
     Ok(())
 }
 
-fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: OcrPage, deadline: Instant, timed_out: &str) -> Result<PathBuf, ToolError> {
+fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: OcrPage, area: &[&str], deadline: Instant, timed_out: &str) -> Result<PathBuf, ToolError> {
     let prefix = workspace.page_prefix(page.number);
     let output = prefix.with_extension("png");
     let mut command = Command::new(renderer);
-    command.arg("-png").arg("-r").arg(OCR_RENDER_DPI.to_string()).arg("-f").arg(page.number.to_string()).arg("-l").arg(page.number.to_string()).arg("-singlefile").arg(input).arg(&prefix);
+    command.arg("-png").arg("-r").arg(OCR_RENDER_DPI.to_string()).arg("-f").arg(page.number.to_string()).arg("-l").arg(page.number.to_string()).arg("-singlefile").args(area).arg(input).arg(&prefix);
     let result = run_ocr_helper(command, deadline, timed_out)?;
     if result.status.success() && output.is_file() {
         let size = std::fs::metadata(&output).map_err(|error| ToolError::processing(format!("Could not inspect rendered OCR page: {error}")))?.len();
@@ -1279,7 +1316,7 @@ mod tests {
             fs::set_permissions(helper, permissions).unwrap();
         }
         let workspace = super::OcrWorkspace::new().unwrap();
-        let result = super::render_ocr_page(&renderer, &input, &workspace, super::OcrPage { number: 1 }, Instant::now() + Duration::from_secs(5), "timed out");
+        let result = super::render_ocr_page(&renderer, &input, &workspace, super::OcrPage { number: 1 }, &[], Instant::now() + Duration::from_secs(5), "timed out");
         let error = result.unwrap_err();
         assert!(error.message.contains("file-size limit"), "{error}");
 

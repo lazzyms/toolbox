@@ -103,6 +103,7 @@ interface ResultListProps {
     resultNoun?: string;
     runningVerb: string;
     runningDetail?: string;
+    signatureRemovedNote?: string;
     live: LiveRun | null;
     combinedInputs?: string[] | null;
     combined?: CombinedResult;
@@ -119,7 +120,7 @@ interface ResultListProps {
     summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, signatureRemovedNote, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
     const namedByOutput = namedByOutputProp || combinedInputs !== null;
     const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
@@ -268,9 +269,9 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
 
     const finishedRow = (result: JobOutcome, index: number) => {
         const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
-        const baseView = rowView(result, resultVerb, namedByOutput, outputNoun, installedPacks);
+        const baseView = rowView(result, resultVerb, namedByOutput, outputNoun, installedPacks, signatureRemovedNote);
         const view = group
-            ? { ...baseView, detailLines: [{ text: group.hint, tone: null }, ...result.warnings.map(warningDetail)], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
+            ? { ...baseView, detailLines: [{ text: group.hint, tone: null }, ...result.warnings.map((warning) => warningDetail(warning, signatureRemovedNote))], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
             : baseView;
         const open = group !== null && expanded.has(index);
         const pack = view.pointer?.pointer.kind === "pack" ? view.pointer.pointer : null;

@@ -268,6 +268,8 @@ export interface ToolDefinition {
   runningDetail?: string;
   outputNoun?: string;
   lockedNote?: string;
+  /** The tool's own words for a result row whose copy lost its digital signature, when its board has them. */
+  signatureRemovedNote?: string;
   blurb: string;
   keywords?: readonly string[];
   symbol: string;
