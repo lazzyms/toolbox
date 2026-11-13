@@ -4,6 +4,7 @@ pub mod page_ranges;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+pub(crate) mod qpdf;
 pub mod unicode_font;
 
 use std::collections::HashSet;
@@ -921,7 +922,7 @@ impl PDFProcessor {
             return JobOutcome::failure(input_path, ToolError::invalid_input("A non-empty password is required."));
         }
         if password.contains(['\n', '\r']) {
-            return JobOutcome::failure(input_path, ToolError::invalid_input("Passwords can't contain line breaks."));
+            return JobOutcome::failure(input_path, ToolError::invalid_input(qpdf::PASSWORD_LINE_BREAK));
         }
         let raw = match read_and_probe(&input_path) {
             Ok((raw, state)) => match lock_skip_reason(state) {
@@ -944,11 +945,10 @@ impl PDFProcessor {
         };
 
         let mut command = Command::new(&qpdf);
-        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", "@-", "--bits=256", "--"]);
-        let options = format!("--user-password={password}\n--owner-password={password}\n").into_bytes();
+        command.arg(&input_path).arg(output_path.path()).args(["--encrypt", qpdf::PASSWORDS_FROM_STDIN, "--bits=256", "--"]);
         let limit = pdf_lock_time_limit(page_count);
         let timed_out = format!("Locking took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
-        let output = match run_bounded_helper_with_input(command, Some(options), Instant::now() + limit, PDF_TEXT_MAX_ERROR_BYTES, PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+        let output = match qpdf::run_with_passwords(command, &[("--user-password", password), ("--owner-password", password)], Instant::now() + limit, &timed_out) {
             Ok(output) => output,
             Err(message) if message == timed_out => return JobOutcome::failure(input_path, ToolError::limit_exceeded(crate::kit::contracts::LimitKind::Time, message)),
             Err(message) => return JobOutcome::failure(input_path, ToolError::unavailable(message)),
@@ -1011,7 +1011,7 @@ pub(crate) mod tests {
         false
     }
 
-    fn make_pdf(path: &PathBuf) {
+    pub(crate) fn make_pdf(path: &PathBuf) {
         let mut doc = Document::with_version("1.7");
         let pages_id = doc.new_object_id();
         let font_id = doc.add_object(dictionary! {
