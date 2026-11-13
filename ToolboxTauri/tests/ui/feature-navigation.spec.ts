@@ -1634,8 +1634,8 @@ test("media and security workspaces expose ordered inputs and format boundaries"
     await page.goto("/");
     await openFromHome(page, "Create GIF");
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(page.getByRole("region", { name: "Frame order" })).toBeVisible();
-    await expect(page.locator(".media-frame-preview")).toBeVisible();
+    await expect(page.getByRole("listbox", { name: "Frames, in play order" }).getByRole("option")).toHaveCount(1);
+    await expect(page.locator(".media-frame-picture img")).toBeVisible();
     await expect.poll(async () => page.evaluate(() => (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_image_preview").length ?? 0)).toBe(1);
     await expect(page.getByRole("button", { name: `Move ${fixtureName} up` })).toBeDisabled();
     await expect(page.getByRole("button", { name: `Move ${fixtureName} down` })).toBeDisabled();

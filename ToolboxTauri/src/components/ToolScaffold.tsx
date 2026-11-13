@@ -62,7 +62,8 @@ export type DiscardGuard = (proceed: () => void, cancel?: () => void) => void;
 // The view rail lives outside the scaffold, so a run reports here to lock it like the options fieldset.
 export const RunStateContext = createContext<((running: boolean) => void) | null>(null);
 
-export type RunContext = { outputPath: string | null; runId: string };
+/** `keys` names each run path's list entry, in the same order, so a tool can tell repeated files apart. */
+export type RunContext = { outputPath: string | null; runId: string; keys: string[] };
 
 /** What a report can do after its run: retry one file, and save to this run's destination. */
 export interface ReportRun {
@@ -144,6 +145,12 @@ interface ToolScaffoldProps {
         progress: Progress;
         selectedFileIndex: number;
         selectFile: (index: number) => void;
+        /** Each file's list entry key, parallel to `files`; a file added twice has two keys. */
+        fileKeys: string[];
+        /** Moves the file at `index` of `files` to `toIndex`, through the same ordering as the file list. */
+        moveFile: (index: number, toIndex: number) => void;
+        /** Removes the file at `index` of `files` from the list, never from disk. */
+        removeFile: (index: number) => void;
         destination: React.ReactNode;
         /** The pieces of `destination`, for a view that places its own destination control, such as next to Export. */
         runDestination: RunDestinationControl;
@@ -200,6 +207,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy), [entries, utility, intakeCopy]);
     const runnable = useMemo(() => statuses.filter((status) => status.flag?.kind !== 'wontRun'), [statuses]);
     const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
+    const fileKeys = useMemo(() => runnable.map((status) => status.entry.key), [runnable]);
     const failingFiles = useMemo(() => runnable.filter((status) => status.flag?.kind === 'willFail').map((status) => status.entry.path), [runnable]);
     const flagged = statuses.filter((status) => status.flag !== null);
     const selectedFileIndex = Math.max(runnable.findIndex((status) => status.entry.key === anchor), 0);
@@ -238,7 +246,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setResults([]);
     }, [files]);
 
-    const runStreamed = async (handler: RunHandler, paths: string[], location: OutputLocation, outputPath: string | null, generation: number) => {
+    const runStreamed = async (handler: RunHandler, paths: string[], keys: string[], location: OutputLocation, outputPath: string | null, generation: number) => {
         const runId = crypto.randomUUID();
         setLive(startRun(runId, paths));
         let unlisten: UnlistenFn | null = null;
@@ -251,7 +259,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             // Without progress events the run still completes and shows its final results.
         }
         try {
-            return parseToolResult(await handler(paths, location, { outputPath, runId }));
+            return parseToolResult(await handler(paths, location, { outputPath, runId, keys }));
         } finally {
             unlisten?.();
         }
@@ -281,7 +289,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 ? `${utility.title} is unavailable in this build.`
                 : null;
             const invalidPaths = new Map<string, JobOutcome>();
-            const validPaths = files.filter((path) => {
+            const validKeys = fileKeys.filter((_, index) => {
+                const path = files[index];
                 if (cardinalityError) {
                     invalidPaths.set(path, failedOutcome(path, 'invalidInput', cardinalityError));
                     return false;
@@ -292,6 +301,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 }
                 return true;
             });
+            const validPaths = validKeys.map((key) => files[fileKeys.indexOf(key)]);
             const orderedSelectionRejected = inputPolicy.inputCardinality === 'ordered' && invalidPaths.size > 0;
             const runs = !orderedSelectionRejected && validPaths.length > 0;
             let outputPath: string | null = null;
@@ -321,7 +331,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 }
                 setLoading(true);
             }
-            const processed = runs ? await runStreamed(handler, validPaths, location, outputPath, generation) : [];
+            const processed = runs ? await runStreamed(handler, validPaths, validKeys, location, outputPath, generation) : [];
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
                 ? files.map((path) => invalidPaths.get(path) ?? failedOutcome(path, 'invalidInput', 'Every selected input must use a supported format for this ordered action.'))
@@ -396,12 +406,13 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         await save(location);
     };
 
+    // A rerun is per file, where a file appears once, so its path finds its entry.
     const rerun = async (paths: string[], handler = perFileRun?.handler) => {
         if (!perFileRun || !handler || paths.length === 0) return;
         const generation = runGeneration.current;
         let rerunResults: JobOutcome[];
         try {
-            rerunResults = parseToolResult(await handler(paths, perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID() }));
+            rerunResults = parseToolResult(await handler(paths, perFileRun.outputLocation, { outputPath: null, runId: crypto.randomUUID(), keys: paths.map((path) => fileKeys[files.indexOf(path)] ?? path) }));
         } catch (error) {
             rerunResults = paths.map((path) => failedOutcome(path, 'processing', String(error)));
         }
@@ -621,7 +632,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
     const focusRow = (key: string) => requestAnimationFrame(() => rowButtons.current.get(key)?.focus());
 
-    const moveTo = (key: string, toIndex: number) => {
+    const moveTo = (key: string, toIndex: number, focus = true) => {
         if (loading) return;
         const next = moveEntry(entries, key, toIndex);
         if (next === entries) return;
@@ -629,7 +640,19 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         selectOnly(key);
         const moved = next[toIndex];
         setMoveStatus(`Moved ${fileName(moved.path)} to position ${toIndex + 1}.`);
-        focusRow(key);
+        if (focus) focusRow(key);
+    };
+
+    // A view's own arrangement of the files, such as the GIF frame grid, keeps focus where it is.
+    const moveFile = (index: number, toIndex: number) => {
+        const key = fileKeys[index];
+        const target = fileKeys[toIndex];
+        if (!ordered || key === undefined || target === undefined) return;
+        moveTo(key, entries.findIndex((entry) => entry.key === target), false);
+    };
+    const removeFile = (index: number) => {
+        const key = fileKeys[index];
+        if (key !== undefined) removeEntries(new Set([key]));
     };
 
     const listKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
@@ -926,6 +949,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 progress,
                 selectedFileIndex,
                 selectFile,
+                fileKeys,
+                moveFile,
+                removeFile,
                 destination: (
                     <>
                     <RunDestination

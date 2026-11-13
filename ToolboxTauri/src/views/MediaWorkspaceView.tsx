@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
-import { initialMediaOptions, isMediaToolId, mediaTools, type MediaOptions, type MediaToolId } from "../features/media";
+import { initialMediaOptions, isMediaToolId, mediaTools, type MediaOptions, type MediaPanelProps, type MediaToolId } from "../features/media";
 
 type OptionSetters = { [Id in MediaToolId]: (update: (current: MediaOptions[Id]) => MediaOptions[Id]) => void };
 
@@ -37,10 +37,10 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
   const toolId: MediaToolId = isMediaToolId(activeUtility.id) ? activeUtility.id : "tiff-pages";
   const tool = mediaTools[toolId];
 
-  const buildRequest = <Id extends MediaToolId>(id: Id, paths: string[], outputLocation: OutputLocation, outputPath: string | null) =>
-    mediaTools[id].buildRequest(options[id], { paths, outputLocation, outputPath });
-  const canRun = <Id extends MediaToolId>(id: Id, files: string[]) =>
-    mediaTools[id].canRun?.(options[id], files) ?? true;
+  const buildRequest = <Id extends MediaToolId>(id: Id, paths: string[], keys: string[], outputLocation: OutputLocation, outputPath: string | null) =>
+    mediaTools[id].buildRequest(options[id], { paths, keys, outputLocation, outputPath });
+  const canRun = <Id extends MediaToolId>(id: Id, files: string[], keys: string[]) =>
+    mediaTools[id].canRun?.(options[id], files, keys) ?? true;
   const runLabelFor = <Id extends MediaToolId>(id: Id, files: string[]) => {
     const label = mediaTools[id].runLabel;
     return typeof label === "function" ? label(options[id], files) : label;
@@ -57,7 +57,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
     () => (capability === activeUtility.capability ? activeUtility : { ...activeUtility, capability }),
     [activeUtility, capability.inputCardinality, capability.manyToOne],
   );
-  const renderPanel = <Id extends MediaToolId>(id: Id, scaffold: { files: string[]; outputLocation: OutputLocation; loading: boolean; selectedFileIndex: number; selectFile: (index: number) => void }): ReactNode => {
+  const renderPanel = <Id extends MediaToolId>(id: Id, scaffold: Omit<MediaPanelProps<unknown>, "utility" | "options" | "setOptions">): ReactNode => {
     const Panel = mediaTools[id].Panel;
     return <Panel key={id} utility={activeUtility} options={options[id]} setOptions={setters[id]} {...scaffold} />;
   };
@@ -76,12 +76,12 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
       outputGroup={tool.outputGroup}
       resultsHint={tool.resultsHint}
       intakeRedirect={tool.intakeRedirect}
-      onRun={(paths, outputLocation, { outputPath, runId }) => {
-        const { command, request } = buildRequest(toolId, paths, outputLocation, outputPath);
+      onRun={(paths, outputLocation, { outputPath, runId, keys }) => {
+        const { command, request } = buildRequest(toolId, paths, keys, outputLocation, outputPath);
         return invoke<ToolResult>(command, { runId, request });
       }}
     >
-      {({ files, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
+      {({ files, fileKeys, moveFile, removeFile, outputLocation, run, loading, selectedFileIndex, selectFile, destination, runLabel }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
           <div>
@@ -90,10 +90,10 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
             <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon or page order.</p>
           </div>
 
-          {renderPanel(toolId, { files, outputLocation, loading, selectedFileIndex, selectFile })}
+          {renderPanel(toolId, { files, fileKeys, moveFile, removeFile, outputLocation, loading, selectedFileIndex, selectFile })}
 
           {destination}
-          <Button variant="default" disabled={loading || files.length === 0 || !canRun(toolId, files)} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
+          <Button variant="default" disabled={loading || files.length === 0 || !canRun(toolId, files, fileKeys)} onClick={run} className="workspace-primary-action" {...shortcutTarget("run")}>
             {runLabel ?? runLabelFor(toolId, files) ?? activeUtility.shortTitle}
             <ShortcutHint id="run" />
           </Button>
