@@ -4,11 +4,13 @@ import { ArrowDown, ArrowUp, List, ListOrdered, SeparatorHorizontal, Trash2 } fr
 import type { JobOutcome, ToolDefinition } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Separator } from "@/components/ui/separator";
 import { Toggle } from "@/components/ui/toggle";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResultList } from "../components/ResultList";
 import { RunStateContext } from "../components/ToolScaffold";
@@ -39,8 +41,27 @@ const gutterLabels: Record<BlockKind, string> = {
 };
 const typeChoices: readonly (Exclude<BlockKind, "pageBreak"> & FormatKeyId)[] = ["paragraph", "heading1", "heading2", "heading3", "bulletedList", "numberedList"];
 
-/** The defaults this first version always uses; page setup and the font picker come later. */
-const PAGE = { pageSize: "a4", margins: "normal" } as const;
+type PageSize = "a4" | "letter" | "legal";
+type Orientation = "portrait" | "landscape";
+type Margins = "narrow" | "normal" | "wide";
+/** How every page looks; sent with the document as its page settings. */
+export type PageSettings = { pageSize: PageSize; orientation: Orientation; margins: Margins; header: string; footer: string; pageNumbers: boolean };
+const defaultPage: PageSettings = { pageSize: "a4", orientation: "portrait", margins: "normal", header: "", footer: "", pageNumbers: false };
+const pageSizes: Record<PageSize, { name: string; choice: string }> = {
+  a4: { name: "A4", choice: "A4, 210 × 297 mm" },
+  letter: { name: "Letter", choice: "Letter, 8.5 × 11 in" },
+  legal: { name: "Legal", choice: "Legal, 8.5 × 14 in" },
+};
+const marginLabels: Record<Margins, { name: string; hint: string }> = {
+  narrow: { name: "Narrow", hint: "Narrow is 13 mm on every side." },
+  normal: { name: "Normal", hint: "Normal is 25 mm on every side." },
+  wide: { name: "Wide", hint: "Wide is 38 mm on every side." },
+};
+const pageSummary = (page: PageSettings) => `${pageSizes[page.pageSize].name}, ${page.orientation}, ${page.margins} margins`;
+const bandSummary = (page: PageSettings) => [
+  page.header.trim() && "Header", page.footer.trim() && "Footer", page.pageNumbers && "Page numbers",
+].filter(Boolean).join(", ").toLowerCase().replace(/^./, (first) => first.toUpperCase()) || "None";
+/** The font this version always uses; the font picker comes later. */
 const FONT = { family: "Liberation Serif", size: 11 } as const;
 
 let lastId = 0;
@@ -122,6 +143,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const [emphasis, setEmphasis] = useState({ bold: false, italic: false });
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
+  const [page, setPage] = useState<PageSettings>(defaultPage);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<JobOutcome[] | null>(null);
   const list = useRef<HTMLOListElement>(null);
@@ -165,6 +187,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const currentPlace = locate(blocks, selectedKey) ?? { index: 0, block: blocks[0], itemIndex: isList(blocks[0]) ? 0 : null };
   const current = currentPlace.block;
   const empty = blocks.every(blockIsBlank);
+  const setPageSetting = <K extends keyof PageSettings>(key: K, value: PageSettings[K]) => setPage((current) => ({ ...current, [key]: value }));
   const starts = listStarts(blocks);
 
   const replace = (index: number, replacement: Block[], focus: Selection) => {
@@ -369,12 +392,12 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const save = async () => {
     if (empty || saving) return;
     const name = `${title.trim() || "Untitled"}.pdf`;
-    const outputPath = await chooseCreatedDocumentSavePath({ title: "Save the PDF", extension: "pdf" }, name, "A4, Liberation Serif 11 pt");
+    const outputPath = await chooseCreatedDocumentSavePath({ title: "Save the PDF", extension: "pdf" }, name, `${pageSizes[page.pageSize].name}${page.orientation === "landscape" ? " landscape" : ""}, Liberation Serif 11 pt`);
     if (!outputPath) return;
     setSaving(true);
     reportRunning?.(true);
     try {
-      const request = { document: { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page: PAGE, font: FONT }, outputPath };
+      const request = { document: { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page, font: FONT }, outputPath };
       setSaved(parseToolResult(await invoke("create_formatted_pdf", { request })));
     } catch (error) {
       setSaved([failedOutcome(outputPath, "processing", error instanceof Error ? error.message : String(error))]);
@@ -390,6 +413,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     setSelectedKey(null);
     setTitle("");
     setAuthor("");
+    setPage(defaultPage);
     setSaved(null);
     lastSelection.current = null;
     focusNext.current = { key: String(first.id), start: 0, end: 0 };
@@ -517,6 +541,58 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
               </p>
             </section>
             <aside className="formatted-pdf-settings" aria-label="Document settings">
+              <fieldset className="workspace-field" disabled={saving} aria-describedby="formatted-pdf-page-summary">
+                <legend className="workspace-panel-label">Page</legend>
+                <p id="formatted-pdf-page-summary" className="workspace-note">{pageSummary(page)}</p>
+                <div className="workspace-field">
+                  <Label htmlFor="formatted-pdf-page-size">Size</Label>
+                  <NativeSelect id="formatted-pdf-page-size" value={page.pageSize} onChange={(event) => setPageSetting("pageSize", event.target.value as PageSize)}>
+                    {(Object.keys(pageSizes) as PageSize[]).map((size) => <NativeSelectOption key={size} value={size}>{pageSizes[size].choice}</NativeSelectOption>)}
+                  </NativeSelect>
+                </div>
+                <div className="workspace-field">
+                  <Label id="formatted-pdf-orientation-label">Orientation</Label>
+                  <ToggleGroup
+                    type="single" variant="outline" size="sm" className="formatted-pdf-segments" aria-labelledby="formatted-pdf-orientation-label"
+                    value={page.orientation} onValueChange={(value) => { if (value) setPageSetting("orientation", value as Orientation); }}
+                  >
+                    <ToggleGroupItem value="portrait">Portrait</ToggleGroupItem>
+                    <ToggleGroupItem value="landscape">Landscape</ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+                <div className="workspace-field">
+                  <Label id="formatted-pdf-margins-label">Margins</Label>
+                  <ToggleGroup
+                    type="single" variant="outline" size="sm" className="formatted-pdf-segments" aria-labelledby="formatted-pdf-margins-label" aria-describedby="formatted-pdf-margins-hint"
+                    value={page.margins} onValueChange={(value) => { if (value) setPageSetting("margins", value as Margins); }}
+                  >
+                    {(Object.keys(marginLabels) as Margins[]).map((margins) => <ToggleGroupItem key={margins} value={margins}>{marginLabels[margins].name}</ToggleGroupItem>)}
+                  </ToggleGroup>
+                  <p id="formatted-pdf-margins-hint" className="workspace-note">{marginLabels[page.margins].hint}</p>
+                </div>
+              </fieldset>
+              <dl className="formatted-pdf-defaults">
+                <dt className="workspace-panel-label">Font</dt>
+                <dd className="workspace-note">Liberation Serif, 11 pt</dd>
+              </dl>
+              <fieldset className="workspace-field" disabled={saving} aria-describedby="formatted-pdf-band-summary">
+                <legend className="workspace-panel-label">Header and footer</legend>
+                <p id="formatted-pdf-band-summary" className="workspace-note">{bandSummary(page)}</p>
+                <div className="formatted-pdf-pair">
+                  <div className="workspace-field">
+                    <Label htmlFor="formatted-pdf-header">Header text</Label>
+                    <Input id="formatted-pdf-header" value={page.header} onChange={(event) => setPageSetting("header", event.target.value)} />
+                  </div>
+                  <div className="workspace-field">
+                    <Label htmlFor="formatted-pdf-footer">Footer text</Label>
+                    <Input id="formatted-pdf-footer" placeholder="None" value={page.footer} onChange={(event) => setPageSetting("footer", event.target.value)} />
+                  </div>
+                </div>
+                <Label htmlFor="formatted-pdf-page-numbers" className="cursor-pointer">
+                  <Checkbox id="formatted-pdf-page-numbers" checked={page.pageNumbers} onCheckedChange={(checked) => setPageSetting("pageNumbers", checked === true)} />
+                  Page numbers at the bottom
+                </Label>
+              </fieldset>
               <fieldset className="workspace-field" disabled={saving}>
                 <legend className="workspace-panel-label">Title and author</legend>
                 <div className="workspace-field">
@@ -529,12 +605,6 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                 </div>
                 <p id="formatted-pdf-details-hint" className="workspace-note">Saved in the PDF's details. The title is also the suggested file name.</p>
               </fieldset>
-              <dl className="formatted-pdf-defaults">
-                <dt className="workspace-panel-label">Page</dt>
-                <dd className="workspace-note">A4, portrait, normal margins</dd>
-                <dt className="workspace-panel-label">Font</dt>
-                <dd className="workspace-note">Liberation Serif, 11 pt</dd>
-              </dl>
             </aside>
           </div>
           <footer className="formatted-pdf-footer">

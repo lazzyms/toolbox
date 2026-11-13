@@ -2670,6 +2670,9 @@ ol.formatted-pdf-items { list-style: decimal; }
 .formatted-pdf-settings { display: grid; gap: 16px; }
 .formatted-pdf-defaults { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; }
 .formatted-pdf-defaults dd { margin: 0; }
+.formatted-pdf-segments { width: 100%; }
+.formatted-pdf-segments > * { flex: 1; }
+.formatted-pdf-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .formatted-pdf-footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .formatted-pdf-new { justify-self: start; }
 @media (max-width: 900px) { .formatted-pdf-layout { grid-template-columns: minmax(0, 1fr); } }
