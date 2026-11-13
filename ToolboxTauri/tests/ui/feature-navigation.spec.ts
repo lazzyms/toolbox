@@ -2127,6 +2127,29 @@ test("PDF conversion resets the displayed scope when switching actions", async (
     expect(invocation?.args).toMatchObject({ request: { pages: [0, 1, 2], pageRange: "1-3" } });
 });
 
+test("PDF page ranges follow the native grammar and messages", async ({ page }) => {
+    await page.goto("/");
+    await openFromHome(page, "PDF to Images");
+    await chooseFixture(page, "/local/document.scoped.pdf");
+    const range = page.getByRole("textbox", { name: "Page range" });
+    const exportButton = page.getByRole("button", { name: "Export PDF to Images", exact: true });
+
+    await range.fill("1-3,,2");
+    await expect(page.getByText("Entry 2 of the page range is empty. Remove the extra comma.", { exact: true })).toBeVisible();
+    await expect(exportButton).toBeDisabled();
+
+    await range.fill("4");
+    await expect(page.getByText("The PDF has 3 pages, so page 4 can't be used.", { exact: true })).toBeVisible();
+    await expect(exportButton).toBeDisabled();
+
+    await range.fill("2-");
+    await expect(page.getByText("2 pages selected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: "Page 1" })).not.toBeChecked();
+    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
+    await exportButton.click();
+    expect((await lastInvocation(page, "pdf_to_images"))?.args).toMatchObject({ request: { pages: [1, 2], pageRange: "2-3" } });
+});
+
 test("GIF extraction does not request a source preview", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Extract GIF Frames");

@@ -61,7 +61,8 @@ test("swapping and inserting pages change only the page order", () => {
 test("page ranges parse to sorted, unique page indices", () => {
   assert.deepEqual(parsePageRange("1-3, 7, 10-12", 12), [0, 1, 2, 6, 9, 10, 11]);
   assert.deepEqual(parsePageRange("3, 1-3, 3", 5), [0, 1, 2]);
-  assert.deepEqual(parsePageRange(" 2 - 4 ,, ", 5), [1, 2, 3]);
+  assert.deepEqual(parsePageRange(" 2 - 4 ", 5), [1, 2, 3]);
+  assert.deepEqual(parsePageRange("8-", 10), [7, 8, 9]);
   assert.deepEqual(parsePageRange("", 3), [0, 1, 2]);
 });
 
@@ -71,10 +72,10 @@ test("page ranges report malformed, reversed and out-of-range input", () => {
     assert.ok(!Array.isArray(parsed), `${value} should be rejected`);
     return parsed.message;
   };
-  assert.equal(issue("1-3, abc", 10), "Invalid page selection: abc.");
-  assert.equal(issue("2-", 10), "Invalid page selection: 2-.");
-  assert.equal(issue("0-2", 10), "Page numbers start at 1.");
-  assert.equal(issue("5-3", 10), "Write 5-3 from low to high, like 3-5.");
-  assert.equal(issue("1-3, 250", 236), "Page 250 isn't in this PDF. It has 236 pages, so use numbers from 1 to 236.");
-  assert.equal(issue("2", 1), "Page 2 isn't in this PDF. It has 1 page, so use numbers from 1 to 1.");
+  assert.equal(issue("1-3, abc", 10), "\"abc\" isn't a page or range. Use pages and ranges like 1-3, 5, 8-.");
+  assert.equal(issue("2,,4", 10), "Entry 2 of the page range is empty. Remove the extra comma.");
+  assert.equal(issue("0-2", 10), "\"0-2\" uses page 0. Page numbers start at 1.");
+  assert.equal(issue("5-3", 10), "\"5-3\" runs backwards. Put the lower page first, for example 3-5.");
+  assert.equal(issue("1-3, 250", 236), "The PDF has 236 pages, so page 250 can't be used.");
+  assert.equal(issue("2", 1), "The PDF has 1 page, so page 2 can't be used.");
 });

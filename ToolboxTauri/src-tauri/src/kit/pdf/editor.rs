@@ -6,8 +6,9 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::ToolError;
+use crate::kit::contracts::{SkipReason, ToolError};
 use super::metadata::{effective_crop_bounds, page_bounds, page_rotation};
+use super::page_ranges::PageRanges;
 use super::{inherited, mutation_preflight, note_signature_removed, remove_signatures, PdfMutationIntent, PdfMutationPreflight, SignedPdf};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -28,10 +29,18 @@ pub enum PageScope {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum RangedPageScope {
+    All,
+    Selected { pages: Vec<usize> },
+    Range { ranges: String },
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CropPdfRequest {
     pub paths: Vec<PathBuf>,
     pub rectangle: PdfRect,
-    pub scope: PageScope,
+    pub scope: RangedPageScope,
     pub output_location: OutputLocation,
 }
 
@@ -343,9 +352,16 @@ fn validate_operation_targets(operation: &PdfEditOperation, deleted_pages: &[usi
 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-cropped", PdfMutationIntent::General, SignedPdf::RemoveSignature, |document, pages, preflight| {
+    transform_or_skip_pdf(input, &request.output_location, "-cropped", PdfMutationIntent::General, SignedPdf::RemoveSignature, |document, pages, preflight| {
         validate_rect(&request.rectangle)?;
-        let selected = scoped_indices(&request.scope, pages.len())?;
+        let (selected, notes) = match &request.scope {
+            RangedPageScope::All => ((0..pages.len()).collect(), Vec::new()),
+            RangedPageScope::Selected { pages: selected } => (selected_indices(selected, pages.len())?, Vec::new()),
+            RangedPageScope::Range { ranges } => match PageRanges::parse(ranges)?.clamp_or_skip(pages.len()) {
+                Ok(clamped) => (clamped.page_indices(), clamped.notes),
+                Err(reason) => return Ok(Edited::Skipped(reason)),
+            },
+        };
         reject_annotated_pages(preflight, pages, selected.iter().copied(), "cropped")?;
         for page_index in selected {
             let page_id = pages[page_index];
@@ -357,7 +373,7 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
                 request.rectangle.y + request.rectangle.height,
             ], true)?;
         }
-        Ok(())
+        Ok(Edited::Saved(if notes.is_empty() { "PDF saved".to_string() } else { format!("PDF saved. {}", notes.join(" ")) }))
     })
 }
 
@@ -753,12 +769,14 @@ fn apply_overlay(document: &mut Document, pages: &[lopdf::ObjectId], overlay: &P
 fn scoped_indices(scope: &PageScope, page_count: usize) -> Result<Vec<usize>, String> {
     match scope {
         PageScope::All => Ok((0..page_count).collect()),
-        PageScope::Selected { pages } => {
-            validate_unique_page_refs("selected-page scope", pages, page_count)?;
-            if pages.is_empty() { return Err("A selected-page scope must contain at least one page.".to_string()); }
-            Ok(pages.clone())
-        }
+        PageScope::Selected { pages } => selected_indices(pages, page_count),
     }
+}
+
+fn selected_indices(pages: &[usize], page_count: usize) -> Result<Vec<usize>, String> {
+    validate_unique_page_refs("selected-page scope", pages, page_count)?;
+    if pages.is_empty() { return Err("A selected-page scope must contain at least one page.".to_string()); }
+    Ok(pages.to_vec())
 }
 
 fn optional_indices(pages: &Option<Vec<usize>>, page_count: usize, label: &str) -> Result<Vec<usize>, String> {
@@ -844,8 +862,18 @@ fn page_number_position(position: Option<&PdfOverlayPosition>, width: f32, heigh
     }
 }
 
+enum Edited {
+    Saved(String),
+    Skipped(SkipReason),
+}
+
 fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, signed: SignedPdf, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<(), String> {
+    transform_or_skip_pdf(input, location, suffix, intent, signed, |document, pages, preflight| edit(document, pages, preflight).map(|()| Edited::Saved("PDF saved".to_string())))
+}
+
+fn transform_or_skip_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, signed: SignedPdf, edit: F) -> JobOutcome
+where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<Edited, String> {
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     if document.is_encrypted() { return failure(input, "Unlock the PDF before editing".to_string()); }
     let pages: Vec<_> = document.get_pages().values().copied().collect();
@@ -858,14 +886,18 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
         Ok(preflight) => preflight,
         Err(error) => return failure(input, error),
     };
-    if let Err(error) = edit(&mut document, &pages, &preflight) { return failure(input, error); }
+    let detail = match edit(&mut document, &pages, &preflight) {
+        Ok(Edited::Saved(detail)) => detail,
+        Ok(Edited::Skipped(reason)) => return JobOutcome::skipped(input, reason),
+        Err(error) => return failure(input, error),
+    };
     let output = match OutputNaming::reserve_destination(&input, location, suffix, "pdf") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve PDF output: {error}")),
     };
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => note_signature_removed(JobOutcome::succeeded(input, vec![path], "PDF saved"), signature_removed),
+            Ok(path) => note_signature_removed(JobOutcome::succeeded(input, vec![path], detail), signature_removed),
             Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
@@ -1365,7 +1397,7 @@ mod session_tests {
         let outcome = crop(&CropPdfRequest {
             paths: vec![source.clone()],
             rectangle: PdfRect { x: 100.0, y: 100.0, width: 200.0, height: 300.0 },
-            scope: PageScope::All,
+            scope: RangedPageScope::All,
             output_location: editor_request_location(&output_dir),
         }, source.clone());
         assert!(outcome.error().is_none(), "crop failed: {:?}", outcome.error());
@@ -1401,7 +1433,7 @@ mod session_tests {
             document.save(&source).unwrap();
             let outcome = crop(&CropPdfRequest {
                 paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
-                scope: PageScope::All, output_location: editor_request_location(&output_dir),
+                scope: RangedPageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
             assert!(outcome.error().is_some_and(|error| error.message.contains("navigation")), "{name}: {:?}", outcome.error());
             assert!(outcome.output_paths().is_empty());
@@ -1422,7 +1454,7 @@ mod session_tests {
             document.save(&source).unwrap();
             let outcome = crop(&CropPdfRequest {
                 paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
-                scope: PageScope::All, output_location: editor_request_location(&output_dir),
+                scope: RangedPageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
             assert!(outcome.error().is_some_and(|error| error.message.contains("page-tree")), "count {count}: {:?}", outcome.error());
             assert!(outcome.output_paths().is_empty());
@@ -1443,7 +1475,7 @@ mod session_tests {
         let outcome = crop(&CropPdfRequest {
             paths: vec![source.clone()],
             rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
-            scope: PageScope::All,
+            scope: RangedPageScope::All,
             output_location: location(&output_dir),
         }, source.clone());
 
@@ -1468,7 +1500,7 @@ mod session_tests {
 
         let outcome = crop(&CropPdfRequest {
             paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
-            scope: PageScope::All, output_location: location(&output_dir),
+            scope: RangedPageScope::All, output_location: location(&output_dir),
         }, source.clone());
 
         assert!(outcome.error().is_some_and(|error| error.message.contains("annotation")), "unexpected result: {:?}", outcome.error());
@@ -1557,7 +1589,7 @@ mod session_tests {
 
             let outcome = crop(&CropPdfRequest {
                 paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
-                scope: PageScope::All, output_location: location(&output_dir),
+                scope: RangedPageScope::All, output_location: location(&output_dir),
             }, source.clone());
 
             assert!(outcome.error().is_some(), "{name}: malformed annotation must fail");
