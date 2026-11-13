@@ -254,7 +254,8 @@ const PDFSceneEditor = ({
       const refusal = results.flatMap((result) => result.failure?.kind === 'invalidInput' ? [removalRefusal(result.failure.message)] : []).find(Boolean);
       if (refusal) setRefused({ path: inputPath, refusal });
       if (results.length && results.every((result) => result.state === 'succeeded')) setExported({ path: inputPath, scene, formValues, flatten });
-      return results.map((result) => result.failure && !(result.failure.kind === 'invalidInput' && removalRefusal(result.failure.message))
+      // A failure that points at a pack already says what to install; its row offers the install.
+      return results.map((result) => result.failure && result.failure.pointer?.kind !== 'pack' && !(result.failure.kind === 'invalidInput' && removalRefusal(result.failure.message))
         ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, runSavingAs, loading, runDestination, live, browse, replaceFiles }) => <PDFSceneFiles files={files} title={utility.shortTitle ?? utility.title} replaceFiles={replaceFiles} onNavigate={onNavigate}>
