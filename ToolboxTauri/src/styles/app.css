@@ -358,6 +358,7 @@ body {
 .workspace-field-warning { margin: 0; color: var(--warning); font-size: 12px; line-height: 1.5; display: flex; gap: 6px; align-items: flex-start; }
 .workspace-field-warning svg { flex: none; width: 14px; height: 14px; margin-top: 2px; }
 .workspace-note.workspace-note-error { color: var(--destructive); }
+.workspace-note.workspace-note-warning { color: var(--warning); }
 .workspace-password-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1929,7 +1930,7 @@ fieldset.scene-inspector-field { min-inline-size: 0; margin: 0; padding: 0; bord
 .password-cleared { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted-foreground); font-size: 12px; }
 .file-selection-row:has(.password-inline) { flex-wrap: wrap; }
 .file-password { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
-.file-password-hint { padding: 0 6px; color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
+.file-password-hint, .file-selection-note { padding: 0 6px; color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
 .password-inline { flex-basis: 100%; display: grid; gap: 4px; padding: 4px 8px 8px; }
 .password-inline-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
 .password-inline-fields > .workspace-field { flex: 1 1 180px; }
@@ -2202,6 +2203,34 @@ kbd.shortcut-hint {
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Resize: the new page, the old page placed on it, and hatching over what falls outside. */
+.resize-paper {
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.resize-content {
+  overflow: hidden;
+  outline: 1px dashed color-mix(in srgb, var(--muted-foreground) 80%, transparent);
+  outline-offset: -1px;
+}
+.resize-content img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.resize-cut {
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warning) 55%, transparent) 0 3px, transparent 3px 7px);
+  outline: 1px solid color-mix(in srgb, var(--warning) 70%, transparent);
+  pointer-events: none;
+}
+.resize-target {
+  outline: 1.5px dashed #1d5fd1;
+  pointer-events: none;
+}
+.crop-mini .workspace-note-warning {
+  color: var(--warning);
 }
 .crop-mini .workspace-note-error {
   color: var(--destructive);
