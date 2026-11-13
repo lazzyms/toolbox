@@ -23,3 +23,8 @@ test("OCR sends English recognition in the chosen mode and no range when every p
 test("OCR reads in the language picked for the run", () => {
   assert.deepEqual(ocrRequest(["/scans/a.pdf"], "alongsideInput", null, "hin", "text").languages, ["hin"]);
 });
+
+test("Force asks OCR to read pages again whose only text is an earlier invisible layer", () => {
+  assert.equal(ocrRequest(["/scans/a.pdf"], "alongsideInput", null, "eng", "text").force, false);
+  assert.equal(ocrRequest(["/scans/a.pdf"], "alongsideInput", null, "eng", "text", true).force, true);
+});

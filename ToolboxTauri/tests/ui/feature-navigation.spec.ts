@@ -1872,6 +1872,79 @@ test("OCR shows a missing engine, a locked scan and a blank scan beside a saved 
     await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
 });
 
+test("OCR Force starts off and asks for earlier OCR text to be replaced once it is checked", async ({ page }) => {
+    await page.goto("/");
+    await openFromHome(page, "Extract from PDF");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await chooseFixture(page, pdfFixturePath);
+
+    const force = page.getByRole("checkbox", { name: "Force: redo earlier OCR text", exact: true });
+    await expect(force).not.toBeChecked();
+    await expect(force).toHaveAccessibleDescription("Reads pages again when their only text is an invisible layer from an earlier OCR run, and replaces that layer. Pages with visible text are always skipped.");
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { force: false } });
+
+    await force.click();
+    await expect(force).toBeChecked();
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    await expect.poll(async () => ((await lastInvocation(page, "ocr_pdf"))?.args as { request?: { force?: boolean } } | undefined)?.request?.force).toBe(true);
+});
+
+test("OCR rows list each page's class and the languages, and a file whose pages all have text is skipped with its reason", async ({ page }) => {
+    const searchable = "/fake/shell/output/document-ocr.pdf";
+    const reason = "Every page already has text: pages 1-3 visible, page 4 from an earlier OCR run. Nothing was made. Turn on Force to replace the earlier OCR text.";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded(pdfFixturePath, [searchable], {
+            detail: "5 of 9 pages recognized, 4 skipped for their text.",
+            pageDetails: [
+                { label: "Recognized", value: "Pages 1-4 and 9" },
+                { label: "Skipped, visible text", value: "Pages 5-7" },
+                { label: "Skipped, earlier OCR text", value: "Page 8. Turn on Force to replace it." },
+                { label: "Languages", value: "English" },
+            ],
+        }),
+        {
+            inputPath: "/local/typed.pdf",
+            outputPaths: [],
+            detail: "",
+            state: "skipped",
+            failure: null,
+            reason: { code: "textAlreadyPresent", message: reason, pointer: null },
+            warnings: [],
+        } satisfies MockOutcome,
+    ]);
+    await openFromHome(page, "Extract from PDF");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await chooseFixture(page, pdfFixturePath);
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).locator(":scope > li");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("5 of 9 pages recognized, 4 skipped for their text.");
+    const details = rows.nth(0).getByRole("list", { name: "Page details for document.pdf" });
+    await expect(details.getByRole("listitem")).toHaveText([
+        "RecognizedPages 1-4 and 9",
+        "Skipped, visible textPages 5-7",
+        "Skipped, earlier OCR textPage 8. Turn on Force to replace it.",
+        "LanguagesEnglish",
+    ]);
+    const toggle = rows.nth(0).getByRole("button", { name: "Hide page details", exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(toggle).toHaveAttribute("aria-controls", (await details.getAttribute("id")) ?? "");
+    await toggle.click();
+    await expect(details).toHaveCount(0);
+    const show = rows.nth(0).getByRole("button", { name: "Show page details", exact: true });
+    await expect(show).toHaveAttribute("aria-expanded", "false");
+    await show.click();
+    await expect(details).toBeVisible();
+
+    await expect(rows.nth(1)).toHaveAttribute("data-state", "skipped");
+    await expect(rows.nth(1)).toContainText("Skipped");
+    await expect(rows.nth(1)).toContainText(reason);
+    await expect(rows.nth(1).getByRole("button", { name: /page details|^Open .*\.pdf$/ })).toHaveCount(0);
+});
+
 test.describe("Extract from PDF", () => {
     const pdfs = ["/local/report.pdf", "/local/site-survey-scan.pdf"];
     const extractRequest = async (page: Page) => {

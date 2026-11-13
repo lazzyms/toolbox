@@ -189,5 +189,30 @@
     "warnings": [
       { "code": "transparencyFlattened", "message": "Transparent areas were flattened onto white, because JPEG has none." }
     ]
+  },
+  {
+    "inputPath": "mixed.pdf",
+    "state": "succeeded",
+    "outputPaths": [
+      "mixed-ocr.pdf"
+    ],
+    "detail": "2 of 3 pages recognized, 1 skipped for its text.",
+    "failure": null,
+    "reason": null,
+    "warnings": [],
+    "pageDetails": [
+      {
+        "label": "Recognized",
+        "value": "Pages 1 and 3"
+      },
+      {
+        "label": "Skipped, visible text",
+        "value": "Page 2"
+      },
+      {
+        "label": "Languages",
+        "value": "English"
+      }
+    ]
   }
 ]

@@ -10,8 +10,9 @@ use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 
 use crate::kit::common::limits::{self, HelperDeadline, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{LimitKind, OutcomePointer, PackNeed, ToolError};
+use crate::kit::contracts::{LimitKind, OutcomeDetail, OutcomePointer, PackNeed, SkipCode, SkipReason, ToolError};
 use crate::kit::pdf::metadata::{effective_crop_bounds, page_bounds, page_rotation};
+use crate::kit::pdf::text_layer::{self, PageText};
 use crate::kit::pdf::unicode_font::UnicodeFont;
 use crate::kit::pdf::page_ranges::{validate_page_ranges, PageRanges};
 use crate::kit::resources;
@@ -185,31 +186,42 @@ fn text_file_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> J
         Err(error) => return failure(input, format!("Could not inspect PDF for OCR: {error}")),
     };
     if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
-    let pages = match selected_ocr_pages(&input, request.page_range()) {
-        Ok(pages) => pages,
+    let document = match load_ocr_document(&input) {
+        Ok(document) => document,
         Err(error) => return JobOutcome::failure(input, error),
     };
-    let text = match run_ocr(&resources, &tessdata_dir, &input, &pages, &languages, &[], deadline).and_then(|pages| ocr_text(&pages).map_err(ToolError::processing)) {
-        Ok(text) => text,
+    let plan = match PagePlan::of(&document, request.page_range(), request.force) {
+        Ok(plan) => plan,
+        Err(error) => return failure(input, error),
+    };
+    let recognized = plan.recognized();
+    if recognized.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
+    if let Err(error) = check_render_limits(&document, &recognized) { return failure(input, error); }
+    let mut ocr = match run_ocr(&resources, &tessdata_dir, &input, &recognized, &languages, &[], deadline) {
+        Ok(pages) => pages.into_iter(),
         Err(error) => return JobOutcome::failure(input, error),
+    };
+    let kept = plan.kept();
+    let mut existing = match existing_text(&input, &kept, deadline) {
+        Ok(pages) => pages.into_iter(),
+        Err(error) => return JobOutcome::failure(input, error),
+    };
+    // Recognised and kept pages are each in page order, so taking from whichever list
+    // the page belongs to puts every page's text back in page order.
+    let pages = plan.scope.iter().filter_map(|(_, text)| if plan.recognizes(*text) { ocr.next() } else { existing.next() }).collect::<Vec<_>>();
+    let text = match ocr_text(&pages) {
+        Ok(text) => text,
+        Err(error) => return failure(input, error),
     };
     if text.len() > OCR_MAX_OUTPUT_BYTES { return failure(input, "OCR output exceeds the 10 MiB text limit.".to_string()); }
     if text.is_empty() { return failure(input, OCR_NO_TEXT.to_string()); }
     match std::fs::write(output.path(), text) {
         Ok(_) => match output.publish() {
-            Ok(path) => success(input, path, &recognized_detail(pages.len(), &language_names)),
+            Ok(path) => plan.text_file_details(success(input, path, &plan.text_file_detail(&language_names)), &language_names, request.page_range()),
             Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
         },
         Err(error) => failure(input, format!("Could not write OCR output: {error}")),
     }
-}
-
-fn recognized_detail(pages: usize, languages: &[String]) -> String {
-    format!("{pages} {} recognized. {}.", if pages == 1 { "page" } else { "pages" }, languages.join(", "))
-}
-
-fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>, ToolError> {
-    selected_document_pages(&load_ocr_document(input)?, range).map_err(ToolError::processing)
 }
 
 fn load_ocr_document(input: &Path) -> Result<Document, ToolError> {
@@ -220,18 +232,178 @@ fn load_ocr_document(input: &Path) -> Result<Document, ToolError> {
     Ok(document)
 }
 
-fn selected_document_pages(document: &Document, range: Option<&str>) -> Result<Vec<OcrPage>, String> {
-    let pages = document.get_pages();
-    if pages.is_empty() { return Err("PDF has no pages to OCR.".to_string()); }
-    let requested = range.map(|range| PageRanges::parse(range).and_then(|ranges| ranges.within(pages.len()))).transpose()?;
+fn recognized_detail(pages: usize, languages: &[String]) -> String {
+    format!("{} recognized. {}.", count(pages, "page", "pages"), languages.join(", "))
+}
+
+fn count(number: usize, one: &str, many: &str) -> String { format!("{number} {}", if number == 1 { one } else { many }) }
+
+/// The pages in scope, in page order, and the text each one already has.
+struct PagePlan {
+    scope: Vec<(OcrPage, PageText)>,
+    /// Pages of the file outside the range, which a text file leaves out.
+    outside: Vec<u32>,
+    force: bool,
+}
+
+impl PagePlan {
+    /// Checks every page in scope for text before anything is recognized. Without
+    /// Force any text keeps a page as it is; with Force a page whose only text is an
+    /// invisible layer is read again. Visible text is never read again.
+    fn of(document: &Document, range: Option<&str>, force: bool) -> Result<Self, String> {
+        let pages = document.get_pages();
+        if pages.is_empty() { return Err("PDF has no pages to OCR.".to_string()); }
+        let requested = range.map(|range| PageRanges::parse(range).and_then(|ranges| ranges.within(pages.len()))).transpose()?;
+        let mut scope = Vec::new();
+        let mut outside = Vec::new();
+        for (number, page_id) in pages {
+            if requested.as_ref().is_some_and(|spans| !spans.iter().any(|&(first, last)| (first..=last).contains(&(number as usize)))) {
+                outside.push(number);
+                continue;
+            }
+            let text = text_layer::page_text(document, page_id).map_err(|error| format!("Page {number}'s text could not be checked: {error}"))?;
+            scope.push((OcrPage { number }, text));
+        }
+        if scope.is_empty() { return Err("Select at least one PDF page for OCR.".to_string()); }
+        Ok(Self { scope, outside, force })
+    }
+
+    fn recognizes(&self, text: PageText) -> bool { text == PageText::None || (self.force && text == PageText::Invisible) }
+
+    fn recognized(&self) -> Vec<OcrPage> { self.scope.iter().filter(|(_, text)| self.recognizes(*text)).map(|(page, _)| *page).collect() }
+
+    fn kept(&self) -> Vec<OcrPage> { self.scope.iter().filter(|(_, text)| !self.recognizes(*text)).map(|(page, _)| *page).collect() }
+
+    fn numbers(&self, class: PageText) -> Vec<u32> { self.scope.iter().filter(|(_, text)| *text == class).map(|(page, _)| page.number).collect() }
+
+    /// Pages read again that had an earlier invisible layer, which the new one replaces.
+    fn replaced(&self) -> Vec<u32> { if self.force { self.numbers(PageText::Invisible) } else { Vec::new() } }
+
+    /// Pages kept as they are because of an earlier invisible layer.
+    fn kept_invisible(&self) -> Vec<u32> { if self.force { Vec::new() } else { self.numbers(PageText::Invisible) } }
+
+    /// Why nothing was made when every page in scope keeps its text.
+    fn text_present(&self) -> SkipReason {
+        let (visible, invisible) = (self.numbers(PageText::Visible), self.kept_invisible());
+        let classes = [(visible, "visible"), (invisible.clone(), "from an earlier OCR run")].into_iter()
+            .filter(|(pages, _)| !pages.is_empty())
+            .map(|(pages, class)| format!("{} {class}", page_list(&pages).to_lowercase()))
+            .collect::<Vec<_>>();
+        let mut message = format!("Every page already has text: {}. Nothing was made.", classes.join(", "));
+        if !invisible.is_empty() { message.push_str(" Turn on Force to replace the earlier OCR text."); }
+        SkipReason::new(SkipCode::TextAlreadyPresent, message)
+    }
+
+    /// "5 of 9 pages recognized, 4 skipped for their text." when pages kept their text.
+    fn searchable_detail(&self, languages: &[String]) -> String {
+        let (recognized, kept, replaced) = (self.recognized().len(), self.kept().len(), self.replaced().len());
+        if kept > 0 {
+            format!("{recognized} of {} recognized, {kept} skipped for {} text.", count(self.scope.len(), "page", "pages"), if kept == 1 { "its" } else { "their" })
+        } else if replaced > 0 {
+            format!("{} recognized, {replaced} with earlier OCR text replaced.", count(recognized, "page", "pages"))
+        } else {
+            recognized_detail(recognized, languages)
+        }
+    }
+
+    /// "5 pages recognized, 3 pages of text added as they are" when pages kept their text.
+    fn text_file_detail(&self, languages: &[String]) -> String {
+        let (recognized, kept, replaced) = (self.recognized().len(), self.kept().len(), self.replaced().len());
+        if kept > 0 {
+            format!("{} recognized, {}", count(recognized, "page", "pages"), count(kept, "page of text added as it is", "pages of text added as they are"))
+        } else if replaced > 0 {
+            format!("{} recognized, {replaced} with earlier OCR text replaced.", count(recognized, "page", "pages"))
+        } else {
+            recognized_detail(recognized, languages)
+        }
+    }
+
+    /// The page breakdown, only when some page kept its text or had it replaced.
+    fn details(&self, kept_rows: [(&str, Vec<u32>, &str); 2], outside: Option<(String, Vec<u32>)>, languages: &[String]) -> Vec<OutcomeDetail> {
+        if self.kept().is_empty() && self.replaced().is_empty() { return Vec::new(); }
+        let row = |label: &str, pages: &[u32], after: &str| (!pages.is_empty()).then(|| OutcomeDetail { label: label.to_string(), value: format!("{}{after}", page_list(pages)) });
+        let [first, second] = kept_rows;
+        [
+            row("Recognized", &self.numbers(PageText::None), ""),
+            row("Earlier OCR text replaced", &self.replaced(), ""),
+            row(first.0, &first.1, first.2),
+            row(second.0, &second.1, second.2),
+            outside.and_then(|(label, pages)| row(&label, &pages, "")),
+            Some(OutcomeDetail { label: "Languages".to_string(), value: languages.join(", ") }),
+        ].into_iter().flatten().collect()
+    }
+
+    fn searchable_details(&self, outcome: JobOutcome, languages: &[String]) -> JobOutcome {
+        let details = self.details([
+            ("Skipped, visible text", self.numbers(PageText::Visible), ""),
+            ("Skipped, earlier OCR text", self.kept_invisible(), ". Turn on Force to replace it."),
+        ], None, languages);
+        outcome.with_page_details(details)
+    }
+
+    fn text_file_details(&self, outcome: JobOutcome, languages: &[String], range: Option<&str>) -> JobOutcome {
+        let outside = range.map(|range| (format!("Outside {}, left out", range.trim()), self.outside.clone()));
+        let details = self.details([
+            ("Visible text, added as it is", self.numbers(PageText::Visible), ""),
+            ("Earlier OCR text, added as it is", self.kept_invisible(), ""),
+        ], outside, languages);
+        outcome.with_page_details(details)
+    }
+}
+
+/// "Page 8", "Pages 1-4 and 9", "Pages 1, 3-5 and 9". Pages are in page order.
+fn page_list(pages: &[u32]) -> String {
+    let mut spans: Vec<(u32, u32)> = Vec::new();
+    for &page in pages {
+        match spans.last_mut() {
+            Some((_, last)) if *last + 1 == page => *last = page,
+            _ => spans.push((page, page)),
+        }
+    }
+    // Two pages in a row read as "2 and 3"; three or more as "5-7".
+    let spans = spans.into_iter().flat_map(|(first, last)| match last - first {
+        0 => vec![first.to_string()],
+        1 => vec![first.to_string(), last.to_string()],
+        _ => vec![format!("{first}-{last}")],
+    }).collect::<Vec<_>>();
+    let joined = match spans.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    };
+    format!("{} {joined}", if pages.len() == 1 { "Page" } else { "Pages" })
+}
+
+/// The text a kept page already has, read with the bundled text reader one page at a
+/// time, in page order. It is normalized the same way as recognised text.
+fn existing_text(input: &Path, pages: &[OcrPage], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
+    if pages.is_empty() { return Ok(Vec::new()); }
+    let reader = resources::resolve_helper(&resources::PDF_TEXT_EXTRACTOR).map_err(|_| ToolError::unavailable(OcrComponent::TextReader.to_string()))?;
+    let limit = deadline.limit(1, pages.len());
+    let stop_at = Instant::now() + limit;
+    let timed_out = format!("Reading the existing text took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
+    let mut texts = Vec::with_capacity(pages.len());
+    let mut total = 0usize;
+    for page in pages {
+        let mut command = Command::new(&reader);
+        command.args(["-enc", "UTF-8", "-f"]).arg(page.number.to_string()).arg("-l").arg(page.number.to_string()).arg(input).arg("-");
+        let result = run_ocr_helper(command, stop_at, &timed_out)?;
+        if !result.status.success() { return Err(ToolError::processing(stderr(result, "The PDF text reader could not read the existing text."))); }
+        total = total.saturating_add(result.stdout.len()).saturating_add(1);
+        if total > OCR_MAX_OUTPUT_BYTES { return Err(ToolError::processing("OCR output exceeds the 10 MiB text limit.")); }
+        texts.push(result.stdout);
+    }
+    Ok(texts)
+}
+
+/// Only the pages that are rendered count toward the render limits.
+fn check_render_limits(document: &Document, pages: &[OcrPage]) -> Result<(), String> {
+    let page_ids = document.get_pages();
     let mut total_pixels = 0u64;
-    let mut selected = Vec::new();
-    for (number, page_id) in pages {
-        if requested.as_ref().is_some_and(|spans| !spans.iter().any(|&(first, last)| (first..=last).contains(&(number as usize)))) { continue; }
-        let (left, bottom, right, top) = page_bounds(document, page_id)?;
-        let width = right - left;
-        let height = top - bottom;
-        let pixels = rendered_pixels(width, height)?;
+    for page in pages {
+        let id = *page_ids.get(&page.number).ok_or_else(|| "PDF page is missing.".to_string())?;
+        let (left, bottom, right, top) = page_bounds(document, id)?;
+        let pixels = rendered_pixels(right - left, top - bottom)?;
         if pixels > OCR_MAX_SINGLE_PIXELS {
             return Err("Selected PDF page exceeds the 40 million pixel OCR limit.".to_string());
         }
@@ -239,9 +411,8 @@ fn selected_document_pages(document: &Document, range: Option<&str>) -> Result<V
         if total_pixels > OCR_MAX_TOTAL_PIXELS {
             return Err("Selected PDF pages exceed the 120 million pixel OCR limit.".to_string());
         }
-        selected.push(OcrPage { number });
     }
-    if selected.is_empty() { Err("Select at least one PDF page for OCR.".to_string()) } else { Ok(selected) }
+    Ok(())
 }
 
 fn rendered_pixels(width: f32, height: f32) -> Result<u64, String> {
@@ -290,7 +461,7 @@ struct OcrResources {
 /// The OCR pieces a file needs. Each one names itself when it is missing, so the
 /// person knows reinstalling is the fix rather than trying another file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OcrComponent { Engine, Renderer, EnglishData }
+enum OcrComponent { Engine, Renderer, EnglishData, TextReader }
 
 impl std::fmt::Display for OcrComponent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -298,6 +469,7 @@ impl std::fmt::Display for OcrComponent {
             Self::Engine => "The text recognition engine is missing. Reinstall Toolbox.",
             Self::Renderer => "The PDF page renderer is missing. Reinstall Toolbox.",
             Self::EnglishData => "The English recognition data is missing. Reinstall Toolbox.",
+            Self::TextReader => "The PDF text reader is missing. Reinstall Toolbox.",
         })
     }
 }
@@ -379,7 +551,13 @@ fn searchable_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline)
         Ok(document) => document,
         Err(error) => return JobOutcome::failure(input, error),
     };
-    let pages = match selected_document_pages(&document, request.page_range()).and_then(|pages| upright_uncropped_pages(&document, pages)) {
+    let plan = match PagePlan::of(&document, request.page_range(), request.force) {
+        Ok(plan) => plan,
+        Err(error) => return failure(input, error),
+    };
+    let pages = plan.recognized();
+    if pages.is_empty() { return JobOutcome::skipped(input, plan.text_present()); }
+    let pages = match check_render_limits(&document, &pages).and_then(|()| upright_uncropped_pages(&document, pages)) {
         Ok(pages) => pages,
         Err(error) => return failure(input, error),
     };
@@ -390,12 +568,21 @@ fn searchable_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline)
         Err(error) => return JobOutcome::failure(input, error),
     };
     if layouts.iter().all(|layout| layout.lines.is_empty()) { return failure(input, OCR_NO_TEXT.to_string()); }
+    let page_ids = document.get_pages();
+    // An earlier invisible layer goes before the new one is added, so each word is
+    // found once. Visible content and every other page stay byte for byte as they were,
+    // which the check below holds the output to.
+    for number in plan.replaced() {
+        let Some(id) = page_ids.get(&number) else { continue };
+        if let Err(error) = text_layer::remove_invisible_text(&mut document, *id) {
+            return failure(input, format!("Page {number}'s earlier OCR text couldn't be replaced: {error}"));
+        }
+    }
     let original = document.clone();
     let signature_removed = match crate::kit::pdf::remove_signatures(&mut document) {
         Ok(removed) => removed,
         Err(error) => return failure(input, error),
     };
-    let page_ids = document.get_pages();
     let layered = pages.iter().zip(layouts).filter_map(|(page, layout)| page_ids.get(&page.number).map(|id| (page.number, *id, layout))).collect::<Vec<_>>();
     let expected = match crate::kit::images::tools::bundled_text_font_bytes().map_err(ToolError::processing).and_then(|font| add_text_layer(&mut document, &layered, font)) {
         Ok(expected) => expected,
@@ -410,7 +597,7 @@ fn searchable_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline)
         return failure(input, format!("The searchable PDF didn't pass its check, so it wasn't saved: {error}"));
     }
     match output.publish() {
-        Ok(path) => crate::kit::pdf::note_signature_removed(success(input, path, &recognized_detail(pages.len(), &language_names)), signature_removed),
+        Ok(path) => crate::kit::pdf::note_signature_removed(plan.searchable_details(success(input, path, &plan.searchable_detail(&language_names)), &language_names), signature_removed),
         Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
     }
 }
@@ -531,11 +718,7 @@ fn add_text_layer(document: &mut Document, pages: &[(u32, ObjectId, OcrLayout)],
 
 /// The page's resources as the page sees them, inherited or its own.
 fn page_resources(document: &Document, page_id: ObjectId) -> Result<(lopdf::Dictionary, lopdf::Dictionary), String> {
-    let resources = match crate::kit::pdf::inherited(document, page_id, b"Resources")? {
-        Some(Object::Dictionary(resources)) => resources,
-        Some(_) => return Err("PDF page resources are invalid.".to_string()),
-        None => lopdf::Dictionary::new(),
-    };
+    let resources = text_layer::page_resources(document, page_id)?;
     let fonts = match resources.get(b"Font") {
         Ok(fonts) => crate::kit::pdf::resolve(document, fonts)?.as_dict().map_err(|_| "PDF page fonts are invalid.".to_string())?.clone(),
         Err(_) => lopdf::Dictionary::new(),
@@ -993,13 +1176,14 @@ mod tests {
         assert!(!root.exists(), "looking for a pack creates nothing");
     }
 
+    /// Scanned pages: something is drawn, but no text.
     fn make_pdf(path: &PathBuf, page_count: usize) {
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
         let mut kids = Vec::new();
         for number in 0..page_count {
-            let content_id = document.add_object(Stream::new(dictionary! {}, format!("BT /F1 24 Tf 72 720 Td (OCR page {}) Tj ET", number + 1).into_bytes()));
+            let content_id = document.add_object(Stream::new(dictionary! {}, format!("q 0 0 0 rg 72 720 {} 10 re f Q", number + 1).into_bytes()));
             let page_id = document.add_object(dictionary! {
                 "Type" => "Page", "Parent" => pages_id,
                 "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
@@ -1030,9 +1214,11 @@ mod tests {
         let input = path("selected-pages-scope.pdf");
         make_pdf(&input, 2);
 
-        assert_eq!(super::selected_ocr_pages(&input, Some("2, 1")).unwrap().iter().map(|page| page.number).collect::<Vec<_>>(), vec![1, 2]);
-        assert_eq!(super::selected_ocr_pages(&input, Some("2-")).unwrap().iter().map(|page| page.number).collect::<Vec<_>>(), vec![2]);
-        assert!(super::selected_ocr_pages(&input, Some("3")).is_err());
+        let document = Document::load(&input).unwrap();
+        let selected = |range| super::PagePlan::of(&document, Some(range), false).map(|plan| plan.recognized().iter().map(|page| page.number).collect::<Vec<_>>());
+        assert_eq!(selected("2, 1").unwrap(), vec![1, 2]);
+        assert_eq!(selected("2-").unwrap(), vec![2]);
+        assert!(selected("3").is_err());
 
         let _ = fs::remove_file(input);
     }
@@ -1049,9 +1235,9 @@ mod tests {
         document.get_dictionary_mut(root).unwrap().set("MediaBox", vec![0.into(), 0.into(), 14400.into(), 14400.into()]);
         document.save(&input).unwrap();
 
-        let error = super::selected_ocr_pages(&input, None).unwrap_err();
-        assert_eq!(error.kind, ErrorKind::Processing);
-        assert!(error.message.contains("pixel"), "{error}");
+        let document = Document::load(&input).unwrap();
+        let error = super::check_render_limits(&document, &super::PagePlan::of(&document, None, false).unwrap().recognized()).unwrap_err();
+        assert!(error.contains("pixel"), "{error}");
         let _ = fs::remove_file(input);
     }
 
@@ -1238,10 +1424,21 @@ mod tests {
     }
 
     #[test]
+    fn page_lists_name_runs_of_pages_the_way_the_results_read() {
+        assert_eq!(super::page_list(&[8]), "Page 8");
+        assert_eq!(super::page_list(&[1, 2, 3, 4, 9]), "Pages 1-4 and 9");
+        assert_eq!(super::page_list(&[1, 3, 4, 5, 9]), "Pages 1, 3-5 and 9");
+        assert_eq!(super::page_list(&[5, 6, 7]), "Pages 5-7");
+        assert_eq!(super::page_list(&[2, 3]), "Pages 2 and 3");
+        assert_eq!(super::page_list(&[1, 2, 5, 6]), "Pages 1, 2, 5 and 6");
+    }
+
+    #[test]
     fn missing_ocr_components_name_themselves() {
         assert_eq!(super::OcrComponent::Engine.to_string(), "The text recognition engine is missing. Reinstall Toolbox.");
         assert_eq!(super::OcrComponent::Renderer.to_string(), "The PDF page renderer is missing. Reinstall Toolbox.");
         assert_eq!(super::OcrComponent::EnglishData.to_string(), "The English recognition data is missing. Reinstall Toolbox.");
+        assert_eq!(super::OcrComponent::TextReader.to_string(), "The PDF text reader is missing. Reinstall Toolbox.");
     }
 
     #[test]

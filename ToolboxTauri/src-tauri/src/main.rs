@@ -714,13 +714,19 @@ mod command_tests {
     }
 
     fn make_pdf(path: &PathBuf, page_count: usize) {
+        let pages = (1..=page_count).map(|number| format!("BT /F1 24 Tf 72 720 Td (Toolbox page {number}) Tj ET")).collect::<Vec<_>>();
+        pdf_of_pages(path, &pages);
+    }
+
+    /// Writes a PDF with one page per content stream. Every page can use Helvetica as /F1.
+    fn pdf_of_pages(path: &PathBuf, pages: &[String]) {
         use lopdf::{dictionary, Document, Object, Stream};
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
         let mut kids = Vec::new();
-        for number in 0..page_count {
-            let content_id = document.add_object(Stream::new(dictionary! {}, format!("BT /F1 24 Tf 72 720 Td (Toolbox page {}) Tj ET", number + 1).into_bytes()));
+        for content in pages {
+            let content_id = document.add_object(Stream::new(dictionary! {}, content.clone().into_bytes()));
             let page_id = document.add_object(dictionary! {
                 "Type" => "Page", "Parent" => pages_id,
                 "MediaBox" => vec![Object::Real(0.5), Object::Real(0.5), Object::Real(612.5), Object::Real(792.5)],
@@ -728,10 +734,18 @@ mod command_tests {
             });
             kids.push(Object::Reference(page_id));
         }
-        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => page_count as i64 }.into());
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => pages.len() as i64 }.into());
         let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
         document.trailer.set("Root", catalog_id);
         document.save(path).unwrap();
+    }
+
+    /// A page with a drawing and no text at all, the way a scan looks before OCR.
+    fn drawn_page(number: usize) -> String { format!("q 0 0 0 rg 72 720 {} 10 re f Q", 40 * number) }
+
+    /// Writes a PDF whose pages have no text, so OCR recognises every one of them.
+    fn drawn_pdf(path: &PathBuf, page_count: usize) {
+        pdf_of_pages(path, &(1..=page_count).map(drawn_page).collect::<Vec<_>>());
     }
 
     fn assert_success<F>(name: &str, future: F) -> Vec<PathBuf>
@@ -2561,7 +2575,7 @@ mod command_tests {
         let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
         let missing = root.join("missing");
         let inputs = vec![root.join("first.pdf"), root.join("second.pdf")];
-        for input in &inputs { make_pdf(input, 1); }
+        for input in &inputs { drawn_pdf(input, 1); }
         let cases = [
             ("TOOLBOX_TESSERACT_PATH", "The text recognition engine is missing. Reinstall Toolbox."),
             ("TOOLBOX_PDFTOPPM_PATH", "The PDF page renderer is missing. Reinstall Toolbox."),
@@ -2602,9 +2616,9 @@ mod command_tests {
         let first = root.join("first.pdf");
         let locked = root.join("locked.pdf");
         let last = root.join("last.pdf");
-        make_pdf(&first, 1);
+        drawn_pdf(&first, 1);
         std::fs::write(&locked, crate::kit::password::tests::pdf(Some(("owner", "user")))).unwrap();
-        make_pdf(&last, 2);
+        drawn_pdf(&last, 2);
         let locked_original = std::fs::read(&locked).unwrap();
 
         let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![first, locked.clone(), last], location(&root, "ocr")), no_packs()));
@@ -2708,10 +2722,10 @@ mod command_tests {
         let root = sandbox("ocr-searchable-batch");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
         let [first, broken, rotated, last] = ["first", "broken", "rotated", "last"].map(|name| root.join(format!("{name}.pdf")));
-        make_pdf(&first, 1);
-        make_pdf(&broken, 1);
-        make_pdf(&rotated, 1);
-        make_pdf(&last, 2);
+        drawn_pdf(&first, 1);
+        drawn_pdf(&broken, 1);
+        drawn_pdf(&rotated, 1);
+        drawn_pdf(&last, 2);
         let mut turned = lopdf::Document::load(&rotated).unwrap();
         let page = *turned.get_pages().get(&1).unwrap();
         turned.get_dictionary_mut(page).unwrap().set("Rotate", 90);
@@ -2738,7 +2752,7 @@ mod command_tests {
         assert_eq!(rotated_error.message, "Page 1 is rotated or cropped. Searchable PDFs support upright, uncropped pages for now. Save a text file instead.");
         assert!(outcomes[1].output_paths().is_empty() && outcomes[2].output_paths().is_empty());
         assert_eq!(written, vec!["first-ocr.pdf".to_string(), "last-ocr.pdf".to_string()], "nothing is left behind for the failed files");
-        assert!(texts[0].contains("Toolbox page 1") && texts[0].contains("Searchable words"), "{:?}", texts[0]);
+        assert_eq!(texts[0], "Searchable words", "the drawn page gains only the new text layer");
         assert_eq!(texts[1].matches("Searchable words").count(), 2, "both pages get a text layer: {:?}", texts[1]);
         assert_eq!(after, originals);
     }
@@ -2750,13 +2764,157 @@ mod command_tests {
         let root = sandbox("ocr-searchable-unicode");
         let _env = word_box_ocr_helpers(&root, &[("Привет", 200, 420), ("κόσμε", 700, 380), ("café", 1150, 300)]);
         let input = root.join("letter.pdf");
-        make_pdf(&input, 1);
+        drawn_pdf(&input, 1);
 
         let output = assert_success("searchable non-Latin", run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], location(&root, "ocr")), no_packs()));
         let text = extracted_text(&root, &output[0], "text");
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(text.split_whitespace().collect::<Vec<_>>().join(" ").contains("Привет κόσμε café"), "{text:?}");
+    }
+
+    /// Four pages, one of each kind and a second scan: 1 and 4 have no text, 2 has
+    /// visible text and 3 is a scan with an invisible layer from an earlier OCR run.
+    fn mixed_text_pdf(path: &PathBuf) {
+        pdf_of_pages(path, &[
+            drawn_page(1),
+            "BT /F1 24 Tf 72 720 Td (Toolbox page 2) Tj ET".to_string(),
+            format!("{} BT 3 Tr /F1 24 Tf 72 720 Td (Earlier layer 3) Tj ET", drawn_page(3)),
+            drawn_page(4),
+        ]);
+    }
+
+    fn ocr_request_with(mode: &str, force: bool, paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
+        vision::OcrRequest { mode: mode.into(), force, ..ocr_text_request(paths, output_location) }
+    }
+
+    fn page_details(outcome: &JobOutcome) -> Vec<(String, String)> {
+        outcome.page_details.iter().map(|detail| (detail.label.clone(), detail.value.clone())).collect()
+    }
+
+    fn rows(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter().map(|(label, value)| (label.to_string(), value.to_string())).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_text_reads_only_pages_without_text_and_adds_the_rest_as_they_are_in_page_order() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-existing-text");
+        let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let input = root.join("mixed.pdf");
+        mixed_text_pdf(&input);
+        let original = std::fs::read(&input).unwrap();
+
+        let run = |force: bool, folder: &str| {
+            let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_request_with("text", force, vec![input.clone()], location(&root, folder)), no_packs()));
+            let text = outcomes[0].output_paths().first().map(|path| std::fs::read_to_string(path).unwrap()).unwrap_or_default();
+            (outcomes.into_iter().next().unwrap(), text)
+        };
+        let (kept, kept_text) = run(false, "kept");
+        let (forced, forced_text) = run(true, "forced");
+        let input_after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(kept.error().is_none(), "{:?}", kept.error());
+        assert_eq!(kept.detail, "2 pages recognized, 2 pages of text added as they are");
+        assert_eq!(page_details(&kept), rows(&[("Recognized", "Pages 1 and 4"), ("Visible text, added as it is", "Page 2"), ("Earlier OCR text, added as it is", "Page 3"), ("Languages", "English")]));
+        assert_eq!(kept_text, "recognized words\n\u{c}Toolbox page 2\n\u{c}Earlier layer 3\n\u{c}recognized words\n", "every page's words once, in page order");
+
+        assert!(forced.error().is_none(), "{:?}", forced.error());
+        assert_eq!(forced.detail, "3 pages recognized, 1 page of text added as it is");
+        assert_eq!(page_details(&forced), rows(&[("Recognized", "Pages 1 and 4"), ("Earlier OCR text replaced", "Page 3"), ("Visible text, added as it is", "Page 2"), ("Languages", "English")]));
+        assert_eq!(forced_text, "recognized words\n\u{c}Toolbox page 2\n\u{c}recognized words\n\u{c}recognized words\n", "a replaced page gives only its new text");
+        assert_eq!(input_after, original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn searchable_pdf_skips_pages_with_text_and_force_replaces_only_an_earlier_invisible_layer() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-searchable-existing-text");
+        let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+        let input = root.join("mixed.pdf");
+        mixed_text_pdf(&input);
+        let original = std::fs::read(&input).unwrap();
+        let before = page_boxes_and_streams(&input);
+
+        let run = |force: bool, folder: &str| {
+            let outcome = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_request_with("searchablePdf", force, vec![input.clone()], location(&root, folder)), no_packs())).remove(0);
+            let output = outcome.output_paths().first().cloned().unwrap_or_else(|| panic!("{folder} made no PDF: {:?}", outcome.error()));
+            let text = extracted_text(&root, &output, &format!("{folder}-text")).split_whitespace().collect::<Vec<_>>().join(" ");
+            let document = lopdf::Document::load(&output).unwrap();
+            let page_three = document.get_page_contents(document.get_pages()[&3]).into_iter()
+                .map(|id| { let stream = document.get_object(id).unwrap().as_stream().unwrap(); String::from_utf8_lossy(&stream.decompressed_content().unwrap_or_else(|_| stream.content.clone())).into_owned() })
+                .collect::<Vec<_>>().join("\n");
+            (outcome, page_boxes_and_streams(&output), text, page_three)
+        };
+        let (kept, kept_pages, kept_text, _) = run(false, "kept");
+        let (forced, forced_pages, forced_text, page_three) = run(true, "forced");
+        let input_after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(kept.detail, "2 of 4 pages recognized, 2 skipped for their text.");
+        assert_eq!(page_details(&kept), rows(&[("Recognized", "Pages 1 and 4"), ("Skipped, visible text", "Page 2"), ("Skipped, earlier OCR text", "Page 3. Turn on Force to replace it."), ("Languages", "English")]));
+        assert_eq!(kept_pages[1..3], before[1..3], "pages that keep their text are not changed");
+        assert_eq!(kept_text.matches("Searchable words").count(), 2, "{kept_text:?}");
+        assert_eq!(kept_text.matches("Earlier layer 3").count(), 1, "{kept_text:?}");
+        assert_eq!(kept_text.matches("Toolbox page 2").count(), 1, "{kept_text:?}");
+
+        assert_eq!(forced.detail, "3 of 4 pages recognized, 1 skipped for its text.");
+        assert_eq!(page_details(&forced), rows(&[("Recognized", "Pages 1 and 4"), ("Earlier OCR text replaced", "Page 3"), ("Skipped, visible text", "Page 2"), ("Languages", "English")]));
+        assert_eq!(forced_pages[1], before[1], "the visible page's content streams are unchanged");
+        assert!(!page_three.contains("Earlier"), "the earlier layer is removed: {page_three:?}");
+        assert!(page_three.contains("72 720 120 10 re") && page_three.contains("/ToolboxOcr"), "the scan is kept and the new layer added: {page_three:?}");
+        assert_eq!(forced_text.matches("Searchable words").count(), 3, "each word is found once: {forced_text:?}");
+        assert!(!forced_text.contains("Earlier"), "{forced_text:?}");
+        assert_eq!(forced_text.matches("Toolbox page 2").count(), 1, "{forced_text:?}");
+        assert_eq!(input_after, original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_skips_a_file_whose_pages_all_keep_their_text_and_force_redoes_only_an_earlier_layer() {
+        use crate::kit::contracts::SkipCode;
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-whole-file-text");
+        let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+        let invisible = |number| format!("{} BT 3 Tr /F1 24 Tf 72 720 Td (Earlier layer {number}) Tj ET", drawn_page(number));
+        let [all_text, all_visible, earlier] = ["all-text", "all-visible", "earlier"].map(|name| root.join(format!("{name}.pdf")));
+        pdf_of_pages(&all_text, &["BT /F1 24 Tf 72 720 Td (Toolbox page 1) Tj ET".to_string(), invisible(2)]);
+        make_pdf(&all_visible, 2);
+        pdf_of_pages(&earlier, &[invisible(1)]);
+        let paths = [all_text.clone(), all_visible.clone(), earlier.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let run = |mode: &str, force: bool, input: &PathBuf, folder: &str| tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_request_with(mode, force, vec![input.clone()], location(&root, folder)), no_packs())).remove(0);
+        let skipped = [
+            (run("text", false, &all_text, "all-text-file"), "Every page already has text: page 1 visible, page 2 from an earlier OCR run. Nothing was made. Turn on Force to replace the earlier OCR text."),
+            (run("searchablePdf", false, &all_text, "all-text-pdf"), "Every page already has text: page 1 visible, page 2 from an earlier OCR run. Nothing was made. Turn on Force to replace the earlier OCR text."),
+            (run("text", true, &all_visible, "all-visible-file"), "Every page already has text: pages 1 and 2 visible. Nothing was made."),
+            (run("searchablePdf", true, &all_visible, "all-visible-pdf"), "Every page already has text: pages 1 and 2 visible. Nothing was made."),
+        ];
+        let written = ["all-text-file", "all-text-pdf", "all-visible-file", "all-visible-pdf"].map(|folder| std::fs::read_dir(root.join(folder)).unwrap().count());
+        let redone = run("searchablePdf", true, &earlier, "earlier");
+        let redone_text = redone.output_paths().first().map(|pdf| extracted_text(&root, pdf, "earlier-text").split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
+        let without_force = run("searchablePdf", false, &earlier, "earlier-without-force");
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        for (outcome, message) in &skipped {
+            let OutcomeState::Skipped { reason } = &outcome.state else { panic!("expected Skipped: {outcome:?}") };
+            assert_eq!(reason.code, SkipCode::TextAlreadyPresent);
+            assert_eq!(reason.message, *message);
+            assert!(outcome.output_paths().is_empty());
+        }
+        assert_eq!(written, [0; 4], "a skipped file writes nothing");
+        assert!(redone.error().is_none(), "{:?}", redone.error());
+        assert_eq!(redone.detail, "1 page recognized, 1 with earlier OCR text replaced.");
+        assert_eq!(page_details(&redone), rows(&[("Earlier OCR text replaced", "Page 1"), ("Languages", "English")]));
+        assert_eq!(redone_text, "Searchable words", "only the new layer is left");
+        assert!(matches!(&without_force.state, OutcomeState::Skipped { reason } if reason.message == "Every page already has text: page 1 from an earlier OCR run. Nothing was made. Turn on Force to replace the earlier OCR text."), "{without_force:?}");
+        assert_eq!(after, originals);
     }
 
     fn split_ranges_request(paths: Vec<PathBuf>, ranges: &str, output_location: OutputLocation) -> SplitPdfRequest {
@@ -3289,6 +3447,8 @@ mod command_tests {
         let tiff = root.join("image.tiff"); image::open(&image).unwrap().save(&tiff).unwrap();
         let pdf = root.join("document.pdf"); make_pdf(&pdf, 2);
         let pdf_two = root.join("document-two.pdf"); make_pdf(&pdf_two, 1);
+        // OCR skips pages that already have text, so it reads a scan whose words are only pixels.
+        let scan = root.join("scan.pdf"); scanned_pdf(&scan, &[&["Toolbox page one"]]);
         let compressible_pdf = root.join("compressible.pdf"); make_compressible_pdf(&compressible_pdf);
         let plain_pdf_bytes = std::fs::read(&pdf).unwrap();
         let plain_image_bytes = std::fs::read(&image).unwrap();
@@ -3459,7 +3619,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "convert_to_pdf", table.clone(), converted_table));
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), SplitPdfRequest { paths: vec![pdf.clone()], mode: SplitMode::EveryN { pages: 1 }.into(), output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_from_pdf", image_pdf.clone(), assert_success("extract images from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![image_pdf.clone()], ExtractMode::Images, None, location(&root, "extract images"))))));
-        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", run_ocr_pdf(RunEvents::silent(), OcrRequest { paths: vec![pdf.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr"), language_overrides: Default::default() }, no_packs()))));
+        outputs.extend(named(&mut naming, "ocr_pdf", scan.clone(), assert_ocr_adapter("ocr", run_ocr_pdf(RunEvents::silent(), OcrRequest { paths: vec![scan.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr"), language_overrides: Default::default() }, no_packs()))));
         outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), output_location: location(&root, "extract pages") }))));
         // One mixed batch, as the Compress Files view sends it: a PDF and each supported image format.
         let compress_photo_jpeg = root.join("compress-photo.jpg"); write_jpeg(&compress_photo_jpeg, &photo_rgb(320, 240, 21), 100, None, false);
