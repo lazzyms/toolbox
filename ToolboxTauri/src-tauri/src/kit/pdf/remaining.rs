@@ -1412,9 +1412,10 @@ const PAGE_BOXES: [&[u8]; 5] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox"
 /// always runs afterwards. The copy is published only when it opens with the same pages, page boxes
 /// and rotation and is smaller.
 pub fn compress_pdf(input: PathBuf, location: &OutputLocation, images: Option<super::recompress::ImageSettings>) -> JobOutcome {
-    let mut source = match Document::load(&input) {
-        Ok(document) => document,
-        Err(_) => return JobOutcome::failure(input, crate::kit::password::unreadable(crate::kit::password::ProtectedFormat::Pdf)),
+    // Mapped rather than read: lopdf copies what it parses, so a read would hold the whole file twice.
+    let mut source = match limits::map_file(&input).ok().and_then(|bytes| Document::load_mem(&bytes).ok()) {
+        Some(document) => document,
+        None => return JobOutcome::failure(input, crate::kit::password::unreadable(crate::kit::password::ProtectedFormat::Pdf)),
     };
     if source.is_encrypted() || source.was_encrypted() {
         return JobOutcome::failure(input, ToolError::invalid_input(PDF_PASSWORD_PROTECTED)
@@ -1442,6 +1443,8 @@ pub fn compress_pdf(input: PathBuf, location: &OutputLocation, images: Option<su
         },
         None => input.clone(),
     };
+    // qpdf works from the file, so the parsed copy is not held while it runs or while the copy is verified.
+    drop(source);
     let result = Command::new(qpdf).arg("--object-streams=generate").arg("--recompress-flate").arg("--compression-level=9")
         .arg("--deterministic-id").arg(&repack_from).arg(output.path()).output_until_stopped();
     drop(staged);
@@ -1451,7 +1454,9 @@ pub fn compress_pdf(input: PathBuf, location: &OutputLocation, images: Option<su
         Ok(result) => return failure(input, stderr(result, "qpdf failed to compress the PDF.")),
         Err(error) => return failure(input, format!("Could not run qpdf: {error}")),
     }
-    match Document::load(output.path()).map_err(|error| error.to_string()).and_then(|copy| page_geometry(&copy)) {
+    let copy = limits::map_file(output.path()).map_err(|error| error.to_string())
+        .and_then(|bytes| Document::load_mem(&bytes).map_err(|error| error.to_string()));
+    match copy.and_then(|copy| page_geometry(&copy)) {
         Ok(copy) if copy == geometry => {}
         Ok(_) => return failure(input, "The compressed copy changed its pages, page boxes or rotation, so nothing was saved.".to_string()),
         Err(error) => return failure(input, format!("Compressed PDF could not be verified: {error}")),

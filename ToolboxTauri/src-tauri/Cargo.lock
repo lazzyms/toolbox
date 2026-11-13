@@ -6008,6 +6008,8 @@ dependencies = [
  "libc",
  "lopdf",
  "md-5 0.10.6",
+ "memchr",
+ "memmap2",
  "minisign-verify",
  "notify-rust",
  "office-crypto",

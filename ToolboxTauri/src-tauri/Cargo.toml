@@ -51,6 +51,10 @@ unicode-script = "0.5.8"
 unicode-bidi = "0.3.18"
 subsetter = { version = "0.2.6", default-features = false }
 lopdf = "0.44"
+# Map large inputs instead of reading them into memory, and find PDF stream keywords in them quickly
+# (src/kit/common/limits.rs). Both are already in the lock file, through tract-onnx and many crates.
+memmap2 = "0.9"
+memchr = "2"
 hayro-ccitt = "0.5"
 hayro-jbig2 = { version = "0.4.0", default-features = false, features = ["std"] }
 encoding_rs = "0.8"
