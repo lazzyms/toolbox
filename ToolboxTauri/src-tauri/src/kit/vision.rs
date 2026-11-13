@@ -1583,6 +1583,8 @@ mod tests {
             let outcomes = {
                 let _guard = crate::kit::lock_process_env();
                 let _env = Env::set(&[
+                    // A staged bundle would win over the stand-in helpers, so there is none here.
+                    ("TOOLBOX_RESOURCE_ROOT", Some(&self.root.join("no-bundle"))),
                     ("TOOLBOX_TESSERACT_PATH", Some(&self.root.join("engine.sh"))),
                     ("TOOLBOX_PDFTOPPM_PATH", Some(&self.root.join("renderer.sh"))),
                     ("TOOLBOX_TESSDATA_PATH", Some(&self.root.join("eng/eng.traineddata"))),
@@ -1855,24 +1857,15 @@ mod tests {
         let engine = fake_ocr_engine(false);
         let tessdata = path("selected-eng.traineddata");
         fs::write(&tessdata, b"fake tessdata").unwrap();
-        let old_engine = std::env::var_os("TOOLBOX_TESSERACT_PATH");
-        let old_tessdata = std::env::var_os("TOOLBOX_TESSDATA_PATH");
-        std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
-        std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
+        let no_bundle = path("no-bundle");
+        let env = Env::set(&[("TOOLBOX_RESOURCE_ROOT", Some(&no_bundle)), ("TOOLBOX_TESSERACT_PATH", Some(&engine)), ("TOOLBOX_TESSDATA_PATH", Some(&tessdata))]);
 
         let outcome = ocr_pdf(&run_of(ocr_request(&input, Some("1"), &output_root)), input.clone());
         let text = outcome.output_paths().first().and_then(|path| fs::read_to_string(path).ok());
         let output_path = outcome.output_paths().first().cloned();
         let input_after = fs::read(&input).unwrap();
 
-        match old_engine {
-            Some(value) => std::env::set_var("TOOLBOX_TESSERACT_PATH", value),
-            None => std::env::remove_var("TOOLBOX_TESSERACT_PATH"),
-        }
-        match old_tessdata {
-            Some(value) => std::env::set_var("TOOLBOX_TESSDATA_PATH", value),
-            None => std::env::remove_var("TOOLBOX_TESSDATA_PATH"),
-        }
+        drop(env);
         let _ = fs::remove_file(&engine);
         let _ = fs::remove_file(&tessdata);
         let _ = fs::remove_file(&input);
@@ -1897,24 +1890,15 @@ mod tests {
         let tessdata = path("failed-eng.traineddata");
         fs::write(&tessdata, b"fake tessdata").unwrap();
         let before_workspaces = ocr_workspaces();
-        let old_engine = std::env::var_os("TOOLBOX_TESSERACT_PATH");
-        let old_tessdata = std::env::var_os("TOOLBOX_TESSDATA_PATH");
-        std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
-        std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
+        let no_bundle = path("no-bundle");
+        let env = Env::set(&[("TOOLBOX_RESOURCE_ROOT", Some(&no_bundle)), ("TOOLBOX_TESSERACT_PATH", Some(&engine)), ("TOOLBOX_TESSDATA_PATH", Some(&tessdata))]);
 
         let outcome = ocr_pdf(&run_of(ocr_request(&input, Some("2"), &output_root)), input.clone());
         let after_workspaces = ocr_workspaces();
         let input_after = fs::read(&input).unwrap();
         let output_entries = fs::read_dir(&output_root).unwrap().count();
 
-        match old_engine {
-            Some(value) => std::env::set_var("TOOLBOX_TESSERACT_PATH", value),
-            None => std::env::remove_var("TOOLBOX_TESSERACT_PATH"),
-        }
-        match old_tessdata {
-            Some(value) => std::env::set_var("TOOLBOX_TESSDATA_PATH", value),
-            None => std::env::remove_var("TOOLBOX_TESSDATA_PATH"),
-        }
+        drop(env);
         let _ = fs::remove_file(&engine);
         let _ = fs::remove_file(&tessdata);
         let _ = fs::remove_file(&input);
@@ -2108,7 +2092,8 @@ mod tests {
             for helper in [&renderer, &engine] {
                 fs::set_permissions(helper, fs::Permissions::from_mode(0o755)).unwrap();
             }
-            let saved = ["TOOLBOX_PDFTOPPM_PATH", "TOOLBOX_TESSERACT_PATH", "TOOLBOX_TESSDATA_PATH"].into_iter().map(|key| (key, std::env::var_os(key))).collect();
+            let saved = ["TOOLBOX_RESOURCE_ROOT", "TOOLBOX_PDFTOPPM_PATH", "TOOLBOX_TESSERACT_PATH", "TOOLBOX_TESSDATA_PATH"].into_iter().map(|key| (key, std::env::var_os(key))).collect();
+            std::env::set_var("TOOLBOX_RESOURCE_ROOT", path("no-bundle"));
             std::env::set_var("TOOLBOX_PDFTOPPM_PATH", &renderer);
             std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
             std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
