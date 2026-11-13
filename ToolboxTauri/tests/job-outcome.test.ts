@@ -14,9 +14,9 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
 
-  const [succeeded, pointedSkip, plainSkip, failed, limited, , , notCarried, converted, images, blankPages] = outcomes;
+  const [succeeded, pointedSkip, plainSkip, failed, limited, , , notCarried, converted, images, blankPages, flattened] = outcomes;
   for (const outcome of outcomes.slice(0, 5)) {
     assert.ok(!("originalBytes" in outcome) && !("outputBytes" in outcome), "outcomes without sizes stay unchanged");
   }
@@ -55,6 +55,7 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   assert.deepEqual(images.warnings.map((warning) => warning.code), ["imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept"]);
   assert.deepEqual(images.warnings.map(warningText), images.warnings.map((warning) => warning.message), "rows say what the native side says");
   assert.deepEqual(blankPages.warnings.map(warningText), blankPages.warnings.map((warning) => warning.message));
+  assert.deepEqual(flattened.warnings.map((warning) => warning.code), ["transparencyFlattened"]);
 });
 
 test("pages without text are a note that points at OCR, not a warning", () => {

@@ -568,3 +568,62 @@ for (const theme of ["light", "dark"] as const) {
         await options.screenshot({ path: testInfo.outputPath(`tone-step-${theme}.png`), animations: "disabled" });
     });
 }
+
+const formatSelect = (page: Page) => page.getByRole("combobox", { name: "Format", exact: true });
+const flattenedNote = "Transparent areas were flattened onto white, because JPEG has none.";
+const reducedNote = "Saved as 8-bit sRGB. The original had more colour depth.";
+
+test("Format keeps each original by default and a chosen format reaches the request and the output name", async ({ page }) => {
+    await openCrop(page, ["/photos/badge.png", "/photos/b.jpg"]);
+    await expect(formatSelect(page)).toHaveValue("original");
+    await expect(formatSelect(page).locator("option")).toHaveText(["Keep original format", "JPEG", "PNG", "WebP", "HEIC"]);
+    await expect(page.getByText("JPEG and HEIC save at quality 90.", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("badge-cropped.png");
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    expect((await runRequest(page) as { format?: unknown }).format).toBeNull();
+
+    await formatSelect(page).selectOption({ label: "JPEG" });
+    await expect(page.getByTestId("run-destination-example")).toHaveText("badge-cropped.jpg");
+    await expect(page.getByRole("note").filter({ hasText: "Transparent areas are flattened onto white, because JPEG has none." })).toBeVisible();
+    await expect(page.getByRole("note").filter({ hasText: "JPEG is saved at quality 90." })).toBeVisible();
+    await expect(page.getByText("JPEG and HEIC save at quality 90.", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    const runs = await invocations(page, "export_image_edit_stack");
+    expect((runs.at(-1)?.args as { request: unknown }).request).toMatchObject({ paths: ["/photos/badge.png", "/photos/b.jpg"], format: "jpg" });
+
+    await formatSelect(page).selectOption({ label: "HEIC" });
+    await expect(page.getByTestId("run-destination-example")).toHaveText("badge-cropped.heic");
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`the flattening note renders on a done row and an 8-bit save warns in the ${theme} theme`, async ({ page }, testInfo) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await openCrop(page, ["/photos/badge.png", "/photos/deep.heic"]);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await formatSelect(page).selectOption({ label: "JPEG" });
+        await page.evaluate(({ flattened, reduced }) => {
+            (window as unknown as StackWindow).__processingResults = [
+                { inputPath: "/photos/badge.png", outputPaths: ["/photos/badge-cropped.jpg"], detail: "Image saved", state: "succeeded", failure: null, reason: null, warnings: [{ code: "transparencyFlattened", message: flattened }] },
+                { inputPath: "/photos/deep.heic", outputPaths: ["/photos/deep-cropped.jpg"], detail: "Image saved", state: "succeeded", failure: null, reason: null, warnings: [{ code: "precisionReduced", message: reduced }] },
+            ] as JobOutcome[];
+        }, { flattened: flattenedNote, reduced: reducedNote });
+        await page.getByRole("button", { name: "Run on 2 images" }).click();
+
+        const rows = page.locator(".result-row");
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(0)).toContainText(flattenedNote);
+        await expect(rows.nth(1)).toContainText(reducedNote);
+        await expect(rows.nth(0)).toHaveAttribute("data-tone", "ok");
+        await expect(rows.nth(0)).not.toContainText(/warning/i);
+        // An 8-bit save stays a warning, as it is in every other image tool.
+        await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
+        await expect(page.getByRole("button", { name: "Open badge-cropped.jpg" })).toBeVisible();
+        const colors = await rows.nth(0).evaluate((row, note) => {
+            const text = Array.from(row.querySelectorAll("*")).find((node) => node.childElementCount === 0 && node.textContent?.includes(note));
+            return { row: getComputedStyle(row).backgroundColor, note: text ? getComputedStyle(text).color : "" };
+        }, flattenedNote);
+        expect(colors.note).not.toBe("");
+        expect(colors.note).not.toBe(colors.row);
+        await rows.nth(0).screenshot({ path: testInfo.outputPath(`format-notes-${theme}.png`), animations: "disabled" });
+    });
+}

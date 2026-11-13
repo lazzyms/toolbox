@@ -555,6 +555,7 @@ pub enum WarningKind {
     JpegColourKept { colour: JpegColour, pages: Vec<u32>, images: u32 },
     /// Pages that had no selectable text while the rest of the file did. OCR can read them.
     PagesWithoutText { pages: Vec<u32> },
+    TransparencyFlattened,
 }
 
 /// Why a JPEG copied byte for byte may show the wrong colours in some viewers.
@@ -867,9 +868,10 @@ mod tests {
             WarningKind::ImageTooLarge { page: 1, image: 1, width: 2, height: 2 },
             WarningKind::JpegColourKept { colour: JpegColour::Cmyk, pages: vec![1], images: 1 },
             WarningKind::PagesWithoutText { pages: vec![1] },
+            WarningKind::TransparencyFlattened,
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried", "omittedContent", "approximateLayout", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept", "pagesWithoutText"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried", "omittedContent", "approximateLayout", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept", "pagesWithoutText", "transparencyFlattened"]);
     }
 
     #[test]
@@ -934,6 +936,8 @@ mod tests {
                 }),
             JobOutcome::succeeded(PathBuf::from("scan-archive.pdf"), vec![PathBuf::from("scan-archive-text.txt")], "PDF text extracted in reading order")
                 .with_warning(OutcomeWarning { kind: WarningKind::PagesWithoutText { pages: vec![30, 31, 32, 33] }, message: "Pages 30-33 have no selectable text. OCR can read them.".into() }),
+            JobOutcome::succeeded(PathBuf::from("badge.png"), vec![PathBuf::from("badge-edited.jpg")], "Image saved")
+                .with_warning(OutcomeWarning { kind: WarningKind::TransparencyFlattened, message: "Transparent areas were flattened onto white, because JPEG has none.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

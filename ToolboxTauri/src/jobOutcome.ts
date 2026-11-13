@@ -86,6 +86,7 @@ const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> =
   imageTooLarge: { ...imagePlace, width: count, height: count },
   jpegColourKept: { colour, pages: counts, images: count },
   pagesWithoutText: { pages: counts },
+  transparencyFlattened: null,
 };
 
 const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {
