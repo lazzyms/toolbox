@@ -1691,6 +1691,26 @@ mod command_tests {
     }
 
     #[test]
+    fn scene_export_streams_page_progress_between_start_and_finish() {
+        let root = sandbox("scene-export-progress");
+        let pdf = root.join("document.pdf"); make_pdf(&pdf, 2);
+        let scene: scene::PdfScene = serde_json::from_value(serde_json::json!({ "pages": [
+            { "sourceIndex": 1, "width": 612, "height": 792, "rotation": 90, "crop": null, "objects": [] },
+            { "sourceIndex": null, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] },
+            { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] }
+        ] })).unwrap();
+        let (outcomes, events) = recorded(|events| export_pdf_scene(events, scene::ExportRequest { paths: vec![pdf.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }));
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        let progress = events.iter().filter_map(|event| match event {
+            FileEvent::Progress { index, completed, total } => Some((*index, *completed, *total)),
+            _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(progress, [(0, 0, 3), (0, 1, 3), (0, 2, 3), (0, 3, 3)]);
+        assert_eq!(events.first(), Some(&FileEvent::Started { index: 0 }));
+        assert!(matches!(events.last(), Some(FileEvent::Finished { index: 0, .. })));
+    }
+
+    #[test]
     fn lock_and_unlock_stream_a_progress_event_for_every_file_in_a_mixed_batch() {
         use crate::kit::{TEST_OVERRIDE_PASSWORD, TEST_PASSWORD};
         let root = sandbox("lock-unlock-events");

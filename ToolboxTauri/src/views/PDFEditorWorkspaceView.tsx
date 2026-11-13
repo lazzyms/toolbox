@@ -3,7 +3,10 @@ import { createPortal } from 'react-dom';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
-import type { WorkspaceSourceAction } from '../components/ToolScaffold';
+import type { RunDestinationControl, WorkspaceSourceAction } from '../components/ToolScaffold';
+import { ExportDestination, ExportProgress } from '../components/ExportControls';
+import type { FileProgress } from '../components/liveRun';
+import { fileName } from '../components/resultRow';
 import type { ShellEvent } from '../hooks/useShellBridge';
 import type { AtomicToolId, ToolDefinition, ToolResult } from '../contracts';
 import { useToolAvailability } from '../ToolAvailabilityContext';
@@ -128,21 +131,19 @@ const PDFSceneEditor = ({
       const results = await invoke<ToolResult>('export_pdf_scene', { runId, request });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
-    {({ files, run, loading, destination }) => {
+    {({ files, run, loading, runDestination, live }) => {
       const inputPath = files.length === 1 ? files[0] ?? null : null;
-      return <>
-        <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
-          exporting={loading} onExport={run}
+      return <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
+          exporting={loading} exportStep={live?.steps[0]} destination={runDestination} onExport={run}
           onNavigate={onNavigate}
-          onScene={(path, scene, baseline) => { session.current = path && scene && baseline ? { path, scene, baseline } : null; }} />
-        <Card className="pdf-scene-destination py-0"><CardContent className="py-3">{destination}</CardContent></Card>
-      </>;
+          onScene={(path, scene, baseline) => { session.current = path && scene && baseline ? { path, scene, baseline } : null; }} />;
     }}
   </ToolScaffold>;
 };
 
-function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, onScene }: {
-  path: string | null; initialTool: SceneTool | null; exporting: boolean; onExport: () => Promise<void>;
+function PDFSceneSession({ path, initialTool, exporting, exportStep, destination, onExport, onNavigate, onScene }: {
+  path: string | null; initialTool: SceneTool | null; exporting: boolean; exportStep: FileProgress | undefined;
+  destination: RunDestinationControl; onExport: () => Promise<void>;
   onNavigate?: PdfEditorNavigation;
   onScene: (path: string | null, scene: PdfScene | null, baseline: PdfScene | null) => void;
 }) {
@@ -436,8 +437,9 @@ function PDFSceneSession({ path, initialTool, exporting, onExport, onNavigate, o
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
       <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
-      <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || !dirty || exporting || Boolean(renderError) || rendering || !exactPreview}
-        {...shortcutTarget('run')} onClick={() => void onExport()}>{exporting ? 'Exporting…' : 'Export PDF'}<ShortcutHint id="run" /></Button>
+      <ExportDestination destination={destination} inputPath={path} />
+      {exporting ? <ExportProgress step={exportStep} fileName={path ? fileName(path) : 'PDF'} /> : <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!page || !dirty || Boolean(renderError) || rendering || !exactPreview}
+        {...shortcutTarget('run')} onClick={() => void onExport()}>Export PDF<ShortcutHint id="run" /></Button>}
     </div>
     {error && <p role="alert" className="scene-error">{error}</p>}
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}
