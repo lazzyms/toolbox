@@ -5,11 +5,12 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Progress as ProgressBar } from "@/components/ui/progress";
 import type { JobOutcome, OutcomePointer, PackNeed, Progress } from "../contracts";
 import { shortenHomePath, useHomeDir } from "../homePath";
 import type { CombinedResult } from "../registry/saveSteps";
 import { formatBytes, PACK_CHANGED_EVENT, PROGRESS_EVENT, type PackProgress } from "../views/PacksSection";
-import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
+import { currentPage, liveFiles, pageTally, type LiveFile, type LiveRun } from "./liveRun";
 import { batchTotal, fileName, neededPack, resultSummary, resultTally, rowView, savedSoFar, warningDetail, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
@@ -103,6 +104,8 @@ interface ResultListProps {
     resultNoun?: string;
     runningVerb: string;
     runningDetail?: string;
+    /** Count the live run in pages, for tools whose single files can take minutes. */
+    progressByPage?: boolean;
     signatureRemovedNote?: string;
     precisionReducedIsNote?: boolean;
     live: LiveRun | null;
@@ -121,7 +124,7 @@ interface ResultListProps {
     summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, signatureRemovedNote, precisionReducedIsNote = false, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, progressByPage = false, signatureRemovedNote, precisionReducedIsNote = false, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
     const namedByOutput = namedByOutputProp || combinedInputs !== null;
     const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
@@ -455,6 +458,71 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
         );
     };
 
+    const liveRow = (file: Exclude<LiveFile, { status: "finished" }>, index: number) => {
+        const running = file.status === "running";
+        const Icon = running ? LoaderCircle : Clock;
+        const label = running ? runningVerb : "Waiting";
+        const name = fileName(file.inputPath);
+        const pages = file.steps;
+        const detail = running
+            ? pages && progressByPage ? `Page ${currentPage(pages)} of ${pages.total}` : runningDetail
+            : progressByPage ? "Page count unknown" : undefined;
+        return (
+            <li key={`${index}:${file.inputPath}`} className="result-row" data-tone={file.status} data-state={file.status}>
+                {outputGroup && <span aria-hidden="true" />}
+                <span className="result-row-icon" aria-hidden="true"><Icon /></span>
+                <span className="result-row-text">
+                    <span className="result-row-name" title={file.inputPath}>{name}</span>
+                    {detail && <span className="result-row-detail">{detail}</span>}
+                    {running && progressByPage && pages && pages.total > 0 && (
+                        <ProgressBar
+                            className="live-run-minibar mt-1 h-1"
+                            aria-label={name}
+                            value={pages.completed}
+                            max={pages.total}
+                            getValueLabel={(value, max) => `Page ${currentPage({ completed: value, total: max })} of ${max}, ${value} done`}
+                        />
+                    )}
+                </span>
+                <span className="result-row-state">{label}</span>
+                <span className="result-row-actions" />
+            </li>
+        );
+    };
+
+    if (loading && live && progressByPage) {
+        const files = liveFiles(live);
+        const finished = files.filter((file) => file.status === "finished").length;
+        const tally = pageTally(live);
+        const reading = files.flatMap((file) => file.status === "running" && file.steps ? [{ name: fileName(file.inputPath), pages: file.steps }] : [])[0];
+        const pagesDone = `${tally.completed} of ${tally.total} pages done`;
+        return (
+            <div className="result-list" data-live="true">
+                <div className="live-run-header">
+                    <div className="result-summary" role="status" aria-live="polite">
+                        <strong>{runningVerb} file {Math.min(finished + 1, files.length)} of {files.length}</strong>
+                        {reading && <span className="result-summary-hint">{reading.name}, page {currentPage(reading.pages)} of {reading.pages.total}</span>}
+                    </div>
+                    <ProgressBar
+                        className="live-run-pages"
+                        aria-label="Pages recognized"
+                        value={tally.completed}
+                        max={Math.max(tally.total, 1)}
+                        getValueLabel={() => pagesDone}
+                    />
+                    <p className="result-summary-hint live-run-note">{pagesDone}. Long scans take a while; the bar counts pages, not files.</p>
+                    <p className="result-summary-hint live-run-note">Each file is recognized on its own, so one that fails doesn't stop the others.</p>
+                </div>
+                <Card className="result-card gap-0 py-0">
+                    <CardContent className="p-0">
+                        <ul className="result-rows" aria-label="Files and results">
+                            {files.map((file, index) => file.status === "finished" ? finishedRow(file.outcome, index) : liveRow(file, index))}
+                        </ul>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
     if (loading && live) {
         const files = liveFiles(live);
         const done = files.flatMap((file) => file.status === "finished" ? [file.outcome] : []);
@@ -487,24 +555,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                 <Card className="result-card gap-0 py-0">
                     <CardContent className="p-0">
                         <ul className="result-rows" aria-label="Files and results" data-grouped={outputGroup ? "true" : undefined}>
-                            {files.map((file, index) => {
-                                if (file.status === "finished") return finishedRow(file.outcome, index);
-                                const running = file.status === "running";
-                                const Icon = running ? LoaderCircle : Clock;
-                                const label = running ? runningVerb : "Waiting";
-                                return (
-                                    <li key={`${index}:${file.inputPath}`} className="result-row" data-tone={file.status} data-state={file.status}>
-                                        {outputGroup && <span aria-hidden="true" />}
-                                        <span className="result-row-icon" aria-hidden="true"><Icon /></span>
-                                        <span className="result-row-text">
-                                            <span className="result-row-name" title={file.inputPath}>{fileName(file.inputPath)}</span>
-                                            {running && runningDetail && <span className="result-row-detail">{runningDetail}</span>}
-                                        </span>
-                                        <span className="result-row-state">{label}</span>
-                                        <span className="result-row-actions" />
-                                    </li>
-                                );
-                            })}
+                            {files.map((file, index) => file.status === "finished" ? finishedRow(file.outcome, index) : liveRow(file, index))}
                         </ul>
                     </CardContent>
                 </Card>

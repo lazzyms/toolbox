@@ -2659,6 +2659,205 @@ mod command_tests {
         assert_eq!(locked_after, locked_original);
     }
 
+    /// Fake OCR helpers that act on markers in the input's name: the renderer tags the
+    /// page it renders, and the engine stalls on a STALL page or prints 6 MB for a WORDY
+    /// one. A HUGE input renders a page past the rendered-page limit. Every other page
+    /// reads "recognized words".
+    #[cfg(unix)]
+    fn marked_ocr_helpers(root: &PathBuf) -> EnvGuard {
+        use std::os::unix::fs::PermissionsExt;
+        let renderer = root.join("marked-pdftoppm");
+        let engine = root.join("marked-tesseract");
+        let tessdata = root.join("eng.traineddata");
+        std::fs::write(&renderer, "#!/bin/sh\nfor prefix; do :; done\ncase \"$*\" in\n  *HUGE*) dd if=/dev/zero of=\"$prefix.png\" bs=1 count=0 seek=52428801 2>/dev/null ;;\n  *STALL*) echo STALL > \"$prefix.png\" ;;\n  *WORDY*) echo WORDY > \"$prefix.png\" ;;\n  *) touch \"$prefix.png\" ;;\nesac\n").unwrap();
+        std::fs::write(&engine, "#!/bin/sh\nif grep -q STALL \"$1\" 2>/dev/null; then exec sleep 30; fi\nif grep -q WORDY \"$1\" 2>/dev/null; then head -c 6000000 /dev/zero | tr '\\0' a; exit 0; fi\nprintf 'recognized words\\n'\n").unwrap();
+        std::fs::write(&tessdata, b"fake tessdata").unwrap();
+        for helper in [&renderer, &engine] { std::fs::set_permissions(helper, std::fs::Permissions::from_mode(0o755)).unwrap(); }
+        EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))])
+    }
+
+    fn names_in(folder: &std::path::Path) -> Vec<String> {
+        let mut names = std::fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_writes_next_to_the_original_or_into_the_chosen_folder_and_numbers_a_second_run() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-destination");
+        let _env = marked_ocr_helpers(&root);
+        let inputs = root.join("inputs");
+        std::fs::create_dir_all(&inputs).unwrap();
+        let scan = inputs.join("scan.pdf");
+        drawn_pdf(&scan, 1);
+        let original = std::fs::read(&scan).unwrap();
+        let chosen = root.join("chosen");
+        std::fs::create_dir_all(&chosen).unwrap();
+
+        for (location, folder) in [(OutputLocation::AlongsideInput, inputs.clone()), (OutputLocation::CustomFolder(chosen.clone()), chosen.clone())] {
+            let first = assert_success("first OCR run", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan.clone()], location.clone()), no_packs()));
+            let first_text = std::fs::read(&first[0]).unwrap();
+            let second = assert_success("second OCR run", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan.clone()], location), no_packs()));
+            assert_eq!(first, vec![folder.join("scan-ocr.txt")]);
+            assert_eq!(second, vec![folder.join("scan-ocr-1.txt")], "a second run gets the next number");
+            assert_eq!(std::fs::read(&first[0]).unwrap(), first_text, "the first output is not overwritten");
+        }
+        assert_eq!(names_in(&inputs), ["scan-ocr-1.txt", "scan-ocr.txt", "scan.pdf"]);
+        assert_eq!(names_in(&chosen), ["scan-ocr-1.txt", "scan-ocr.txt"]);
+        assert_eq!(std::fs::read(&scan).unwrap(), original);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Runs OCR on the offender beside a good one-page scan, and checks that only the
+    /// offender fails, with its limit and recorded value, and that neither original changed.
+    #[cfg(unix)]
+    fn assert_ocr_limits_only(root: &PathBuf, offender: &PathBuf, limit: LimitKind, recorded_value: &str) {
+        let good = root.join("good.pdf");
+        if !good.exists() { drawn_pdf(&good, 1); }
+        let originals = [Original::of(offender), Original::of(&good)];
+        let name = offender.file_stem().unwrap().to_string_lossy().into_owned();
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![offender.clone(), good], location(root, &name)), no_packs()));
+        for original in &originals { original.assert_untouched(); }
+        assert_only_offender_limited(&outcomes, offender, limit, recorded_value);
+        assert_eq!(std::fs::read_dir(root.join(&name)).unwrap().count(), 1, "{name}: only the good file's text is written");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_holds_each_file_to_its_recorded_limits_alone() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-limits");
+        let _env = marked_ocr_helpers(&root);
+
+        let oversized = root.join("oversized.pdf");
+        drawn_pdf(&oversized, 1);
+        std::fs::OpenOptions::new().write(true).open(&oversized).unwrap().set_len(100 * 1024 * 1024 + 1).unwrap();
+        assert_ocr_limits_only(&root, &oversized, LimitKind::FileSize, "100 MiB");
+
+        let long = root.join("long.pdf");
+        make_pdf(&long, 5_001);
+        assert_ocr_limits_only(&root, &long, LimitKind::PageCount, "5,000");
+
+        let bomb = root.join("bomb.pdf");
+        std::fs::write(&bomb, crate::kit::common::limits::fixtures::pdf_with_stream(&crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001))).unwrap();
+        assert_ocr_limits_only(&root, &bomb, LimitKind::Decompression, "500 MB");
+
+        let poster = root.join("poster.pdf");
+        drawn_pdf(&poster, 1);
+        let mut document = lopdf::Document::load(&poster).unwrap();
+        let page = document.get_pages().values().next().copied().unwrap();
+        document.get_dictionary_mut(page).unwrap().set("MediaBox", vec![0.into(), 0.into(), 14400.into(), 14400.into()]);
+        document.save(&poster).unwrap();
+        assert_ocr_limits_only(&root, &poster, LimitKind::Decompression, "40 million pixel");
+
+        let huge = root.join("HUGE.pdf");
+        drawn_pdf(&huge, 1);
+        assert_ocr_limits_only(&root, &huge, LimitKind::Decompression, "50 MiB");
+
+        let wordy = root.join("WORDY.pdf");
+        drawn_pdf(&wordy, 2);
+        assert_ocr_limits_only(&root, &wordy, LimitKind::FileSize, "10 MiB");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_stops_a_stalled_page_or_file_at_its_deadline_and_finishes_the_others() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-deadlines");
+        let _env = marked_ocr_helpers(&root);
+        let stalled = root.join("STALL.pdf");
+        let good = root.join("good.pdf");
+        drawn_pdf(&stalled, 2);
+        drawn_pdf(&good, 1);
+        let originals = [Original::of(&stalled), Original::of(&good)];
+        let run = |name: &str, limits: crate::kit::common::limits::ToolLimits, deadline: crate::kit::common::limits::HelperDeadline| {
+            let run = Arc::new(vision::OcrRun { request: ocr_text_request(vec![stalled.clone(), good.clone()], location(&root, name)), packs: no_packs() });
+            BatchRunner::run_with_limits(&RunEvents::silent(), "ocr_pdf", run.request.paths.clone(), &run.request.output_location, Some(limits), &run, move |run, path| {
+                vision::ocr_pdf_within(run, path, deadline)
+            })
+        };
+        let recorded = crate::kit::common::limits::recorded("ocr_pdf").unwrap();
+        let short = crate::kit::common::limits::HelperDeadline { per_file: std::time::Duration::from_secs(1), per_page: std::time::Duration::from_secs(3) };
+
+        let by_page = run("by-page", recorded, short);
+        assert_only_offender_limited(&by_page, &stalled, LimitKind::Time, "4 seconds");
+        assert_eq!(by_page[0].error().unwrap().message, "Stopped at page 1 of 2: that page took longer than 4 seconds. Nothing was saved.");
+
+        let generous = crate::kit::common::limits::HelperDeadline { per_file: std::time::Duration::from_secs(60), per_page: std::time::Duration::from_secs(60) };
+        let by_file = run("by-file", crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(1), ..recorded }, generous);
+        assert_only_offender_limited(&by_file, &stalled, LimitKind::Time, "time limit for one file");
+        assert_eq!(by_file[0].error().unwrap().message, "Stopped at page 1 of 2: it reached the time limit for one file. Nothing was saved. Split it into smaller PDFs, then try again.");
+
+        for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ocr_batch_fails_one_file_skips_one_and_finishes_the_rest_without_touching_originals() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-mixed");
+        let _env = marked_ocr_helpers(&root);
+        let first = root.join("first.pdf");
+        let broken = root.join("broken.pdf");
+        let has_text = root.join("has-text.pdf");
+        let photo = root.join("photo.png");
+        let last = root.join("last.pdf");
+        drawn_pdf(&first, 2);
+        std::fs::write(&broken, b"%PDF-1.7\nthis is not a PDF body\n").unwrap();
+        make_pdf(&has_text, 1);
+        write_png(&photo, 32, 9);
+        drawn_pdf(&last, 1);
+        let paths = vec![first, broken.clone(), has_text.clone(), photo, last];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "out")), no_packs()));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        assert_eq!(paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>(), originals, "originals stay byte for byte");
+        let failed = outcomes.iter().filter(|outcome| outcome.error().is_some()).map(|outcome| &outcome.input_path).collect::<Vec<_>>();
+        let skipped = outcomes.iter().filter(|outcome| matches!(outcome.state, crate::kit::contracts::OutcomeState::Skipped { .. })).map(|outcome| &outcome.input_path).collect::<Vec<_>>();
+        assert_eq!(failed, [&broken]);
+        assert_eq!(skipped, [&has_text]);
+        for index in [0, 3, 4] {
+            let output = outcomes[index].output_paths().first().unwrap_or_else(|| panic!("{} must succeed: {:?}", paths[index].display(), outcomes[index]));
+            assert!(std::fs::read_to_string(output).unwrap().contains("recognized words"));
+        }
+        assert_eq!(std::fs::read_dir(root.join("out")).unwrap().count(), 3, "only the three good files are written");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_streams_page_progress_for_a_multi_page_file() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-progress");
+        let _env = marked_ocr_helpers(&root);
+        let single = root.join("single.pdf");
+        let long = root.join("long.pdf");
+        drawn_pdf(&single, 1);
+        drawn_pdf(&long, 3);
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::new(move |event| sink.lock().unwrap().push(event)), ocr_text_request(vec![single, long], location(&root, "out")), no_packs()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_none()), "{outcomes:?}");
+        let events = events.lock().unwrap();
+        let of = |index: usize| events.iter().filter(|event| match *event {
+            FileEvent::Started { index: at } | FileEvent::Progress { index: at, .. } | FileEvent::Finished { index: at, .. } => *at == index,
+        }).cloned().collect::<Vec<_>>();
+        let long_events = of(1);
+        assert_eq!(long_events[0], FileEvent::Started { index: 1 });
+        assert_eq!(long_events[1..5], (0..=3).map(|completed| FileEvent::Progress { index: 1, completed, total: 3 }).collect::<Vec<_>>());
+        assert!(matches!(long_events[5], FileEvent::Finished { index: 1, .. }));
+        assert_eq!(long_events.len(), 6);
+        assert_eq!(of(0)[1..3], [FileEvent::Progress { index: 0, completed: 0, total: 1 }, FileEvent::Progress { index: 0, completed: 1, total: 1 }]);
+    }
+
     fn searchable_pdf_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
         vision::OcrRequest { mode: "searchablePdf".into(), ..ocr_text_request(paths, output_location) }
     }

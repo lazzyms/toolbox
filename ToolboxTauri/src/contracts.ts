@@ -266,6 +266,8 @@ export interface ToolDefinition {
   resultNoun?: string;
   runningVerb: string;
   runningDetail?: string;
+  /** The live run counts pages instead of files, as long scans take a while (OCR board). */
+  progressByPage?: boolean;
   outputNoun?: string;
   lockedNote?: string;
   /** The tool's own words for a result row whose copy lost its digital signature, when its board has them. */

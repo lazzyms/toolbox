@@ -20,10 +20,15 @@ pub enum FileEvent {
     Progress { index: usize, completed: usize, total: usize },
 }
 
-type Sink = Arc<dyn Fn(FileEvent) + Send + Sync>;
+pub(crate) type Sink = Arc<dyn Fn(FileEvent) + Send + Sync>;
 
 thread_local! {
     static PROGRESS: std::cell::RefCell<Option<(usize, Sink)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Sends progress this thread reports to `sink` as the file at `index`. Each job runs on its own thread, so the reporter belongs to that file alone.
+pub(crate) fn report_progress_to(index: usize, sink: Option<Sink>) {
+    PROGRESS.with(|progress| *progress.borrow_mut() = sink.map(|sink| (index, sink)));
 }
 
 /// Reports progress for the file the current job is processing. Outside a batch run, such as a preview, it does nothing.
@@ -185,8 +190,7 @@ impl BatchRunner {
                         Some(limits) => {
                             let (job, request, sink) = (Arc::clone(&job), Arc::clone(request), events.sink.clone());
                             limits.run_each(path, events.cancel.flag(), move |path| {
-                                // Each job runs on its own thread, so the reporter belongs to this file alone.
-                                PROGRESS.with(|progress| *progress.borrow_mut() = sink.map(|sink| (index, sink)));
+                                report_progress_to(index, sink);
                                 job(&request, path)
                             })
                         }
