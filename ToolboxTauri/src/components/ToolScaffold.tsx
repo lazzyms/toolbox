@@ -121,7 +121,7 @@ interface ToolScaffoldProps {
     outputGroup?: OutputGrouping;
     /** A line after the finished headline, such as a total across files. */
     resultsHint?: (results: JobOutcome[]) => string | null;
-    /** Facts about each listed file. An ordered list given facts shows page counts, sizes, dates and a sort control. */
+    /** Facts about each listed file. Any list given facts shows sizes; an ordered one also shows page counts, dates and a sort control. */
     entryFacts?: (path: string) => EntryFacts | undefined;
     /** Replaces the list's default hint, for example when the view needs more files. */
     listHint?: string;
@@ -764,11 +764,12 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             const pasted = pastedHtml(entry.path);
                             const name = pasted?.name ?? fileName(entry.path);
                             const isSelected = selection.has(entry.key);
-                            const facts = describesEntries ? entryFacts?.(entry.path) : undefined;
-                            const pages = facts?.pageCount != null ? pageCountLabel(facts.pageCount) : null;
+                            // Any list with facts shows sizes; only an ordered list also shows pages and dates.
+                            const facts = entryFacts?.(entry.path);
+                            const pages = describesEntries && facts?.pageCount != null ? pageCountLabel(facts.pageCount) : null;
                             const copies = copiesByPath.get(entry.path) ?? 1;
                             const folder = shortenHomePath(parentFolder(entry.path), home);
-                            const detail = facts?.modifiedMs != null ? `${folder} · Modified ${modifiedLabel(facts.modifiedMs)}` : folder;
+                            const detail = describesEntries && facts?.modifiedMs != null ? `${folder} · Modified ${modifiedLabel(facts.modifiedMs)}` : folder;
                             const mark = flag ? null : intakeCopy?.mark?.(entry.path) ?? null;
                             const label = mark ? `${name}, ${mark.toLowerCase()}` : name;
                             const rowLabel = describesEntries
