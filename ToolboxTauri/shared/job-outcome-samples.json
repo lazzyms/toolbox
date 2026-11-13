@@ -163,5 +163,20 @@
         "message": "Pages 2, 5, 9 — 6 JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours."
       }
     ]
+  },
+  {
+    "inputPath": "scan-archive.pdf",
+    "state": "succeeded",
+    "outputPaths": ["scan-archive-text.txt"],
+    "detail": "PDF text extracted in reading order",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "pagesWithoutText",
+        "details": { "pages": [30, 31, 32, 33] },
+        "message": "Pages 30-33 have no selectable text. OCR can read them."
+      }
+    ]
   }
 ]
