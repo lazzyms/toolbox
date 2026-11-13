@@ -12,7 +12,7 @@ use crate::kit::common::{note_renamed, OutputLocation, OutputNaming};
 use crate::kit::contracts::{JobOutcome, LimitKind, ToolError};
 use crate::kit::images::source::{self, ImageFamily};
 use crate::kit::pdf::convert::{page_count, Margins, Orientation, PageSize};
-use crate::kit::pdf::font_resolver::{FontReport, FontResolver, SystemFontLookup};
+use crate::kit::pdf::font_resolver::{BundledFonts, FontReport, FontResolver, InstalledSystemFonts, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, Align, Assembly, Block, FontBook, Flow, Geometry, Paragraph, Picture, Span, Style, Theme, PAGE_COUNT, PAGE_NUMBER};
 use crate::packs::uninstall::RunPacks;
 
@@ -209,8 +209,8 @@ pub fn limits() -> ToolLimits { limits::CREATED_DOCUMENT }
 
 /// Saves the document at the chosen path, or a numbered name beside it when that name is taken.
 pub fn create(request: &FormattedPdfRequest, packs: &RunPacks) -> JobOutcome {
-    // Only bundled fonts, so the same document makes the same PDF on every computer.
-    let outcome = match FontResolver::bundled() {
+    // The shared rule: an installed font, then a bundled metric-compatible fallback, then the bundled default.
+    let outcome = match FontResolver::shared() {
         Ok(fonts) => create_with(request, &fonts, packs),
         Err(error) => JobOutcome::failure(request.output_path.clone(), error),
     };
@@ -307,6 +307,26 @@ fn make<S: SystemFontLookup>(
     Ok(Made { pdf, count, fonts: book.reports() })
 }
 
+/// The families the font picker offers: the bundled ones, the same on every computer, then the installed ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontChoices {
+    pub bundled: Vec<String>,
+    /// Installed families the layout can embed, without those that share a bundled family's name.
+    pub system: Vec<String>,
+}
+
+pub fn font_choices() -> Result<FontChoices, String> {
+    let bundled = BundledFonts::discover_installed().map_err(|error| error.message)?;
+    Ok(font_choices_from(&bundled, InstalledSystemFonts::shared()))
+}
+
+fn font_choices_from(bundled: &BundledFonts, system: &InstalledSystemFonts) -> FontChoices {
+    let bundled = bundled.families().map(str::to_string).collect::<Vec<_>>();
+    let system = system.families().into_iter().filter(|family| !bundled.iter().any(|name| name.eq_ignore_ascii_case(family))).collect();
+    FontChoices { bundled, system }
+}
+
 /// What the preview shows: the document's first pages as images, and how many pages saving it would make.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -343,7 +363,8 @@ const PLACEHOLDER_BORDER: [u8; 3] = [0xcc, 0xcc, 0xcc];
 /// Lays the document out exactly as saving does and draws its first pages, all in memory. Nothing is written: the
 /// PDF goes to the renderer on stdin and the page images come back on stdout. An empty document has no pages.
 pub fn preview(request: &FormattedPreviewRequest, packs: &RunPacks) -> Result<FormattedPreview, String> {
-    let fonts = FontResolver::bundled().map_err(|error| error.message)?;
+    // The same rule as saving, so the preview draws the fonts the saved PDF will use.
+    let fonts = FontResolver::shared().map_err(|error| error.message)?;
     let renderer = crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)?;
     preview_with(request, &fonts, packs, &renderer)
 }
@@ -488,7 +509,7 @@ fn page_size_label(size: PageSize) -> &'static str {
 mod tests {
     use super::*;
     use crate::kit::contracts::{ErrorKind, WarningKind};
-    use crate::kit::pdf::font_resolver::{BundledFonts, BundledOnly, FontSource};
+    use crate::kit::pdf::font_resolver::{BundledOnly, FontSource, FontStyle};
     use lopdf::{Document, Object};
     use serde_json::json;
     use std::fs;
@@ -668,6 +689,117 @@ mod tests {
         tiny.document.font.size = 2.;
         assert!(run(&tiny).error().is_some_and(|error| error.message.contains("Text size")));
         assert!(fs::read_dir(&root).unwrap().next().is_none(), "a refused document writes nothing");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The text size each text-showing operation containing `needle` is drawn at, from the `Tf` before it.
+    fn sizes_drawing(document: &Document, page: u32, needle: &str) -> Vec<f32> {
+        let id = document.get_pages()[&page];
+        let fonts = document.get_page_fonts(id).unwrap();
+        let content = lopdf::content::Content::decode(&document.get_page_content(id)).unwrap();
+        let (mut font, mut size, mut found) = (None, 0., Vec::new());
+        for operation in content.operations {
+            match operation.operator.as_str() {
+                "Tf" => {
+                    font = fonts.get(operation.operands[0].as_name().unwrap()).copied();
+                    size = operation.operands[1].as_float().unwrap();
+                }
+                "Tj" | "TJ" => {
+                    let encoding = font.unwrap().get_font_encoding(document).unwrap();
+                    let strings = match &operation.operands[0] { Object::Array(parts) => parts.clone(), other => vec![other.clone()] };
+                    let text = strings.iter().filter_map(|part| part.as_str().ok()).map(|bytes| Document::decode_text(&encoding, bytes).unwrap()).collect::<String>();
+                    if text.contains(needle) { found.push(size); }
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    fn with_font(family: &str, size: f32, path: &Path) -> FormattedPdfRequest {
+        let mut request = request(short_blocks(), path);
+        request.document.font = DocumentFont { family: family.into(), size };
+        request
+    }
+
+    #[test]
+    fn a_bundled_family_chosen_by_name_draws_the_text_and_is_named_with_its_source() {
+        let root = sandbox("bundled_family");
+        let path = root.join("Carlito.pdf");
+        let outcome = run(&with_font("Carlito", 11., &path));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let regular = outcome.fonts.iter().find(|font| font.requested_style == FontStyle::Regular).expect("the text font is reported");
+        assert_eq!((regular.requested_family.as_str(), regular.font_used.as_str(), regular.source), ("Carlito", "Carlito", FontSource::BundledFallback));
+        assert!(outcome.fonts.iter().all(|font| font.requested_family == "Carlito" && font.font_used == "Carlito"), "{:?}", outcome.fonts);
+        assert_eq!(serde_json::to_value(regular).unwrap()["source"], "bundled fallback");
+        let document = Document::load(&path).unwrap();
+        assert_eq!(fonts_drawing(&document, 1, "Return the keys"), ["Carlito-Regular"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_unknown_family_resolves_to_a_bundled_substitute_that_is_named() {
+        let root = sandbox("unknown_family");
+        let path = root.join("Unknown.pdf");
+        let outcome = run(&with_font("Toolbox Unknown Display", 11., &path));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert!(!outcome.fonts.is_empty());
+        for font in &outcome.fonts {
+            assert_eq!((font.requested_family.as_str(), font.font_used.as_str(), font.source), ("Toolbox Unknown Display", "DejaVu Sans", FontSource::BundledDefault), "{font:?}");
+        }
+        // A family with a metric-compatible stand-in uses it: Calibri is drawn in Carlito.
+        let calibri = run(&with_font("Calibri", 11., &root.join("Calibri.pdf")));
+        assert!(calibri.fonts.iter().all(|font| font.requested_family == "Calibri" && font.font_used == "Carlito" && font.source == FontSource::BundledFallback), "{:?}", calibri.fonts);
+        let document = Document::load(&path).unwrap();
+        assert_eq!(fonts_drawing(&document, 1, "Return the keys"), ["DejaVuSans"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_installed_family_is_used_before_the_bundled_fonts_and_named_as_from_this_computer() {
+        let root = sandbox("system_family");
+        let installed = root.join("fonts");
+        fs::create_dir_all(&installed).unwrap();
+        fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Pacifico-Regular.ttf"), installed.join("Pacifico.ttf")).unwrap();
+        let bundled = BundledFonts::discover(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts")).unwrap();
+        let system = InstalledSystemFonts::in_folders(vec![installed]);
+        let path = root.join("Pacifico.pdf");
+        let resolver = FontResolver::new(bundled.clone(), &system);
+        let outcome = note_renamed(create_with(&with_font("Pacifico", 11., &path), &resolver, &no_packs()), Some(&path));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert!(outcome.fonts.iter().all(|font| font.font_used == "Pacifico" && font.source == FontSource::System), "{:?}", outcome.fonts);
+        assert_eq!(fonts_drawing(&Document::load(&path).unwrap(), 1, "Return the keys"), ["Pacifico-Regular"]);
+
+        // The picker lists the bundled families, the same on every computer, then the installed ones.
+        let choices = font_choices_from(&bundled, &system);
+        assert_eq!(choices, FontChoices {
+            bundled: ["Liberation Sans", "Liberation Serif", "Liberation Mono", "Carlito", "Caladea", "DejaVu Sans"].map(String::from).to_vec(),
+            system: vec!["Pacifico".into()],
+        });
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_installed_font_with_a_bundled_name_is_not_listed_twice() {
+        let root = sandbox("system_duplicate");
+        fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Carlito-Regular.ttf"), root.join("Carlito.ttf")).unwrap();
+        let bundled = BundledFonts::discover(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts")).unwrap();
+        assert!(font_choices_from(&bundled, &InstalledSystemFonts::in_folders(vec![root.clone()])).system.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_base_size_changes_the_drawn_text_size() {
+        let root = sandbox("base_size");
+        let small = root.join("Small.pdf");
+        let large = root.join("Large.pdf");
+        assert!(run(&with_font("Liberation Serif", 11., &small)).error().is_none());
+        assert!(run(&with_font("Liberation Serif", 16., &large)).error().is_none());
+        let (small, large) = (Document::load(&small).unwrap(), Document::load(&large).unwrap());
+        assert_eq!(sizes_drawing(&small, 1, "Return the keys"), [11.]);
+        assert_eq!(sizes_drawing(&large, 1, "Return the keys"), [16.]);
+        let heading = |document: &Document| sizes_drawing(document, 1, "Kitchen")[0];
+        assert!(heading(&large) > heading(&small) && heading(&small) > 11., "headings scale from the base size: {} then {}", heading(&small), heading(&large));
         let _ = fs::remove_dir_all(root);
     }
 

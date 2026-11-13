@@ -214,6 +214,8 @@ impl BundledFonts {
     pub fn fallback_bytes(&self) -> u64 { self.fallback_bytes }
     pub fn fallback_families(&self) -> impl Iterator<Item = &str> { self.families.iter().map(|family| family.family.as_str()) }
     pub fn default_family(&self) -> &str { &self.default.family }
+    /// Every bundled family by name: the fallbacks in manifest order, then the default.
+    pub fn families(&self) -> impl Iterator<Item = &str> { self.fallback_families().chain(std::iter::once(self.default_family())) }
 
     fn fallback_for(&self, family: &str) -> Option<&BundledFamily> {
         let wanted = normalized(family);
@@ -237,6 +239,18 @@ impl InstalledSystemFonts {
     pub fn new() -> Self { Self::in_folders(platform_font_folders()) }
 
     pub fn in_folders(folders: Vec<PathBuf>) -> Self { Self { folders, index: OnceLock::new() } }
+
+    /// The platform font folders, indexed once for the whole process, so a preview on every pause in typing
+    /// does not scan the fonts again.
+    pub fn shared() -> &'static Self {
+        static SHARED: OnceLock<InstalledSystemFonts> = OnceLock::new();
+        SHARED.get_or_init(Self::new)
+    }
+
+    /// Every indexed family by its display name, sorted without regard to case.
+    pub fn families(&self) -> Vec<String> {
+        self.index().values().filter_map(|faces| faces.first().map(|face| face.family.clone())).collect()
+    }
 
     fn index(&self) -> &BTreeMap<String, Vec<SystemFace>> {
         self.index.get_or_init(|| {
@@ -262,6 +276,10 @@ impl SystemFontLookup for InstalledSystemFonts {
     fn faces(&self, family: &str) -> Vec<SystemFace> {
         self.index().get(&normalized(family)).cloned().unwrap_or_default()
     }
+}
+
+impl<T: SystemFontLookup + ?Sized> SystemFontLookup for &T {
+    fn faces(&self, family: &str) -> Vec<SystemFace> { (**self).faces(family) }
 }
 
 fn platform_font_folders() -> Vec<PathBuf> {
@@ -336,6 +354,14 @@ pub struct FontResolver<S: SystemFontLookup = InstalledSystemFonts> {
 impl FontResolver<InstalledSystemFonts> {
     pub fn installed() -> Result<Self, ToolError> {
         Ok(Self::new(BundledFonts::discover_installed()?, InstalledSystemFonts::new()))
+    }
+}
+
+impl FontResolver<&'static InstalledSystemFonts> {
+    /// The shared rule over the process-wide font index: an installed font, then a bundled
+    /// metric-compatible fallback, then the bundled default.
+    pub fn shared() -> Result<Self, ToolError> {
+        Ok(Self::new(BundledFonts::discover_installed()?, InstalledSystemFonts::shared()))
     }
 }
 

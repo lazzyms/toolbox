@@ -11,6 +11,8 @@ type FormattedWindow = Window & {
     __preview: unknown;
     __holdPreview: boolean;
     __heldPreviews: Array<(preview: unknown) => void>;
+    /** What list_formatted_pdf_fonts replies: the bundled families, then the installed ones. */
+    __fonts: { bundled: string[]; system: string[] };
 };
 
 /** One-pixel PNGs in two colours, so each faked page is told apart by its image. */
@@ -30,6 +32,7 @@ test.beforeEach(async ({ page }) => {
         win.__preview = { pageCount: 1, pages: [{ dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQi1rwHwADygIY2ofr+QAAAABJRU5ErkJggg==", width: 566, height: 800 }], missingImages: [] };
         win.__holdPreview = false;
         win.__heldPreviews = [];
+        win.__fonts = { bundled: ["Liberation Sans", "Liberation Serif", "Liberation Mono", "Carlito", "Caladea", "DejaVu Sans"], system: ["Calibri", "Georgia"] };
         win.__drop = (paths, point) => {
             for (const [id, listener] of listeners) {
                 if (listener.event === "toolbox://shell-event") callbacks.get(listener.handler)?.({ event: listener.event, id, payload: { kind: "dropped-files", paths, point } });
@@ -46,6 +49,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command === "create_formatted_pdf") return new Promise((resolve) => { finish = resolve; });
                 if (command === "preview_formatted_pdf") return win.__holdPreview ? new Promise((resolve) => { win.__heldPreviews.push(resolve); }) : win.__preview;
+                if (command === "list_formatted_pdf_fonts") return win.__fonts;
                 if (command === "plugin:dialog|open") return win.__dialogResults.shift() ?? null;
                 if (command === "plugin:event|listen") {
                     const { event, handler } = args as { event: string; handler: number };
@@ -210,8 +214,8 @@ test("Formatted PDF sends the exact page settings chosen with each page and head
     const settings = page.getByRole("complementary", { name: "Document settings" });
     const cases: Array<[(page: Page) => Promise<void>, Record<string, unknown>]> = [
         [async () => undefined, {}],
-        [() => settings.getByLabel("Size").selectOption("letter"), { pageSize: "letter" }],
-        [() => settings.getByLabel("Size").selectOption("legal"), { pageSize: "legal" }],
+        [() => settings.getByLabel("Size", { exact: true }).selectOption("letter"), { pageSize: "letter" }],
+        [() => settings.getByLabel("Size", { exact: true }).selectOption("legal"), { pageSize: "legal" }],
         [() => settings.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click(), { orientation: "landscape" }],
         [() => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Narrow" }).click(), { margins: "narrow" }],
         [() => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Wide" }).click(), { margins: "wide" }],
@@ -227,13 +231,13 @@ test("Formatted PDF sends the exact page settings chosen with each page and head
 test("Formatted PDF summarises the page settings, explains each margin and resets them for a new document", async ({ page }) => {
     await openFormatted(page);
     const settings = page.getByRole("complementary", { name: "Document settings" });
-    await expect(settings.getByLabel("Size")).toHaveValue("a4");
-    await expect(settings.getByLabel("Size").locator("option")).toHaveText(["A4, 210 × 297 mm", "Letter, 8.5 × 11 in", "Legal, 8.5 × 14 in"]);
+    await expect(settings.getByLabel("Size", { exact: true })).toHaveValue("a4");
+    await expect(settings.getByLabel("Size", { exact: true }).locator("option")).toHaveText(["A4, 210 × 297 mm", "Letter, 8.5 × 11 in", "Legal, 8.5 × 14 in"]);
     await expect(settings.getByRole("group", { name: "Page" })).toContainText("A4, portrait, normal margins");
     await expect(settings).toContainText("Normal is 25 mm on every side.");
     await expect(settings.getByLabel("Footer text")).toHaveAttribute("placeholder", "None");
 
-    await settings.getByLabel("Size").selectOption("letter");
+    await settings.getByLabel("Size", { exact: true }).selectOption("letter");
     await settings.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click();
     await settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Wide" }).click();
     await expect(settings.getByRole("group", { name: "Page" })).toContainText("Letter, landscape, wide margins");
@@ -738,4 +742,86 @@ test("Formatted PDF says how many pages the preview leaves out and why a preview
     await expect(preview.getByRole("status")).toHaveText("Preview unavailable");
     await expect(preview.getByText("The preview could not be drawn.")).toBeVisible();
     await expect(saveButton(page)).toBeEnabled();
+});
+
+const fontSent = async (page: Page, command: "create_formatted_pdf" | "preview_formatted_pdf") =>
+    ((await invocation(page, command)) as { document: { font: unknown } } | undefined)?.document.font;
+
+const fontUse = (requestedFamily: string, requestedStyle: string, fontUsed: string, styleUsed: string, source: string) => ({ requestedFamily, requestedStyle, fontUsed, styleUsed, source });
+
+test("Formatted PDF lists bundled fonts first, marks installed ones as this computer only, and sends the chosen family and size", async ({ page }) => {
+    await openFormatted(page);
+    await block(page, "Block 1, Paragraph").fill("Dear neighbour,");
+    const fontSettings = page.getByRole("group", { name: "Font" });
+    await expect(fontSettings).toContainText("Liberation Serif, 11 pt");
+    await expect(fontSettings).toContainText("Headings scale from the base size. Bold and italic use the same family.");
+    await expect.poll(() => fontSent(page, "preview_formatted_pdf")).toEqual({ family: "Liberation Serif", size: 11 });
+
+    await page.getByLabel("Family").click();
+    const list = page.getByRole("listbox");
+    await expect(list.getByRole("option")).toHaveText(["Liberation Sans", "Liberation Serif", "Liberation Mono", "Carlito", "Caladea", "DejaVu Sans", "CalibriThis computer only", "GeorgiaThis computer only"]);
+    await expect(list.getByRole("group", { name: "Bundled with Toolbox" }).getByRole("option")).toHaveCount(6);
+    const here = list.getByRole("group", { name: "On this computer" });
+    await expect(here.getByRole("option", { name: "Georgia, this computer only" })).toBeVisible();
+    await expect(here.getByRole("option", { name: "Calibri, this computer only" })).toBeVisible();
+    await expect(list.getByRole("group", { name: "Bundled with Toolbox" }).getByText("This computer only")).toHaveCount(0);
+    await expect(list.getByRole("option", { name: "Liberation Serif" })).toHaveAttribute("aria-selected", "true");
+    await expect(list).toContainText("Bundled fonts look the same on every computer. Fonts from this computer can space text differently on Windows.");
+    await here.getByRole("option", { name: "Georgia, this computer only" }).click();
+    await expect(page.getByLabel("Family")).toHaveText("Georgia");
+
+    const size = page.getByRole("spinbutton", { name: "Base size in points" });
+    await expect(size).toHaveAttribute("min", "8");
+    await expect(size).toHaveAttribute("max", "24");
+    await size.fill("14");
+    await expect(fontSettings).toContainText("Georgia, 14 pt");
+    await expect.poll(() => fontSent(page, "preview_formatted_pdf")).toEqual({ family: "Georgia", size: 14 });
+    // A size outside the range is not sent, and leaving the field puts back the size in use.
+    await size.fill("40");
+    await size.blur();
+    await expect(size).toHaveValue("14");
+    await expect(fontSettings).toContainText("Georgia, 14 pt");
+
+    await page.getByLabel("Page numbers at the bottom").check();
+    await saveButton(page).click();
+    const dialog = page.getByRole("dialog", { name: "Save the PDF" });
+    await expect(dialog).toContainText("A4, Georgia 14 pt");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => fontSent(page, "create_formatted_pdf")).toEqual({ family: "Georgia", size: 14 });
+    expect(await fontSent(page, "preview_formatted_pdf")).toEqual({ family: "Georgia", size: 14 });
+
+    await page.evaluate((fonts) => (window as unknown as FormattedWindow).__finish([{
+        inputPath: "/Users/test/Documents/Untitled.pdf", outputPaths: ["/Users/test/Documents/Untitled.pdf"], detail: "1 page, A4.",
+        state: "succeeded", failure: null, reason: null, warnings: [], fonts,
+    }]), [fontUse("Georgia", "regular", "Georgia", "regular", "system"), fontUse("Georgia", "bold", "Georgia", "bold", "system"), fontUse("Georgia", "italic", "Georgia", "italic", "system")]);
+    const used = page.getByRole("table", { name: "Fonts used" });
+    await expect(used.getByRole("columnheader")).toHaveText(["You chose", "Used in the PDF", "From"]);
+    await expect(used.getByRole("row").nth(1).getByRole("cell")).toHaveText(["Georgia", "Georgia Regular, Bold, Italic", "This computerInstalled on this computer"]);
+    await expect(used.getByRole("row").nth(2).getByRole("cell")).toHaveText(["Page numbers", "Georgia", "Same as the text"]);
+    const note = page.getByRole("note").filter({ hasText: "Georgia came from this computer" });
+    await expect(note).toContainText("Saving the same document on Windows can space or wrap text slightly differently. Pick a bundled font when the PDF must match everywhere.");
+});
+
+test("Formatted PDF names the bundled font that stood in for a missing one and why", async ({ page }) => {
+    await openFormatted(page);
+    await block(page, "Block 1, Paragraph").fill("Dear neighbour,");
+    await page.getByLabel("Family").click();
+    await page.getByRole("option", { name: "Calibri, this computer only" }).click();
+    await expect.poll(() => fontSent(page, "preview_formatted_pdf")).toEqual({ family: "Calibri", size: 11 });
+    await saveButton(page).click();
+    await page.getByRole("dialog", { name: "Save the PDF" }).getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => fontSent(page, "create_formatted_pdf")).toEqual({ family: "Calibri", size: 11 });
+    await page.evaluate((fonts) => (window as unknown as FormattedWindow).__finish([{
+        inputPath: "/Users/test/Documents/Untitled.pdf", outputPaths: ["/Users/test/Documents/Untitled.pdf"], detail: "1 page, A4.",
+        state: "succeeded", failure: null, reason: null, warnings: [], fonts,
+    }]), [fontUse("Calibri", "regular", "Carlito", "regular", "bundled fallback")]);
+    const used = page.getByRole("table", { name: "Fonts used" });
+    await expect(used.getByRole("row")).toHaveCount(2);
+    await expect(used.getByRole("row").nth(1).getByRole("cell")).toHaveText(["Calibri", "Carlito Regular", "Bundled with ToolboxStands in for Calibri, which isn't installed here"]);
+    await expect(page.getByRole("note").filter({ hasText: "Calibri isn't installed, so Carlito was used" }))
+        .toContainText("Carlito comes with Toolbox and has the same letter widths, so lines break in the same places. Bundled fonts give the same PDF on every computer.");
+    await expect(page.getByRole("note").filter({ hasText: "came from this computer" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "New document" }).click();
+    await expect(page.getByRole("group", { name: "Font" })).toContainText("Liberation Serif, 11 pt");
 });
