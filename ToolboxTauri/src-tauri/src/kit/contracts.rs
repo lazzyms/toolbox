@@ -101,16 +101,6 @@ impl fmt::Debug for OpenPasswords {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CompressImagesRequest {
-    pub paths: Vec<PathBuf>,
-    pub quality: u8,
-    #[serde(default)]
-    pub lossless: bool,
-    pub output_location: OutputLocation,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ConvertImagesRequest {
     pub paths: Vec<PathBuf>,
     pub format: String,
@@ -1173,6 +1163,7 @@ mod tests {
         let compress = native_capability("compress_files").unwrap();
         assert_eq!(compress.accepted_extensions, [".pdf", ".jpg", ".jpeg", ".png", ".webp"]);
         assert_eq!(compress.skipped_extensions, [".heic", ".heif"]);
+        assert!(native_capability("compress_images").is_none(), "Compress Images is retired into compress_files");
         assert!(native_capabilities().iter().filter(|capability| capability.command != "compress_files").all(|capability| capability.skipped_extensions.is_empty()));
         let privacy = native_capability("inspect_pdf_privacy").unwrap();
         assert_eq!(privacy.accepted_extensions, [".pdf"]);

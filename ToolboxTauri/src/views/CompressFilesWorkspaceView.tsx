@@ -1,13 +1,12 @@
 import { Fragment, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
-import type { CompressFilesRequest, CompressImagesRequest, CompressLevel, ToolDefinition, ToolResult } from "../contracts";
+import type { CompressFilesRequest, CompressLevel, ToolDefinition, ToolResult } from "../contracts";
 import { extensionOf, type IntakeCopy } from "../components/intake";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
@@ -51,9 +50,6 @@ const runLabelFor = (count: number) => count === 0 ? "Compress" : `Compress ${co
 export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
   const [level, setLevel] = useState<CompressLevel>("medium");
   const [stripExif, setStripExif] = useState(false);
-  const [imageQuality, setImageQuality] = useState(80);
-  const [lossless, setLossless] = useState(false);
-  const isCompress = utility.id === "compress-files";
   const selected = levels.find(({ value }) => value === level) ?? levels[1];
 
   return (
@@ -61,80 +57,60 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
       variant="workspace"
       sessionKey="compress-files"
       utility={utility}
-      emptyHint={isCompress ? "PDF, JPEG, PNG and WebP. Mix them in one batch." : undefined}
-      intakeCopy={isCompress ? compressIntakeCopy : undefined}
-      onRun={(paths, outputLocation, { runId }) => isCompress
-        ? invoke<ToolResult>("compress_files", { runId, request: { paths, level, stripExif, outputLocation } satisfies CompressFilesRequest })
-        : invoke<ToolResult>("compress_images", { runId,
-          request: { paths, quality: imageQuality, lossless, outputLocation } satisfies CompressImagesRequest,
-        })}
+      emptyHint="PDF, JPEG, PNG and WebP. Mix them in one batch."
+      intakeCopy={compressIntakeCopy}
+      onRun={(paths, outputLocation, { runId }) =>
+        invoke<ToolResult>("compress_files", { runId, request: { paths, level, stripExif, outputLocation } satisfies CompressFilesRequest })}
     >
-      {({ files, run, loading, destination, runLabel }) => (
+      {({ files, run, loading, destination }) => (
         <Card className="workspace-control-panel py-0">
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
             <div>
               <h2 className="workspace-active-command">{utility.title}</h2>
-              <p className="workspace-panel-copy">
-                {isCompress
-                  ? "Save a smaller copy of each selected file. The originals stay untouched."
-                  : "Save a smaller copy of each selected image. The originals stay untouched."}
-              </p>
+              <p className="workspace-panel-copy">Save a smaller copy of each selected file. The originals stay untouched.</p>
             </div>
-            {isCompress ? (
-              <>
-                <div className="workspace-field">
-                  <Label id="compress-strength-label">Strength</Label>
-                  <RadioGroup aria-labelledby="compress-strength-label" className="gap-1.5" value={level} onValueChange={(value) => setLevel(value as CompressLevel)}>
-                    {levels.map(({ value, name, summary }) => (
-                      <span key={value} className="workspace-check">
-                        <RadioGroupItem id={`compress-strength-${value}`} value={value} />
-                        <Label htmlFor={`compress-strength-${value}`} className="gap-2">
-                          <span>{name}</span>
-                          <span className="workspace-panel-copy mt-0">{summary}</span>
-                        </Label>
-                      </span>
-                    ))}
-                  </RadioGroup>
-                </div>
-                <div className="workspace-field">
-                  <span className="workspace-panel-label" id="compress-effect-label">What {selected.name} does</span>
-                  <dl className="workspace-field-grid m-0" aria-labelledby="compress-effect-label">
-                    {selected.does.map(([format, effect]) => (
-                      <Fragment key={format}>
-                        <dt>{format}</dt>
-                        <dd className="m-0 text-foreground">{effect}</dd>
-                      </Fragment>
-                    ))}
-                  </dl>
-                  <p className="workspace-note mt-0">Text, transparency and colour profiles always stay.</p>
-                </div>
-                <div className="workspace-field">
-                  <div className="workspace-field-heading">
-                    <Label htmlFor="compress-strip-exif">Strip EXIF</Label>
-                    <Switch id="compress-strip-exif" aria-describedby="compress-strip-exif-hint" checked={stripExif} onCheckedChange={setStripExif} />
-                  </div>
-                  <p id="compress-strip-exif-hint" className="workspace-note mt-0">{exifHint(stripExif)}</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="workspace-field">
-                  <div className="workspace-field-heading"><Label id="image-quality-label">Quality</Label><output>{imageQuality}%</output></div>
-                  <Slider aria-labelledby="image-quality-label" min={1} max={100} value={[imageQuality]} onValueChange={([value]) => value !== undefined && setImageQuality(value)} />
-                </div>
-                <div className="workspace-check"><Label htmlFor="image-lossless">Preserve original pixels</Label><Switch id="image-lossless" checked={lossless} onCheckedChange={setLossless} /></div>
-              </>
-            )}
+            <div className="workspace-field">
+              <Label id="compress-strength-label">Strength</Label>
+              <RadioGroup aria-labelledby="compress-strength-label" className="gap-1.5" value={level} onValueChange={(value) => setLevel(value as CompressLevel)}>
+                {levels.map(({ value, name, summary }) => (
+                  <span key={value} className="workspace-check">
+                    <RadioGroupItem id={`compress-strength-${value}`} value={value} />
+                    <Label htmlFor={`compress-strength-${value}`} className="gap-2">
+                      <span>{name}</span>
+                      <span className="workspace-panel-copy mt-0">{summary}</span>
+                    </Label>
+                  </span>
+                ))}
+              </RadioGroup>
+            </div>
+            <div className="workspace-field">
+              <span className="workspace-panel-label" id="compress-effect-label">What {selected.name} does</span>
+              <dl className="workspace-field-grid m-0" aria-labelledby="compress-effect-label">
+                {selected.does.map(([format, effect]) => (
+                  <Fragment key={format}>
+                    <dt>{format}</dt>
+                    <dd className="m-0 text-foreground">{effect}</dd>
+                  </Fragment>
+                ))}
+              </dl>
+              <p className="workspace-note mt-0">Text, transparency and colour profiles always stay.</p>
+            </div>
+            <div className="workspace-field">
+              <div className="workspace-field-heading">
+                <Label htmlFor="compress-strip-exif">Strip EXIF</Label>
+                <Switch id="compress-strip-exif" aria-describedby="compress-strip-exif-hint" checked={stripExif} onCheckedChange={setStripExif} />
+              </div>
+              <p id="compress-strip-exif-hint" className="workspace-note mt-0">{exifHint(stripExif)}</p>
+            </div>
             {destination}
             <Button
               variant="default"
               disabled={loading || files.length === 0 || utility.capability.nativeAvailability !== "available"}
               onClick={run}
               className="workspace-primary-action"
-              aria-label={isCompress ? undefined : `Export ${utility.title}`}
               {...shortcutTarget("run")}
             >
-              {isCompress ? runLabelFor(files.length) : runLabel ?? utility.shortTitle}
+              {runLabelFor(files.length)}
               <ShortcutHint id="run" />
             </Button>
           </CardContent>

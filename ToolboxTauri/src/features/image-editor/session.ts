@@ -2,7 +2,6 @@ import type { ConvertImagesRequest, OutputLocation, WatermarkOptions } from "../
 
 export type ImageEditOperation =
   | { kind: "convert"; format: ConvertImagesRequest["format"] }
-  | { kind: "compress"; quality: number; lossless: boolean }
   | {
       kind: "resize";
       width: number;

@@ -28,7 +28,6 @@ export type AtomicToolId =
   | "pdf-properties"
   | "pdf-bates"
   | "heic-convert"
-  | "compress"
   | "resize"
   | "rotate"
   | "crop"
@@ -90,7 +89,6 @@ export type JobState = "running" | "success" | "mixed" | "failure";
 export type ToolCommand =
   | "remove_password"
   | "protect_files"
-  | "compress_images"
   | "convert_images"
   | "inspect_pdf"
   | "crop_pdf"
@@ -300,7 +298,6 @@ export interface ToolDefinition {
     | "image-resize"
     | "image-rotate"
     | "image-crop"
-    | "image-compress"
     | "image-convert"
     | "image-watermark"
     | "image-tone"
@@ -366,11 +363,6 @@ export interface WatermarkOptions {
   color?: string;
   position?: WatermarkPosition;
   rotation?: number;
-}
-
-export interface CompressImagesRequest extends ToolRequest {
-  quality: number;
-  lossless?: boolean;
 }
 
 export type OcrMode = "searchablePdf" | "text";
