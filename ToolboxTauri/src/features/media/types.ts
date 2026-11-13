@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { JobOutcome, OutputLocation, ToolCommand, ToolDefinition } from "../../contracts";
+import type { JobOutcome, OutputLocation, ToolCapability, ToolCommand, ToolDefinition } from "../../contracts";
 import type { OutputGrouping } from "../../components/resultRow";
 
 /** What the shared run hands every Media tool when it builds its request. */
@@ -36,11 +36,13 @@ export interface MediaTool<Options> {
   /** Whether the options allow a run, beyond having files and not running. */
   canRun?: (options: Options, files: string[]) => boolean;
   /** The run button's label when the shared run has none; defaults to the tool's short title. */
-  runLabel?: string;
+  runLabel?: string | ((options: Options, files: string[]) => string);
   /** Whether the shared file list offers reordering; defaults to true. */
   showFileOrdering?: boolean;
-  /** The example output names for an input, when the shared example would name them wrongly. */
-  exampleName?: (inputPath: string) => string | readonly string[];
+  /** How the shared run treats the inputs under these options; defaults to the registered capability. */
+  capability?: (options: Options, registered: ToolCapability) => ToolCapability;
+  /** The example output names the destination shows for an input; defaults to the registered suffix. */
+  exampleName?: (options: Options, inputPath: string) => string | readonly string[];
   /** Shows a succeeded file's outputs as one row that expands into its parts. */
   outputGroup?: OutputGrouping;
   /** A line after the finished headline, such as a total across files. */

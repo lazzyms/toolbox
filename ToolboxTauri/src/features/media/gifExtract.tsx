@@ -62,7 +62,7 @@ export const gifExtractTool: MediaTool<Record<string, never>> = {
     command: "extract_gif_frames",
     request: { paths, outputLocation },
   }),
-  exampleName: (path) => [
+  exampleName: (_options, path) => [
     exampleOutputName(path, "extract_gif_frames", "-frame-001"),
     exampleOutputName(path, "extract_gif_frames", "-timings", "json"),
   ],
