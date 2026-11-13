@@ -207,7 +207,11 @@ impl Picture {
         limits.max_image_width = Some(MAX_PICTURE_SIDE);
         limits.max_image_height = Some(MAX_PICTURE_SIDE);
         reader.limits(limits);
-        let image = reader.decode().map_err(|error| error.to_string())?;
+        Self::from_image(reader.decode().map_err(|error| error.to_string())?, size)
+    }
+
+    /// A decoded image, held to the same size limits as one read here.
+    pub fn from_image(image: image::DynamicImage, size: Option<(f32, f32)>) -> Result<Self, String> {
         if image.width() == 0 || image.height() == 0 || image.width() as u64 * image.height() as u64 > MAX_PICTURE_PIXELS {
             return Err("the image is too large".into());
         }

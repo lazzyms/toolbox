@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../contracts';
-import { TOOL_DROP_EVENT, type ShellEvent } from '../hooks/useShellBridge';
+import { TOOL_DROP_EVENT, toolDrop, type ShellEvent } from '../hooks/useShellBridge';
 import { useOutputLocation } from '../outputLocation';
 import { failedOutcome, parseToolResult } from '../jobOutcome';
 import { UtilityRegistry, toolsForWorkspace, workspaceForTool } from '../registry';
@@ -497,8 +497,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     // The native shell owns window drops and forwards them here once a tool is open.
     useEffect(() => {
         const handleDroppedFiles = (event: Event) => {
-            const paths = (event as CustomEvent<unknown>).detail;
-            if (Array.isArray(paths) && paths.every((path) => typeof path === 'string')) dropRef.current(paths);
+            const drop = toolDrop(event);
+            if (drop) dropRef.current(drop.paths);
         };
         window.addEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
         return () => window.removeEventListener(TOOL_DROP_EVENT, handleDroppedFiles);
