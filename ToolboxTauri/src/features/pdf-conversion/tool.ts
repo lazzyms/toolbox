@@ -9,6 +9,8 @@ export type OptionsPanelProps<Options> = {
   options: Options;
   setOptions(options: Options): void;
   files: string[];
+  /** The file list row the user last selected, for previews of one input. */
+  selectedFileIndex: number;
   inspectedDocument: PdfDocument | null;
   selectedPages: number[];
   pageRange: string;

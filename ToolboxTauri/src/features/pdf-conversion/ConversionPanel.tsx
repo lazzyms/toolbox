@@ -26,6 +26,7 @@ type ConversionPanelProps = {
   options: unknown;
   setOptions: (options: unknown) => void;
   files: string[];
+  selectedFileIndex: number;
   run: () => Promise<void>;
   loading: boolean;
   pageRange: string;
@@ -47,6 +48,7 @@ export const ConversionPanel = ({
   options,
   setOptions,
   files,
+  selectedFileIndex,
   run,
   loading,
   pageRange,
@@ -191,6 +193,7 @@ export const ConversionPanel = ({
           options={options}
           setOptions={setOptions}
           files={files}
+          selectedFileIndex={selectedFileIndex}
           inspectedDocument={inspectedDocument}
           selectedPages={selectedPages}
           pageRange={pageRange}

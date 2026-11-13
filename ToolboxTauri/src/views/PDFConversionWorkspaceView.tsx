@@ -62,7 +62,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
       onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
     >
-      {({ files, run, loading, destination, runLabel }) => (
+      {({ files, selectedFileIndex, run, loading, destination, runLabel }) => (
         <ConversionPanel
           destination={destination}
           runLabel={runLabel}
@@ -71,6 +71,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           options={options}
           setOptions={setOptions}
           files={files}
+          selectedFileIndex={selectedFileIndex}
           run={run}
           loading={loading}
           pageRange={pageRange}

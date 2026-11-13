@@ -26,6 +26,10 @@ test.beforeEach(async ({ page }) => {
                     const pageCount = (args as { request: { path: string } }).request.path.endsWith(".three.pdf") ? 3 : 1;
                     return { pages: Array.from({ length: pageCount }, (_, index) => ({ index, x: 0, y: 0, width: 612, height: 792, preview })) };
                 }
+                if (command === "inspect_image_preview") {
+                    const tall = (args as { request: { path: string } }).request.path.includes("tall");
+                    return tall ? { width: 20, height: 30, dataUrl: preview } : { width: 40, height: 20, dataUrl: preview };
+                }
                 if (command.startsWith("plugin:")) return null;
                 const paths = (args as { request?: { paths?: string[] } }).request?.paths ?? [];
                 return paths.map((inputPath) => ({ inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: [] }));
@@ -77,7 +81,73 @@ test.describe("PDF Conversion tools send their exact requests", () => {
             paths: ["/local/scan-1.png", "/local/scan-2.jpg"],
             outputLocation,
             outputPath: "/fake/shell/output/scan-1-combined.pdf",
+            pageSize: "matchImage",
         }));
+    });
+
+    test("Images to PDF sends margin, fit and orientation only for A4 and Letter", async ({ page }) => {
+        await selectFromRail(page, "PDF Conversion", "Images to PDF");
+        await chooseFiles(page, "/local/wide.jpg", "/local/tall.png");
+        const pageSize = page.getByRole("radiogroup", { name: "Page size" });
+        const layout = (name: string) => page.getByRole("group", { name: `${name} layout` });
+        const matchHint = page.getByText("Each page is the size of its image. Margin, fit and orientation appear for A4 and Letter.");
+        const layoutControls = [
+            page.getByRole("radiogroup", { name: "Orientation" }),
+            page.getByRole("radiogroup", { name: "Fit" }),
+            page.getByRole("radiogroup", { name: "Margin" }),
+        ];
+        const paths = ["/local/wide.jpg", "/local/tall.png"];
+        const base = { paths, outputLocation, outputPath: "/fake/shell/output/wide-combined.pdf" };
+
+        await expect(pageSize.getByRole("radio", { name: "Match image" })).toBeChecked();
+        await expect(matchHint).toBeVisible();
+        for (const control of layoutControls) await expect(control).toHaveCount(0);
+        await expect(layout("A4")).toHaveCount(0);
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({ ...base, pageSize: "matchImage" }));
+
+        await pageSize.getByRole("radio", { name: "A4" }).click();
+        await expect(matchHint).toHaveCount(0);
+        const a4 = layout("A4");
+        await expect(a4).toBeVisible();
+        await expect(a4.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Automatic" })).toBeChecked();
+        await expect(a4.getByText("Automatic turns each page to suit its image.")).toBeVisible();
+        await expect(a4.getByRole("radio", { name: "Fit within the page" })).toBeChecked();
+        await expect(a4.getByRole("radio", { name: "Fill the page, trimming edges" })).not.toBeChecked();
+        await expect(a4.getByRole("radiogroup", { name: "Margin" }).getByRole("radio", { name: "Small" })).toBeChecked();
+        await expect(a4.getByText("Page 1, wide.jpg on A4 landscape with a small margin. Select another page to preview it.")).toBeVisible();
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({
+            ...base, pageSize: "a4", margin: "small", fit: "fit", orientation: "automatic",
+        }));
+
+        await page.getByRole("option", { name: "tall.png" }).click();
+        await expect(a4.getByText("Page 2, tall.png on A4 portrait with a small margin. Select another page to preview it.")).toBeVisible();
+
+        await a4.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click();
+        await a4.getByRole("radio", { name: "Fill the page, trimming edges" }).click();
+        await a4.getByRole("radiogroup", { name: "Margin" }).getByRole("radio", { name: "Large" }).click();
+        await expect(a4.getByText("Page 2, tall.png on A4 landscape with a large margin. Select another page to preview it.")).toBeVisible();
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({
+            ...base, pageSize: "a4", margin: "large", fit: "fill", orientation: "landscape",
+        }));
+
+        await pageSize.getByRole("radio", { name: "Letter" }).click();
+        await expect(layout("A4")).toHaveCount(0);
+        const letter = layout("Letter");
+        await expect(letter).toBeVisible();
+        await letter.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Portrait" }).click();
+        await letter.getByRole("radiogroup", { name: "Margin" }).getByRole("radio", { name: "None" }).click();
+        await expect(letter.getByText("Page 2, tall.png on Letter portrait with no margin. Select another page to preview it.")).toBeVisible();
+        expect(await exportAndCapture(page, "images_to_pdf", { save: true })).toEqual(sent({
+            ...base, pageSize: "letter", margin: "none", fit: "fill", orientation: "portrait",
+        }));
+
+        await pageSize.getByRole("radio", { name: "Match image" }).click();
+        await expect(matchHint).toBeVisible();
+        await expect(layout("Letter")).toHaveCount(0);
+        for (const control of layoutControls) await expect(control).toHaveCount(0);
+        const request = await exportAndCapture(page, "images_to_pdf", { save: true });
+        expect(request).toEqual(sent({ ...base, pageSize: "matchImage" }));
+        for (const key of ["margin", "fit", "orientation"]) expect((request as { request: object }).request).not.toHaveProperty(key);
     });
 
     test("PDF to Images from the rail", async ({ page }) => {
