@@ -22,6 +22,10 @@ import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneSh
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
+import { isPdfSceneTool } from '../registry';
+import { pdfEditorBatchTools, type PdfEditorBatchTools } from '../features/pdf-editor/batchTools';
+import { PdfEditorBatchSurface } from '../features/pdf-editor/BatchSurface';
+import { PDFConversionWorkspaceView } from './PDFConversionWorkspaceView';
 import { shortcutTarget } from '../shortcuts';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
@@ -83,15 +87,7 @@ function handleToolbarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
   buttons[next].focus();
 }
 
-export const PDFEditorWorkspaceView = ({
-  utility,
-  initialPaths,
-  onNavigate,
-  onWorkspaceSourceAction,
-  fileActivation,
-  onActivationAccepted,
-  onFilesChange,
-}: {
+type PDFEditorWorkspaceProps = {
   utility: ToolDefinition;
   initialPaths?: readonly string[];
   onNavigate?: PdfEditorNavigation;
@@ -99,7 +95,25 @@ export const PDFEditorWorkspaceView = ({
   fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
-}) => {
+};
+
+export const PDFEditorWorkspaceView = ({ batchTools = pdfEditorBatchTools, ...props }: PDFEditorWorkspaceProps & { batchTools?: PdfEditorBatchTools }) => {
+  const { utility, initialPaths, onFilesChange } = props;
+  if (isPdfSceneTool(utility.id)) return <PDFSceneEditor {...props} />;
+  const batchTool = batchTools[utility.id];
+  if (batchTool) return <PdfEditorBatchSurface utility={utility} tool={batchTool} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+};
+
+const PDFSceneEditor = ({
+  utility,
+  initialPaths,
+  onNavigate,
+  onWorkspaceSourceAction,
+  fileActivation,
+  onActivationAccepted,
+  onFilesChange,
+}: PDFEditorWorkspaceProps) => {
   const availability = useToolAvailability();
   const session = useRef<{ path: string; scene: PdfScene; baseline: PdfScene } | null>(null);
   const requestedTool: SceneTool = utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : 'select';
