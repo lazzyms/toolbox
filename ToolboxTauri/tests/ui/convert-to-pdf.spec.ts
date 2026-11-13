@@ -707,3 +707,33 @@ test("the eBooks section appears only while an EPUB is listed, a run carries its
     await expect(resultRows(page).filter({ hasText: "novel.epub" })).toContainText("12 pages.");
     await expect(resultRows(page).filter({ hasText: "locked.EPUB" })).toContainText(protectedBook);
 });
+
+test("a file in a script that needs a pack shows the script pack's Install on its own row only, never at tool level", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/circular-hindi.docx", "/local/minutes.docx"]);
+    // Before the run, nothing about packs shows: the tool doesn't know which scripts the files hold.
+    await expect(page.getByText(/pack/i)).toHaveCount(0);
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({ paths: ["/local/circular-hindi.docx", "/local/minutes.docx"], outputLocation: "alongsideInput" });
+
+    const message = "Devanagari text needs the Unicode scripts pack, which isn't installed. Nothing was saved.";
+    await page.evaluate((message) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/circular-hindi.docx", outputPaths: [], detail: "", state: "failed", reason: null, warnings: [],
+            failure: { kind: "unavailable", message, pointer: { kind: "pack", packId: "unicode-scripts", name: "Unicode scripts", reason: "notInstalled" } } },
+        { inputPath: "/local/minutes.docx", outputPaths: ["/local/minutes.pdf"], detail: "1 page.", state: "succeeded", failure: null, reason: null, warnings: [] },
+    ]), message);
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    const hindi = rows.filter({ hasText: "circular-hindi.docx" });
+    await expect(hindi).toHaveAttribute("data-tone", "fail");
+    await expect(hindi).toContainText("Needs a pack");
+    await expect(hindi).toContainText(message);
+    await expect(hindi.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+    const minutes = rows.filter({ hasText: "minutes.docx" });
+    await expect(minutes).toContainText("1 page.");
+    await expect(minutes).not.toContainText("Needs a pack");
+    await expect(minutes.getByRole("button", { name: /pack/ })).toHaveCount(0);
+    // The only pack prompt on the page is the affected row's.
+    await expect(page.getByRole("button", { name: /pack/ })).toHaveCount(1);
+    await hindi.getByRole("button", { name: "Install Unicode scripts pack for circular-hindi.docx", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as ConvertWindow).__invocations.filter(({ command }) => command === "install_pack").map(({ args }) => (args as { packId: string }).packId))).toEqual(["unicode-scripts"]);
+});

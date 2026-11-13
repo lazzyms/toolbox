@@ -83,8 +83,9 @@ pub const OCR_TOOL_ID: &str = "pdf-ocr";
 /// The text recognition language built into the app, as its Tesseract code and name. Every other
 /// language comes from a pack.
 pub const BUILT_IN_OCR_LANGUAGE: (&str, &str) = ("eng", "English");
-/// The tool whose script packs the catalog names with `scriptFonts`.
-pub const PDF_TEXT_TOOL_ID: &str = "pdf-edit";
+/// The tools that write text with the fonts a pack names with `scriptFonts`: Edit PDF and
+/// Convert to PDF.
+pub const SCRIPT_FONT_TOOL_IDS: [&str; 2] = ["pdf-edit", "convert-to-pdf"];
 
 /// `from` is inclusive and `before` is exclusive. No `before` means every later version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,8 +279,8 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
                 return Err(format!("The pack catalog has more than one pack for language {:?}", language.code));
             }
         }
-        if !pack.script_fonts.is_empty() && !pack.tool_ids.iter().any(|tool| tool == PDF_TEXT_TOOL_ID) {
-            return Err(format!("Pack {} adds script fonts but not to {PDF_TEXT_TOOL_ID}", pack.id));
+        if let Some(tool) = SCRIPT_FONT_TOOL_IDS.iter().find(|tool| !pack.script_fonts.is_empty() && !pack.tool_ids.iter().any(|id| id == *tool)) {
+            return Err(format!("Pack {} adds script fonts but not to {tool}", pack.id));
         }
         for (script, font) in &pack.script_fonts {
             // Scripts the app writes with its own font never come from a pack.
@@ -878,7 +879,7 @@ mod tests {
 
     fn script_pack(id: &str, name: &str, fonts: serde_json::Value, download_bytes: u64) -> serde_json::Value {
         serde_json::json!({
-            "id": id, "name": name, "description": "d", "toolIds": [PDF_TEXT_TOOL_ID], "license": "OFL-1.1", "version": "1.0",
+            "id": id, "name": name, "description": "d", "toolIds": SCRIPT_FONT_TOOL_IDS, "license": "OFL-1.1", "version": "1.0",
             "minPackFormat": 1, "appVersions": { "from": "0.1" }, "scriptFonts": fonts,
             "payloads": [{ "target": "all", "downloadBytes": download_bytes, "installedBytes": download_bytes, "sha256": "0".repeat(64), "path": format!("{id}.toolboxpack") }]
         })
@@ -946,6 +947,9 @@ mod tests {
         let mut wrong_tool = pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }));
         wrong_tool["toolIds"] = serde_json::json!(["pdf-ocr"]);
         assert!(parse(wrong_tool).unwrap_err().contains("not to pdf-edit"));
+        let mut edit_only = pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }));
+        edit_only["toolIds"] = serde_json::json!(["pdf-edit"]);
+        assert!(parse(edit_only).unwrap_err().contains("not to convert-to-pdf"));
         let twice = parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [
             pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" })),
             script_pack("unicode-scripts-cjk", "CJK", serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }), MIB),
