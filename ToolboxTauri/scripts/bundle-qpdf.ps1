@@ -1,5 +1,6 @@
 # Stages the exact qpdf release pinned in qpdf-pin.json for one Windows target into
-# the bundle resources directory, so the installer ships a native qpdf.exe and its DLLs.
+# the bundle resources directory, so the installer ships a native qpdf.exe and its DLLs. DLLs in the archive
+# that are not native to the target are left out.
 # The archive must match its pinned SHA-256, and the staged qpdf.exe must be native to
 # the target and at or above the pinned minimum. Run before `npm run tauri build`.
 param(
@@ -42,6 +43,8 @@ function Assert-Qpdf([string]$Path) {
 Assert-Qpdf $qpdf.FullName
 New-Item -ItemType Directory -Force -Path $ResourcesDir | Out-Null
 Copy-Item $qpdf.FullName (Join-Path $ResourcesDir "qpdf.exe") -Force
-Get-ChildItem $qpdf.DirectoryName -Filter *.dll | Copy-Item -Destination $ResourcesDir -Force
+$libraries = @(& node (Join-Path $PSScriptRoot "qpdf-libraries.mjs") $qpdf.DirectoryName --target $Target)
+if ($LASTEXITCODE -ne 0) { throw "bundle-qpdf: couldn't list the qpdf libraries native to $Target" }
+foreach ($library in $libraries) { Copy-Item (Join-Path $qpdf.DirectoryName $library) -Destination $ResourcesDir -Force }
 Assert-Qpdf (Join-Path $ResourcesDir "qpdf.exe")
 Write-Host "bundle-qpdf: staged qpdf $($pin.windows.version) for $Target -> $ResourcesDir"

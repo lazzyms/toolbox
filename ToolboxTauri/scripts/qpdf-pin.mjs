@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 export const PIN_PATH = new URL("../qpdf-pin.json", import.meta.url);
 
@@ -122,4 +123,20 @@ export function inspectQpdf({ path, target, pin = readPin(), readVersion = runVe
     return { cause: "too-old", message: `qpdf ${version} at ${path} is below the pinned minimum ${pin.minimumVersion}` };
   }
   return { cause: null, version, message: `qpdf ${version} is native ${expected.architecture} for ${target}` };
+}
+
+// The DLLs beside a release helper that the target can load. Upstream archives can carry a library built for another
+// architecture (qpdf 12.4.2's arm64 zip ships an x64 vcruntime140_1.dll that nothing in it imports); staging it would
+// put a foreign binary in the installer.
+export function nativeLibraries({ directory, target }) {
+  const expected = TARGETS[target];
+  if (!expected) throw new Error(`Unsupported release target ${target}; expected one of ${Object.keys(TARGETS).join(", ")}`);
+  const native = [];
+  const foreign = [];
+  for (const name of readdirSync(directory).filter((entry) => entry.toLowerCase().endsWith(".dll")).sort()) {
+    const found = binaryArchitectures(readFileSync(join(directory, name)));
+    if (found.format === expected.format && found.architectures.includes(expected.architecture)) native.push(name);
+    else foreign.push({ name, described: found.format === "unknown" ? "not a native library" : `${found.format} ${found.architectures.join("+")}` });
+  }
+  return { native, foreign };
 }

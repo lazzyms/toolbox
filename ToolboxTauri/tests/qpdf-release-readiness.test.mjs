@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { inspectPdftotext, inspectQpdf, inspectRenderer, readPin } from "../scripts/qpdf-pin.mjs";
+import { inspectPdftotext, inspectQpdf, inspectRenderer, nativeLibraries, readPin } from "../scripts/qpdf-pin.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtures = mkdtempSync(join(tmpdir(), "toolbox-qpdf-release-"));
@@ -292,4 +292,41 @@ test("the macOS bundling script refuses a pdftotext that is not a native arm64 b
   assert.match(result.stderr, /pdftotext release check failed \(wrong-architecture\)/);
   assert.match(result.stderr, /bundle-qpdf: refusing pdftotext/);
   assert.deepEqual(resources, []);
+});
+
+function libraryDirectory(name, files) {
+  const directory = join(fixtures, name);
+  mkdirSync(directory, { recursive: true });
+  for (const [file, bytes] of Object.entries(files)) writeFileSync(join(directory, file), bytes);
+  return directory;
+}
+
+test("stages only the qpdf libraries native to Windows arm64", () => {
+  const directory = libraryDirectory("libraries-arm64", {
+    "qpdf30.dll": pe(ARM64_PE),
+    "vcruntime140.dll": pe(ARM64_PE),
+    "vcruntime140_1.dll": pe(X86_64_PE),
+    "qpdf.exe": pe(ARM64_PE),
+    "notes.txt": Buffer.from("not a library"),
+  });
+  assert.deepEqual(nativeLibraries({ directory, target: "aarch64-pc-windows-msvc" }), {
+    native: ["qpdf30.dll", "vcruntime140.dll"],
+    foreign: [{ name: "vcruntime140_1.dll", described: "pe x86_64" }],
+  });
+});
+
+test("keeps every native x64 qpdf library for Windows x86_64", () => {
+  const directory = libraryDirectory("libraries-x64", { "qpdf30.dll": pe(X86_64_PE), "vcruntime140_1.dll": pe(X86_64_PE), "broken.dll": Buffer.from("MZ") });
+  assert.deepEqual(nativeLibraries({ directory, target: "x86_64-pc-windows-msvc" }), {
+    native: ["qpdf30.dll", "vcruntime140_1.dll"],
+    foreign: [{ name: "broken.dll", described: "not a native library" }],
+  });
+});
+
+test("the library lister prints native libraries and names the skipped ones", () => {
+  const directory = libraryDirectory("libraries-cli", { "qpdf30.dll": pe(ARM64_PE), "vcruntime140_1.dll": pe(X86_64_PE) });
+  const result = spawnSync(process.execPath, ["scripts/qpdf-libraries.mjs", directory, "--target", "aarch64-pc-windows-msvc"], { cwd: projectRoot, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "qpdf30.dll\n");
+  assert.match(result.stderr, /skipping vcruntime140_1\.dll, which is pe x86_64, not native to aarch64-pc-windows-msvc/);
 });
