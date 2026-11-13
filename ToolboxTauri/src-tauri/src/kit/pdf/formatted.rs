@@ -34,7 +34,7 @@ const MAX_TABLE_ROWS: usize = 1000;
 const MAX_CELL_CHARACTERS: usize = 1000;
 
 /// A stretch of paragraph or list text in one style.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Run {
     pub text: String,
@@ -42,7 +42,7 @@ pub struct Run {
     pub italic: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListItem {
     pub runs: Vec<Run>,
@@ -51,7 +51,7 @@ pub struct ListItem {
 /// One block of the document. Headings are drawn bold, so they carry plain text; paragraphs and list items carry runs.
 /// A table carries its rows of plain cell text, and with `header_row` its first row is the header. An image carries the
 /// path of a file on this device, read when the PDF is saved.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DocumentBlock {
     Heading1 { text: String },
@@ -135,7 +135,7 @@ fn load_picture(path: &Path) -> Result<Picture, ToolError> {
     ))
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentFont {
     pub family: String,
@@ -143,7 +143,7 @@ pub struct DocumentFont {
 }
 
 /// How every page looks: its size, orientation and margins, and the header, footer and page numbers drawn on it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageSettings {
     pub page_size: PageSize,
@@ -188,7 +188,7 @@ fn band_line(text: &str, align: Align) -> Option<Block> {
     }))
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FormattedDocument {
     pub title: String,
@@ -196,6 +196,28 @@ pub struct FormattedDocument {
     pub blocks: Vec<DocumentBlock>,
     pub page: PageSettings,
     pub font: DocumentFont,
+}
+
+impl FormattedDocument {
+    /// Refuses a document no PDF can be made from: a block that fails its own check, no font, a size out of range, or
+    /// more text than one PDF may hold. A blank document passes, since it is still being written; saving refuses it.
+    pub fn check(&self) -> Result<(), ToolError> {
+        self.blocks.iter().try_for_each(DocumentBlock::check)?;
+        if self.font.family.trim().is_empty() { return Err(ToolError::invalid_input("Choose a font for the document.")); }
+        if !self.font.size.is_finite() || !FONT_SIZES.contains(&self.font.size) {
+            return Err(ToolError::invalid_input(format!("Text size must be between {} and {} pt.", FONT_SIZES.start(), FONT_SIZES.end())));
+        }
+        let limits = limits();
+        let page = &self.page;
+        let bytes = self.title.len() + self.author.len() + page.header.len() + page.footer.len() + self.blocks.iter().map(DocumentBlock::text_bytes).sum::<usize>();
+        if bytes as u64 > limits.max_bytes {
+            return Err(ToolError::limit_exceeded(
+                LimitKind::FileSize,
+                format!("The document is larger than the {} limit for one PDF. Split it into smaller documents and try again.", limits::bytes_label(limits.max_bytes)),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -247,22 +269,11 @@ fn make<S: SystemFontLookup>(
     packs: &RunPacks,
     picture: impl Fn(&Path) -> Result<(Picture, Option<String>), ToolError>,
 ) -> Result<Made, ToolError> {
-    document.blocks.iter().try_for_each(DocumentBlock::check)?;
+    document.check()?;
     let (mut blocks, images) = layout_blocks(&document.blocks);
     if blocks.is_empty() { return Err(ToolError::invalid_input("The document is empty. Add some text and try again.")); }
-    if document.font.family.trim().is_empty() { return Err(ToolError::invalid_input("Choose a font for the document.")); }
-    if !document.font.size.is_finite() || !FONT_SIZES.contains(&document.font.size) {
-        return Err(ToolError::invalid_input(format!("Text size must be between {} and {} pt.", FONT_SIZES.start(), FONT_SIZES.end())));
-    }
     let limits = limits();
     let page = &document.page;
-    let bytes = document.title.len() + document.author.len() + page.header.len() + page.footer.len() + document.blocks.iter().map(DocumentBlock::text_bytes).sum::<usize>();
-    if bytes as u64 > limits.max_bytes {
-        return Err(ToolError::limit_exceeded(
-            LimitKind::FileSize,
-            format!("The document is larger than the {} limit for one PDF. Split it into smaller documents and try again.", limits::bytes_label(limits.max_bytes)),
-        ));
-    }
 
     let (pictures, captions): (Vec<Picture>, Vec<Option<String>>) = images.iter().map(|path| picture(path)).collect::<Result<Vec<_>, _>>()?.into_iter().unzip();
     if captions.iter().any(Option::is_some) {

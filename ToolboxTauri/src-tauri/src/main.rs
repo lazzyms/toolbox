@@ -13,7 +13,7 @@ use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::ImageProcessor;
 use crate::kit::images::tools;
 use crate::kit::compress::{compress_file, CompressFilesRequest};
-use crate::kit::pdf::{bates, convert, editor, formatted, metadata, privacy, properties, remaining, scene, to_epub, PDFProcessor};
+use crate::kit::pdf::{bates, convert, editor, formatted, formatted_draft, metadata, privacy, properties, remaining, scene, to_epub, PDFProcessor};
 use crate::kit::pdf::page_ranges::{require_page_ranges, validate_page_ranges};
 use crate::kit::vision;
 use crate::packs::uninstall::RunPacks;
@@ -396,6 +396,25 @@ async fn list_formatted_pdf_fonts() -> Result<formatted::FontChoices, String> {
     tauri::async_runtime::spawn_blocking(formatted::font_choices).await.map_err(|error| error.to_string())?
 }
 
+/// The Formatted PDF draft kept on this device, if there is one, or why the stored one couldn't be used.
+#[tauri::command]
+async fn load_formatted_draft(app: tauri::AppHandle) -> Result<formatted_draft::DraftLoad, String> {
+    let path = settings::app_data_file(&app, formatted_draft::DRAFT_FILE)?;
+    tauri::async_runtime::spawn_blocking(move || formatted_draft::load(&path)).await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn save_formatted_draft(app: tauri::AppHandle, document: formatted::FormattedDocument) -> Result<formatted_draft::FormattedDraft, String> {
+    let path = settings::app_data_file(&app, formatted_draft::DRAFT_FILE)?;
+    tauri::async_runtime::spawn_blocking(move || formatted_draft::save(&path, document)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn clear_formatted_draft(app: tauri::AppHandle) -> Result<(), String> {
+    let path = settings::app_data_file(&app, formatted_draft::DRAFT_FILE)?;
+    tauri::async_runtime::spawn_blocking(move || formatted_draft::clear(&path)).await.map_err(|error| error.to_string())?
+}
+
 async fn run_preview_formatted_pdf(request: formatted::FormattedPreviewRequest, packs: RunPacks) -> Result<formatted::FormattedPreview, String> {
     if !command_supports_preview(formatted::COMMAND) { return Err("Formatted PDF preview is unavailable in this build.".to_string()); }
     tauri::async_runtime::spawn_blocking(move || formatted::preview(&request, &packs)).await.map_err(|error| error.to_string())?
@@ -662,6 +681,9 @@ fn main() {
             create_formatted_pdf,
             preview_formatted_pdf,
             list_formatted_pdf_fonts,
+            load_formatted_draft,
+            save_formatted_draft,
+            clear_formatted_draft,
             images_to_pdf,
             ocr_pdf,
             blur_faces,

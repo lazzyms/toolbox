@@ -78,17 +78,27 @@ fn update_stored(settings_path: &Path, change: impl FnOnce(&mut StoredSettings))
     let _guard = WRITE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut stored = read_stored(settings_path);
     change(&mut stored);
-    let directory = settings_path.parent().ok_or("Settings path has no parent folder.")?;
-    std::fs::create_dir_all(directory).map_err(|error| format!("Could not create the settings folder: {error}"))?;
-    let bytes = serde_json::to_vec_pretty(&stored).map_err(|error| error.to_string())?;
-    let staged = settings_path.with_extension("json.tmp");
-    std::fs::write(&staged, bytes).map_err(|error| format!("Could not save settings: {error}"))?;
-    std::fs::rename(&staged, settings_path).map_err(|error| format!("Could not save settings: {error}"))
+    write_json_atomically(settings_path, &stored, "settings")
+}
+
+/// Writes `value` as JSON to a staged file next to `path`, then renames it over `path`, so a crash mid-write leaves the
+/// old file whole. `noun` names what is saved in the error message.
+pub(crate) fn write_json_atomically(path: &Path, value: &impl Serialize, noun: &str) -> Result<(), String> {
+    let directory = path.parent().ok_or_else(|| format!("The {noun} path has no parent folder."))?;
+    std::fs::create_dir_all(directory).map_err(|error| format!("Could not create the {noun} folder: {error}"))?;
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    let staged = path.with_extension("json.tmp");
+    std::fs::write(&staged, bytes).map_err(|error| format!("Could not save {noun}: {error}"))?;
+    std::fs::rename(&staged, path).map_err(|error| format!("Could not save {noun}: {error}"))
+}
+
+pub(crate) fn app_data_file(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+    Ok(app.path().app_data_dir().map_err(|error| error.to_string())?.join(name))
 }
 
 fn paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf), String> {
     let resolver = app.path();
-    let settings_path = resolver.app_data_dir().map_err(|error| error.to_string())?.join(SETTINGS_FILE);
+    let settings_path = app_data_file(app, SETTINGS_FILE)?;
     let documents = resolver
         .document_dir()
         .or_else(|_| resolver.home_dir())
