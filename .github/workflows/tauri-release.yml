@@ -298,6 +298,23 @@ jobs:
           name: ocr-outputs-${{ matrix.artifact }}
           path: ${{ runner.temp }}/ocr-outputs/*
           if-no-files-found: error
+      - name: Check the artifact carries the Convert to PDF renderer and fallback fonts
+        shell: bash
+        working-directory: ToolboxTauri
+        run: node scripts/check-release-readiness.mjs --convert-artifact "$OCR_RELEASE_ROOT" --target ${{ matrix.target }}
+      - name: Convert every family's embedded-font fixture with the artifact's own fonts
+        shell: bash
+        working-directory: ToolboxTauri/src-tauri
+        env:
+          TOOLBOX_CONVERT_RELEASE_OUT: ${{ runner.temp }}/convert-outputs
+        run: |
+          TOOLBOX_CONVERT_RELEASE_ROOT="$OCR_RELEASE_ROOT" cargo test command_tests::release_artifact_converts_every_family_with_its_own_fonts -- --exact --nocapture
+          test -f "$TOOLBOX_CONVERT_RELEASE_OUT/snapshots.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: convert-outputs-${{ matrix.artifact }}
+          path: ${{ runner.temp }}/convert-outputs/*
+          if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
           name: toolbox-${{ matrix.artifact }}
@@ -327,8 +344,31 @@ jobs:
             windows-x86_64=ocr-outputs/windows-x86_64 \
             windows-arm64=ocr-outputs/windows-arm64
 
+  compare-convert:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.source_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v7
+        with: {name: convert-outputs-macos-aarch64, path: convert-outputs/macos-aarch64}
+      - uses: actions/download-artifact@v7
+        with: {name: convert-outputs-windows-x86_64, path: convert-outputs/windows-x86_64}
+      - uses: actions/download-artifact@v7
+        with: {name: convert-outputs-windows-arm64, path: convert-outputs/windows-arm64}
+      - name: Compare Convert to PDF snapshots across targets
+        run: |
+          node ToolboxTauri/scripts/compare-convert-outputs.mjs \
+            macos-aarch64=convert-outputs/macos-aarch64 \
+            windows-x86_64=convert-outputs/windows-x86_64 \
+            windows-arm64=convert-outputs/windows-arm64
+
   publish:
-    needs: [version, packs, build, compare-ocr]
+    needs: [version, packs, build, compare-ocr, compare-convert]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.value }}

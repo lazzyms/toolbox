@@ -131,7 +131,7 @@ export function ocrArtifactLayout(root, target) {
   return { resources, ocrRoot, rasterizer, rasterizerName };
 }
 
-function nativeProblem(path, target, label) {
+export function nativeProblem(path, target, label) {
   const expected = TARGETS[target];
   const found = binaryArchitectures(readFileSync(path));
   if (found.format === expected.format && found.architectures.includes(expected.architecture)) return null;
