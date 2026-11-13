@@ -1,11 +1,15 @@
 import { useRef } from "react";
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, TriangleAlert } from "lucide-react";
+import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { fileName } from "../../components/intake";
+import { formatBytes } from "../../shared/fileSize";
 import { GifFrameStrip, type GifFrame } from "./GifFrameStrip";
+import { GifPlayback, useFramePreviews } from "./GifPlayback";
+import { estimateGifBytes, isLargeGif } from "./gifTiming";
 import type { MediaPanelProps, MediaTool } from "./types";
 
 export interface GifCreateOptions {
@@ -47,6 +51,12 @@ const listFrames = (numbers: number[]) =>
 const GifCreatePanel = ({ utility, options, setOptions, files, fileKeys, selectedFileIndex, selectFile, moveFile, removeFile, loading }: MediaPanelProps<GifCreateOptions>) => {
   const ownInput = useRef<HTMLInputElement>(null);
   const frames = framesOf(options, files, fileKeys);
+  const supportsPreview = utility.capability.supportsPreview;
+  const previews = useFramePreviews(files, supportsPreview);
+  // Frame 1 sets the canvas, so its size and the frame count give the estimate before running.
+  const canvas = frames[0] ? previews[frames[0].path] ?? null : null;
+  const bytes = canvas ? estimateGifBytes(canvas, frames.length) : null;
+  const large = bytes !== null && isLargeGif(bytes);
   const selected = frames[selectedFileIndex];
   const globalError = globalProblem(options);
   const ownErrors = ownProblems(frames);
@@ -61,14 +71,25 @@ const GifCreatePanel = ({ utility, options, setOptions, files, fileKeys, selecte
     <>
       <GifFrameStrip
         frames={frames}
+        previews={previews}
         totalMs={totalMs}
-        supportsPreview={utility.capability.supportsPreview}
+        supportsPreview={supportsPreview}
         selectedIndex={selectedFileIndex}
         selectIndex={selectFile}
         moveFrame={moveFile}
         removeFrame={removeFile}
         disabled={loading}
-      />
+        notice={large && bytes !== null && (
+          <Card role="status" className="media-gif-large flex-row gap-2.5 px-3 py-2.5 text-xs">
+            <TriangleAlert className="size-4 shrink-0" aria-hidden="true" />
+            <p>This GIF will be about {formatBytes(bytes)}. Large GIFs are slow to open and share. Remove frames or add smaller images to reduce it.</p>
+          </Card>
+        )}
+      >
+        {supportsPreview && (
+          <GifPlayback frames={frames} previews={previews} selectedIndex={selectedFileIndex} loop={options.loop} disabled={loading} />
+        )}
+      </GifFrameStrip>
       <div className="workspace-field">
         <Label htmlFor="gif-delay">Delay for every frame</Label>
         <div className="workspace-unit-input">
@@ -154,6 +175,21 @@ const GifCreatePanel = ({ utility, options, setOptions, files, fileKeys, selecte
         </div>
         <p className="workspace-note">Off plays once and stops on the last frame.</p>
       </div>
+      {canvas && bytes !== null && (
+        <div className="workspace-field" role="group" aria-labelledby="gif-size-heading">
+          <span id="gif-size-heading" className="workspace-panel-label">Size</span>
+          <p className="workspace-panel-copy">{canvas.width} × {canvas.height}, from frame 1</p>
+          <p className="workspace-note">Other frames are centred. Larger ones are scaled down to fit, never stretched. Padding is transparent.</p>
+          {large ? (
+            <p className="workspace-field-warning">
+              <TriangleAlert aria-hidden="true" />
+              <span>About {formatBytes(bytes)}. That&apos;s large for a GIF.</span>
+            </p>
+          ) : (
+            <p className="workspace-note">About {formatBytes(bytes)}.</p>
+          )}
+        </div>
+      )}
     </>
   );
 };

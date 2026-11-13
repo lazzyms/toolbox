@@ -42,6 +42,7 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     if (path.includes("tall")) return { width: 300, height: 1400, dataUrl: blankImage };
                     if (path.includes("square")) return { width: 1024, height: 1024, dataUrl: blankImage };
                     if (path.includes("small")) return { width: 512, height: 512, dataUrl: blankImage };
+                    if (path.includes("2mp")) return { width: 2000, height: 1000, dataUrl: blankImage };
                     return { width: 640, height: 480, dataUrl: blankImage };
                 }
                 if (command === "inspect_tiff_pages") {
@@ -635,6 +636,134 @@ test.describe("Media requests", () => {
         await ownDelay.fill("1");
         await expect(page.getByRole("alert")).toHaveCount(0);
         expect(await runOnce(page, "create_gif", "a-animated.gif")).toMatchObject({ request: { frameDelayMs: 60000, frameDelayOverrides: [{ index: 0, delayMs: 1 }] } });
+    });
+
+    test("Create GIF preview plays the current order with the delays the GIF stores, its loop, and follows a reorder", async ({ page }) => {
+        await page.clock.install();
+        // Reduce motion is on: the preview never starts by itself, and Play still plays it.
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await start(page);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/a.png", "/local/frames/b.png", "/local/frames/c.png"]);
+
+        const grid = page.getByRole("listbox", { name: "Frames, in play order" });
+        const canvas = page.getByRole("img", { name: /^Preview, / });
+        const play = page.getByRole("button", { name: "Play", exact: true });
+        const pause = page.getByRole("button", { name: "Pause", exact: true });
+        const shows = (frame: number, name: string) => expect(canvas).toHaveAccessibleName(`Preview, Frame ${frame} of 3, ${name}`);
+        await shows(1, "a.png");
+        await expect(page.getByText("Frame 1 of 3", { exact: true })).toBeVisible();
+        await expect(page.getByText("Shows the GIF at 640 × 480 with your delays and loop. It doesn't play on its own when Reduce motion is on.")).toBeVisible();
+
+        // b.png gets its own 44 ms, which the GIF stores as 40 ms; selecting a frame shows it.
+        await grid.getByRole("button", { name: "Frame 2, b.png, 100 ms" }).click();
+        await page.getByRole("checkbox", { name: "Own delay" }).click();
+        await page.getByLabel("Delay for frame 2, milliseconds").fill("44");
+        await shows(2, "b.png");
+        await grid.getByRole("button", { name: "Frame 1, a.png, 100 ms" }).click();
+        await shows(1, "a.png");
+
+        // From here time moves only when the test moves it.
+        await page.clock.pauseAt(Date.now() + 60_000);
+        await page.clock.runFor(5_000);
+        await shows(1, "a.png");
+        await play.click();
+        await expect(pause).toBeVisible();
+        await page.clock.runFor(99);
+        await shows(1, "a.png");
+        await page.clock.runFor(1);
+        await shows(2, "b.png");
+        await page.clock.runFor(39);
+        await shows(2, "b.png");
+        await page.clock.runFor(1);
+        await shows(3, "c.png");
+        await page.clock.runFor(100);
+        await shows(1, "a.png");
+        await pause.click();
+        await expect(play).toBeVisible();
+        await page.clock.runFor(5_000);
+        await shows(1, "a.png");
+
+        // Move c.png to the front: the preview shows it there and plays the new order, b.png keeping its 40 ms.
+        await grid.getByRole("button", { name: "Frame 3, c.png, 100 ms" }).click();
+        await page.keyboard.press("Meta+ArrowLeft");
+        await page.keyboard.press("Meta+ArrowLeft");
+        await expect(grid.getByRole("option").first()).toHaveAccessibleName("Frame 1, c.png, 100 ms");
+        await shows(1, "c.png");
+        await play.click();
+        await page.clock.runFor(100);
+        await shows(2, "a.png");
+        await page.clock.runFor(100);
+        await shows(3, "b.png");
+        await page.clock.runFor(40);
+        await shows(1, "c.png");
+        await pause.click();
+
+        // Played once, it stops on the last frame; Play from there starts again at frame 1.
+        await page.getByRole("switch", { name: "Loop forever" }).click();
+        await grid.getByRole("button", { name: "Frame 3, b.png, 44 ms, own delay" }).click();
+        await shows(3, "b.png");
+        await play.click();
+        await shows(1, "c.png");
+        await page.clock.runFor(200);
+        await shows(3, "b.png");
+        await page.clock.runFor(40);
+        await expect(play).toBeVisible();
+        await page.clock.runFor(5_000);
+        await shows(3, "b.png");
+
+        // The slider steps through the frames by keyboard.
+        const slider = page.getByRole("slider", { name: "Preview frame" });
+        await slider.focus();
+        await page.keyboard.press("Home");
+        await shows(1, "c.png");
+        await page.keyboard.press("ArrowRight");
+        await shows(2, "a.png");
+        await expect(slider).toHaveAttribute("aria-valuenow", "2");
+    });
+
+    test("Create GIF warns before running when the estimate passes 10 MB, and the warning clears below it", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Create GIF");
+        // Frame 1 sets a 2000 × 1000 canvas. The estimate is one byte per canvas pixel per frame,
+        // so six frames are 12,000,000 bytes and five are exactly 10,000,000, the threshold, which is not large.
+        await choose(page, Array.from({ length: 6 }, (_, index) => `/local/frames/2mp-${index + 1}.png`));
+
+        const grid = page.getByRole("listbox", { name: "Frames, in play order" });
+        const banner = page.getByRole("status").filter({ hasText: /^This GIF will be about/ });
+        const size = page.getByRole("group", { name: "Size" });
+        await expect(size).toContainText("2000 × 1000, from frame 1");
+        await expect(size).toContainText("Other frames are centred. Larger ones are scaled down to fit, never stretched. Padding is transparent.");
+        await expect(banner).toHaveText("This GIF will be about 12 MB. Large GIFs are slow to open and share. Remove frames or add smaller images to reduce it.");
+        await expect(size).toContainText("About 12 MB. That's large for a GIF.");
+
+        await grid.getByRole("button", { name: "Frame 6, 2mp-6.png, 100 ms" }).click();
+        await page.keyboard.press("Delete");
+        await expect(grid.getByRole("option")).toHaveCount(5);
+        await expect(banner).toHaveCount(0);
+        await expect(size).toContainText("About 10 MB.");
+        await expect(size).not.toContainText("large for a GIF");
+        // The warning never blocks a run.
+        await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+    });
+
+    test("Create GIF size follows frame 1, so a smaller first frame clears the warning", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, [...Array.from({ length: 6 }, (_, index) => `/local/frames/2mp-${index + 1}.png`), "/local/frames/small.png"]);
+
+        const grid = page.getByRole("listbox", { name: "Frames, in play order" });
+        const banner = page.getByRole("status").filter({ hasText: /^This GIF will be about/ });
+        const size = page.getByRole("group", { name: "Size" });
+        await expect(banner).toContainText("This GIF will be about 14 MB.");
+        await grid.getByRole("button", { name: "Frame 7, small.png, 100 ms" }).click();
+        for (let step = 0; step < 6; step += 1) await page.keyboard.press("Meta+ArrowLeft");
+        await expect(grid.getByRole("option").first()).toHaveAccessibleName("Frame 1, small.png, 100 ms");
+        // 512 × 512 × 7 frames is 1,835,008 bytes.
+        await expect(size).toContainText("512 × 512, from frame 1");
+        await expect(size).toContainText("About 1.8 MB.");
+        await expect(banner).toHaveCount(0);
+        await expect(page.getByText("Shows the GIF at 512 × 512 with your delays and loop.", { exact: false })).toBeVisible();
     });
 
     test("Create GIF proposes the first frame's name in the resolved folder, and cancelling sends nothing", async ({ page }) => {
