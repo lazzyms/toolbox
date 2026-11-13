@@ -345,6 +345,23 @@ export const removePages = (scene: PdfScene, ids: string[]): PdfScene | null => 
   return { ...rest, pages, ...(kept?.length ? { textEdits: kept } : {}) };
 };
 
+/**
+ * Puts removed original pages back as they were opened. Each goes right after the kept page that preceded it
+ * in the original, so a restored page lands where it was even after other pages moved. Pages already present stay put.
+ */
+export const restorePages = (scene: PdfScene, opened: PdfScene, sourceIndexes: number[]): PdfScene => {
+  const pages = [...scene.pages];
+  for (const sourceIndex of [...new Set(sourceIndexes)].sort((a, b) => a - b)) {
+    const page = opened.pages.find((item) => item.sourceIndex === sourceIndex);
+    if (!page || pages.some((item) => item.sourceIndex === sourceIndex)) continue;
+    // After the kept page that came closest before it in the original, or first when none did.
+    const after = pages.reduce((best, item, index) => item.sourceIndex !== null && item.sourceIndex < sourceIndex
+      && (best < 0 || item.sourceIndex > pages[best].sourceIndex!) ? index : best, -1);
+    pages.splice(after + 1, 0, page);
+  }
+  return pages.length === scene.pages.length ? scene : { ...scene, pages };
+};
+
 // Moves the pages to the target's position, keeping their relative order.
 export const movePagesBefore = (scene: PdfScene, ids: string[], targetId: string): PdfScene => {
   if (ids.includes(targetId) || !scene.pages.some((page) => page.id === targetId)) return scene;
