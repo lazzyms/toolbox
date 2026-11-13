@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -7,6 +7,7 @@ import type { ExistingPdfUtilityId } from "../../views/PDFEditorWorkspaceView";
 import { shortenHomePath, useHomeDir } from "../../homePath";
 import { parentFolder } from "../../components/intake";
 import { fileName, rowView } from "../../components/resultRow";
+import { passwordsFor, PasswordRetryForm } from "../../components/PasswordFields";
 import type { PdfEditorBatchTool, ReportActions } from "./batchTools";
 
 /** The report `inspect_pdf_privacy` returns in each succeeded outcome's detail. */
@@ -236,6 +237,7 @@ const FileReport = ({ outcome, home, actions }: { outcome: JobOutcome; home: str
           <span>{report ? `${folder} · ${plural(report.pageCount, "page", "pages")}` : `${folder} · Not read`}</span>
         </div>
         {failure !== null && <p role="alert" className="privacy-report-error">{outcome.state === "skipped" ? "Skipped" : "Failed"}: {failure}</p>}
+        {actions.retryWithPassword && outcome.failure?.kind === "wrongPassword" && <PasswordRetry name={fileName(outcome.inputPath)} retry={(password) => actions.retryWithPassword!(outcome.inputPath, password)} />}
         {report && (
           <>
             <p className="privacy-report-tally">
@@ -283,6 +285,33 @@ const FileReport = ({ outcome, home, actions }: { outcome: JobOutcome; home: str
   );
 };
 
+const PasswordRetry = ({ name, retry }: { name: string; retry: (password: string) => Promise<void> }) => {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const submit = async (password: string) => {
+    setBusy(true);
+    try {
+      await retry(password);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="privacy-report-retry">
+      <Button variant="outline" size="sm" aria-expanded={open} disabled={busy} onClick={() => setOpen((current) => !current)}>Try another password</Button>
+      {open && (
+        <PasswordRetryForm
+          name={name}
+          busy={busy}
+          note="Only this file is checked again. Its new password isn't saved."
+          onRetry={(password) => void submit(password)}
+          onCancel={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
+};
+
 export const PrivacyReports = ({ results, actions }: { results: JobOutcome[]; actions: ReportActions }) => {
   const home = useHomeDir();
   const failed = results.filter((outcome) => parseReport(outcome) === null).length;
@@ -299,7 +328,8 @@ export const PrivacyReports = ({ results, actions }: { results: JobOutcome[]; ac
 
 export const privacyCheckTool: PdfEditorBatchTool = {
   description: "One report per PDF in 14 categories, from document information to unsupported items. Each category shows what was found and why it matters, or says None found.",
-  request: (paths) => ({ paths }),
+  request: (paths, _outputLocation, passwords) => ({ paths, ...passwordsFor(paths, passwords) }),
+  openPassword: true,
   report: {
     runLabel: (count) => count ? `Check ${plural(count, "PDF", "PDFs")}` : "Check PDFs",
     note: "Reads each PDF and makes a report. No file is changed or saved.",

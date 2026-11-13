@@ -2670,7 +2670,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     if (utility.capability.outputSuffix === "" && !utility.capability.formatFamilies) {
         await expect(page.getByRole("region", { name: pdfFixtureName, exact: true }).getByText("None found", { exact: true })).toHaveCount(14);
         const reportRuns = await page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? []).filter((call) => call.command === command), utility.command);
-        expect(reportRuns.map(({ args }) => (args as { request: unknown }).request)).toEqual([{ paths: [selectedFixturePath] }]);
+        expect(reportRuns.map(({ args }) => (args as { request: unknown }).request)).toEqual([{ paths: [selectedFixturePath], password: "", passwordOverrides: {} }]);
         return;
     }
     if (["pdf-merge", "pdf-compare", "images-to-pdf", "gif-create"].includes(utility.id)) await confirmSave(page);

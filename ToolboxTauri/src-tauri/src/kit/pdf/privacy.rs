@@ -1,5 +1,7 @@
 //! Privacy Check: reads what a PDF reveals besides its pages. It only reads, so it shares no code path that writes a PDF.
 
+use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use lopdf::{Document, Object, Permissions};
@@ -9,12 +11,35 @@ use super::document_info::{self, PdfProperties, PropertyConflict, XmpSummary};
 use super::hidden_content::{self, HiddenContent};
 use crate::kit::contracts::{JobOutcome, ToolError};
 
-#[derive(Debug, Clone, Deserialize)]
+/// The open password for the batch plus per-file overrides, as in the shared password request.
+/// An empty password counts as none, so files that open without one are read directly.
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyRequest {
     pub paths: Vec<PathBuf>,
     #[serde(default)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub password_overrides: HashMap<PathBuf, String>,
+}
+
+impl PrivacyRequest {
+    pub fn password_for(&self, path: &Path) -> Option<&str> {
+        self.password_overrides.get(path).or(self.password.as_ref()).map(String::as_str).filter(|password| !password.is_empty())
+    }
+}
+
+impl fmt::Debug for PrivacyRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut overridden = self.password_overrides.keys().collect::<Vec<_>>();
+        overridden.sort();
+        formatter
+            .debug_struct("PrivacyRequest")
+            .field("paths", &self.paths)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("password_overrides", &overridden)
+            .finish()
+    }
 }
 
 /// One PDF's report. Every category is present; an empty one means none found.
@@ -104,7 +129,8 @@ pub struct ProducerSoftware {
 
 pub fn inspect(path: &Path, password: Option<&str>) -> Result<PrivacyReport, ToolError> {
     let bytes = document_info::read_bytes(path)?;
-    let document = document_info::load(&bytes, password)?;
+    // An empty password still opens a file with no user password, and a file that needs one then fails as a wrong password the user can retry.
+    let document = document_info::load(&bytes, Some(password.unwrap_or_default()))?;
     let details = document_info::from_document(&document);
     let mut unsupported = details.unsupported;
     let hidden = hidden_content::read(&document, &bytes, &mut unsupported);
@@ -139,7 +165,7 @@ pub fn inspect(path: &Path, password: Option<&str>) -> Result<PrivacyReport, Too
 
 /// The batch job: one report per file in the outcome's detail, and never an output path.
 pub fn inspect_job(request: &PrivacyRequest, input: PathBuf) -> JobOutcome {
-    match inspect(&input, request.password.as_deref()) {
+    match inspect(&input, request.password_for(&input)) {
         Ok(report) => match serde_json::to_string(&report) {
             Ok(detail) => JobOutcome::succeeded(input, Vec::new(), detail),
             Err(error) => JobOutcome::failure(input, ToolError::processing(format!("Could not build the report: {error}"))),
@@ -511,7 +537,7 @@ mod tests {
         let sandbox = Sandbox::new("open-password");
         let bytes = pdf(Fixture { encryption: Some(("owner", crate::kit::TEST_PASSWORD, Permissions::all())), ..restricted() });
 
-        assert!(matches!(sandbox.inspect(&bytes, None).unwrap_err().kind, ErrorKind::InvalidInput));
+        assert!(matches!(sandbox.inspect(&bytes, None).unwrap_err().kind, ErrorKind::WrongPassword));
         let encryption = sandbox.inspect(&bytes, Some(crate::kit::TEST_PASSWORD)).unwrap().encryption.unwrap();
         assert!(encryption.open_password);
         assert!(encryption.denied.is_empty());
@@ -632,7 +658,7 @@ mod tests {
         let paths = fixtures.iter().map(|(name, bytes)| sandbox.file(name, bytes)).collect::<Vec<_>>();
         let before = sandbox.names();
 
-        let request = Arc::new(PrivacyRequest { paths: paths.clone(), password: None });
+        let request = Arc::new(PrivacyRequest { paths: paths.clone(), password: None, password_overrides: HashMap::new() });
         let outcomes = BatchRunner::inspect(&RunEvents::silent(), "inspect_pdf_privacy", paths.clone(), &request, inspect_job);
 
         assert_eq!(sandbox.names(), before, "inspection must create no files");
@@ -677,5 +703,102 @@ mod tests {
         assert_eq!(hidden["optionalContent"]["hidden"][1], serde_json::json!({ "page": 1, "subtype": "Square", "reason": "offPage" }));
         assert_eq!(hidden["signatures"][0], serde_json::json!({ "field": "approver", "signer": "Acme Ltd", "signedAt": "2026-02-11T09:30:00+01:00" }));
         assert_eq!(hidden["leftovers"], serde_json::json!({ "thumbnailPages": [1], "pagePieces": [{ "page": 1, "applications": ["Illustrator"] }] }));
+    }
+
+    fn locked_with(user_password: &'static str) -> Vec<u8> {
+        pdf(Fixture { encryption: Some(("owner", user_password, Permissions::all())), ..information() })
+    }
+
+    fn privacy_request(paths: &[PathBuf], password: Option<&str>, overrides: &[(&PathBuf, &str)]) -> Arc<PrivacyRequest> {
+        Arc::new(PrivacyRequest {
+            paths: paths.to_vec(),
+            password: password.map(str::to_owned),
+            password_overrides: overrides.iter().map(|(path, password)| ((*path).clone(), password.to_string())).collect(),
+        })
+    }
+
+    fn run(request: &Arc<PrivacyRequest>) -> Vec<JobOutcome> {
+        BatchRunner::inspect(&RunEvents::silent(), "inspect_pdf_privacy", request.paths.clone(), request, inspect_job)
+    }
+
+    fn opened(outcome: &JobOutcome) -> serde_json::Value {
+        assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{outcome:?}");
+        serde_json::from_str(&outcome.detail).unwrap()
+    }
+
+    #[test]
+    fn privacy_requests_prefer_the_override_treat_an_empty_password_as_none_and_never_print_one() {
+        let request: PrivacyRequest = serde_json::from_value(serde_json::json!({
+            "paths": ["/in/a.pdf", "/in/b.pdf"],
+            "password": "batch-secret",
+            "passwordOverrides": { "/in/b.pdf": "own-secret" },
+        })).unwrap();
+        assert_eq!(request.password_for(Path::new("/in/a.pdf")), Some("batch-secret"));
+        assert_eq!(request.password_for(Path::new("/in/b.pdf")), Some("own-secret"));
+        let printed = format!("{request:?}");
+        assert!(!printed.contains("batch-secret") && !printed.contains("own-secret"), "{printed}");
+
+        let empty: PrivacyRequest = serde_json::from_value(serde_json::json!({ "paths": ["/in/a.pdf"], "password": "", "passwordOverrides": {} })).unwrap();
+        assert_eq!(empty.password_for(Path::new("/in/a.pdf")), None);
+        let paths_only: PrivacyRequest = serde_json::from_value(serde_json::json!({ "paths": ["/in/a.pdf"] })).unwrap();
+        assert_eq!(paths_only.password_for(Path::new("/in/a.pdf")), None);
+    }
+
+    #[test]
+    fn a_batch_opens_each_file_with_its_override_or_the_batch_password_and_a_wrong_password_fails_only_that_file() {
+        let sandbox = Sandbox::new("passwords");
+        let wrong = "not-this-files-password-31415";
+        let fixtures = [
+            ("batch.pdf", locked_with(crate::kit::TEST_PASSWORD)),
+            ("own.pdf", locked_with(crate::kit::TEST_OVERRIDE_PASSWORD)),
+            ("wrong.pdf", locked_with(crate::kit::TEST_OVERRIDE_PASSWORD)),
+            ("restricted.pdf", pdf(restricted())),
+            ("plain.pdf", pdf(information())),
+        ];
+        let paths = fixtures.iter().map(|(name, bytes)| sandbox.file(name, bytes)).collect::<Vec<_>>();
+        let before = sandbox.names();
+
+        let outcomes = run(&privacy_request(&paths, Some(crate::kit::TEST_PASSWORD), &[(&paths[1], crate::kit::TEST_OVERRIDE_PASSWORD), (&paths[2], wrong)]));
+
+        assert_eq!(sandbox.names(), before, "inspection must create no files");
+        for ((_, bytes), path) in fixtures.iter().zip(&paths) {
+            assert_eq!(&std::fs::read(path).unwrap(), bytes, "{} must stay byte-identical", path.display());
+        }
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        for index in [0, 1] {
+            let report = opened(&outcomes[index]);
+            assert_eq!(report["encryption"]["openPassword"], true, "{}", paths[index].display());
+            assert_eq!(report["documentInformation"]["author"], "Legal Ops, Acme Ltd");
+        }
+        let failure = outcomes[2].error().expect("the wrong password fails that file");
+        assert_eq!(failure.kind, ErrorKind::WrongPassword);
+        let serialized = serde_json::to_string(&outcomes[2]).unwrap();
+        for secret in [wrong, crate::kit::TEST_PASSWORD, crate::kit::TEST_OVERRIDE_PASSWORD] {
+            assert!(!serialized.contains(secret), "the failure must not name a password: {serialized}");
+        }
+        assert_eq!(opened(&outcomes[3])["encryption"]["openPassword"], false);
+        assert_eq!(opened(&outcomes[4])["encryption"], serde_json::Value::Null);
+
+        let retried = run(&privacy_request(&paths[2..3], Some(""), &[(&paths[2], crate::kit::TEST_OVERRIDE_PASSWORD)]));
+        assert_eq!(retried.len(), 1);
+        assert_eq!(opened(&retried[0])["encryption"]["openPassword"], true);
+    }
+
+    #[test]
+    fn without_a_password_files_that_need_none_are_inspected_and_a_locked_file_fails_alone() {
+        let sandbox = Sandbox::new("no-password");
+        let paths = [
+            sandbox.file("restricted.pdf", &pdf(restricted())),
+            sandbox.file("locked.pdf", &locked_with(crate::kit::TEST_PASSWORD)),
+            sandbox.file("plain.pdf", &pdf(CLEAN)),
+        ];
+        for password in [None, Some("")] {
+            let outcomes = run(&privacy_request(&paths, password, &[]));
+            let encryption = &opened(&outcomes[0])["encryption"];
+            assert_eq!(encryption["openPassword"], false, "{password:?}");
+            assert_eq!(encryption["denied"].as_array().unwrap().len(), 6);
+            assert_eq!(outcomes[1].error().map(|error| &error.kind), Some(&ErrorKind::WrongPassword), "{password:?}");
+            assert_eq!(opened(&outcomes[2])["pageCount"], 1);
+        }
     }
 }

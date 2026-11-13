@@ -4,6 +4,8 @@ const cleanPath = "/Users/test/Documents/clean.pdf";
 const leakyPath = "/Users/test/Documents/lease.pdf";
 const ndaPath = "/Users/test/Documents/nda.pdf";
 const brokenPath = "/Users/test/Documents/broken.pdf";
+const lockedPath = "/Users/test/Documents/locked.pdf";
+const lockedPassword = "locked-secret";
 
 const noProperties = { title: null, author: null, subject: null, keywords: null, creator: null, producer: null, creationDate: null, modificationDate: null };
 const nothingHidden = {
@@ -78,10 +80,10 @@ const ndaReport = {
   unsupported: ["The file's save history could not be read."],
 };
 
-type HarnessWindow = Window & { calls: Array<{ command: string; args: any }>; navigations: unknown[] };
+type HarnessWindow = Window & { calls: Array<{ command: string; args: any }>; navigations: unknown[]; picked?: string[] };
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(({ cleanPath, leakyPath, ndaPath, brokenPath, cleanReport, leakyReport, ndaReport }) => {
+  await page.addInitScript(({ cleanPath, leakyPath, ndaPath, brokenPath, lockedPath, lockedPassword, cleanReport, leakyReport, ndaReport }) => {
     const w = window as unknown as HarnessWindow;
     w.calls = [];
     const reports: Record<string, unknown> = { [cleanPath]: cleanReport, [leakyPath]: leakyReport, [ndaPath]: ndaReport };
@@ -90,11 +92,16 @@ test.beforeEach(async ({ page }) => {
       transformCallback: () => 1, unregisterCallback: () => {},
       invoke: async (command: string, args: any) => {
         w.calls.push({ command, args });
-        if (command === "plugin:dialog|open") return [cleanPath, leakyPath, ndaPath, brokenPath];
+        if (command === "plugin:dialog|open") return w.picked ?? [cleanPath, leakyPath, ndaPath, brokenPath];
         if (command === "plugin:path|resolve_directory") return "/Users/test";
         if (command === "check_output_folder") return "ready";
         if (command === "inspect_pdf_privacy") {
-          return args.request.paths.map((inputPath: string) => reports[inputPath]
+          const { paths, password, passwordOverrides } = args.request;
+          return paths.map((inputPath: string) => inputPath === lockedPath && (passwordOverrides?.[inputPath] || password) !== lockedPassword
+            ? { inputPath, outputPaths: [], state: "failed", detail: "", failure: { kind: "wrongPassword", message: "The password didn't open this file.", pointer: null }, reason: null, warnings: [] }
+            : inputPath === lockedPath
+            ? { inputPath, outputPaths: [], state: "succeeded", detail: JSON.stringify({ ...cleanReport, encryption: { openPassword: true, version: 4, revision: 4, keyBits: 128, encryptsMetadata: true, allowed: [], denied: [] } }), failure: null, reason: null, warnings: [] }
+            : reports[inputPath]
             ? { inputPath, outputPaths: [], state: "succeeded", detail: JSON.stringify(reports[inputPath]), failure: null, reason: null, warnings: [] }
             : { inputPath, outputPaths: [], state: "failed", detail: "", failure: { kind: "processing", message: "Could not read the PDF: invalid file header", pointer: null }, reason: null, warnings: [] });
         }
@@ -102,7 +109,7 @@ test.beforeEach(async ({ page }) => {
       },
     };
     (window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-  }, { cleanPath, leakyPath, ndaPath, brokenPath, cleanReport, leakyReport, ndaReport });
+  }, { cleanPath, leakyPath, ndaPath, brokenPath, lockedPath, lockedPassword, cleanReport, leakyReport, ndaReport });
   // A custom save folder proves the read-only tool never checks or uses a destination.
   await page.goto("/tests/ui/harness/pdf-editor-batch.html?tool=pdf-privacy&folder=/Users/test/Reports");
 });
@@ -143,7 +150,7 @@ test("Privacy Check sits under Details in the PDF Editor rail", async ({ page })
   await expect(rail.getByRole("button", { name: "Privacy Check" })).toHaveAttribute("title", "See what each PDF reveals besides its pages. Changes nothing.");
 });
 
-test("Privacy Check sends only the paths and shows one report or error per file without saving anything", async ({ page }) => {
+test("Privacy Check sends the paths with no password and shows one report or error per file without saving anything", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Privacy Check" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Check PDFs/ })).toBeDisabled();
   await page.getByRole("button", { name: "Choose files to process" }).click();
@@ -155,7 +162,7 @@ test("Privacy Check sends only the paths and shows one report or error per file 
 
   const runs = await calls(page, "inspect_pdf_privacy");
   expect(runs).toHaveLength(1);
-  expect(runs[0].args).toEqual({ runId: expect.any(String), request: { paths: [cleanPath, leakyPath, ndaPath, brokenPath] } });
+  expect(runs[0].args).toEqual({ runId: expect.any(String), request: { paths: [cleanPath, leakyPath, ndaPath, brokenPath], password: "", passwordOverrides: {} } });
   expect(await calls(page, "check_output_folder")).toEqual([]);
   expect(await calls(page, "plugin:dialog|save")).toEqual([]);
 
@@ -275,4 +282,105 @@ test("The form field pointer is hidden when Edit PDF is turned off", async ({ pa
   const forms = category(report(page, "lease.pdf"), "Filled form fields");
   await expect(forms.getByText("Filled", { exact: true })).toBeVisible();
   await expect(forms.getByRole("button")).toHaveCount(0);
+});
+
+const pick = async (page: Page, paths: string[]) => {
+  await page.evaluate((paths) => { (window as unknown as HarnessWindow).picked = paths; }, paths);
+  await page.getByRole("button", { name: "Choose files to process" }).click();
+};
+const fileRow = (page: Page, name: string) => page.locator(".file-selection-item", { hasText: name });
+const setOwnPassword = async (page: Page, name: string, password: string) => {
+  await fileRow(page, name).click();
+  await page.getByRole("button", { name: `Set own password for ${name}`, exact: true }).click();
+  const editor = page.getByRole("group", { name: `Own password for ${name}` });
+  await editor.getByLabel("Own open password", { exact: true }).fill(password);
+  await editor.getByRole("button", { name: "Save password" }).click();
+  await expect(editor).toHaveCount(0);
+};
+const pageSecrets = (page: Page) => page.evaluate(() => {
+  const storage = (store: Storage) => Object.keys(store).map((key) => `${key}=${store.getItem(key)}`);
+  return [document.body.innerText, ...storage(localStorage), ...storage(sessionStorage), document.cookie].join("\n");
+});
+
+test("An open password for all files is offered, and a file can have its own", async ({ page }) => {
+  await pick(page, [cleanPath, lockedPath]);
+  const batch = page.getByLabel("Open password for all files", { exact: true });
+  await expect(batch).toHaveAttribute("placeholder", "Only for PDFs that need one");
+  await expect(batch).toHaveAttribute("type", "password");
+  await expect(page.getByText("Only used for PDFs that need a password to open.")).toBeVisible();
+  await expect(page.getByText("Never saved. Cleared when you clear the list.")).toBeVisible();
+  await expect(page.getByText("Password for all files, if needed")).toHaveCount(2);
+
+  await setOwnPassword(page, "locked.pdf", lockedPassword);
+  await expect(page.getByText("Only used for PDFs that need a password to open. 1 PDF uses its own password.")).toBeVisible();
+  await expect(page.getByText("Own password", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("Password for all files, if needed")).toHaveCount(1);
+});
+
+test("Privacy Check sends the batch open password with only the run's own passwords, and the own password wins", async ({ page }) => {
+  await pick(page, [cleanPath, lockedPath, leakyPath]);
+  await page.getByLabel("Open password for all files", { exact: true }).fill("batch-secret");
+  await setOwnPassword(page, "locked.pdf", lockedPassword);
+  await page.getByRole("button", { name: /^Check 3 PDFs/ }).click();
+
+  const runs = await calls(page, "inspect_pdf_privacy");
+  expect(runs.map((run) => run.args.request)).toEqual([
+    { paths: [cleanPath, lockedPath, leakyPath], password: "batch-secret", passwordOverrides: { [lockedPath]: lockedPassword } },
+  ]);
+  await expect(page.getByRole("status").filter({ hasText: "Done." })).toHaveText("Done. 3 reportsNothing was changed in any PDF.");
+  const locked = report(page, "locked.pdf");
+  await expect(locked.getByRole("alert")).toHaveCount(0);
+  await expect(category(locked, "Encryption and permissions").getByText("Needed to open it", { exact: true })).toBeVisible();
+  expect(await pageSecrets(page)).not.toContain(lockedPassword);
+  expect(await pageSecrets(page)).not.toContain("batch-secret");
+});
+
+test("A wrong password fails only that file, and retrying sends only that file with its new password", async ({ page }) => {
+  await pick(page, [cleanPath, lockedPath, leakyPath]);
+  await page.getByLabel("Open password for all files", { exact: true }).fill("batch-secret");
+  await page.getByRole("button", { name: /^Check 3 PDFs/ }).click();
+
+  await expect(page.getByRole("status").filter({ hasText: "Done." })).toHaveText("Done. 2 reports, 1 failedNothing was changed in any PDF.");
+  const locked = report(page, "locked.pdf");
+  await expect(locked.getByRole("alert")).toHaveText("Failed: The password didn't open this file. Check it, or try the password this file was sent with.");
+  await expect(locked.getByRole("list", { name: "Report categories" })).toHaveCount(0);
+  await expect(report(page, "clean.pdf").getByRole("alert")).toHaveCount(0);
+  await expect(report(page, "lease.pdf").getByRole("alert")).toHaveCount(0);
+  await expect(report(page, "clean.pdf").getByRole("button", { name: "Try another password" })).toHaveCount(0);
+
+  const tryAnother = locked.getByRole("button", { name: "Try another password" });
+  await expect(tryAnother).toHaveAttribute("aria-expanded", "false");
+  await tryAnother.click();
+  await expect(tryAnother).toHaveAttribute("aria-expanded", "true");
+  const retry = page.getByRole("group", { name: "Retry locked.pdf with another password" });
+  await expect(retry).toContainText("Only this file is checked again. Its new password isn't saved.");
+  await retry.getByLabel("Password for locked.pdf", { exact: true }).fill(lockedPassword);
+  await retry.getByRole("button", { name: "Retry this file" }).click();
+
+  await expect(locked.getByRole("alert")).toHaveCount(0);
+  await expect(locked.getByRole("list", { name: "Report categories" })).toBeVisible();
+  await expect(retry).toHaveCount(0);
+  await expect(report(page, "clean.pdf")).toBeVisible();
+  await expect(report(page, "lease.pdf")).toBeVisible();
+  expect((await calls(page, "inspect_pdf_privacy")).map((run) => run.args.request)).toEqual([
+    { paths: [cleanPath, lockedPath, leakyPath], password: "batch-secret", passwordOverrides: {} },
+    { paths: [lockedPath], password: "", passwordOverrides: { [lockedPath]: lockedPassword } },
+  ]);
+  await expect(fileRow(page, "locked.pdf")).not.toContainText("Own password");
+  expect(await pageSecrets(page)).not.toContain(lockedPassword);
+});
+
+test("PDFs that need no password are checked without one, and clearing the list forgets every password", async ({ page }) => {
+  await pick(page, [cleanPath, lockedPath]);
+  await page.getByRole("button", { name: /^Check 2 PDFs/ }).click();
+  expect((await calls(page, "inspect_pdf_privacy"))[0].args.request).toEqual({ paths: [cleanPath, lockedPath], password: "", passwordOverrides: {} });
+  await expect(report(page, "clean.pdf").getByRole("alert")).toHaveCount(0);
+  await expect(report(page, "locked.pdf").getByRole("alert")).toHaveText("Failed: The password didn't open this file. Check it, or try the password this file was sent with.");
+
+  await page.getByLabel("Open password for all files", { exact: true }).fill("batch-secret");
+  await setOwnPassword(page, "locked.pdf", lockedPassword);
+  await page.getByRole("button", { name: "Clear list" }).click();
+  await pick(page, [cleanPath, lockedPath]);
+  await expect(page.getByLabel("Open password for all files", { exact: true })).toHaveValue("");
+  await expect(page.getByText("Own password", { exact: true })).toHaveCount(0);
 });

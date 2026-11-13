@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../../components/ToolScaffold";
+import { BatchPasswordFields, FilePasswordCell, ForgetClosedFiles, usePasswordSet } from "../../components/PasswordFields";
 import { ShortcutHint } from "../../components/ShortcutHint";
 import { shortcutTarget } from "../../shortcuts";
 import type { ToolDefinition, ToolResult } from "../../contracts";
@@ -17,11 +19,17 @@ export const PdfEditorBatchSurface = ({ utility, tool, initialPaths, onFilesChan
   onNavigate?: PdfEditorNavigation;
 }) => {
   const availability = useToolAvailability();
+  const passwords = usePasswordSet();
   const actions: ReportActions = {
     canOpen: (target) => Boolean(onNavigate) && availability.allows(target),
     open: (target, path) => onNavigate?.({ utilityId: target, initialPaths: [path] }),
   };
   const report = tool.report;
+
+  useEffect(() => {
+    passwords.clear();
+  }, [utility.id]);
+
   return (
     <ToolScaffold
       variant="workspace"
@@ -29,16 +37,23 @@ export const PdfEditorBatchSurface = ({ utility, tool, initialPaths, onFilesChan
       utility={utility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
-      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>(utility.command, { runId, request: tool.request(paths, outputLocation) })}
-      renderReport={report && ((results) => report.render(results, actions))}
+      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>(utility.command, { runId, request: tool.request(paths, outputLocation, passwords.set) })}
+      retryWithPassword={tool.openPassword ? (inputPath, password) => (paths, outputLocation, { runId }) =>
+        invoke<ToolResult>(utility.command, { runId, request: tool.request(paths, outputLocation, { batch: "", overrides: { [inputPath]: password } }) }) : undefined}
+      renderFileExtra={tool.openPassword ? (path, selected, locked) => (
+        <FilePasswordCell mode="open" path={path} passwords={passwords} selected={selected} disabled={locked} />
+      ) : undefined}
+      renderReport={report && ((results, retry) => report.render(results, { ...actions, retryWithPassword: retry.withPassword }))}
     >
       {({ files, run, loading, destination, runLabel }) => (
         <Card className="workspace-control-panel py-0">
+          {tool.openPassword && <ForgetClosedFiles files={files} passwords={passwords} />}
           <CardContent className="workspace-control-panel-content grid gap-4 p-4">
             <div>
               <h2 className="workspace-active-command">{utility.title}</h2>
               <p className="workspace-panel-copy">{tool.description}</p>
             </div>
+            {tool.openPassword && <BatchPasswordFields mode="open" passwords={passwords} files={files} />}
             {tool.report ? <p className="workspace-note">{tool.report.note}</p> : destination}
             <Button
               variant="default"
