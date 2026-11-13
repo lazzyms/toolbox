@@ -29,6 +29,7 @@ const APP13: u8 = 0xED;
 const COM: u8 = 0xFE;
 const SOS: u8 = 0xDA;
 const EOI: u8 = 0xD9;
+const DQT: u8 = 0xDB;
 
 pub const ENDS_EARLY: &str = "This JPEG ends early, so it may be damaged. Nothing was saved.";
 pub const CMYK_UNSUPPORTED: &str = "This JPEG uses CMYK colour, which Compress can't re-save without changing its colours.";
@@ -54,6 +55,8 @@ impl Segment<'_> {
 }
 
 struct Header<'a> {
+    /// Where the scan (its SOS marker) starts, so the bytes from here on are the image data.
+    scan_start: usize,
     segments: Vec<Segment<'a>>,
     components: Option<u8>,
 }
@@ -83,7 +86,7 @@ fn read_header(bytes: &[u8]) -> Result<Header<'_>, String> {
         }
         if marker == SOS {
             if !bytes[end..].windows(2).any(|pair| pair == [0xFF, EOI]) { return Err(ENDS_EARLY.to_string()); }
-            return Ok(Header { segments, components });
+            return Ok(Header { scan_start: position, segments, components });
         }
         segments.push(segment);
         position = end;
@@ -133,6 +136,53 @@ pub(crate) fn recompress_jpeg(bytes: &[u8], quality: u8, strip_exif: bool) -> Re
     carried.for_each(|segment| output.extend_from_slice(segment.bytes));
     output.extend_from_slice(body);
     Ok(output)
+}
+
+/// What re-saving a JPEG keeps and re-encodes, read from its headers alone: the bytes of the
+/// carried segments, the bytes of the scan, and the quality its first quantisation table implies.
+pub(crate) struct JpegLayout {
+    pub carried_bytes: usize,
+    pub scan_bytes: usize,
+    pub quality: Option<u8>,
+}
+
+/// Reads a JPEG's headers without decoding its image, for Compress Files estimates.
+pub(crate) fn jpeg_layout(bytes: &[u8], strip_exif: bool) -> Result<JpegLayout, String> {
+    let header = read_header(bytes)?;
+    if header.components == Some(4) { return Err(CMYK_UNSUPPORTED.to_string()); }
+    let carried_bytes = header.segments.iter()
+        .filter(|segment| segment.is_icc() || (!strip_exif && segment.is_descriptive()))
+        .map(|segment| segment.bytes.len())
+        .sum();
+    let quality = header.segments.iter().find(|segment| segment.marker == DQT).and_then(|segment| estimate_quality(segment.payload()));
+    Ok(JpegLayout { carried_bytes, scan_bytes: bytes.len() - header.scan_start, quality })
+}
+
+/// The Annex K luminance table in natural order, which every encoder scales by its quality.
+const STANDARD_LUMINANCE: [u32; 64] = [
+    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55,
+    14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62,
+    18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92,
+    49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
+];
+
+/// The quantiser scale the IJG encoder applies at `quality`; a larger scale means smaller output.
+/// Quality 100 scales to 0, which would make every scan free, so the scale is floored at 1.
+pub(crate) fn quant_scale(quality: u8) -> f64 {
+    let quality = u32::from(quality.clamp(1, 100));
+    f64::from(if quality < 50 { 5000 / quality } else { 200 - 2 * quality }.max(1))
+}
+
+/// The quality whose scaled standard table has the same total as an 8-bit table in `payload`.
+fn estimate_quality(payload: &[u8]) -> Option<u8> {
+    let table = payload.get(..65)?;
+    if table[0] >> 4 != 0 { return None; }
+    let actual: u32 = table[1..].iter().map(|&value| u32::from(value)).sum();
+    (1..=100u8).min_by_key(|&quality| {
+        let scale = quant_scale(quality) as u32;
+        let expected: u32 = STANDARD_LUMINANCE.iter().map(|&value| ((value * scale + 50) / 100).clamp(1, 255)).sum();
+        expected.abs_diff(actual)
+    })
 }
 
 /// Checks a written copy decodes as a JPEG, displays at the source's size, keeps the colour

@@ -1,8 +1,8 @@
-import { Fragment, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import type { CompressFilesRequest, CompressLevel, ToolDefinition, ToolResult } from "../contracts";
-import { extensionOf, type IntakeCopy } from "../components/intake";
+import { extensionOf, fileSizeLabel, parseEntryFacts, type EntryFacts, type IntakeCopy } from "../components/intake";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -45,12 +45,93 @@ const compressIntakeCopy: IntakeCopy = {
   countHint: (flagged) => flagged > 0 ? `${flagged} won't be compressed` : "",
 };
 
+// The estimator's answer for one file: rough sizes at each strength, or null when it has none.
+type SizeEstimate = { originalBytes: number; low: number; medium: number; high: number };
+const unknownFacts: EntryFacts = { pageCount: null, modifiedMs: null, sizeBytes: null };
+const estimable = new Set([".pdf", ".jpg", ".jpeg", ".png", ".webp"]);
+// Estimates read each file, so only a couple run at once and they never hold up the list.
+const ESTIMATES_IN_FLIGHT = 2;
+const estimateKey = (path: string, stripExif: boolean) => `${stripExif ? "strip" : "keep"}\0${path}`;
+const parseEstimate = (value: unknown): SizeEstimate | null => {
+  if (!value || typeof value !== "object") return null;
+  const { originalBytes, low, medium, high } = value as Record<string, unknown>;
+  const sizes = [originalBytes, low, medium, high];
+  return sizes.every((size) => typeof size === "number" && Number.isFinite(size) && size >= 0)
+    ? { originalBytes: originalBytes as number, low: low as number, medium: medium as number, high: high as number }
+    : null;
+};
+
 const runLabelFor = (count: number) => count === 0 ? "Compress" : `Compress ${count} ${count === 1 ? "file" : "files"}`;
 
 export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
   const [level, setLevel] = useState<CompressLevel>("medium");
   const [stripExif, setStripExif] = useState(false);
   const selected = levels.find(({ value }) => value === level) ?? levels[1];
+  const [listedPaths, setListedPaths] = useState<readonly string[]>([]);
+  const [facts, setFacts] = useState<ReadonlyMap<string, EntryFacts>>(() => new Map());
+  // Keyed by EXIF choice and path, so a strength change only picks another level and never asks again.
+  // A key that is present but undefined is being estimated; null means the file has no estimate.
+  const [estimates, setEstimates] = useState<ReadonlyMap<string, SizeEstimate | null | undefined>>(() => new Map());
+  const listChanged = useCallback((paths: readonly string[]) => setListedPaths(paths), []);
+
+  // Every listed file shows its size. Files that can't be read show none, and each is asked about once.
+  useEffect(() => {
+    const unknown = [...new Set(listedPaths)].filter((path) => !facts.has(path));
+    if (unknown.length === 0) return;
+    let current = true;
+    const remember = (described: ReadonlyMap<string, EntryFacts>) => {
+      if (!current) return;
+      setFacts((known) => new Map([...known, ...unknown.map((path) => [path, described.get(path) ?? unknownFacts] as const)]));
+    };
+    invoke("describe_intake_files", { paths: unknown })
+      .then((value) => remember(parseEntryFacts(value)))
+      .catch(() => remember(new Map()));
+    return () => {
+      current = false;
+    };
+  }, [listedPaths, facts]);
+
+  // Estimates run in the background, a few at a time, for listed files of the types Compress takes.
+  // The estimator itself returns none for an animated image, which the list flags as won't run.
+  // A result for a file that has left the list is dropped; a failure shows no estimate.
+  useEffect(() => {
+    const listed = new Set(listedPaths);
+    const pending = [...estimates.entries()].filter(([, estimate]) => estimate === undefined).length;
+    const next = [...listed]
+      .filter((path) => estimable.has(extensionOf(path)) && !estimates.has(estimateKey(path, stripExif)))
+      .slice(0, Math.max(0, ESTIMATES_IN_FLIGHT - pending));
+    if (next.length === 0) return;
+    setEstimates((known) => new Map([...known, ...next.map((path) => [estimateKey(path, stripExif), undefined] as const)]));
+    for (const path of next) {
+      const key = estimateKey(path, stripExif);
+      invoke("estimate_compressed_size", { path, stripExif })
+        .then(parseEstimate, () => null)
+        .then((estimate) => setEstimates((known) => {
+          if (!known.has(key)) return known;
+          const updated = new Map(known);
+          updated.set(key, estimate);
+          return updated;
+        }));
+    }
+  }, [listedPaths, stripExif, estimates]);
+
+  // Forget estimates for files that left the list, so a file added back is estimated afresh.
+  useEffect(() => {
+    const listed = new Set(listedPaths);
+    setEstimates((known) => {
+      const kept = [...known].filter(([key]) => listed.has(key.slice(key.indexOf("\0") + 1)));
+      return kept.length === known.size ? known : new Map(kept);
+    });
+  }, [listedPaths]);
+
+  // Only rows that will run reach here: skipped and won't-run rows show their badge instead.
+  const estimateFor = (path: string) => {
+    const key = estimateKey(path, stripExif);
+    const estimate = estimates.get(key);
+    if (estimate === null) return null;
+    if (estimate === undefined) return <span className="file-selection-fact file-selection-estimate">Estimating…</span>;
+    return <span className="file-selection-fact file-selection-estimate" data-estimated="true">About {fileSizeLabel(estimate[level])}</span>;
+  };
 
   return (
     <ToolScaffold
@@ -59,6 +140,9 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
       utility={utility}
       emptyHint="PDF, JPEG, PNG and WebP. Mix them in one batch."
       intakeCopy={compressIntakeCopy}
+      onFilesChange={listChanged}
+      entryFacts={(path) => facts.get(path)}
+      renderFileExtra={estimateFor}
       onRun={(paths, outputLocation, { runId }) =>
         invoke<ToolResult>("compress_files", { runId, request: { paths, level, stripExif, outputLocation } satisfies CompressFilesRequest })}
     >
@@ -82,6 +166,7 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
                   </span>
                 ))}
               </RadioGroup>
+              <p className="workspace-note mt-0">Estimates in the list follow the strength. Estimates are rough. Real sizes show when the batch finishes.</p>
             </div>
             <div className="workspace-field">
               <span className="workspace-panel-label" id="compress-effect-label">What {selected.name} does</span>

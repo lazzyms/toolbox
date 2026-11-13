@@ -122,7 +122,7 @@ fn recompressed(document: &Document, stream: &Stream, drawn: Option<(f64, f64)>,
 }
 
 /// Pixels needed along one axis to show `inches` at `max_ppi`, never more than the image has.
-fn target(pixels: u32, inches: f64, max_ppi: u32) -> u32 {
+pub(crate) fn target(pixels: u32, inches: f64, max_ppi: u32) -> u32 {
     let needed = (inches * max_ppi as f64 - 1e-6).ceil();
     if !needed.is_finite() || needed >= pixels as f64 { pixels } else { (needed as u32).max(1) }
 }
@@ -158,7 +158,7 @@ fn channels(document: &Document, colour_space: &Object) -> Option<usize> {
     }
 }
 
-fn is_photographic(image: &DynamicImage) -> bool {
+pub(crate) fn is_photographic(image: &DynamicImage) -> bool {
     fn distinct_at_least<T: std::hash::Hash + Eq>(values: impl Iterator<Item = T>, wanted: usize) -> bool {
         let mut seen = HashSet::new();
         values.into_iter().any(|value| { seen.insert(value); seen.len() >= wanted })

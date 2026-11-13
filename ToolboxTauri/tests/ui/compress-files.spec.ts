@@ -19,7 +19,13 @@ type CompressWindow = Window & {
     __drop: (paths: string[]) => void;
     __emit: (payload: unknown) => void;
     __finish: (outcomes: Outcome[]) => void;
+    // Per path: an estimate, null for none, "fail" to reject, or "hold" to stay pending until released.
+    __estimates: Record<string, Estimate | null | "fail" | "hold">;
+    __release: Record<string, () => void>;
+    __sizes: Record<string, number>;
 };
+
+type Estimate = { originalBytes: number; low: number; medium: number; high: number };
 
 type RunArgs = { runId: string; request: { paths: string[]; level: string; stripExif: boolean; outputLocation: unknown } };
 
@@ -38,6 +44,9 @@ test.beforeEach(async ({ page }) => {
         let finish: ((outcomes: unknown) => void) | null = null;
         win.__invocations = [];
         win.__dialog = [];
+        win.__estimates = {};
+        win.__release = {};
+        win.__sizes = {};
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         const dispatch = (name: string, payload: unknown) => {
             for (const [id, listener] of listeners) {
@@ -62,7 +71,17 @@ test.beforeEach(async ({ page }) => {
                     return null;
                 }
                 if (command === "plugin:dialog|open") return win.__dialog.shift() ?? null;
-                if (command === "inspect_intake_paths") return (args as { paths: string[] }).paths.map((path) => ({ path, kind: "file" }));
+                if (command === "inspect_intake_paths") return (args as { paths: string[] }).paths.map((path) => ({ path, kind: "file", animated: path.includes("spinner") }));
+                if (command === "describe_intake_files") return (args as { paths: string[] }).paths
+                    .filter((path) => path in win.__sizes)
+                    .map((path) => ({ path, sizeBytes: win.__sizes[path], modifiedMs: null, pageCount: null }));
+                if (command === "estimate_compressed_size") {
+                    const { path } = args as { path: string };
+                    const estimate = win.__estimates[path] ?? null;
+                    if (estimate === "fail") throw "Could not read the file.";
+                    if (estimate === "hold") return new Promise((resolve) => { win.__release[path] = () => resolve(null); });
+                    return estimate;
+                }
                 if (command === "get_output_settings") return { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
                 if (command === "check_output_folder") return "ready";
                 if (command === "cancel_run") return true;
@@ -88,6 +107,12 @@ const invocations = (page: Page, command: string) => page.evaluate((command) =>
 const queueDialog = (page: Page, result: unknown) => page.evaluate((result) => { (window as unknown as CompressWindow).__dialog.push(result); }, result);
 const emit = (page: Page, payload: Record<string, unknown>) => page.evaluate((payload) => (window as unknown as CompressWindow).__emit(payload), payload);
 const finish = (page: Page, outcomes: Outcome[]) => page.evaluate((outcomes) => (window as unknown as CompressWindow).__finish(outcomes), outcomes);
+const setEstimates = (page: Page, sizes: Record<string, number>, estimates: CompressWindow["__estimates"]) => page.evaluate(({ sizes, estimates }) => {
+    const win = window as unknown as CompressWindow;
+    win.__sizes = sizes;
+    win.__estimates = estimates;
+}, { sizes, estimates });
+const release = (page: Page, path: string) => page.evaluate((path) => (window as unknown as CompressWindow).__release[path]?.(), path);
 const strength = (page: Page) => page.getByRole("radiogroup", { name: "Strength" });
 const stripExif = (page: Page) => page.getByRole("switch", { name: "Strip EXIF" });
 
@@ -342,4 +367,101 @@ test("strength, Strip EXIF, sizes, savings and Skipped reasons have spoken label
     await expect(rows.nth(0).getByRole("button", { name: "Open report-compressed.pdf" })).toBeVisible();
     const summary = page.getByRole("status").filter({ hasText: /^Done\./ });
     await expect(summary).toContainText("Saved 10.8 MB, 74% smaller");
+});
+
+const listedRow = (page: Page, name: string) => page.getByRole("listbox").getByRole("option", { name });
+const estimateOf = (row: Locator) => row.locator(".file-selection-estimate");
+
+test("each file shows its size and a rough estimate that follows the strength, with none on skipped or won't-run rows", async ({ page }) => {
+    const paths = ["/local/site-survey-scan.pdf", "/local/IMG_4012.jpg", "/local/IMG_4020.heic", "/local/site-notes.docx", "/local/loading-spinner.webp", "/local/broken.png", "/local/odd.png"];
+    await openCompress(page);
+    await setEstimates(page, Object.fromEntries(paths.map((path, index) => [path, 1_000_000 * (index + 1)])), {
+        "/local/site-survey-scan.pdf": { originalBytes: 14_600_000, low: 13_900_000, medium: 3_900_000, high: 2_100_000 },
+        "/local/IMG_4012.jpg": { originalBytes: 3_100_000, low: 2_400_000, medium: 900_000, high: 520_000 },
+        "/local/broken.png": "fail",
+        "/local/odd.png": null,
+    });
+    await addFiles(page, paths);
+    await expect(page.getByText("Estimates in the list follow the strength. Estimates are rough. Real sizes show when the batch finishes.")).toBeVisible();
+
+    const scan = listedRow(page, "site-survey-scan.pdf");
+    const photo = listedRow(page, "IMG_4012.jpg");
+    await expect(scan).toContainText("1.0 MB");
+    await expect(estimateOf(scan)).toHaveText("About 3.9 MB");
+    await expect(estimateOf(photo)).toHaveText("About 900 KB");
+
+    // Skipped and won't-run rows keep their size but show no estimate.
+    for (const [name, badge] of [["IMG_4020.heic", "Will skip"], ["site-notes.docx", "Won't run"], ["loading-spinner.webp", "Won't run"]]) {
+        const row = listedRow(page, name);
+        await expect(row).toContainText(badge);
+        await expect(row).toContainText(/\d MB/);
+        await expect(estimateOf(row)).toHaveCount(0);
+    }
+    // A failed or empty estimate shows nothing rather than an error.
+    for (const name of ["broken.png", "odd.png"]) {
+        await expect(listedRow(page, name)).toContainText(/\d\.0 MB/);
+        await expect(estimateOf(listedRow(page, name))).toHaveCount(0);
+    }
+    await expect(page.getByText(/Could not read/)).toHaveCount(0);
+
+    const asked = () => invocations(page, "estimate_compressed_size") as Promise<Array<{ path: string; stripExif: boolean }>>;
+    await expect.poll(async () => (await asked()).map(({ path }) => path).sort())
+        // HEIC and other types are never asked about. An animated WebP is, and the estimator answers none.
+        .toEqual(["/local/IMG_4012.jpg", "/local/broken.png", "/local/loading-spinner.webp", "/local/odd.png", "/local/site-survey-scan.pdf"]);
+
+    await strength(page).getByRole("radio", { name: /^High/ }).click();
+    await expect(estimateOf(scan)).toHaveText("About 2.1 MB");
+    await expect(estimateOf(photo)).toHaveText("About 520 KB");
+    await strength(page).getByRole("radio", { name: /^Low/ }).click();
+    await expect(estimateOf(scan)).toHaveText("About 13.9 MB");
+    await expect(estimateOf(photo)).toHaveText("About 2.4 MB");
+    // A strength change picks another level from the same answer; it never asks again.
+    expect(await asked()).toHaveLength(5);
+
+    await page.getByRole("button", { name: "Compress 5 files", exact: true }).click();
+    await expect.poll(async () => (await invocations(page, "compress_files")).length).toBe(1);
+    const [{ request }] = await invocations(page, "compress_files") as RunArgs[];
+    expect(request.level).toBe("low");
+});
+
+test("rows say Estimating while the estimate is pending, the run never waits for it, and a removed file's late answer is dropped", async ({ page }) => {
+    const paths = ["/local/report.pdf", "/local/IMG_4012.jpg"];
+    await openCompress(page);
+    await setEstimates(page, { "/local/report.pdf": 2_000_000, "/local/IMG_4012.jpg": 3_000_000 }, { "/local/report.pdf": "hold", "/local/IMG_4012.jpg": "hold" });
+    await addFiles(page, paths);
+
+    const report = listedRow(page, "report.pdf");
+    const photo = listedRow(page, "IMG_4012.jpg");
+    await expect(estimateOf(report)).toHaveText("Estimating…");
+    await expect(estimateOf(photo)).toHaveText("Estimating…");
+    await expect(report).toContainText("2.0 MB");
+
+    // Removing a file while its estimate is pending drops the answer when it arrives.
+    await photo.getByRole("button").first().click();
+    await page.keyboard.press("Delete");
+    await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(1);
+    await setEstimates(page, { "/local/report.pdf": 2_000_000 }, { "/local/report.pdf": "hold", "/local/IMG_4012.jpg": { originalBytes: 3_000_000, low: 2_000_000, medium: 1_000_000, high: 500_000 } });
+    await release(page, "/local/IMG_4012.jpg");
+
+    // The run starts while an estimate is still pending.
+    await page.getByRole("button", { name: "Compress 1 file", exact: true }).click();
+    await expect.poll(async () => (await invocations(page, "compress_files")).length).toBe(1);
+    await finish(page, [compressed(paths[0], 2_000_000, 900_000)]);
+    await expect(page.getByRole("status").filter({ hasText: /^Done\./ })).toBeVisible();
+});
+
+test("turning Strip EXIF on estimates the images again for that choice", async ({ page }) => {
+    await openCompress(page);
+    await setEstimates(page, { "/local/IMG_4012.jpg": 3_100_000 }, { "/local/IMG_4012.jpg": { originalBytes: 3_100_000, low: 2_400_000, medium: 900_000, high: 520_000 } });
+    await addFiles(page, ["/local/IMG_4012.jpg"]);
+    const photo = listedRow(page, "IMG_4012.jpg");
+    await expect(estimateOf(photo)).toHaveText("About 900 KB");
+
+    await setEstimates(page, { "/local/IMG_4012.jpg": 3_100_000 }, { "/local/IMG_4012.jpg": { originalBytes: 3_100_000, low: 2_300_000, medium: 850_000, high: 480_000 } });
+    await stripExif(page).click();
+    await expect(estimateOf(photo)).toHaveText("About 850 KB");
+    expect(await invocations(page, "estimate_compressed_size")).toEqual([
+        { path: "/local/IMG_4012.jpg", stripExif: false },
+        { path: "/local/IMG_4012.jpg", stripExif: true },
+    ]);
 });

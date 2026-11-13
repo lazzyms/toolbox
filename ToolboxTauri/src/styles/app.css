@@ -1124,6 +1124,10 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.file-selection-estimate {
+  min-width: 88px;
+  text-align: right;
+}
 .file-selection-sort {
   display: inline-flex;
   align-items: center;
