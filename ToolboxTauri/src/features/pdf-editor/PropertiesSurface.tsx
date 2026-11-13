@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { CircleAlert } from "lucide-react";
 import { ToolScaffold } from "../../components/ToolScaffold";
 import { ShortcutHint } from "../../components/ShortcutHint";
 import { shortcutTarget } from "../../shortcuts";
@@ -10,40 +11,68 @@ import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { fileName } from "../../components/resultRow";
 
-type Field = "title" | "author" | "subject";
+type Field = "title" | "author" | "subject" | "creationDate" | "modificationDate";
 type Action = "keep" | "set" | "clear";
 type Choice = { action: Action; value: string };
-type Current = { title: string | null; author: string | null; subject: string | null; modificationDate: string | null };
+type Current = Record<Field, string | null>;
 type Read = { state: "read"; values: Current } | { state: "locked" } | { state: "unreadable" };
+type FieldSpec = { id: Field; label: string; noun: string; article: string; summaryNoun: string; date?: true };
 
 const PROTECTED = "Edit Properties can't edit a password-protected PDF yet. Nothing was saved.";
 const NONE = "(none)";
-const fields: { id: Field; label: string; noun: string; article: string }[] = [
-  { id: "title", label: "Title", noun: "title", article: "a" },
-  { id: "author", label: "Author", noun: "author", article: "an" },
-  { id: "subject", label: "Subject", noun: "subject", article: "a" },
+const DATE_PLACEHOLDER = "YYYY-MM-DD HH:MM, your local time";
+const DATE_FORMAT = "Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00.";
+const fields: FieldSpec[] = [
+  { id: "title", label: "Title", noun: "title", article: "a", summaryNoun: "title" },
+  { id: "author", label: "Author", noun: "author", article: "an", summaryNoun: "author" },
+  { id: "subject", label: "Subject", noun: "subject", article: "a", summaryNoun: "subject" },
+  { id: "creationDate", label: "Created", noun: "creation date", article: "a", summaryNoun: "date", date: true },
+  { id: "modificationDate", label: "Modified", noun: "modification date", article: "a", summaryNoun: "date", date: true },
 ];
-const keepAll: Record<Field, Choice> = { title: { action: "keep", value: "" }, author: { action: "keep", value: "" }, subject: { action: "keep", value: "" } };
+const keepAll = Object.fromEntries(fields.map(({ id }) => [id, { action: "keep", value: "" }])) as Record<Field, Choice>;
+
+const pad = (value: number, length = 2) => String(Math.abs(value)).padStart(length, "0");
+
+/** Turns "YYYY-MM-DD HH:MM" in the viewer's time zone into a dated moment with its offset, or explains what is wrong. */
+const parseLocalDate = (text: string): { ok: true; value: string } | { ok: false; error: string } => {
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(text.trim());
+  if (!match) return { ok: false, error: DATE_FORMAT };
+  const [year, month, day, hour, minute] = match.slice(1).map(Number);
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return { ok: false, error: `${match[1]}-${match[2]}-${match[3]} isn't a real date. ${DATE_FORMAT}` };
+  if (hour > 23 || minute > 59) return { ok: false, error: `${match[4]}:${match[5]} isn't a real time. ${DATE_FORMAT}` };
+  const local = new Date(year, month - 1, day, hour, minute);
+  local.setFullYear(year);
+  const offset = -local.getTimezoneOffset();
+  return { ok: true, value: `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00${offset < 0 ? "-" : "+"}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}` };
+};
+
+const shownValue = (field: FieldSpec, value: string | null) => value !== null && field.date ? value.slice(0, 16).replace("T", " ") : value;
+const dateError = (field: FieldSpec, choice: Choice) => {
+  if (!field.date || choice.action !== "set" || choice.value.trim() === "") return null;
+  const parsed = parseLocalDate(choice.value);
+  return parsed.ok ? null : parsed.error;
+};
 
 const filesHave = (count: number) => `${count} ${count === 1 ? "file has" : "files have"}`;
 const joined = (parts: string[]) => parts.length < 2 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 
-const nowHint = (field: (typeof fields)[number], files: string[], reads: Map<string, Read>, keeping: boolean) => {
+const nowHint = (field: FieldSpec, files: readonly string[], reads: Map<string, Read>, keeping: boolean) => {
   if (files.length === 0) return "Add PDFs to see the current value.";
   const known = files.map((path) => reads.get(path)).filter((read): read is Extract<Read, { state: "read" }> => read?.state === "read");
   if (known.length === 0) return null;
-  if (files.length === 1) return `Now: ${known[0].values[field.id] ?? NONE}`;
-  const values = known.map(({ values }) => values[field.id]).filter((value): value is string => value !== null);
+  if (files.length === 1) return `Now: ${shownValue(field, known[0].values[field.id]) ?? NONE}`;
+  const values = known.map(({ values }) => values[field.id] ?? null).filter((value): value is string => value !== null);
   const missing = known.length - values.length;
   const distinct = new Set(values).size;
   const parts = field.id === "subject"
     ? [values.length ? `${filesHave(values.length)} ${field.article} ${field.noun}` : null, missing ? (values.length ? `${missing} ${missing === 1 ? "has" : "have"} none` : `${filesHave(missing)} none`) : null]
-    : [distinct > 1 ? `${distinct} different ${field.noun}s` : values.length === 1 ? `1 file has ${field.article} ${field.noun}` : values.length ? `${values.length} files have the same ${field.noun}` : null, missing ? `${filesHave(missing)} none` : null];
+    : [distinct > 1 ? `${distinct} different ${field.summaryNoun}s` : values.length === 1 ? `1 file has ${field.article} ${field.summaryNoun}` : values.length ? `${values.length} files have the same ${field.summaryNoun}` : null, missing ? `${filesHave(missing)} none` : null];
   const now = `Now: ${parts.filter(Boolean).join(", ")}`;
   return keeping ? `${now}. Each keeps its own.` : now;
 };
 
-const fieldNote = (field: (typeof fields)[number], choice: Choice, count: number) => {
+const fieldNote = (field: FieldSpec, choice: Choice, count: number) => {
   if (count === 0) return null;
   if (choice.action === "clear") return count === 1 ? "Removed from the file, including its XMP copy." : `Removed from all ${count} files, including their XMP copies.`;
   if (choice.action === "set" && count > 1) return `Replaces the ${field.noun} in all ${count} files.`;
@@ -62,14 +91,24 @@ const reasonFor = (choices: Record<Field, Choice>, count: number) => {
   if (fields.every(({ id }) => choices[id].action === "keep")) return "Every field is set to Keep, so nothing would change. Choose Set or Clear for a field.";
   const empty = fields.find(({ id }) => choices[id].action === "set" && choices[id].value.trim() === "");
   if (empty) return `Enter ${empty.article} ${empty.noun}, or choose Keep or Clear.`;
+  const invalid = fields.find((field) => dateError(field, choices[field.id]) !== null);
+  if (invalid) return `Fix the ${invalid.noun} to save.`;
   return null;
 };
 
 const runLabel = (count: number) => count === 0 ? "Save edited copies" : count === 1 ? "Save edited copy" : `Save ${count} edited copies`;
 
-const patchFor = (choices: Record<Field, Choice>) => Object.fromEntries(fields.map(({ id }) => [id, choices[id].action === "set" ? { action: "set", value: choices[id].value } : { action: choices[id].action }]));
+const setValue = (field: FieldSpec, value: string) => {
+  if (!field.date) return value;
+  const parsed = parseLocalDate(value);
+  return parsed.ok ? parsed.value : value;
+};
+const patchFor = (choices: Record<Field, Choice>) => Object.fromEntries(fields.map((field) => {
+  const choice = choices[field.id];
+  return [field.id, choice.action === "set" ? { action: "set", value: setValue(field, choice.value) } : { action: choice.action }];
+}));
 
-/** Reads each added PDF's current title, author, subject and modified date once. */
+/** Reads each added PDF's current title, author, subject and dates once. */
 const useCurrentValues = (files: readonly string[]) => {
   const [reads, setReads] = useState(() => new Map<string, Read>());
   const requested = useRef(new Set<string>());
@@ -150,6 +189,8 @@ export const PdfPropertiesSurface = ({ utility, initialPaths, onFilesChange }: {
                 const labelId = `pdf-properties-${field.id}`;
                 const hint = nowHint(field, files, reads, choice.action === "keep" && files.length > 1);
                 const note = fieldNote(field, choice, files.length);
+                const error = dateError(field, choice);
+                const errorId = `${labelId}-error`;
                 return (
                   <div key={field.id} role="group" aria-labelledby={labelId} className="pdf-properties-field grid gap-1.5">
                     <div className="flex items-center gap-2">
@@ -172,12 +213,15 @@ export const PdfPropertiesSurface = ({ utility, initialPaths, onFilesChange }: {
                     {choice.action === "set" && (
                       <Input
                         aria-label={`New ${field.label}`}
-                        placeholder={field.label}
+                        placeholder={field.date ? DATE_PLACEHOLDER : field.label}
                         value={choice.value}
                         disabled={loading}
+                        aria-invalid={error !== null || undefined}
+                        aria-describedby={error !== null ? errorId : undefined}
                         onChange={(event) => choose(field.id, { value: event.target.value })}
                       />
                     )}
+                    {error !== null && <p id={errorId} role="alert" className="password-error"><CircleAlert aria-hidden="true" />{error}</p>}
                     {note && <p className="workspace-note">{note}</p>}
                   </div>
                 );

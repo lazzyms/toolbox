@@ -14,7 +14,7 @@ use crate::kit::password::WRONG_PASSWORD;
 pub(crate) const XMP_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const RDF: &[u8] = b"http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 pub(crate) const DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
-const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
+pub(crate) const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
 const PDF: &[u8] = b"http://ns.adobe.com/pdf/1.3/";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,7 +63,7 @@ impl DocumentProperty {
         Self::ALL.into_iter().find(|property| property.xmp_name() == (namespace, local))
     }
 
-    fn is_date(self) -> bool {
+    pub(crate) fn is_date(self) -> bool {
         matches!(self, Self::CreationDate | Self::ModificationDate)
     }
 }
@@ -511,7 +511,7 @@ fn pdf_offset(cursor: &mut Cursor<'_>) -> Option<i32> {
     offset_minutes(hours, minutes)
 }
 
-fn parse_xmp_date(text: &str) -> Option<PdfDate> {
+pub(crate) fn parse_xmp_date(text: &str) -> Option<PdfDate> {
     let mut cursor = Cursor(text.as_bytes());
     let year = cursor.digits(4)?;
     let mut fields = [1, 1, 0, 0, 0];
