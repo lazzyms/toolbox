@@ -9,7 +9,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::{self, bytes_label, duration_label, StoppableHelper};
-use crate::kit::common::{renamed_warning, JobOutcome, OutputLocation, OutputNaming, OutputReservation};
+use crate::kit::common::{renamed_warning, FolderReservation, JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
 use crate::kit::contracts::{LimitKind, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::images::source::{self, ImageFamily};
@@ -837,26 +837,25 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
         }
     } else { None };
     let images = if request.mode.wants_images() {
-        match write_images(&input, &document, &pages, &request.output_location, request.min_image_size) {
+        let written = discover_images(&document, &pages).map_err(|error| (None, error))
+            .and_then(|candidates| write_images(&input, &request.output_location, &candidates, request.min_image_size));
+        match written {
             Ok(images) => images,
-            Err((published, error)) => {
-                let outputs = text.into_iter().chain(published).collect();
+            Err((folder, error)) => {
+                let outputs = text.into_iter().chain(folder).collect();
                 return JobOutcome::failure_with_outputs(input, outputs, ToolError::processing(error));
             }
         }
-    } else { Vec::new() };
-    match (request.mode, text, images.is_empty()) {
+    } else { None };
+    match (request.mode, text, images) {
         (ExtractMode::Text, Some(text), _) => JobOutcome::succeeded(input, vec![text], if request.preserve_layout { "PDF text extracted with its layout preserved" } else { "PDF text extracted in reading order" }),
         (ExtractMode::Text, None, _) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NeedsOcr, NEEDS_OCR_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() })),
-        (ExtractMode::Images, _, true) => failure(input, NO_EMBEDDED_IMAGES.to_string()),
-        (ExtractMode::Images, _, false) => JobOutcome::succeeded(input, images, "Embedded JPEG images extracted without recompression"),
-        (ExtractMode::Both, Some(text), false) => {
-            let detail = format!("Saved the text and {} {}.", images.len(), if images.len() == 1 { "image" } else { "images" });
-            JobOutcome::succeeded(input, std::iter::once(text).chain(images).collect(), detail)
-        }
-        (ExtractMode::Both, Some(text), true) => JobOutcome::succeeded(input, vec![text], BOTH_WITHOUT_IMAGES),
-        (ExtractMode::Both, None, false) => JobOutcome::succeeded(input, images, BOTH_WITHOUT_TEXT),
-        (ExtractMode::Both, None, true) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NOTHING_TO_EXTRACT)),
+        (ExtractMode::Images, _, None) => failure(input, NO_EMBEDDED_IMAGES.to_string()),
+        (ExtractMode::Images, _, Some(images)) => JobOutcome::succeeded(input, vec![images.folder], format!("Saved {}.", image_count(images.count))),
+        (ExtractMode::Both, Some(text), Some(images)) => JobOutcome::succeeded(input, vec![text, images.folder], format!("Saved the text and {}.", image_count(images.count))),
+        (ExtractMode::Both, Some(text), None) => JobOutcome::succeeded(input, vec![text], BOTH_WITHOUT_IMAGES),
+        (ExtractMode::Both, None, Some(images)) => JobOutcome::succeeded(input, vec![images.folder], BOTH_WITHOUT_TEXT),
+        (ExtractMode::Both, None, None) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NOTHING_TO_EXTRACT)),
     }
 }
 
@@ -969,37 +968,64 @@ fn discover_images<'a>(document: &'a Document, pages: &[u32]) -> Result<Vec<Imag
     Ok(candidates)
 }
 
-/// Copies the selected pages' embedded JPEG images as they are, skipping those smaller than
-/// `min_size` on either side. An empty list means there were none to save.
-/// On failure nothing new is published, except images already published when publishing itself fails.
-fn write_images(input: &Path, document: &Document, pages: &[u32], location: &OutputLocation, min_size: Option<u32>) -> Result<Vec<PathBuf>, (Vec<PathBuf>, String)> {
-    let candidates = discover_images(document, pages).map_err(|error| (Vec::new(), error))?;
-    let mut reservations = Vec::new();
-    for candidate in &candidates {
-        if min_size.is_some_and(|min| candidate.width < i64::from(min) || candidate.height < i64::from(min)) { continue; }
-        let Some(filters) = &candidate.filters else {
-            return Err((Vec::new(), "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string()));
-        };
-        if filters.iter().any(|filter| filter != "DCTDecode") {
-            return Err((Vec::new(), format!("PDF image on page {} uses an unsupported filter; only original JPEG images can be extracted without recompression.", candidate.page)));
-        }
-        let reservation = OutputNaming::reserve_destination(input, location, &format!("-image-{}-{}", candidate.page, candidate.index), "jpg")
-            .map_err(|error| (Vec::new(), format!("Could not reserve extracted image output: {error}")))?;
-        fs::write(reservation.path(), candidate.data).map_err(|error| (Vec::new(), format!("Could not write extracted image: {error}")))?;
-        reservations.push(reservation);
-    }
-    publish_extracted_images(reservations)
+/// One PDF's images folder and how many images were published into it.
+#[derive(Debug, PartialEq)]
+struct SavedImages {
+    folder: PathBuf,
+    count: usize,
 }
 
-fn publish_extracted_images(reservations: Vec<OutputReservation>) -> Result<Vec<PathBuf>, (Vec<PathBuf>, String)> {
-    let mut outputs = Vec::with_capacity(reservations.len());
-    for reservation in reservations {
-        match reservation.publish() {
-            Ok(path) => outputs.push(path),
-            Err(error) => return Err((outputs, format!("Could not publish extracted image: {error}"))),
+fn image_count(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "image" } else { "images" })
+}
+
+/// Copies the candidates' JPEG data as it is into one new "{stem}-images" folder, skipping those under `min_size`.
+/// `None` means there were none to save, and no folder is made. On failure nothing is published, except the
+/// images published before a later publish failed, whose folder is then reported with the error.
+fn write_images(input: &Path, location: &OutputLocation, candidates: &[ImageCandidate], min_size: Option<u32>) -> Result<Option<SavedImages>, (Option<PathBuf>, String)> {
+    let mut kept = Vec::new();
+    for candidate in candidates {
+        if min_size.is_some_and(|min| candidate.width < i64::from(min) || candidate.height < i64::from(min)) { continue; }
+        let Some(filters) = &candidate.filters else {
+            return Err((None, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string()));
+        };
+        if filters.iter().any(|filter| filter != "DCTDecode") {
+            return Err((None, format!("PDF image on page {} uses an unsupported filter; only original JPEG images can be extracted without recompression.", candidate.page)));
         }
+        kept.push(candidate);
     }
-    Ok(outputs)
+    if kept.is_empty() { return Ok(None); }
+    let folder = OutputNaming::reserve_folder(input, location, "-images")
+        .map_err(|error| (None, format!("Could not create the images folder: {error}")))?;
+    let mut reservations = Vec::with_capacity(kept.len());
+    for candidate in kept {
+        let name = format!("page-{}-image-{}.jpg", candidate.page, candidate.index + 1);
+        let reservation = match OutputNaming::reserve_named_candidate(&folder.path().join(&name)) {
+            Ok(Some(reservation)) => reservation,
+            Ok(None) => return Err((None, format!("Could not reserve extracted image output: {name} already exists"))),
+            Err(error) => return Err((None, format!("Could not reserve extracted image output: {error}"))),
+        };
+        fs::write(reservation.path(), candidate.data).map_err(|error| (None, format!("Could not write extracted image: {error}")))?;
+        reservations.push(reservation);
+    }
+    publish_extracted_images(folder, reservations).map(Some)
+}
+
+/// Publishes each image into its reserved folder in order. The folder is kept once one image is published.
+fn publish_extracted_images(folder: FolderReservation, reservations: Vec<OutputReservation>) -> Result<SavedImages, (Option<PathBuf>, String)> {
+    let mut count = 0;
+    let mut pending = reservations.into_iter();
+    while let Some(reservation) = pending.next() {
+        if let Err(error) = reservation.publish() {
+            drop(pending);
+            if count == 0 { return Err((None, format!("Could not publish extracted image: {error}"))); }
+            let folder = folder.publish();
+            let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+            return Err((Some(folder), format!("Could not publish extracted image: {error}. The {} before it {} saved in {name}.", image_count(count), if count == 1 { "was" } else { "were" })));
+        }
+        count += 1;
+    }
+    Ok(SavedImages { folder: folder.publish(), count })
 }
 
 fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Result<Vec<u32>, String> {
@@ -2211,8 +2237,90 @@ pub(crate) mod tests {
 
         assert!(outcome.error().is_some(),"expected unsupported image filter to fail");
         assert!(outcome.output_paths().is_empty());
-        assert_eq!(fs::read_dir(&temp).unwrap().count(),1);
-        assert!(!temp.join("source-image-1-0.jpg").exists());
+        assert_eq!(fs::read_dir(&temp).unwrap().count(),1,"no images folder is made when no image is written");
+        assert!(!temp.join("source-images").exists());
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    fn jpeg_bytes(rgb: [u8; 3]) -> Vec<u8> {
+        let mut jpeg=Cursor::new(Vec::new());
+        JpegEncoder::new(&mut jpeg).encode_image(&DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2,2,image::Rgb(rgb)))).unwrap();
+        jpeg.into_inner()
+    }
+
+    /// Page 1 holds two JPEGs, page 2 none, page 3 one.
+    fn images_folder_fixture(path: &Path) -> Vec<Vec<u8>> {
+        let streams=vec![jpeg_bytes([255,0,0]),jpeg_bytes([0,255,0]),jpeg_bytes([0,0,255])];
+        let mut document=Document::with_version("1.7");
+        let pages_id=document.new_object_id();
+        let ids=streams.iter().map(|data| document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>2, "Height"=>2,
+            "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8, "Filter"=>"DCTDecode"
+        },data.clone()))).collect::<Vec<_>>();
+        let mut kids=Vec::new();
+        for xobjects in [dictionary! { "A"=>ids[0], "B"=>ids[1] }, dictionary! {}, dictionary! { "C"=>ids[2] }] {
+            let page_id=document.add_object(dictionary! {
+                "Type"=>"Page", "Parent"=>pages_id, "MediaBox"=>vec![0.into(),0.into(),1.into(),1.into()],
+                "Resources"=>dictionary! { "XObject"=>xobjects }
+            });
+            kids.push(Object::Reference(page_id));
+        }
+        document.objects.insert(pages_id,dictionary! { "Type"=>"Pages", "Kids"=>kids, "Count"=>3 }.into());
+        let catalog_id=document.add_object(dictionary! { "Type"=>"Catalog", "Pages"=>pages_id });
+        document.trailer.set("Root",catalog_id);
+        document.save(path).unwrap();
+        streams
+    }
+
+    fn sorted_names(folder: &Path) -> Vec<String> {
+        let mut names=fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn images_land_in_one_numbered_images_folder_with_one_based_names_and_original_bytes() {
+        let temp=split_fixture_root("images-folder");
+        let input=temp.join("report.pdf");
+        let streams=images_folder_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let request=ExtractFromPdfRequest { paths:vec![input.clone()], mode:ExtractMode::Images, page_range:None, output_location:OutputLocation::AlongsideInput, preserve_layout:false, min_image_size:None };
+
+        let first=extract(&request,input.clone());
+        let folder=temp.join("report-images");
+        assert_eq!(first.output_paths(),[folder.clone()]);
+        assert_eq!(first.detail,"Saved 3 images.");
+        assert_eq!(sorted_names(&folder),vec!["page-1-image-1.jpg","page-1-image-2.jpg","page-3-image-1.jpg"]);
+        assert_eq!(fs::read(folder.join("page-1-image-1.jpg")).unwrap(),streams[0]);
+        assert_eq!(fs::read(folder.join("page-1-image-2.jpg")).unwrap(),streams[1]);
+        assert_eq!(fs::read(folder.join("page-3-image-1.jpg")).unwrap(),streams[2]);
+        let first_run=folder.join("page-1-image-1.jpg");
+        let first_modified=fs::metadata(&first_run).unwrap().modified().unwrap();
+
+        let second=extract(&request,input.clone());
+        let numbered=temp.join("report-images-1");
+        assert_eq!(second.output_paths(),[numbered.clone()]);
+        assert_eq!(sorted_names(&numbered),vec!["page-1-image-1.jpg","page-1-image-2.jpg","page-3-image-1.jpg"]);
+        assert_eq!(sorted_names(&folder),vec!["page-1-image-1.jpg","page-1-image-2.jpg","page-3-image-1.jpg"],"the first folder is never written into");
+        assert_eq!(fs::metadata(&first_run).unwrap().modified().unwrap(),first_modified);
+        assert_eq!(sorted_names(&temp),vec!["report-images","report-images-1","report.pdf"]);
+        assert_eq!(fs::read(&input).unwrap(),original);
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn no_images_folder_is_made_when_no_image_is_written() {
+        let temp=split_fixture_root("images-folder-none");
+        let input=temp.join("report.pdf");
+        images_folder_fixture(&input);
+        let request=|page_range: &str, min_image_size| ExtractFromPdfRequest { paths:vec![input.clone()], mode:ExtractMode::Images, page_range:Some(page_range.to_string()), output_location:OutputLocation::AlongsideInput, preserve_layout:false, min_image_size };
+
+        let imageless_page=extract(&request("2",None),input.clone());
+        let all_too_small=extract(&request("1-3",Some(3)),input.clone());
+
+        assert_eq!(imageless_page.error().map(|error| error.message.as_str()),Some(NO_EMBEDDED_IMAGES));
+        assert_eq!(all_too_small.error().map(|error| error.message.as_str()),Some(NO_EMBEDDED_IMAGES));
+        assert_eq!(sorted_names(&temp),vec!["report.pdf"]);
         fs::remove_dir_all(temp).unwrap();
     }
 
@@ -2234,29 +2342,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn extracted_image_publication_reports_outputs_published_before_a_later_conflict() {
-        let temp = std::env::temp_dir().join(format!(
-            "toolbox_extract_partial_{}_{}",
-            std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        fs::create_dir_all(&temp).unwrap();
-        let input = temp.join("source.pdf");
-        fs::write(&input, b"source").unwrap();
-        let location = OutputLocation::AlongsideInput;
-        let first = OutputNaming::reserve_destination(&input, &location, "-image-1-0", "jpg").unwrap();
-        let second = OutputNaming::reserve_destination(&input, &location, "-image-1-1", "jpg").unwrap();
-        let first_destination = first.destination_path().to_path_buf();
-        let second_destination = second.destination_path().to_path_buf();
-        fs::write(first.path(), b"first extracted image").unwrap();
-        fs::write(second.path(), b"second extracted image").unwrap();
-        fs::write(&second_destination, b"competing replacement").unwrap();
+    fn extracted_image_publication_reports_the_folder_of_images_published_before_a_later_conflict() {
+        let temp=split_fixture_root("images-folder-partial");
+        let input=temp.join("source.pdf");
+        fs::write(&input,b"source").unwrap();
+        let reserve=|folder: &FolderReservation, name: &str, data: &[u8]| {
+            let reservation=OutputNaming::reserve_named_candidate(&folder.path().join(name)).unwrap().unwrap();
+            fs::write(reservation.path(),data).unwrap();
+            reservation
+        };
 
-        let (published, _) = publish_extracted_images(vec![first, second]).unwrap_err();
+        let folder=OutputNaming::reserve_folder(&input,&OutputLocation::AlongsideInput,"-images").unwrap();
+        let reservations=vec![
+            reserve(&folder,"page-1-image-1.jpg",b"first extracted image"),
+            reserve(&folder,"page-1-image-2.jpg",b"second extracted image"),
+            reserve(&folder,"page-2-image-1.jpg",b"third extracted image"),
+        ];
+        let images=temp.join("source-images");
+        fs::write(images.join("page-1-image-2.jpg"),b"competing replacement").unwrap();
 
-        assert_eq!(published, vec![first_destination.clone()]);
-        assert_eq!(fs::read(&first_destination).unwrap(), b"first extracted image");
-        assert_eq!(fs::read(&second_destination).unwrap(), b"competing replacement");
+        let (published,message)=publish_extracted_images(folder,reservations).unwrap_err();
+
+        assert_eq!(published,Some(images.clone()));
+        assert!(message.starts_with("Could not publish extracted image: "),"{message}");
+        assert!(message.ends_with("The 1 image before it was saved in source-images."),"{message}");
+        assert_eq!(sorted_names(&images),vec!["page-1-image-1.jpg","page-1-image-2.jpg"]);
+        assert_eq!(fs::read(images.join("page-1-image-1.jpg")).unwrap(),b"first extracted image");
+        assert_eq!(fs::read(images.join("page-1-image-2.jpg")).unwrap(),b"competing replacement");
+
+        let folder=OutputNaming::reserve_folder(&input,&OutputLocation::AlongsideInput,"-images").unwrap();
+        let blocked=reserve(&folder,"page-1-image-1.jpg",b"only image");
+        let numbered=temp.join("source-images-1");
+        fs::create_dir(numbered.join("page-1-image-1.jpg")).unwrap();
+
+        let (published,_)=publish_extracted_images(folder,vec![blocked]).unwrap_err();
+
+        assert_eq!(published,None,"a folder with nothing published in it is not reported");
         fs::remove_dir_all(temp).unwrap();
     }
 
