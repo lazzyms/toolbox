@@ -207,7 +207,7 @@
 "y": 7280,
 "w": 1280,
 "h": 800,
-"title": "Convert: PDF to images, extract, EPUB, to PDF",
+"title": "PDF to Images: range, picks, estimate, results; extract, EPUB, to PDF",
 "expand": "fill"
 },
 "OCR.dc.html": {
@@ -223,7 +223,7 @@
 "y": 7280,
 "w": 1280,
 "h": 800,
-"title": "Images to PDF: ordered pages and save dialog",
+"title": "Images to PDF: order, layout, save dialog, combine",
 "expand": "fill"
 },
 "FormattedPdf.dc.html": {
@@ -247,7 +247,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Convert image format",
+"title": "Convert image format: mixed batch, skipped, TIFF pages",
 "expand": "fill"
 },
 "Compress.dc.html": {
@@ -512,7 +512,7 @@
 "y": 7020,
 "text": "PDF Conversion",
 "kind": "title1",
-"maxW": 6800
+"maxW": 9900
 },
 "conv": {
 "x": 5440,
@@ -659,6 +659,86 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"ic1": {
+"x": 5840,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Conversion Q1. Ordered list for Images to PDF\n\nImagesToPdf Files added: a grid of page cards, each with a thumbnail, its page number, name, format and size. The grid reads as the page order.\n\nReorder by dragging (ImagesToPdf Dragging shows the drop slot and 'Drop here to make floorplan.heic page 2'), by the Move earlier and Move later buttons on each card, or with ⌘/Ctrl+Left and ⌘/Ctrl+Right on the selected card. Sort by: Order added (default), Name or Modified date.\n\nA multi-page TIFF is one wide card numbered 'Pages 5–7' with a thumbnail per TIFF page. Its pages stay together and move as one."
+},
+"ic2": {
+"x": 6240,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Conversion Q2. Layout options and the page preview\n\nImagesToPdf Files added: Page size defaults to Match image, and the only hint is 'Each page is the size of its image. Margin, fit and orientation appear for A4 and Letter.' Margin, fit and orientation are hidden, not disabled, because they do nothing for Match image.\n\nImagesToPdf A4 layout: choosing A4 or Letter shows Margin (None, Small, Large), Fit (Fit within, Fill the page, trimming edges) and Orientation (Automatic). They are grouped under the page size they depend on.\n\nThe page preview appears only for A4 and Letter. It shows the selected page on the paper with its margin, and selecting another card changes it."
+},
+"ic3": {
+"x": 6640,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Conversion Q3. Resolution control\n\nConvertBatch Files added: Resolution, dpi is a segmented control with 72, 150 (default) and 300, plus Custom. Custom (ConvertBatch Range and resolution) shows a number field limited to 72–300.\n\nThe hint under it turns the dpi into pixels for a Letter page, such as '1275 × 1650 px' at 150, and says to use 300 for print. Each button has an accessible name such as '150 dpi', so a screen reader does not read a bare number."
+},
+"ic4": {
+"x": 7040,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Conversion Q4. Where the image-count estimate goes\n\nConvertBatch: the estimate sits in the footer, directly above the run button, so it is read last before running: 'This will make 108 images, from 6 PDFs, 1 locked.' The run button points at it with aria-describedby, and it is a polite status region, so changing the range or picks announces the new count.\n\nThe list also has an Images column per PDF, so a surprising total can be traced to one file. ConvertBatch Range error replaces the count with 'No image count yet' and disables Convert PDFs."
+},
+"ic5": {
+"x": 7440,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Conversion Q5. Page selection across a batch, and clamping\n\nConvertBatch Range and resolution: one typed range ('3-5, 8-') applies to every PDF. The hint says so: pages past a PDF's last page are left out, and a PDF with no pages left is skipped. Rows show it before running: memo-oct.pdf 'Range shortened, only pages 3 and 4 exist', and cover-letter.pdf 'Will be skipped, no pages in 3-5, 8-'.\n\nConvertBatch Pick pages: selecting a PDF and pressing Return opens its thumbnails. Picks replace the range for that PDF only, and a badge in the options says so.\n\nConvertBatch Range error: '5-3 runs backwards. Write it as 3-5.' The error is inline, uses role=alert and is tied to the field with aria-describedby."
+},
+"ic7": {
+"x": 7840,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Conversion Q7. Aggregate versus per-file results\n\nImages to PDF makes one file, so ImagesToPdf Combined shows one output card (name, page count, size, Open and Show in Finder) above the list of input images and their pages. In ImagesToPdf Combine failed, nothing is saved. The card names the input and page that stopped it (scan-0042.tiff, TIFF page 2), and every other input says the combine stopped.\n\nPDF to Images and Convert Image Format make files per input, so ConvertBatch Converted and ImageConvert Converted use one result row per input with its own state. A row with several outputs has a Show N images button (aria-expanded) that lists each file with Open and Show in Finder."
+},
+"ic8": {
+"x": 8240,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Conversion Q8. The PDF Conversion rail\n\nConvertBatch Rail and ImagesToPdf Rail: the rail has three labelled groups. Combine and split has Merge PDFs, Split PDF and Images to PDF. From PDF has PDF to Images, Extract from PDF and PDF to EPUB. Make PDFs has OCR, Formatted PDF and Convert to PDF.\n\nEach group is role=group named by its heading. The current tool is aria-pressed. Up and Down move between tools, and Enter opens one, as the Rail state's help line says. Convert Image Format stays in the Images rail (ImageConvert Rail)."
+},
+"ic9": {
+"x": 8640,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "Conversion Q9. Shortcuts and destination\n\nOpen files is ⌘/Ctrl+O, run is ⌘/Ctrl+Return (⌘↵ on macOS, Ctrl+Enter on Windows), Find a tool is ⌘/Ctrl+K, and Esc cancels a run. Images to PDF also uses ⌘/Ctrl+Left and ⌘/Ctrl+Right to reorder pages. Every shortcut is shown on its button.\n\nPDF to Images and Convert Image Format show Save to from the app-wide setting ('Next to each original') with 'Change for this run'. After a change, ConvertBatch Range and resolution and ImageConvert Converted show the folder with a 'This run only' badge, Change and Reset to default. The example name shows the suffix: -page-03, or -converted with -p1, -p2 for TIFF pages.\n\nImages to PDF has no Save to. Make PDF… always opens the native save dialog (ImagesToPdf Save dialog), which suggests IMG_4012-combined.pdf next to the first image."
+},
+"ic6": {
+"x": 9040,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Conversion Q6. Mixed batch, target, TIFF compression and Skipped\n\nImageConvert Files added: one list for any mix of HEIC, JPEG, PNG, WebP and TIFF. Each row shows From (format, transparency, bit depth, TIFF page count) and a To column for the chosen target. Files already in the target format say 'Will be skipped, already JPEG' before running. JPG and JPEG count as one format, and so do HEIC and HEIF, and TIF and TIFF.\n\nPer-file notes are predicted before running: 'Transparent areas become white', 'Saved as 8-bit', '3 files, -p1 to -p3'. In ImageConvert format-webp, each row says Lossless or Lossy, quality 90.\n\nConvert to is a segmented control. TIFF compression (LZW default, None, Deflate) appears only when TIFF is the target (ImageConvert format-tiff). There is no quality control. A note says quality is the shared 90 and points to Compress.\n\nA GIF isn't added. A note gives the reason and a button to Extract GIF Frames."
+},
+"ic10": {
+"x": 9440,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Conversion: screen reader and platform labels\n\nAll three boards follow the same pattern:\n- One polite status line under the list header announces changes: 'Added 7 PDFs. 1 file not added.', the new range result, or the drag target.\n- Each row's accessible name is one sentence: name, details, state, then the reason, such as 'cover-letter.pdf, 2 pages. No pages in the range, so it will be skipped.'\n- The run header is a status region ('Converting PDF 2 of 7'). Progress bars have aria-valuetext ('13 of 88 images saved').\n- Errors in fields use role=alert and aria-invalid. A missing renderer is a role=alert card.\n- Seg controls are radiogroups with roving tabindex. Locked options use aria-disabled.\n- Row actions name their file, such as 'Open logo-converted.jpg'.\n\nOn Windows, every board shows Ctrl in place of ⌘, File Explorer in place of Finder ('Show in Explorer' on small buttons), and C:\\Users paths. Use the platform prop to see both."
 },
 "ms1": {
 "x": 7600,
