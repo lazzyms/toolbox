@@ -619,7 +619,7 @@ export const ImageEditStackPanel = ({
                 <p className="workspace-panel-copy flex gap-2" role="note">
                   <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
                   {isNeutralImageToneStep(tone)
-                    ? "This step changes nothing. All four values are 0, so the preview matches the original."
+                    ? "This step changes nothing. With no other step, every image is Skipped as No changes, unless you choose another format below."
                     : "Transparent areas stay transparent."}
                 </p>
               </>
