@@ -47,7 +47,7 @@ import { PlannedToolView, UnavailableToolView } from "./PlannedToolView";
 import { SettingsPage, type SettingsSection } from "./SettingsPage";
 import { favoritesStorageKey, recentStorageKey } from "../savedToolIds";
 import { useShellBridge } from "../hooks/useShellBridge";
-import { TOOL_DROP_EVENT, type ShellCommand, type ShellEvent } from "../hooks/useShellBridge";
+import { TOOL_DROP_EVENT, type ShellCommand, type ShellEvent, type ToolDrop } from "../hooks/useShellBridge";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 
 const workspaceViews = {
@@ -282,7 +282,7 @@ export const MainPage = () => {
       if (!selectedTool) {
         void invoke("open_paths", { paths: event.paths });
       } else {
-        window.dispatchEvent(new CustomEvent(TOOL_DROP_EVENT, { detail: event.paths }));
+        window.dispatchEvent(new CustomEvent<ToolDrop>(TOOL_DROP_EVENT, { detail: { paths: event.paths, point: event.point ?? null } }));
       }
       return;
     }

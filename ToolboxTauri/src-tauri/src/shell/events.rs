@@ -23,11 +23,18 @@ pub(crate) enum ShellCommand {
     Shortcuts,
 }
 
+/// Where files were dropped, in CSS pixels from the top left of the window.
+#[derive(Clone, Copy, Serialize)]
+pub struct DropPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
 pub(crate) enum ShellEvent {
     Files { activation_id: String, workspace: WorkspaceId, paths: Vec<String> },
-    DroppedFiles { paths: Vec<String> },
+    DroppedFiles { paths: Vec<String>, point: DropPoint },
     Command { command: ShellCommand },
     RejectedFiles { paths: Vec<String>, reason: String },
 }

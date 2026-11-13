@@ -5,13 +5,24 @@ type FormattedWindow = Window & {
     __invocations: Array<{ command: string; args: unknown }>;
     __finish: (outcomes: unknown[]) => void;
     __lastSaveFolder?: string;
+    __dialogResults: Array<string | null>;
+    __drop: (paths: string[], point?: { x: number; y: number }) => void;
 };
 
 test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
         const win = window as unknown as FormattedWindow;
         let finish: ((outcomes: unknown) => void) | null = null;
+        const callbacks = new Map<number, (event: unknown) => void>();
+        const listeners = new Map<number, { event: string; handler: number }>();
+        let nextId = 1;
         win.__invocations = [];
+        win.__dialogResults = [];
+        win.__drop = (paths, point) => {
+            for (const [id, listener] of listeners) {
+                if (listener.event === "toolbox://shell-event") callbacks.get(listener.handler)?.({ event: listener.event, id, payload: { kind: "dropped-files", paths, point } });
+            }
+        };
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         win.__finish = (outcomes) => finish?.(outcomes);
         window.__TAURI_INTERNALS__ = {
@@ -22,10 +33,22 @@ test.beforeEach(async ({ page }) => {
                 if (command === "get_last_save_folder") return win.__lastSaveFolder ?? "/Users/test/Documents";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command === "create_formatted_pdf") return new Promise((resolve) => { finish = resolve; });
+                if (command === "plugin:dialog|open") return win.__dialogResults.shift() ?? null;
+                if (command === "plugin:event|listen") {
+                    const { event, handler } = args as { event: string; handler: number };
+                    const id = nextId++;
+                    listeners.set(id, { event, handler });
+                    return id;
+                }
+                if (command === "plugin:event|unlisten") listeners.delete((args as { eventId: number }).eventId);
                 return null;
             },
-            transformCallback: () => 1,
-            unregisterCallback: () => undefined,
+            transformCallback: (callback: (event: unknown) => void) => {
+                const id = nextId++;
+                callbacks.set(id, callback);
+                return id;
+            },
+            unregisterCallback: (id: number) => callbacks.delete(id),
         };
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => undefined };
     });
@@ -516,4 +539,114 @@ test("Formatted PDF sends a table without a header row, and drops blank columns"
     expect(await savedBlocks(page)).toEqual([
         { kind: "table", headerRow: false, rows: [["Kitchen", "Oven cleaned"], ["Bathroom", ""]] },
     ]);
+});
+
+const imageBlock = (page: Page, label: string) => page.getByRole("list", { name: "Document blocks, in order" }).getByRole("group", { name: label });
+
+/** Picks `path` in the native file picker that Image… opens. */
+const pickImage = async (page: Page, path: string) => {
+    await page.evaluate((path) => { (window as unknown as FormattedWindow).__dialogResults.push(path); }, path);
+    await page.getByRole("button", { name: "Image…" }).click();
+};
+
+/** Drops files from Finder on the window, at the middle of the upper or lower half of `target`. */
+const dropOn = async (page: Page, paths: string[], target: ReturnType<Page["locator"]>, half: "upper" | "lower") => {
+    await expect.poll(() => page.evaluate(() => (window as unknown as FormattedWindow).__invocations.some(({ command, args }) =>
+        command === "plugin:event|listen" && (args as { event: string }).event === "toolbox://shell-event"))).toBe(true);
+    const box = (await target.boundingBox())!;
+    const point = { x: box.x + box.width / 2, y: box.y + box.height * (half === "upper" ? 0.25 : 0.75) };
+    await page.evaluate(({ paths, point }) => (window as unknown as FormattedWindow).__drop(paths, point), { paths, point });
+};
+
+const listItem = (page: Page, label: string) => page.getByRole("list", { name: "Document blocks, in order" }).locator(":scope > li").filter({ has: page.getByLabel(label, { exact: true }) });
+
+test("Formatted PDF adds images from the picker and by dropping them where they land, and sends each with its path", async ({ page }) => {
+    await openFormatted(page);
+    await expect(page.getByText("Drop an image from Finder to add it where you drop.")).toBeVisible();
+    await block(page, "Block 1, Paragraph").fill("Dear neighbour,");
+
+    await pickImage(page, "/Users/test/Pictures/floorplan.png");
+    const picked = imageBlock(page, "Block 2, Image, floorplan.png");
+    await expect(picked).toBeFocused();
+    await expect(picked).toContainText("Fits the page width. Read from your disk when you save.");
+    const dialog = await page.evaluate(() => (window as unknown as FormattedWindow).__invocations.findLast(({ command }) => command === "plugin:dialog|open")?.args);
+    expect(dialog).toMatchObject({ options: { multiple: false, filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "heic", "heif", "tif", "tiff"] }] } });
+    await expect(page.getByLabel("Block type")).toBeDisabled();
+    await expect(page.getByLabel("Block type")).toHaveValue("image");
+
+    // Cancelling the picker adds nothing.
+    await page.getByRole("button", { name: "Image…" }).click();
+    await expect(page.getByRole("group", { name: /, Image, / })).toHaveCount(1);
+
+    // A drop on the upper half of a block goes before it, on the lower half after it, and files that aren't images are left out.
+    await dropOn(page, ["/Users/test/Pictures/Site plan.JPG", "/Users/test/notes.txt"], listItem(page, "Block 1, Paragraph"), "upper");
+    await expect(imageBlock(page, "Block 1, Image, Site plan.JPG")).toBeFocused();
+    await dropOn(page, ["/Users/test/Pictures/porch.heic"], listItem(page, "Block 2, Paragraph"), "lower");
+    await expect(imageBlock(page, "Block 3, Image, porch.heic")).toBeVisible();
+    await dropOn(page, ["/Users/test/notes.txt"], listItem(page, "Block 2, Paragraph"), "lower");
+    await expect(page.getByRole("group", { name: /, Image, / })).toHaveCount(3);
+
+    // Delete on a focused image removes its block.
+    await imageBlock(page, "Block 3, Image, porch.heic").focus();
+    await page.keyboard.press("Delete");
+    await expect(page.getByRole("group", { name: /, Image, / })).toHaveCount(2);
+
+    expect(await savedBlocks(page)).toEqual([
+        { kind: "image", path: "/Users/test/Pictures/Site plan.JPG" },
+        { kind: "paragraph", runs: [plain("Dear neighbour,")] },
+        { kind: "image", path: "/Users/test/Pictures/floorplan.png" },
+    ]);
+});
+
+test("Formatted PDF replaces an empty paragraph with a picked image, and an image alone can be saved", async ({ page }) => {
+    await openFormatted(page);
+    await expect(saveButton(page)).toBeDisabled();
+    await pickImage(page, "C:\\Users\\test\\Pictures\\floorplan.png");
+    await expect(imageBlock(page, "Block 1, Image, floorplan.png")).toBeVisible();
+    await expect(page.getByRole("list", { name: "Document blocks, in order" }).locator(":scope > li")).toHaveCount(1);
+    expect(await savedBlocks(page)).toEqual([{ kind: "image", path: "C:\\Users\\test\\Pictures\\floorplan.png" }]);
+});
+
+test("Formatted PDF names a missing image, keeps the draft and points to the block to fix", async ({ page }) => {
+    const path = "/Users/test/Pictures/floorplan.png";
+    const missing = (outputPath: string) => [{
+        inputPath: outputPath, state: "failed", outputPaths: [], detail: "", reason: null, warnings: [],
+        failure: { kind: "invalidInput", message: `floorplan.png is missing. It was at ${path}. Nothing was written. Choose the image again or remove its block, then save.`, pointer: null },
+    }];
+    await openFormatted(page);
+    await block(page, "Block 1, Paragraph").fill("Dear neighbour,");
+    await pickImage(page, path);
+    await savedBlocks(page);
+    await page.evaluate((outcomes) => (window as unknown as FormattedWindow).__finish(outcomes), missing("/Users/test/Documents/Untitled.pdf"));
+
+    await expect(page.getByRole("alert")).toContainText("The PDF wasn't saved: floorplan.png is missing");
+    await expect(page.getByRole("alert")).toContainText(`It was at ${path} when you added it. Nothing was written and your draft is kept.`);
+    await expect(page.getByRole("status").filter({ hasText: "Save failed, nothing written" })).toContainText("Fix the image block, then save again");
+    const image = imageBlock(page, "Block 2, Image, floorplan.png");
+    await expect(image).toContainText(`Not found at ${path}`);
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("Dear neighbour,");
+    await expect(page.getByRole("list", { name: "Results" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "New document" })).toHaveCount(0);
+
+    // Choosing the image again clears the error, and the next save sends the new path.
+    await page.evaluate(() => { (window as unknown as FormattedWindow).__dialogResults.push("/Users/test/Desktop/floorplan.png"); });
+    await image.getByRole("button", { name: "Choose image…" }).click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(imageBlock(page, "Block 2, Image, floorplan.png")).toContainText("Fits the page width.");
+    await saveButton(page).click();
+    await page.getByRole("dialog", { name: "Save the PDF" }).getByRole("button", { name: "Save" }).click();
+    await expect.poll(async () => ((await invocation(page, "create_formatted_pdf")) as { document: { blocks: unknown } }).document.blocks).toEqual([
+        { kind: "paragraph", runs: [plain("Dear neighbour,")] },
+        { kind: "image", path: "/Users/test/Desktop/floorplan.png" },
+    ]);
+    await page.evaluate((outcomes) => (window as unknown as FormattedWindow).__finish(outcomes), missing("/Users/test/Documents/Untitled.pdf").map((outcome) => ({
+        ...outcome, failure: { ...outcome.failure, message: outcome.failure.message.replaceAll(path, "/Users/test/Desktop/floorplan.png") },
+    })));
+    await expect(page.getByRole("alert")).toContainText("The PDF wasn't saved: floorplan.png is missing");
+
+    // Removing the block clears it too.
+    await imageBlock(page, "Block 2, Image, floorplan.png").getByRole("button", { name: "Remove block" }).click();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: "Save failed" })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: /, Image, / })).toHaveCount(0);
 });

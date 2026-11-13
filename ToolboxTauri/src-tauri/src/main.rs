@@ -698,8 +698,9 @@ fn main() {
         })
         .on_window_event(|window, event| {
             shell::handle_window_event(window, event);
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
-                shell::handle_drop(window.app_handle(), paths.clone());
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event {
+                let point = position.to_logical::<f64>(window.scale_factor().unwrap_or(1.));
+                shell::handle_drop(window.app_handle(), paths.clone(), shell::DropPoint { x: point.x, y: point.y });
             }
         })
         .build(tauri::generate_context!())

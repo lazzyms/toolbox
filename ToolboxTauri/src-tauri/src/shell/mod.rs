@@ -6,6 +6,7 @@ mod window;
 use std::sync::Mutex;
 
 use events::ShellEvent;
+pub use events::DropPoint;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
@@ -79,9 +80,10 @@ pub fn focus(app: &AppHandle) {
 }
 
 // The frontend decides where a drop goes: into the open tool, or through `open_paths` from home.
-pub fn handle_drop(app: &AppHandle, paths: Vec<std::path::PathBuf>) {
+// The point, in CSS pixels from the top left of the window, lets a tool place the files where they were dropped.
+pub fn handle_drop(app: &AppHandle, paths: Vec<std::path::PathBuf>, point: DropPoint) {
     let paths = paths.into_iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>();
-    dispatch(app, ShellEvent::DroppedFiles { paths });
+    dispatch(app, ShellEvent::DroppedFiles { paths, point });
 }
 
 pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
