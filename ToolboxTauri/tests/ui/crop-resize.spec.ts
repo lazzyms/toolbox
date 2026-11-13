@@ -469,3 +469,82 @@ test("small previews show where the same rectangle lands on the batch's other pa
     await margin(page, "Top").fill("-1");
     await expect(caption(page)).toHaveText("Fix the margins to see the crop.");
 });
+
+const pagesField = (page: Page) => panel(page).getByRole("textbox", { name: "Pages", exact: true });
+
+test("Pages sends the typed range exactly as entered, and an empty field crops every page", async ({ page }) => {
+    await openCrop(page);
+    await addPdfs(page, ["/local/lease.pdf", "/local/cover.pdf"]);
+    await expect(pagesField(page)).toHaveValue("");
+    await expect(pagesField(page)).toHaveAttribute("placeholder", "All pages");
+    await expect(pagesField(page)).toHaveAttribute("aria-describedby", "crop-pages-help");
+    await expect(panel(page).locator("#crop-pages-help")).toHaveText("Empty means all pages. Pages past the end are ignored. A PDF with none left is skipped.");
+
+    await pagesField(page).fill(" 2-4,  9- ");
+    await page.getByRole("button", { name: "Crop 2 PDFs", exact: true }).click();
+    await expect.poll(async () => (await cropRequests(page)).length).toBe(1);
+    const [{ request }] = await cropRequests(page) as Array<{ request: { paths: string[]; scope: unknown } }>;
+    expect(request.paths).toEqual(["/local/lease.pdf", "/local/cover.pdf"]);
+    expect(request.scope).toEqual({ range: { ranges: " 2-4,  9- " } });
+});
+
+test("an unreadable page range is named, linked to Pages, and keeps Run disabled until fixed", async ({ page }) => {
+    await openCrop(page);
+    await addPdfs(page, ["/local/lease.pdf"]);
+    const run = page.getByRole("button", { name: "Crop 1 PDF", exact: true });
+    await expect(run).toBeEnabled();
+
+    await pagesField(page).fill("1-3,,2");
+    const alert = panel(page).locator("#crop-pages-err");
+    await expect(alert).toHaveAttribute("role", "alert");
+    await expect(alert).toHaveText("Entry 2 of the page range is empty. Remove the extra comma.");
+    await expect(pagesField(page)).toHaveAttribute("aria-invalid", "true");
+    await expect(pagesField(page)).toHaveAttribute("aria-describedby", "crop-pages-err crop-pages-help");
+    await expect(page.getByTestId("crop-run-reason")).toHaveText("Fix the pages to crop.");
+    await expect(run).toBeDisabled();
+
+    await pagesField(page).fill("1-3, 2");
+    await expect(alert).toHaveCount(0);
+    await expect(pagesField(page)).not.toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByTestId("crop-run-reason")).toHaveCount(0);
+    await expect(run).toBeEnabled();
+
+    await pagesField(page).fill("");
+    await run.click();
+    await expect.poll(async () => (await cropRequests(page)).length).toBe(1);
+    const [{ request }] = await cropRequests(page) as Array<{ request: { scope: unknown } }>;
+    expect(request.scope).toBe("all");
+});
+
+test("a ranged crop reports a cropped PDF, a Skipped PDF with its reason, a removed signature and a failure in one batch", async ({ page }) => {
+    await openCrop(page);
+    const paths = ["/local/lease.pdf", "/local/cover.pdf", "/local/vendor-nda.pdf", "/local/payroll.pdf"];
+    await addPdfs(page, paths);
+    await pagesField(page).fill("3-");
+    await page.getByRole("button", { name: "Crop 4 PDFs", exact: true }).click();
+    await expect.poll(async () => (await cropRequests(page)).length).toBe(1);
+    const [{ request }] = await cropRequests(page) as Array<{ request: { paths: string[]; scope: unknown } }>;
+    expect(request.paths).toEqual(paths);
+    expect(request.scope).toEqual({ range: { ranges: "3-" } });
+
+    await finish(page, [
+        outcome(paths[0], { outputPaths: ["/local/lease-cropped.pdf"], detail: "PDF saved" }),
+        outcome(paths[1], { state: "skipped", reason: { code: "rangeEmptyAfterClamping", message: "No pages in 3- are in this PDF, which has 2 pages.", pointer: null } }),
+        outcome(paths[2], { outputPaths: ["/local/vendor-nda-cropped.pdf"], detail: "PDF saved", warnings: [{ code: "signatureRemoved", message: "native wording" }] }),
+        outcome(paths[3], { state: "failed", failure: { kind: "invalidInput", message: "Unlock the PDF before editing", pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+    ]);
+
+    const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(results).toHaveCount(4);
+    await expect(results.nth(0)).toHaveAttribute("data-tone", "ok");
+    await expect(results.nth(0)).toContainText("lease-cropped.pdf");
+    await expect(results.nth(1)).toHaveAttribute("data-tone", "skip");
+    await expect(results.nth(1)).toContainText("Skipped");
+    await expect(results.nth(1)).toContainText("No pages in 3- are in this PDF, which has 2 pages.");
+    await expect(results.nth(1).getByRole("button", { name: /^(Open|Show in)/ })).toHaveCount(0);
+    await expect(results.nth(2)).toHaveAttribute("data-tone", "warn");
+    await expect(results.nth(2)).toContainText("The digital signature was removed, because changing the file breaks it.");
+    await expect(results.nth(2)).not.toContainText("native wording");
+    await expect(results.nth(3)).toHaveAttribute("data-tone", "fail");
+    await expect(results.nth(3)).toContainText("Unlock the PDF before editing");
+});

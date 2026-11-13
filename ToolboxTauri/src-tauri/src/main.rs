@@ -1888,7 +1888,7 @@ mod command_tests {
     }
 
     fn crop_request(paths: Vec<PathBuf>, scope: RangedPageScope, output_location: OutputLocation) -> CropPdfRequest {
-        CropPdfRequest { paths, spec: CropSpec::Rectangle { left: 100.0 / 612.0, top: 392.0 / 792.0, width: 200.0 / 612.0, height: 300.0 / 792.0 }, scope, output_location }
+        CropPdfRequest { paths, spec: CropSpec::Margins { top: 392.5, right: 312.5, bottom: 99.5, left: 99.5 }, scope, output_location }
     }
 
     fn cropped_pages(path: &std::path::Path) -> Vec<usize> {
@@ -1896,7 +1896,7 @@ mod command_tests {
         document.get_pages().into_iter().filter(|(_, page)| {
             // Crop sets only the CropBox; an uncropped page keeps its MediaBox alone.
             let crop_box = document.get_dictionary(*page).unwrap().get(b"CropBox").ok().and_then(|value| value.as_array().ok()).cloned().unwrap_or_default();
-            crop_box.iter().map(|value| value.as_float().unwrap()).zip([100.5, 100.5, 300.5, 400.5]).filter(|(actual, expected)| (actual - expected).abs() < 0.01).count() == 4
+            crop_box.iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>() == vec![100.0, 100.0, 300.0, 400.0]
         }).map(|(number, _)| number as usize).collect()
     }
 
@@ -1930,6 +1930,71 @@ mod command_tests {
         assert_eq!(std::fs::read_dir(root.join("command")).unwrap().count(), 0);
         assert_eq!([&long, &medium, &short].map(|path| std::fs::read(path).unwrap()), originals);
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Each page's CropBox (if any), MediaBox and content bytes, by page number.
+    fn page_boxes_and_contents(path: &std::path::Path) -> Vec<(Option<Vec<f32>>, Vec<f32>, Vec<u8>)> {
+        let document = lopdf::Document::load(path).unwrap();
+        let floats = |value: &lopdf::Object| value.as_array().unwrap().iter().map(|number| number.as_float().unwrap()).collect::<Vec<_>>();
+        document.get_pages().into_values().map(|page_id| {
+            let page = document.get_dictionary(page_id).unwrap();
+            (page.get(b"CropBox").ok().map(floats), floats(page.get(b"MediaBox").unwrap()), document.get_page_content(page_id))
+        }).collect()
+    }
+
+    #[test]
+    fn crop_command_scopes_a_mixed_batch_to_the_typed_range_with_skipped_signed_and_failed_files_isolated() {
+        use crate::kit::contracts::{OutcomeWarning, SkipCode, WarningKind};
+        let root = sandbox("crop-scoped-batch");
+        let (lease, nda, cover, broken) = (root.join("lease.pdf"), root.join("vendor-nda.pdf"), root.join("cover.pdf"), root.join("broken.pdf"));
+        make_pdf(&lease, 5); make_pdf(&nda, 4); make_pdf(&cover, 2);
+        let mut document = lopdf::Document::load(&nda).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&nda).unwrap();
+        std::fs::write(&broken, b"%PDF-1.7 not really").unwrap();
+        let inputs = vec![lease.clone(), nda.clone(), cover.clone(), broken.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let before = [&lease, &nda].map(|path| page_boxes_and_contents(path));
+
+        let outcomes = tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), crop_request(inputs.clone(), RangedPageScope::Range { ranges: "3-".into() }, location(&root, "out"))));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
+
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        for ((outcome, before), (pages, warnings)) in outcomes.iter().zip(&before).zip([(5, vec![]), (4, removed)]) {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.detail, "PDF saved");
+            assert_eq!(outcome.warnings, warnings);
+            let after = page_boxes_and_contents(&outcome.output_paths()[0]);
+            assert_eq!(after.len(), pages);
+            for (number, (page_after, page_before)) in after.iter().zip(before).enumerate() {
+                if number < 2 {
+                    assert_eq!(page_after, page_before, "page {} is outside 3- and must be unchanged", number + 1);
+                    assert!(page_after.0.is_none());
+                } else {
+                    assert_eq!(page_after.0.as_deref(), Some(&[100.0, 100.0, 300.0, 400.0][..]), "page {}", number + 1);
+                    assert_eq!((&page_after.1, &page_after.2), (&page_before.1, &page_before.2), "page {} keeps its MediaBox and content", number + 1);
+                }
+            }
+        }
+        assert!(!crate::kit::pdf::has_signed_signature_field(&lopdf::Document::load(&outcomes[1].output_paths()[0]).unwrap()));
+
+        match &outcomes[2].state {
+            OutcomeState::Skipped { reason } => {
+                assert_eq!(reason.code, SkipCode::RangeEmptyAfterClamping);
+                assert_eq!(reason.message, "No pages in 3- are in this PDF, which has 2 pages.");
+            }
+            state => panic!("expected cover.pdf to be skipped, got {state:?}"),
+        }
+        assert!(outcomes[2].output_paths().is_empty() && outcomes[2].warnings.is_empty());
+        assert!(outcomes[3].error().is_some() && outcomes[3].output_paths().is_empty());
+
+        let mut written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, vec!["lease-cropped.pdf", "vendor-nda-cropped.pdf"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -4765,7 +4830,7 @@ mod command_tests {
 
         let outcomes = inputs.iter().flat_map(|input| tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), CropPdfRequest {
             paths: vec![input.clone()],
-            spec: CropSpec::Rectangle { left: 10.0 / 612.0, top: 382.0 / 792.0, width: 300.0 / 612.0, height: 400.0 / 792.0 },
+            spec: CropSpec::Margins { top: 382.5, right: 302.5, bottom: 9.5, left: 9.5 },
             scope: RangedPageScope::All,
             output_location: location(&root, "cropped"),
         }))).collect::<Vec<_>>();
@@ -4782,9 +4847,7 @@ mod command_tests {
                 .is_ok_and(|dictionary| dictionary.has(b"ByteRange") || dictionary.get(b"Type").and_then(|value| value.as_name()).is_ok_and(|name| name == b"Sig") || dictionary.has(b"FT"))));
             let page = output.get_dictionary(*output.get_pages().values().next().unwrap()).unwrap();
             assert!(page.get(b"Annots").is_err());
-            let crop_box = page.get(b"CropBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>();
-            // make_pdf's MediaBox starts at 0.5, and the rectangle is a fraction of that 612 x 792 page.
-            assert!(crop_box.iter().zip([10.5, 10.5, 310.5, 410.5]).all(|(actual, expected)| (actual - expected).abs() < 0.01), "{crop_box:?}");
+            assert_eq!(page.get(b"CropBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>(), [10.0, 10.0, 310.0, 410.0]);
         }
         assert_eq!(outcomes.iter().map(|outcome| outcome.warnings.clone()).collect::<Vec<_>>(), [removed.clone(), removed, vec![]]);
         for (input, original) in inputs.iter().zip(originals) {
