@@ -168,8 +168,14 @@ test("Merge needs two PDFs, says why, and points to Organize Pages", async ({ pa
     await expect(page.getByText("Merge needs at least 2 PDFs.")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Open Organize Pages" }).click();
+    // Organize works on one PDF at a time, so the two listed files arrive in its chooser.
+    const chooser = page.getByRole("dialog", { name: "Organize works on one PDF at a time" });
+    await expect(chooser).toBeVisible();
+    await expect(chooser.getByRole("radio", { name: "a.pdf" })).toBeChecked();
+    await expect(chooser.getByRole("radio", { name: "b.pdf" })).toBeVisible();
+    await chooser.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(chooser).toBeHidden();
     await expect(page.getByRole("button", { name: "Add Organize PDF to favorites" })).toBeVisible();
-    await expect(page.getByRole("listbox", { name: "Files" }).getByRole("option")).toHaveText([/a\.pdf/, /b\.pdf/]);
     expect(await mergeRequests(page)).toEqual([]);
 });
 
