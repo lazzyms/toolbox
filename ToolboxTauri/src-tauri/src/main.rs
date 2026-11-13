@@ -379,6 +379,7 @@ async fn extract_from_pdf(events: RunEvents, request: remaining::ExtractFromPdfR
 #[tauri::command]
 async fn pdf_to_epub(events: RunEvents, request: to_epub::PdfToEpubRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_epub", &request.paths) { return outcomes; }
+    if let Err(outcomes) = validate_page_ranges(&request.paths, request.page_range.as_deref()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "pdf_to_epub", request.paths.clone(), &request.output_location, &request, to_epub::convert)
 }
@@ -2688,7 +2689,7 @@ mod command_tests {
     }
 
     fn epub_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> to_epub::PdfToEpubRequest {
-        to_epub::PdfToEpubRequest { paths, output_location, remove_headers_and_footers: true, cover: to_epub::EpubCover::NoCover, title: None, author: None }
+        to_epub::PdfToEpubRequest { paths, output_location, remove_headers_and_footers: true, cover: to_epub::EpubCover::NoCover, title: None, author: None, page_range: None }
     }
 
     fn epub_entries(path: &PathBuf) -> Vec<(String, zip::CompressionMethod, Vec<u8>)> {
@@ -2780,6 +2781,130 @@ mod command_tests {
         assert_eq!(outcomes[3].error().unwrap().message, remaining::PDF_DAMAGED);
         assert_eq!(written, vec!["text.epub".to_string()], "only the text PDF makes a book");
         assert_eq!(after, originals);
+    }
+
+    fn ranged_epub_request(paths: Vec<PathBuf>, output_location: OutputLocation, range: &str) -> to_epub::PdfToEpubRequest {
+        to_epub::PdfToEpubRequest { page_range: Some(range.into()), ..epub_request(paths, output_location) }
+    }
+
+    fn epub_chapter(path: &PathBuf) -> String {
+        String::from_utf8(epub_entries(path).into_iter().find(|(name, _, _)| name == "OEBPS/chapter-1.xhtml").unwrap().2).unwrap()
+    }
+
+    fn epub_detail(outcome: &JobOutcome, label: &str) -> Option<String> {
+        outcome.page_details.iter().find(|detail| detail.label == label).map(|detail| detail.value.clone())
+    }
+
+    #[test]
+    fn pdf_to_epub_converts_only_the_pages_in_range() {
+        let root = sandbox("pdf-to-epub-range");
+        let pdf = root.join("notes.pdf");
+        make_pdf(&pdf, 6);
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), ranged_epub_request(vec![pdf.clone()], location(&root, "books"), " 2-3, 5 ")));
+        let chapter = outcomes[0].output_paths().first().map(epub_chapter).unwrap_or_default();
+        let all = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "all"))));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
+        assert_eq!(outcomes[0].detail, "3 pages. No bookmarks or headings, so the contents list the title only.", "only the pages in the range are counted");
+        assert_eq!(epub_detail(&outcomes[0], "Pages converted").as_deref(), Some("2-3, 5"));
+        assert!(chapter.contains("<p>Toolbox page 2</p>\n<p>Toolbox page 3</p>\n<p>Toolbox page 5</p>"), "{chapter}");
+        for left_out in [1, 4, 6] { assert!(!chapter.contains(&format!("Toolbox page {left_out}<")), "page {left_out} is outside the range: {chapter}"); }
+        assert!(outcomes[0].warnings.is_empty(), "{:?}", outcomes[0].warnings);
+        assert_eq!(epub_detail(&all[0], "Pages converted").as_deref(), Some("1-6"), "without a range every page is converted");
+    }
+
+    #[test]
+    fn pdf_to_epub_clamps_one_range_to_each_pdf_and_skips_a_pdf_it_leaves_empty() {
+        use crate::kit::contracts::SkipCode;
+        let root = sandbox("pdf-to-epub-range-batch");
+        let long = root.join("long.pdf");
+        let short = root.join("short.pdf");
+        make_pdf(&long, 5);
+        make_pdf(&short, 2);
+        let paths = vec![long.clone(), short.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), ranged_epub_request(paths.clone(), location(&root, "books"), "3-")));
+        let chapter = outcomes[0].output_paths().first().map(epub_chapter).unwrap_or_default();
+        let written = std::fs::read_dir(root.join("books")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
+        assert_eq!(epub_detail(&outcomes[0], "Pages converted").as_deref(), Some("3-5"), "an open range ends at this PDF's last page");
+        assert!(outcomes[0].detail.starts_with("3 pages. "), "{}", outcomes[0].detail);
+        assert!(chapter.contains("Toolbox page 3") && chapter.contains("Toolbox page 5") && !chapter.contains("Toolbox page 2<"), "{chapter}");
+        let OutcomeState::Skipped { reason } = &outcomes[1].state else { panic!("the short PDF has no pages in range: {:?}", outcomes[1]) };
+        assert_eq!((reason.code, reason.message.as_str()), (SkipCode::RangeEmptyAfterClamping, "No pages in range 3-. This PDF has 2 pages. No EPUB was made."));
+        assert_eq!(reason.pointer, None);
+        assert!(outcomes[1].output_paths().is_empty());
+        assert_eq!(written, vec!["long.epub".to_string()], "the skipped PDF makes no book");
+        assert_eq!(after, originals);
+    }
+
+    #[test]
+    fn pdf_to_epub_skips_an_image_only_pdf_for_ocr_and_lists_image_only_pages_of_a_mixed_one() {
+        use crate::kit::contracts::{OutcomePointer, SkipCode, WarningKind};
+        let root = sandbox("pdf-to-epub-image-only");
+        let scan = root.join("scan.pdf");
+        let mixed = root.join("mixed.pdf");
+        scanned_pdf(&scan, &[&["Only pixels here"], &["And here"]]);
+        pdf_of_pages(&mixed, &[
+            "BT /F1 24 Tf 72 720 Td (Toolbox page 1) Tj ET".to_string(),
+            drawn_page(2),
+            "BT /F1 24 Tf 72 720 Td (Toolbox page 3) Tj ET".to_string(),
+            drawn_page(4),
+        ]);
+        let paths = vec![scan.clone(), mixed.clone()];
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(paths.clone(), location(&root, "books"))));
+        let chapter = outcomes[1].output_paths().first().map(epub_chapter).unwrap_or_default();
+        let written = std::fs::read_dir(root.join("books")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        // A range that keeps only a page without text leaves nothing to convert, so that PDF needs OCR too.
+        let only_blank = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), ranged_epub_request(vec![mixed.clone()], location(&root, "blank"), "2, 4")));
+        let blank_written = root.join("blank").read_dir().map(|entries| entries.count()).unwrap_or(0);
+        let _ = std::fs::remove_dir_all(&root);
+
+        let OutcomeState::Skipped { reason } = &outcomes[0].state else { panic!("the scan needs OCR: {:?}", outcomes[0]) };
+        assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NeedsOcr, to_epub::NO_SELECTABLE_TEXT));
+        assert_eq!(reason.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
+        assert!(outcomes[0].output_paths().is_empty());
+
+        assert!(outcomes[1].error().is_none(), "the mixed PDF converts: {:?}", outcomes[1]);
+        assert!(outcomes[1].detail.starts_with("2 pages. "), "only pages with text are converted: {}", outcomes[1].detail);
+        assert_eq!(epub_detail(&outcomes[1], "Pages converted").as_deref(), Some("1, 3"));
+        let blank = outcomes[1].warnings.iter().find(|warning| matches!(warning.kind, WarningKind::PagesWithoutText { .. })).unwrap_or_else(|| panic!("{:?}", outcomes[1].warnings));
+        assert_eq!((&blank.kind, blank.message.as_str()), (&WarningKind::PagesWithoutText { pages: vec![2, 4] }, "Pages 2, 4 have no selectable text. OCR can read them."));
+        assert!(chapter.contains("Toolbox page 1") && chapter.contains("Toolbox page 3"), "{chapter}");
+        assert_eq!(written, vec!["mixed.epub".to_string()], "the image-only PDF makes no book");
+
+        let OutcomeState::Skipped { reason } = &only_blank[0].state else { panic!("no selected page has text: {:?}", only_blank[0]) };
+        assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NeedsOcr, to_epub::NO_SELECTABLE_TEXT));
+        assert_eq!(blank_written, 0);
+    }
+
+    #[test]
+    fn pdf_to_epub_rejects_a_malformed_range_before_running() {
+        let root = sandbox("pdf-to-epub-bad-range");
+        let first = root.join("first.pdf");
+        let second = root.join("second.pdf");
+        make_pdf(&first, 3);
+        make_pdf(&second, 3);
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), ranged_epub_request(vec![first.clone(), second.clone()], location(&root, "books"), "3-1")));
+        let written = std::fs::read_dir(root.join("books")).unwrap().count();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(outcomes.len(), 2);
+        for outcome in &outcomes {
+            let error = outcome.error().unwrap_or_else(|| panic!("a malformed range fails every PDF: {outcome:?}"));
+            assert_eq!(error.message, "\"3-1\" runs backwards. Put the lower page first, for example 1-3.");
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput));
+            assert!(outcome.output_paths().is_empty());
+        }
+        assert_eq!(written, 0, "nothing runs, so nothing is written");
     }
 
     #[test]
@@ -5297,7 +5422,7 @@ mod command_tests {
             outputs.extend(named(&mut naming, "extract_from_pdf", mixed_pdf.clone(), both));
         }
         // PDF to EPUB reads text in-process, so it needs no helper or pack.
-        let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub"), remove_headers_and_footers: true, cover: to_epub::EpubCover::NoCover, title: None, author: None }));
+        let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub"), remove_headers_and_footers: true, cover: to_epub::EpubCover::NoCover, title: None, author: None, page_range: None }));
         assert_eq!(epub, [root.join("pdf to epub").join("document.epub")], "PDF to EPUB names its book after the PDF with no suffix");
         outputs.extend(named(&mut naming, "pdf_to_epub", pdf.clone(), epub));
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
