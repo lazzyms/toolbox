@@ -1588,6 +1588,11 @@ body {
 .export-progress-text { color: var(--muted-foreground); font-size: 12px; white-space: nowrap; }
 .scene-toolbar-divider { align-self: stretch; width: 1px; background: var(--border); margin: 2px 3px; }
 .scene-inline-hint, .scene-property-note { color: var(--muted-foreground); font-size: 10px; }
+.scene-form-note-content { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; font-size: 12px; color: var(--muted-foreground); }
+.scene-form-note-content p { margin: 0; }
+.scene-form-note-content strong { color: var(--foreground); font-weight: 600; }
+.scene-form-note-content > svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.scene-form-fields { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .scene-signature-mini-preview { width: 58px; height: 28px; object-fit: contain; border: 1px solid var(--border); border-radius: 4px; background: var(--pdf-document-page); }
 .scene-signature-preview { height: 64px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--pdf-document-page); }
 .scene-render-status { margin-left: auto; font-size: 10px; white-space: nowrap; }

@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react';
 import { TypedSignature } from './SceneCanvas';
-import { Bold, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart } from 'lucide-react';
+import { Bold, Check, Info, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart, TriangleAlert } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Input } from '../../components/ui/input';
@@ -9,7 +9,7 @@ import { NativeSelect } from '../../components/ui/native-select';
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
-import type { PdfEditRun, PdfTextEdit } from './contracts';
+import type { PdfEditRun, PdfFormField, PdfFormInspection, PdfTextEdit } from './contracts';
 import { notEditableReasons, textOverflowWords } from './scene';
 import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle, WatermarkPattern } from './scene';
 import type { SubToolId } from './subtools';
@@ -37,6 +37,10 @@ export interface SubToolInspectorProps {
   watermarkFontSize: number; setWatermarkFontSize: (value: number) => void;
   watermarkPattern: WatermarkPattern; setWatermarkPattern: (value: WatermarkPattern) => void;
   addFixedWatermark: () => void;
+  form: PdfFormInspection | null;
+  formValue: (field: PdfFormField) => string | boolean;
+  goToField: (field: PdfFormField) => void;
+  switchToAddText: () => void;
   selectedRun: PdfEditRun | undefined;
   textEdits: PdfTextEdit[];
   pageNumberOf: (sourceIndex: number) => number;
@@ -229,6 +233,50 @@ const CropGuide: Panel = ({ page, commitPage }) => {
   </> : null;
 };
 
+const pageList = (pages: number[]) => pages.length === 1 ? `page ${pages[0]}`
+  : `pages ${pages.slice(0, -1).join(', ')} and ${pages[pages.length - 1]}`;
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+const FormGuide: Panel = ({ page, form, formValue, goToField, switchToAddText }) => {
+  if (!form) return <p className="scene-property-note" role="status">Reading the form fields…</p>;
+  if (form.unsupported || !form.fields.length) {
+    const [headline, ...rest] = (form.unsupported ?? 'This PDF has no form fields to fill.').split(/(?<=\.) /);
+    return <>
+      <p className="scene-property-note">{form.unsupported ? 'This PDF has a form, but not one Toolbox can fill.' : 'Fill form is unavailable for this PDF.'}</p>
+      <Card className="scene-form-note py-0" role="note"><CardContent className="scene-form-note-content">
+        <TriangleAlert aria-hidden="true" /><p><strong>{headline}</strong> {rest.join(' ')}</p>
+      </CardContent></Card>
+      <p className="scene-property-note">{form.unsupported ? 'To fill it anyway, open it in Adobe Acrobat or Reader. Or type your answers onto the page with Add text.' : 'Type your answers onto the page with Add text instead.'}</p>
+      <Button variant="outline" size="sm" className="self-start" onClick={switchToAddText}>Use Add text instead</Button>
+    </>;
+  }
+  const empty = (field: PdfFormField) => formValue(field) === '' || formValue(field) === false;
+  const pages = [...new Set(form.fields.map((field) => field.widgets[0].page + 1))].sort((a, b) => a - b);
+  const missing = form.fields.filter((field) => field.required && empty(field)).length;
+  const status = (field: PdfFormField) => {
+    const value = formValue(field);
+    if (field.type === 'checkbox') return value ? 'Checked' : field.required ? 'Required, not checked' : null;
+    if (value !== '') return <Check aria-label="Filled" />;
+    if (field.widgets[0].page !== page.sourceIndex) return `Page ${field.widgets[0].page + 1}${field.required ? ', required' : ''}`;
+    return field.required ? 'Required, empty' : field.readOnly ? 'Read-only' : null;
+  };
+  return <>
+    <p className="scene-property-note">Type into the fields on the page. Tab moves to the next field in the order below.</p>
+    <Card className="scene-form-note py-0" role="note"><CardContent className="scene-form-note-content">
+      <Info aria-hidden="true" /><p>{`${plural(form.fields.length, 'field', 'fields')} on ${pageList(pages)}.`}{missing ? ` ${plural(missing, 'required field is', 'required fields are')} still empty.` : ''}</p>
+    </CardContent></Card>
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-form-fields">Fields</span>
+      <ol className="scene-form-fields" aria-labelledby="scene-form-fields">
+        {form.fields.map((field) => <li key={field.name}>
+          <Button variant="ghost" size="sm" className="w-full justify-between" onClick={() => goToField(field)}>
+            <span className="truncate">{field.label || field.name}</span><span className="scene-property-note">{status(field)}</span>
+          </Button>
+        </li>)}
+      </ol>
+    </div>
+  </>;
+};
+
 const EditTextGuide: Panel = ({ page, selectedRun, textEdits, pageNumberOf, showEdit, revertEdit, chooseTool }) => {
   const availability = useToolAvailability();
   const selectedEdit = selectedRun && textEdits.find((edit) => edit.pageIndex === page.sourceIndex && edit.run === selectedRun.index);
@@ -268,4 +316,5 @@ export const subToolInspectors: Partial<Record<SubToolId | SceneTool, { Fields?:
   signature: { Fields: SignatureFields, Guide: SignatureGuide },
   watermark: { Fields: WatermarkFields, Guide: WatermarkGuide },
   crop: { Guide: CropGuide },
+  form: { Guide: FormGuide },
 };

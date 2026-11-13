@@ -18,6 +18,7 @@ const plan = (scene: PdfScene) => planSceneExport({ paths: ["/local/source.pdf"]
 
 test("every Edit PDF sub-tool is declared once with a group and a suffix", () => {
   assert.deepEqual(subTools.map(({ id, group, suffix }) => [id, group, suffix]), [
+    ["form", "document", "-filled"],
     ["edit-text", "document", "-edited"],
     ["text", "overlay", "-edited"],
     ["highlight", "overlay", "-edited"],
@@ -68,6 +69,21 @@ test("a single contributor exports with its own suffix and several use -edited",
   assert.equal(exportSuffix([{ suffix: "-filled" }, { suffix: "-redacted" }]), "-edited");
   assert.equal(plan(withObjects(baseline, 0, "signature")).suffix, "-edited");
   assert.equal(plan(withObjects(baseline, 0, "signature", "watermark")).suffix, "-edited");
+});
+
+test("form values join the request only when present and fill first", () => {
+  const formValues = [{ name: "applicant.name", value: "Ada" }, { name: "agree", value: true }];
+  const filled = planSceneExport({ paths: ["/local/source.pdf"], scene: baseline, baseline, outputLocation: "alongsideInput", formValues });
+  assert.deepEqual(Object.keys(filled.request), ["paths", "scene", "formValues", "outputLocation"]);
+  assert.deepEqual(filled.request.formValues, formValues);
+  assert.deepEqual(filled.contributors, ["form"]);
+  assert.equal(filled.suffix, "-filled");
+  const chained = planSceneExport({ paths: ["/local/source.pdf"], scene: withObjects(baseline, 0, "text"), baseline, outputLocation: "alongsideInput", formValues });
+  assert.deepEqual(chained.contributors, ["form", "text"]);
+  assert.equal(chained.suffix, "-edited");
+  const empty = planSceneExport({ paths: ["/local/source.pdf"], scene: baseline, baseline, outputLocation: "alongsideInput", formValues: [] });
+  assert.equal("formValues" in empty.request, false);
+  assert.equal(empty.suffix, null);
 });
 
 test("an unchanged scene has no contributors and no suffix", () => {

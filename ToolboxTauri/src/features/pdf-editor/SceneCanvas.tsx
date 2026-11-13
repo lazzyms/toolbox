@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent } from 'react';
+import { Checkbox } from '../../components/ui/checkbox';
 import { Input } from '../../components/ui/input';
 import { Textarea } from '../../components/ui/textarea';
 import { notEditableReasons, overflowMessage, textOverflowWords, visibleBounds } from './scene';
@@ -129,7 +130,7 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
   return shapeArtwork(object.shape, r, object.color, object.opacity);
 }
 
-export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject,
+export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, formFields = [], formValue, onFormValue,
   redactionFill = '#000000', redactionPreview = false, editRuns, textEdits, selectedRun, onSelectRun, onEditRun }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
@@ -264,6 +265,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (event.button !== 0 || gesture.current) return;
     const target = event.target as Element;
     if (target.closest('[data-text-editor]')) return;
+    if (tool === 'form') { if (!target.closest('[data-form-field]')) onSelect(null); return; }
     if (tool === 'edit-text') {
       const index = target.closest('[data-edit-run]')?.getAttribute('data-edit-run');
       if (index == null) { onSelectRun(null); setEditingRun(null); } else { event.preventDefault(); openRun(Number(index)); }
@@ -448,6 +450,19 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
           })()}
           {overflowRun && overflowWords > 0 && <text className="scene-edit-overflow" x={overflowRun.x} y={overflowRun.y + overflowRun.height + 10} fontSize={8}>{overflowMessage(overflowWords)}</text>}
         </g>}
+        {tool === 'form' && formValue && onFormValue && formFields.flatMap(field => field.widgets.filter(widget => widget.page === page.sourceIndex).map((widget, index) => {
+          const value = formValue(field);
+          const label = field.label || field.name;
+          const fontSize = Math.max(6, Math.min(12, widget.height * 0.6));
+          return <foreignObject key={`${field.name}:${index}`} x={widget.x} y={widget.y} width={widget.width} height={widget.height} className="scene-form-field" data-form-field={field.name}>
+            {field.type === 'checkbox'
+              ? <Checkbox aria-label={label} checked={value === true} disabled={field.readOnly} aria-required={field.required} style={{ width: Math.min(widget.width, widget.height), height: Math.min(widget.width, widget.height) }}
+                onCheckedChange={checked => onFormValue(field, checked === true)} />
+              : field.multiline
+                ? <Textarea aria-label={label} value={String(value)} disabled={field.readOnly} required={field.required} maxLength={field.maxLen ?? undefined} className="h-full w-full min-h-0 resize-none rounded-none px-1 py-0" style={{ fontSize }} onChange={event => onFormValue(field, event.target.value)} />
+                : <Input aria-label={label} value={String(value)} disabled={field.readOnly} required={field.required} maxLength={field.maxLen ?? undefined} className="h-full w-full min-h-0 rounded-none px-1 py-0" style={{ fontSize }} onChange={event => onFormValue(field, event.target.value)} />}
+          </foreignObject>;
+        }))}
         {draft && gesture.current?.mode === 'crop' && draft.crop && <rect {...draft.crop} className="scene-crop-outline" strokeWidth={2 / scale} pointerEvents="none" />}
       </g>
     </svg>

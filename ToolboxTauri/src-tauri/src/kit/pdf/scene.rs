@@ -9,6 +9,9 @@ use crate::kit::{common::{batch_runner::report_progress, limits, note_renamed, J
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, text_edit, PdfMutationIntent};
 
+mod forms;
+pub use forms::{inspect_form, FormInspection};
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
 #[derive(Clone, Debug, Deserialize)]
@@ -225,14 +228,16 @@ fn glyph_width(face: &ttf_parser::Face<'_>, gid: u16) -> i64 {
 struct TextLine { glyphs: Vec<(u16, char)>, width: f32 }
 struct TextLayout { font: TextFont, lines: Vec<TextLine>, first_baseline: f32 }
 
-fn unrenderable_message(family: &str, missing: &[char], target: &str) -> String {
+fn unrenderable_message(family: &str, missing: &[char], subject: &str) -> String {
     let named = missing.iter().take(10).map(|c| format!("“{c}” (U+{:04X})", *c as u32)).collect::<Vec<_>>().join(", ");
     let more = if missing.len() > 10 { format!(" and {} more", missing.len() - 10) } else { String::new() };
     let noun = if missing.len() == 1 { "this character" } else { "these characters" };
-    format!("{family} can't show {noun}: {named}{more}. Remove {} to export {target}.", if missing.len() == 1 { "it" } else { "them" })
+    format!("{family} can't show {noun}: {named}{more}. Remove {} to export {subject}.", if missing.len() == 1 { "it" } else { "them" })
 }
 
-fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> {
+fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> { layout_text_for(o, "this text box") }
+
+fn layout_text_for(o: &SceneObject, subject: &str) -> Result<TextLayout, ToolError> {
     if o.text.chars().count() > TEXT_MAX_CHARACTERS {
         return Err(ToolError::limit_exceeded(crate::kit::contracts::LimitKind::TextLength,
             "Text box text is longer than the 100,000-character limit. Shorten it and try again."));
@@ -272,7 +277,7 @@ fn layout_text(o: &SceneObject) -> Result<TextLayout, ToolError> {
         }
         finish(line, &mut lines);
     }
-    if !missing.is_empty() { return Err(ToolError::invalid_input(unrenderable_message(font.family, &missing, "this text box"))); }
+    if !missing.is_empty() { return Err(ToolError::invalid_input(unrenderable_message(font.family, &missing, subject))); }
     let em = face.units_per_em() as f32;
     let (ascent, descent) = (face.ascender() as f32 / em, face.descender() as f32 / em);
     // Matches CSS line-height: half-leading above the ascender.
@@ -802,12 +807,13 @@ pub fn export_suffix(contributors: &[Stage]) -> Option<&'static str> {
 
 struct OverlayPlan { preflight: ScenePreflight, identity: bool, pure_reorder: bool }
 struct RedactPlan { renderer: PathBuf, pages: BTreeMap<usize, Vec<(Rect, [u8; 3])>> }
-enum StagePlan { Skip, EditText(text_edit::TextEditPlan), Overlays(OverlayPlan), Redact(RedactPlan) }
+enum StagePlan { Skip, FillForms(forms::FormPlan), EditText(text_edit::TextEditPlan), Overlays(OverlayPlan), Redact(RedactPlan) }
 
 impl StagePlan {
     fn changes_document(&self) -> bool {
         match self {
             StagePlan::Skip => false,
+            StagePlan::FillForms(plan) => plan.changes_document(),
             StagePlan::EditText(_) => true,
             StagePlan::Overlays(plan) => !plan.identity,
             StagePlan::Redact(_) => true,
@@ -836,7 +842,10 @@ fn overlay_preflight(doc: &Document, scene: &PdfScene) -> Result<StagePlan, Stri
 
 fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &StageSections) -> Result<StagePlan, ToolError> {
     match stage {
-        Stage::FillForms => unsupported_section(sections.form_values.is_some(), "Filling form fields"),
+        Stage::FillForms => match &sections.form_values {
+            Some(values) => forms::preflight(doc, values).map(StagePlan::FillForms),
+            None => Ok(StagePlan::Skip),
+        },
         Stage::EditText => edit_text_preflight(doc, sections.text_edits.as_deref()),
         Stage::Overlays => overlay_preflight(doc, scene).map_err(ToolError::processing),
         Stage::Flatten => unsupported_section(sections.flatten.is_some(), "Flattening"),
@@ -848,6 +857,7 @@ fn stage_preflight(stage: Stage, doc: &Document, scene: &PdfScene, sections: &St
 fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene) -> Result<(), String> {
     match plan {
         StagePlan::Skip => Ok(()),
+        StagePlan::FillForms(plan) => forms::apply(doc, plan),
         StagePlan::EditText(plan) => text_edit::apply(doc, plan),
         StagePlan::Overlays(plan) => apply_overlays(doc, scene, plan),
         StagePlan::Redact(plan) => apply_redactions(doc, scene, plan),
@@ -2547,7 +2557,6 @@ mod tests {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let original=fs::read(&input).unwrap();
         let cases=[
-            (serde_json::json!({ "formValues": [] }), "Filling form fields is not supported yet"),
             (serde_json::json!({ "flatten": false }), "Flattening is not supported yet"),
         ];
         for (sections,message) in cases {
@@ -2569,7 +2578,7 @@ mod tests {
             run_stages(&input,&request.scene,&request.sections).err().unwrap().message
         };
         let all=serde_json::json!({ "formValues": [], "textEdits": [], "flatten": true, "redactions": [] });
-        assert!(first_failure(all, None).starts_with("Filling form fields"));
+        assert!(first_failure(all, None).starts_with("This PDF has no form fields to fill"));
         assert!(first_failure(serde_json::json!({ "textEdits": [], "flatten": true, "redactions": [] }), None).starts_with("No text was changed"));
         assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), Some(PdfScene{pages:vec![]})).starts_with("Scene must contain"));
         assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), None).starts_with("Flattening"));
