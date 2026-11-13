@@ -207,6 +207,8 @@ pub struct InstallContext<'a> {
     pub limits: PackLimits,
     /// Checked between steps. Once the verified folder starts moving into place it is too late.
     pub cancel: Option<&'a CancelFlag>,
+    /// Told the pack id once the pack is installed, updated or repaired.
+    pub changed: Option<&'a (dyn Fn(&str) + Sync)>,
 }
 
 impl InstallContext<'_> {
@@ -235,10 +237,26 @@ pub async fn install_pack_file(app: tauri::AppHandle, path: PathBuf) -> Result<P
         let catalog = load_catalog().map_err(unavailable)?;
         let public_key = trusted_public_key().map_err(unavailable)?;
         let target = super::current_target();
-        let context = InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: &app_version, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: None };
+        let changed = |pack_id: &str| emit_changed(&app, pack_id);
+        let context = InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: &app_version, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: None, changed: Some(&changed) };
         install(&path, &context)?;
         Ok(list_packs_in(&catalog, &app_data, &target, &app_version))
     }).await.map_err(unavailable)?
+}
+
+/// Tells every window a pack was installed, updated or repaired, so result rows that needed it
+/// and the pack list can show it.
+pub const CHANGED_EVENT: &str = "pack-changed";
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackChanged<'a> {
+    pub pack_id: &'a str,
+}
+
+pub fn emit_changed(app: &tauri::AppHandle, pack_id: &str) {
+    use tauri::Emitter;
+    let _ = app.emit(CHANGED_EVENT, PackChanged { pack_id });
 }
 
 /// The key pack payloads must be signed with: the updater public key built into this app.
@@ -554,6 +572,9 @@ fn commit(context: &InstallContext, header: &Header, staging: &Path, content: &P
     super::uninstall::retire_old_versions(&pack_folder);
     // A repaired or updated pack is checked again at its next use.
     super::health::forget(&pack_folder);
+    if let Some(changed) = context.changed {
+        changed(&header.id);
+    }
     Ok(())
 }
 
@@ -569,7 +590,7 @@ pub(super) fn digest_hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::super::{current_target, PackStatus};
     use super::*;
     use crate::kit::resources::{resolve_pack_backed, PackBackedLocations, ResourceSource, ResolvedResource};
@@ -579,7 +600,7 @@ pub(super) mod tests {
     const APP: &str = "1.0.14";
     const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
-    pub(in crate::packs) fn sandbox(name: &str) -> PathBuf {
+    pub(crate) fn sandbox(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("toolbox-pack-install-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
@@ -587,13 +608,13 @@ pub(super) mod tests {
     }
 
     /// A throwaway minisign key made for the test. It signs in the legacy mode the updater accepts.
-    pub(in crate::packs) struct TestKey {
+    pub(crate) struct TestKey {
         pair: Ed25519KeyPair,
         id: [u8; 8],
     }
 
     impl TestKey {
-        pub(in crate::packs) fn new(id: u8) -> Self {
+        pub(crate) fn new(id: u8) -> Self {
             let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap();
             Self { pair: Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap(), id: [id; 8] }
         }
@@ -604,7 +625,7 @@ pub(super) mod tests {
             B64.encode(format!("untrusted comment: minisign public key: test\n{}\n", B64.encode(key)))
         }
 
-        pub(in crate::packs) fn public_key(&self) -> PublicKey {
+        pub(crate) fn public_key(&self) -> PublicKey {
             decode_public_key(&self.encoded_public_key()).unwrap()
         }
 
@@ -630,10 +651,10 @@ pub(super) mod tests {
 
     /// A pack built in code. Each test changes what it needs and builds the file and its catalog.
     #[derive(Clone)]
-    pub(in crate::packs) struct Fixture {
-        pub(in crate::packs) id: String,
-        pub(in crate::packs) version: String,
-        pub(in crate::packs) target: String,
+    pub(crate) struct Fixture {
+        pub(crate) id: String,
+        pub(crate) version: String,
+        pub(crate) target: String,
         pack_format: u32,
         app_versions: serde_json::Value,
         files: Vec<(String, Vec<u8>)>,
@@ -643,7 +664,7 @@ pub(super) mod tests {
     }
 
     impl Fixture {
-        pub(in crate::packs) fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 id: "ocr-hindi".into(),
                 version: "2.0".into(),
@@ -671,7 +692,7 @@ pub(super) mod tests {
             })).unwrap()
         }
 
-        pub(in crate::packs) fn payload(&self) -> Vec<u8> {
+        pub(crate) fn payload(&self) -> Vec<u8> {
             let manifest = self.manifest();
             let mut entries: Vec<(&str, &[u8])> = vec![(MANIFEST_FILE, &manifest)];
             entries.extend(self.files.iter().chain(&self.extra_entries).map(|(name, bytes)| (name.as_str(), bytes.as_slice())));
@@ -683,7 +704,7 @@ pub(super) mod tests {
         }
 
         /// The pack file, its payload signed by `key`.
-        pub(in crate::packs) fn file(&self, key: &TestKey) -> Vec<u8> {
+        pub(crate) fn file(&self, key: &TestKey) -> Vec<u8> {
             let payload = self.payload();
             Self::envelope(&self.header(), &payload, Some(key.sign(&payload).as_bytes()))
         }
@@ -695,13 +716,13 @@ pub(super) mod tests {
         }
 
         /// A catalog offering exactly this pack, with the payload's real checksum.
-        pub(in crate::packs) fn catalog(&self) -> Catalog {
+        pub(crate) fn catalog(&self) -> Catalog {
             self.catalog_with_checksum(digest_hex(&self.payload()))
         }
 
         fn catalog_with_checksum(&self, sha256: String) -> Catalog {
             super::super::parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [{
-                "id": self.id, "name": "Text recognition, Hindi", "description": "Reads Hindi.", "toolIds": ["pdf-ocr"],
+                "id": self.id, "name": "Text recognition, Hindi", "description": "Reads Hindi.", "toolIds": ["pdf-ocr"], "ocrLanguage": { "code": "hin", "name": "Hindi" },
                 "license": "Apache-2.0", "version": self.version, "minPackFormat": 1, "appVersions": { "from": "1.0.0" },
                 "payloads": [{ "target": self.target, "downloadBytes": 1000, "installedBytes": 32505856, "sha256": sha256, "path": "packs/ocr-hindi.toolboxpack" }]
             }]}).to_string()).unwrap()
@@ -734,7 +755,7 @@ pub(super) mod tests {
 
         fn install_as(&self, app_version: &str) -> Result<()> {
             let target = current_target();
-            install(&self.file, &InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version, public_key: &self.key, limits: self.limits, cancel: None })
+            install(&self.file, &InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version, public_key: &self.key, limits: self.limits, cancel: None, changed: None })
         }
 
         fn list(&self, app_version: &str) -> PackList {
@@ -755,6 +776,25 @@ pub(super) mod tests {
 
     fn kind_of(result: Result<()>) -> PackInstallErrorKind {
         result.expect_err("the pack should be rejected").kind
+    }
+
+    #[test]
+    fn an_install_from_file_reports_the_pack_changed_once_and_a_rejected_one_does_not() {
+        let key = TestKey::new(1);
+        let setup = Setup::new("changed-event", &Fixture::new(), &key);
+        let target = current_target();
+        let changed = std::sync::Mutex::new(Vec::new());
+        let record = |pack_id: &str| changed.lock().unwrap().push(pack_id.to_string());
+        let install_with = |public_key: &PublicKey| install(&setup.file, &InstallContext { catalog: &setup.catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key, limits: PackLimits::DEFAULT, cancel: None, changed: Some(&record) });
+
+        assert_eq!(kind_of(install_with(&TestKey::new(2).public_key())), PackInstallErrorKind::WrongKey);
+        assert!(changed.lock().unwrap().is_empty(), "a rejected pack changes nothing");
+        install_with(&setup.key).unwrap();
+        assert_eq!(*changed.lock().unwrap(), ["ocr-hindi"]);
+
+        // The event payload the UI reads.
+        assert_eq!(serde_json::to_value(PackChanged { pack_id: "ocr-hindi" }).unwrap(), serde_json::json!({ "packId": "ocr-hindi" }));
+        assert_eq!(CHANGED_EVENT, "pack-changed");
     }
 
     #[test]
@@ -913,7 +953,7 @@ pub(super) mod tests {
         fs::write(&setup.file, &tampered).unwrap();
         let catalog = new.catalog();
         let target = current_target();
-        let context = InstallContext { catalog: &catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key: &setup.key, limits: PackLimits::DEFAULT, cancel: None };
+        let context = InstallContext { catalog: &catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key: &setup.key, limits: PackLimits::DEFAULT, cancel: None, changed: None };
         assert!(install(&setup.file, &context).is_err());
         assert_eq!(fs::read(setup.app_data.join("packs/ocr-hindi/installed.json")).unwrap(), old_record);
         assert!(setup.app_data.join("packs/ocr-hindi/1.0/tessdata/hin.traineddata").is_file());
@@ -1001,7 +1041,7 @@ pub(super) mod tests {
         let target = current_target();
         let cancel = CancelFlag::default();
         cancel.cancel();
-        let context = InstallContext { catalog: &setup.catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key: &setup.key, limits: setup.limits, cancel: Some(&cancel) };
+        let context = InstallContext { catalog: &setup.catalog, app_data: &setup.app_data, target: &target, app_version: APP, public_key: &setup.key, limits: setup.limits, cancel: Some(&cancel), changed: None };
         assert_eq!(kind_of(install(&setup.file, &context)), PackInstallErrorKind::Cancelled);
         setup.assert_untouched("cancelled");
         setup.install().unwrap();
@@ -1033,7 +1073,7 @@ pub(super) mod tests {
     #[test]
     fn installing_makes_no_network_request() {
         let source = include_str!("install.rs");
-        let runtime = &source[..source.find("#[cfg(test)]\npub(super) mod tests").unwrap()];
+        let runtime = &source[..source.find("#[cfg(test)]\npub(crate) mod tests").unwrap()];
         for needle in ["std::net", "TcpStream", "UdpSocket", "ToSocketAddrs", "reqwest", "ureq", "hyper", "tauri_plugin_http", "Command::new"] {
             assert!(!runtime.contains(needle), "install.rs must not use {needle}");
         }

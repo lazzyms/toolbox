@@ -16,7 +16,7 @@
 use super::health::{self, Health};
 use super::install::{self, unavailable, PackInstallError, PackInstallErrorKind, INSTALL_LOCK};
 use super::{list_packs_in, load_catalog, read_record, PackList, PACKS_DIR};
-use crate::kit::contracts::{OutcomePointer, ToolError};
+use crate::kit::contracts::{OutcomePointer, PackNeed, ToolError};
 use crate::kit::resources::{resolve_pack_backed, PackBackedLocations, ResolvedResource, ResourceSource};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -47,12 +47,10 @@ fn pack_folder(app_data: &Path, pack_id: &str) -> PathBuf {
 /// The packs one run is using. Each pack is held once however often the run resolves it, and
 /// every hold is released when this is dropped.
 #[derive(Default)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct PackHolds {
     folders: BTreeSet<PathBuf>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl PackHolds {
     /// Holds the pack for this run. Returns whether this run had not held it yet.
     pub fn hold(&mut self, app_data: &Path, pack_id: &str) -> bool {
@@ -140,51 +138,61 @@ fn holders(app_data: &Path, pack_id: &str) -> usize {
     holds().runs.get(&pack_folder(app_data, pack_id)).copied().unwrap_or(0)
 }
 
+/// A pack a run needs, as its result names it.
+#[derive(Debug, Clone, Copy)]
+pub struct RequiredPack<'a> {
+    pub id: &'a str,
+    /// How a result row names the pack, as in "Install Hindi pack".
+    pub name: &'a str,
+}
+
 /// Resolves a pack-backed resource for a run. When it comes from the installed pack, the run holds
 /// the pack until `holds` is dropped. The hold is taken before the pack is read, so an uninstall
 /// either finishes first, and the resource is not resolved from the pack, or is refused.
 ///
-/// The pack is checked at its first use this session ([`health`]). A damaged pack, or one whose
-/// format or app range does not fit `app_version` (incompatible), fails with
-/// [`ErrorKind::Unavailable`](crate::kit::contracts::ErrorKind) pointing to the pack, and nothing
-/// past it, such as a development override, is used in its place. Each file the run would process
-/// with the resource fails with this error.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn resolve_pack_resource(name: &str, app_data: &Path, pack_id: &str, app_version: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>, holds: &mut PackHolds) -> Result<ResolvedResource, ToolError> {
-    let newly_held = holds.hold(app_data, pack_id);
-    let resolved = resolve_checked(name, app_data, pack_id, app_version, bundled_root, development_override);
+/// The pack is checked at its first use this session ([`health`]). A pack that is not installed, is
+/// damaged, or whose format or app range does not fit `app_version` (incompatible) fails with
+/// [`ErrorKind::Unavailable`](crate::kit::contracts::ErrorKind) and a required-pack pointer that
+/// says which, and nothing past a damaged or incompatible pack, such as a development override,
+/// is used in its place. Each file the run would process with the resource fails with this error.
+pub fn resolve_pack_resource(name: &str, app_data: &Path, pack: RequiredPack, app_version: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>, holds: &mut PackHolds) -> Result<ResolvedResource, ToolError> {
+    let newly_held = holds.hold(app_data, pack.id);
+    let resolved = resolve_checked(name, app_data, pack, app_version, bundled_root, development_override);
     let from_pack = matches!(&resolved, Ok(resource) if resource.source == ResourceSource::InstalledPack);
     if newly_held && !from_pack {
-        holds.release(&pack_folder(app_data, pack_id));
+        holds.release(&pack_folder(app_data, pack.id));
     }
     resolved
 }
 
-fn resolve_checked(name: &str, app_data: &Path, pack_id: &str, app_version: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>) -> Result<ResolvedResource, ToolError> {
-    let pointer = || OutcomePointer::Pack { pack_id: pack_id.to_string() };
-    let damaged = |reason: &str| ToolError::unavailable(format!("The {pack_id} pack is damaged. {reason} Repair it in Settings, Packs."))
-        .with_pointer(pointer());
+fn resolve_checked(name: &str, app_data: &Path, pack: RequiredPack, app_version: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>) -> Result<ResolvedResource, ToolError> {
+    let needs = |reason: PackNeed, message: String| ToolError::unavailable(message)
+        .with_pointer(OutcomePointer::Pack { pack_id: pack.id.to_string(), name: pack.name.to_string(), reason });
+    let pack_name = pack.name;
+    let damaged = || needs(PackNeed::Damaged, format!("The {pack_name} pack is damaged, so it was not used. Nothing was saved."));
     // Only a bundled copy, which never comes from the pack, may stand in for a pack that cannot be used.
     let bundled_only = |bundled_root: Option<PathBuf>, error: ToolError| {
         let bundled = PackBackedLocations { bundled_root, installed_pack_root: None, development_override: None };
         resolve_pack_backed(name, &bundled).map_err(|_| error)
     };
-    if read_record(&pack_folder(app_data, pack_id)).is_some_and(|record| !record.fits(app_version)) {
-        let incompatible = ToolError::unavailable(format!("The {pack_id} pack doesn't work with this version of Toolbox. Update Toolbox to use it, or update the pack in Settings, Packs."))
-            .with_pointer(pointer());
+    if read_record(&pack_folder(app_data, pack.id)).is_some_and(|record| !record.fits(app_version)) {
+        let incompatible = needs(PackNeed::Incompatible, format!("Needs a newer {pack_name} pack. The installed one doesn't work with this version of Toolbox. Nothing was saved."));
         return bundled_only(bundled_root, incompatible);
     }
-    let installed_pack_root = match health::check(app_data, pack_id) {
+    let installed_pack_root = match health::check(app_data, pack.id) {
         None => None,
         Some(Health::Verified(root)) => Some(root),
-        Some(Health::Damaged(reason)) => return bundled_only(bundled_root, damaged(&reason)),
+        Some(Health::Damaged(_)) => return bundled_only(bundled_root, damaged()),
     };
     let verified = installed_pack_root.is_some();
     let locations = PackBackedLocations { bundled_root, installed_pack_root, development_override };
     resolve_pack_backed(name, &locations).map_err(|error| {
+        if !verified {
+            return needs(PackNeed::NotInstalled, format!("Needs the {pack_name} pack, which isn't installed. Nothing was saved."));
+        }
         // A file that passed the check this session no longer does: the pack is damaged now.
-        match verified.then(|| health::recheck(app_data, pack_id)).flatten() {
-            Some(Health::Damaged(reason)) => damaged(&reason),
+        match health::recheck(app_data, pack.id) {
+            Some(Health::Damaged(_)) => damaged(),
             _ => ToolError::unavailable(error),
         }
     })
@@ -242,6 +250,10 @@ mod tests {
     const APP: &str = "1.0.14";
     const MODEL: &str = "tessdata/hin.traineddata";
 
+    fn hindi(id: &str) -> RequiredPack<'_> {
+        RequiredPack { id, name: "Hindi" }
+    }
+
     struct Setup {
         app_data: PathBuf,
         fixture: Fixture,
@@ -260,7 +272,7 @@ mod tests {
             let catalog = fixture.catalog();
             let app_data = root.join("app-data");
             let target = current_target();
-            install::install(&file, &InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: APP, public_key: &key.public_key(), limits: PackLimits::DEFAULT, cancel: None }).unwrap();
+            install::install(&file, &InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: APP, public_key: &key.public_key(), limits: PackLimits::DEFAULT, cancel: None, changed: None }).unwrap();
             Self { app_data, fixture, catalog, key }
         }
 
@@ -269,7 +281,7 @@ mod tests {
         }
 
         fn resolve(&self, holds: &mut PackHolds) -> Result<ResolvedResource, ToolError> {
-            resolve_pack_resource(MODEL, &self.app_data, &self.fixture.id, APP, None, None, holds)
+            resolve_pack_resource(MODEL, &self.app_data, hindi(&self.fixture.id), APP, None, None, holds)
         }
 
         fn uninstall(&self) -> Result<(), PackInstallError> {
@@ -357,7 +369,9 @@ mod tests {
         setup.uninstall().unwrap();
         assert_eq!(super::super::installed_pack_root(&setup.app_data, &setup.fixture.id), None);
         let mut later = PackHolds::default();
-        assert_eq!(setup.resolve(&mut later), Err(ToolError::unavailable(format!("Resource {MODEL} is unavailable."))));
+        let not_installed = ToolError::unavailable("Needs the Hindi pack, which isn't installed. Nothing was saved.")
+            .with_pointer(OutcomePointer::Pack { pack_id: setup.fixture.id.clone(), name: "Hindi".into(), reason: PackNeed::NotInstalled });
+        assert_eq!(setup.resolve(&mut later), Err(not_installed));
         // A run that did not resolve anything from the pack does not keep it held.
         assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0);
     }
@@ -371,7 +385,7 @@ mod tests {
         std::fs::copy(model.join(MODEL), bundled.join(MODEL)).unwrap();
         std::fs::copy(model.join("manifest.json"), bundled.join("manifest.json")).unwrap();
         let mut run = PackHolds::default();
-        let resolved = resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, APP, Some(bundled), None, &mut run).unwrap();
+        let resolved = resolve_pack_resource(MODEL, &setup.app_data, hindi(&setup.fixture.id), APP, Some(bundled), None, &mut run).unwrap();
         assert_eq!(resolved.source, ResourceSource::Bundled);
         assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0);
         setup.uninstall().unwrap();
@@ -430,15 +444,14 @@ mod tests {
             let file = self.app_data.parent().unwrap().join("repair.toolboxpack");
             std::fs::write(&file, bytes).unwrap();
             let target = current_target();
-            install::install(&file, &InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version: APP, public_key: &self.key.public_key(), limits: PackLimits::DEFAULT, cancel: None })
+            install::install(&file, &InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version: APP, public_key: &self.key.public_key(), limits: PackLimits::DEFAULT, cancel: None, changed: None })
         }
     }
 
     fn damaged(pack_id: &str) -> impl Fn(&ToolError) -> bool + '_ {
         move |error| error.kind == ErrorKind::Unavailable
-            && error.pointer == Some(OutcomePointer::Pack { pack_id: pack_id.to_string() })
-            && error.message.starts_with(&format!("The {pack_id} pack is damaged."))
-            && error.message.ends_with("Repair it in Settings, Packs.")
+            && error.pointer == Some(OutcomePointer::Pack { pack_id: pack_id.to_string(), name: "Hindi".into(), reason: PackNeed::Damaged })
+            && error.message == "The Hindi pack is damaged, so it was not used. Nothing was saved."
     }
 
     #[test]
@@ -451,7 +464,6 @@ mod tests {
         let mut run = PackHolds::default();
         let error = setup.resolve(&mut run).unwrap_err();
         assert!(damaged(&setup.fixture.id)(&error), "{error:?}");
-        assert!(error.message.contains("ChecksumMismatch"), "{error:?}");
         assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0, "a damaged pack is not held");
         assert_eq!(setup.status(), PackStatus::Damaged);
 
@@ -515,7 +527,7 @@ mod tests {
             let mut run = PackHolds::default();
             // Each input the run would process with the resource fails on its own.
             let outcomes = ["first.pdf", "second.pdf"].into_iter().map(|input| {
-                match resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, APP, None, Some(development_override.clone()), &mut run) {
+                match resolve_pack_resource(MODEL, &setup.app_data, hindi(&setup.fixture.id), APP, None, Some(development_override.clone()), &mut run) {
                     Ok(resource) => panic!("{input} resolved {resource:?}"),
                     Err(error) => JobOutcome::failure(PathBuf::from(input), error),
                 }
@@ -589,13 +601,13 @@ mod tests {
 
             let development_override = installed.clone();
             let mut run = PackHolds::default();
-            let error = resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, app_version, None, Some(development_override), &mut run).unwrap_err();
+            let error = resolve_pack_resource(MODEL, &setup.app_data, hindi(&setup.fixture.id), app_version, None, Some(development_override), &mut run).unwrap_err();
             assert_eq!(error.kind, ErrorKind::Unavailable, "{case}");
-            assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: setup.fixture.id.clone() }), "{case}");
-            assert_eq!(error.message, "The ocr-hindi pack doesn't work with this version of Toolbox. Update Toolbox to use it, or update the pack in Settings, Packs.", "{case}");
+            assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: setup.fixture.id.clone(), name: "Hindi".into(), reason: PackNeed::Incompatible }), "{case}");
+            assert_eq!(error.message, "Needs a newer Hindi pack. The installed one doesn't work with this version of Toolbox. Nothing was saved.", "{case}");
             assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0, "{case}: nothing was loaded from it");
             // A bundled copy, which is not the pack, may still be used.
-            let resolved = resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, app_version, Some(bundled.clone()), None, &mut run).unwrap();
+            let resolved = resolve_pack_resource(MODEL, &setup.app_data, hindi(&setup.fixture.id), app_version, Some(bundled.clone()), None, &mut run).unwrap();
             assert_eq!(resolved.source, ResourceSource::Bundled, "{case}");
         }
 

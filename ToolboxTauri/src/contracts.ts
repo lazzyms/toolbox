@@ -128,8 +128,11 @@ export type ToolCommand =
 
 export type OutcomePointer =
   | { kind: "tool"; toolId: AtomicToolId }
-  | { kind: "pack"; packId: string }
+  | { kind: "pack"; packId: string; name: string; reason: PackNeed }
   | { kind: "outputFolder" };
+
+/** Why a file needs its pack: `PackNeed` in `src-tauri/src/kit/contracts.rs`. */
+export type PackNeed = "notInstalled" | "damaged" | "incompatible";
 
 export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "textLength";
 

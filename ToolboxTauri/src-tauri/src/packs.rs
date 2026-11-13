@@ -60,7 +60,22 @@ pub struct CatalogPack {
     pub min_pack_format: u32,
     pub app_versions: VersionRange,
     pub payloads: Vec<Payload>,
+    /// The language a text recognition pack adds. OCR finds the pack a language needs by its code.
+    #[serde(default)]
+    pub ocr_language: Option<OcrLanguage>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrLanguage {
+    /// The language's Tesseract code, as in `hin`. The pack holds `tessdata/<code>.traineddata`.
+    pub code: String,
+    /// How results name the pack, as in "Install Hindi pack".
+    pub name: String,
+}
+
+/// The tool whose language packs the catalog names with `ocrLanguage`.
+pub const OCR_TOOL_ID: &str = "pdf-ocr";
 
 /// `from` is inclusive and `before` is exclusive. No `before` means every later version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +192,7 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
         return Err(format!("The pack catalog format {} is not supported", catalog.format_version));
     }
     let mut ids = std::collections::BTreeSet::new();
+    let mut languages = std::collections::BTreeSet::from(["eng"]);
     for pack in &catalog.packs {
         let valid_id = !pack.id.is_empty() && pack.id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
         if !valid_id || !ids.insert(pack.id.as_str()) {
@@ -199,6 +215,16 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
         let valid_path = |path: &str| path.ends_with(".toolboxpack") && path.split('/').all(install::is_plain_segment);
         if let Some(payload) = pack.payloads.iter().find(|payload| !valid_path(&payload.path)) {
             return Err(format!("Pack {} has a bad download path for {}: {:?}", pack.id, payload.target, payload.path));
+        }
+        if let Some(language) = &pack.ocr_language {
+            // The code names a file in the pack, so it must be one plain Tesseract language name.
+            let valid_code = !language.code.is_empty() && language.code.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_');
+            if !valid_code || language.name.trim().is_empty() || !pack.tool_ids.iter().any(|tool| tool == OCR_TOOL_ID) {
+                return Err(format!("Pack {} has a bad text recognition language", pack.id));
+            }
+            if !languages.insert(language.code.as_str()) {
+                return Err(format!("The pack catalog has more than one pack for language {:?}", language.code));
+            }
         }
     }
     Ok(catalog)

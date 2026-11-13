@@ -175,14 +175,12 @@ pub fn resolve_bundled_or_override(name: &str, bundled_root: &Path, override_var
     Ok(None)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct PackBackedLocations {
     pub bundled_root: Option<PathBuf>,
     pub installed_pack_root: Option<PathBuf>,
     pub development_override: Option<PathBuf>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn resolve_pack_backed(name: &str, locations: &PackBackedLocations) -> Result<ResolvedResource, String> {
     let manifest_roots = [(&locations.bundled_root, ResourceSource::Bundled), (&locations.installed_pack_root, ResourceSource::InstalledPack)];
     for (root, source) in manifest_roots {

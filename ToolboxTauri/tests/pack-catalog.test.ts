@@ -20,3 +20,28 @@ for (const [name, path] of Object.entries(catalogs)) {
     }
   });
 }
+
+type OcrLanguagePack = { id: string; toolIds: string[]; ocrLanguage?: { code: string; name: string } };
+
+// OCR points a file at the pack whose ocrLanguage code matches its language, so every such pack is
+// one OCR uses, and each language has exactly one pack. English ships with the app.
+for (const [name, path] of Object.entries(catalogs)) {
+  test(`every ${name} OCR language pack is one OCR PDF uses, with a code no other pack claims`, () => {
+    const catalog = JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8")) as { packs: OcrLanguagePack[] };
+    const codes = new Set<string>(["eng"]);
+    for (const pack of catalog.packs) {
+      if (!pack.ocrLanguage) continue;
+      const { code, name: language } = pack.ocrLanguage;
+      assert.ok(pack.toolIds.includes("pdf-ocr"), `${pack.id} reads ${language} for OCR PDF`);
+      assert.match(code, /^[a-z_]+$/, `${pack.id} has a Tesseract language code`);
+      assert.ok(language.trim().length > 0, `${pack.id} names its language`);
+      assert.ok(!codes.has(code), `${pack.id} claims ${code}, which another pack or the app already has`);
+      codes.add(code);
+    }
+  });
+}
+
+test("the fixture catalog has OCR language packs, so the checks above are not vacuous", () => {
+  const catalog = JSON.parse(readFileSync(new URL(`../${catalogs.fixture}`, import.meta.url), "utf8")) as { packs: OcrLanguagePack[] };
+  assert.ok(catalog.packs.filter((pack) => pack.ocrLanguage).length >= 2);
+});
