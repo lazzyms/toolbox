@@ -2,9 +2,10 @@ import { test, expect, type Page } from '@playwright/test';
 import { openToolBySearch } from './open-tool';
 
 const svg = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="612" height="792"><rect width="612" height="792" fill="white"/></svg>');
-const field = (name: string, label: string | null, type: 'text' | 'checkbox', page: number, y: number, extra: Record<string, unknown> = {}) => ({
-  name, label, type, value: type === 'checkbox' ? false : '', options: type === 'checkbox' ? ['Yes'] : [], flags: 0,
-  required: false, readOnly: false, multiline: false, maxLen: null, widgets: [{ page, x: 72, y, width: type === 'checkbox' ? 14 : 220, height: type === 'checkbox' ? 14 : 22 }], ...extra,
+const field = (name: string, label: string | null, type: 'text' | 'checkbox' | 'radio' | 'dropdown' | 'listbox', page: number, y: number, extra: Record<string, unknown> = {}) => ({
+  name, label, type, value: type === 'checkbox' ? false : type === 'listbox' ? [] : '', options: type === 'checkbox' ? ['Yes'] : [], optionLabels: [], flags: 0,
+  required: false, readOnly: false, multiline: false, multiSelect: false, editable: false, maxLen: null, format: null,
+  widgets: [{ page, x: 72, y, width: type === 'checkbox' ? 14 : 220, height: type === 'checkbox' ? 14 : 22 }], ...extra,
 });
 // Native Tab order differs from the visual order: Email sits above Full name on the page.
 const fillable = { unsupported: null, fields: [
@@ -151,4 +152,101 @@ test('a refused fill shows the native reason in plain language', async ({ page }
   await canvas(page).getByRole('textbox', { name: 'Full name' }).fill('Ada');
   await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
   await expect(page.getByText('This PDF could not be exported safely. “applicant.name” is read-only, so it can\'t be filled.')).toBeVisible();
+});
+
+const radio = (option: string, x: number) => ({ page: 0, x, y: 60, width: 14, height: 14, option });
+const choices = { unsupported: null, fields: [
+  field('pets', 'Pets', 'radio', 0, 60, { options: ['Yes', 'No'], optionLabels: ['Yes', 'No'], required: true, flags: 2 | 1 << 15, widgets: [radio('Yes', 72), radio('No', 120)] }),
+  field('status', 'Status', 'dropdown', 0, 100, { options: ['Employed', 'Retired', 'self'], optionLabels: ['Employed', 'Retired', 'Self-employed'] }),
+  field('languages', 'Languages', 'listbox', 0, 140, { options: ['English', 'French', 'German'], optionLabels: ['English', 'French', 'German'], multiSelect: true,
+    widgets: [{ page: 0, x: 72, y: 140, width: 220, height: 48 }] }),
+  field('shift', 'Shift', 'listbox', 0, 200, { options: ['Day', 'Night'], optionLabels: ['Day', 'Night'], widgets: [{ page: 0, x: 72, y: 200, width: 220, height: 32 }] }),
+  field('dob', 'Date of birth', 'text', 0, 250, { format: { kind: 'date', pattern: 'dd/mm/yyyy' } }),
+  field('zip', 'ZIP', 'text', 0, 290, { maxLen: 5, format: { kind: 'special', special: 0 } }),
+  field('phone', 'Phone', 'text', 0, 330, { required: true, flags: 2 }),
+] };
+const exported = async (page: Page) => {
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(1);
+  return page.evaluate(() => (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request.formValues);
+};
+
+test('radio groups, drop-downs and list boxes fill from their options and export the chosen values', async ({ page }, testInfo) => {
+  await openForm(page, choices);
+  const panel = inspector(page);
+  const pets = canvas(page).getByRole('radiogroup', { name: 'Pets' });
+  await pets.getByRole('radio', { name: 'No' }).click();
+  await expect(pets.getByRole('radio', { name: 'No' })).toBeChecked();
+  const status = canvas(page).getByRole('combobox', { name: 'Status' });
+  await expect(status.getByRole('option')).toHaveText(['', 'Employed', 'Retired', 'Self-employed']);
+  await status.selectOption('self');
+  const languages = canvas(page).getByRole('toolbar', { name: 'Languages' });
+  await languages.getByRole('button', { name: 'German' }).click();
+  await languages.getByRole('button', { name: 'English' }).click();
+  await expect(languages.getByRole('button', { name: 'English' })).toHaveAttribute('aria-pressed', 'true');
+  const shift = canvas(page).getByRole('radiogroup', { name: 'Shift' });
+  await shift.getByRole('radio', { name: 'Day' }).click();
+  await shift.getByRole('radio', { name: 'Night' }).click();
+  await expect(shift.getByRole('radio', { name: 'Day' })).not.toBeChecked();
+  await expect(panel.getByRole('list', { name: 'Fields' }).getByRole('listitem')).toHaveText([
+    'PetsNo', 'StatusSelf-employed', 'LanguagesEnglish, German', 'ShiftNight', 'Date of birth', 'ZIP', 'PhoneRequired, empty',
+  ]);
+  await page.screenshot({ path: testInfo.outputPath('pdf-form-choices.png') });
+  expect(await exported(page)).toEqual([
+    { name: 'pets', value: 'No' },
+    { name: 'status', value: 'self' },
+    { name: 'languages', value: ['English', 'German'] },
+    { name: 'shift', value: ['Night'] },
+  ]);
+});
+
+test('max length is enforced while typing and invalid or empty required fields are flagged', async ({ page }, testInfo) => {
+  await openForm(page, choices);
+  const panel = inspector(page);
+  const zip = canvas(page).getByRole('textbox', { name: 'ZIP' });
+  await zip.click();
+  await page.keyboard.type('123456789');
+  await expect(zip).toHaveValue('12345');
+
+  const dob = canvas(page).getByRole('textbox', { name: 'Date of birth' });
+  await dob.click();
+  await page.keyboard.type('31/02/2024');
+  await expect(dob).not.toHaveAttribute('aria-invalid');
+  await page.keyboard.press('Tab');
+  await expect(dob).toHaveAttribute('aria-invalid', 'true');
+  await expect(dob).toHaveAccessibleDescription('Not a real date');
+  await expect(page.getByRole('status').filter({ hasText: 'Date of birth: not a real date.' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: /^Date of birth/ }).locator('.text-destructive')).toHaveText('Not a real date');
+  await expect(panel.getByRole('note')).toHaveText("7 fields on page 1. 1 field has an entry that isn't valid, and 2 required fields are still empty.");
+  // The ZIP field was left with a valid entry, so it carries no flag.
+  await expect(zip).not.toHaveAttribute('aria-invalid');
+
+  const phone = canvas(page).getByRole('textbox', { name: 'Phone' });
+  await phone.click();
+  await expect(panel.getByRole('button', { name: /^Phone/ }).locator('.text-destructive')).toHaveCount(0);
+  await dob.click();
+  await expect(phone).toHaveAttribute('aria-invalid', 'true');
+  await expect(phone).toHaveAccessibleDescription('Required');
+  await expect(page.getByRole('status').filter({ hasText: 'Phone is required.' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: /^Phone/ }).locator('.text-destructive')).toHaveText('Required, empty');
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.type('29/02/2024');
+  await phone.click();
+  await expect(dob).not.toHaveAttribute('aria-invalid');
+  await expect(panel.getByRole('note')).toHaveText('7 fields on page 1. 2 required fields are still empty.');
+  await page.screenshot({ path: testInfo.outputPath('pdf-form-flags.png') });
+
+  await panel.getByRole('button', { name: 'Go to next empty required field' }).click();
+  await expect(canvas(page).getByRole('radiogroup', { name: 'Pets' }).getByRole('radio', { name: 'Yes' })).toBeFocused();
+  await expect(page.getByRole('status').filter({ hasText: 'Pets is required.' })).toBeVisible();
+  await page.keyboard.press('Space');
+  await phone.fill('555 123 4567');
+  await expect(panel.getByRole('note')).toHaveText('7 fields on page 1.');
+  await expect(panel.getByRole('button', { name: 'Go to next empty required field' })).toBeDisabled();
+  expect(await exported(page)).toEqual([
+    { name: 'pets', value: 'Yes' },
+    { name: 'dob', value: '29/02/2024' },
+    { name: 'zip', value: '12345' },
+    { name: 'phone', value: '555 123 4567' },
+  ]);
 });

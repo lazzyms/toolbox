@@ -18,7 +18,8 @@ import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
 import { Label } from '../components/ui/label';
 import { Slider } from '../components/ui/slider';
-import type { PdfDocument, PdfEditRun, PdfFormField, PdfFormInspection, PdfFormValue, PdfPage, PdfTextEdit, PdfTextRun } from '../features/pdf-editor/contracts';
+import type { PdfDocument, PdfEditRun, PdfFormEntry, PdfFormField, PdfFormInspection, PdfFormValue, PdfPage, PdfTextEdit, PdfTextRun } from '../features/pdf-editor/contracts';
+import { formEntryFlag, isFormEntryEmpty } from '../features/pdf-editor/form-checks';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { RedactDisclosure, RedactInspector, listMarks, redactionFills } from '../features/pdf-editor/RedactInspector';
@@ -321,7 +322,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [error, setError] = useState<string | null>(null);
   // Form entries live outside the scene history: Reset clears them, Undo does not.
   const [form, setForm] = useState<PdfFormInspection | null>(null);
-  const [formEntries, setFormEntries] = useState<Record<string, string | boolean>>({});
+  const [formEntries, setFormEntries] = useState<Record<string, PdfFormEntry>>({});
+  const [formLeft, setFormLeft] = useState<ReadonlySet<string>>(new Set());
+  const [formFocus, setFormFocus] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
   const formRequested = useRef(false);
   const [loading, setLoading] = useState(Boolean(path));
   const [rendering, setRendering] = useState(false);
@@ -357,7 +361,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   }, [tool, path]);
   const formValue = (field: PdfFormField) => formEntries[field.name] ?? field.value;
   const formValues = useMemo<PdfFormValue[]>(() => (form?.fields ?? [])
-    .filter((field) => field.name in formEntries && formEntries[field.name] !== field.value)
+    .filter((field) => field.name in formEntries && JSON.stringify(formEntries[field.name]) !== JSON.stringify(field.value))
     .map((field) => ({ name: field.name, value: formEntries[field.name] })), [form, formEntries]);
   const baseline = document ? sceneFromDocument(document) : null;
   const contributors = baseline ? sceneContributors(scene, baseline, formValues) : [];
@@ -423,6 +427,15 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       () => {});
     return () => { textGeneration.current.current += 1; };
   }, [path, document, page?.sourceIndex]);
+  // Flags show once the user has left a field: an entry the export would refuse, or a required field still empty.
+  const formFlag = (field: PdfFormField) => !formLeft.has(field.name) ? null
+    : formEntryFlag(field, formValue(field)) ?? (field.required && isFormEntryEmpty(formValue(field)) ? 'Required' : null);
+  const formLabel = (field: PdfFormField) => field.label || field.name;
+  const leaveFormField = (field: PdfFormField) => {
+    setFormLeft((left) => new Set(left).add(field.name));
+    const flag = formEntryFlag(field, formValue(field));
+    setFormNotice(flag ? `${formLabel(field)}: ${flag.toLowerCase()}.` : field.required && isFormEntryEmpty(formValue(field)) ? `${formLabel(field)} is required.` : null);
+  };
   useEffect(() => { onScene(path, document ? scene : null, document ? sceneFromDocument(document) : null, formValues); }, [path, scene, document, formValues]);
   useLayoutEffect(() => {
     if (selectedSignature) setSignatureTextDraft(selectedSignature.text);
@@ -542,7 +555,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     past: [...value.past, value.present], present: value.future[0], future: value.future.slice(1),
   } : value); };
   const endGroup = () => { group.current = null; };
-  const reset = () => { if (document) commit(sceneFromDocument(document)); setFormEntries({}); setSelectedId(null); setSelectedRun(null); };
+  const reset = () => { if (document) commit(sceneFromDocument(document)); setFormEntries({}); setFormLeft(new Set()); setFormNotice(null); setSelectedId(null); setSelectedRun(null); };
   useEffect(() => {
     const onShellCommand = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
@@ -658,7 +671,15 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     const target = scene.pages.find((item) => item.sourceIndex === field.widgets[0].page);
     if (!target) return;
     if (target.id !== page?.id) selectPage(target.id);
-    requestAnimationFrame(() => window.document.querySelector<HTMLElement>(`[data-form-field="${CSS.escape(field.name)}"] [aria-label]`)?.focus());
+    requestAnimationFrame(() => window.document.querySelector<HTMLElement>(`[data-form-field="${CSS.escape(field.name)}"] :is(input, textarea, select, button, [tabindex]):not([tabindex="-1"])`)?.focus());
+  };
+  const goToNextRequired = () => {
+    const fields = form?.fields ?? [];
+    const from = fields.findIndex((field) => field.name === formFocus);
+    const next = [...fields.slice(from + 1), ...fields.slice(0, from + 1)].find((field) => field.required && isFormEntryEmpty(formValue(field)));
+    if (!next) return;
+    setFormNotice(`${formLabel(next)} is required.`);
+    goToField(next);
   };
   const formUnavailable = Boolean(form && (form.unsupported || !form.fields.length));
   const pageTargets = selectedPages.filter((id) => scene.pages.some((item) => item.id === id));
@@ -768,7 +789,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     signatureTextDraft, setSignatureTextDraft, signatureColor, setSignatureColor, signatureError, chooseSignatureImage,
     usedSignatures: reusable, reuseSignature, clearUsedSignatures,
     pageCount: scene.pages.length, addWatermark, chooseWatermarkPicture, watermarkPictureError,
-    form, formValue, goToField, switchToAddText: () => { endGroup(); setTool('text'); setSelectedId(null); },
+    form, formValue, formFlag, goToField, goToNextRequired, switchToAddText: () => { endGroup(); setTool('text'); setSelectedId(null); },
     selectedRun: editRuns.find((run) => run.index === selectedRun), textEdits,
     pageNumberOf: (sourceIndex) => scene.pages.findIndex((item) => item.sourceIndex === sourceIndex) + 1, showEdit, revertEdit, chooseTool,
   } : null;
@@ -926,6 +947,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
             redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions}
             formFields={form?.unsupported ? [] : form?.fields} formValue={formValue}
             onFormValue={(field, value) => { if (availability.allows('pdf-edit') && !field.readOnly) setFormEntries((entries) => ({ ...entries, [field.name]: value })); }}
+            formFlag={formFlag} onFormFocus={(field) => setFormFocus(field.name)} onFormLeave={leaveFormField}
             editRuns={editRuns} textEdits={pageEdits} selectedRun={selectedRun} onSelectRun={setSelectedRun} onEditRun={setTextEdit}
             watermarks={watermarks} onWatermarkChange={(id, patch) => { if (canEditCanvas) changeObject(id, patch, 'watermark-position'); }} />
         </div>
@@ -996,7 +1018,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
         {availability.allows('pdf-organize') && <><Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => { if (availability.allows('pdf-organize')) commit(rotatePages(scene, targets)); }}>Rotate ↻</Button>
         <Button variant="ghost" size="sm" aria-label="Move page earlier" disabled={currentIndex <= 0} onClick={() => shiftPage(-1)}>Move ←</Button>
         <Button variant="ghost" size="sm" aria-label="Move page later" disabled={currentIndex >= scene.pages.length - 1} onClick={() => shiftPage(1)}>Move →</Button></>}
-        {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note">{tool === 'form' && formUnavailable && <><span role="status">Fill form is unavailable for this PDF.</span><span className="scene-toolbar-divider" /></>}<span role="status">{changes ? `${changes} ${changes === 1 ? 'change' : 'changes'} not exported · ` : ''}</span>{tool === 'form' ? 'Fields are filled in the copy only' : 'Original unchanged'}</span>
+        {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note">{tool === 'form' && formUnavailable && <><span role="status">Fill form is unavailable for this PDF.</span><span className="scene-toolbar-divider" /></>}{tool === 'form' && formNotice && <><span role="status">{formNotice}</span><span className="scene-toolbar-divider" /></>}<span role="status">{changes ? `${changes} ${changes === 1 ? 'change' : 'changes'} not exported · ` : ''}</span>{tool === 'form' ? 'Fields are filled in the copy only' : 'Original unchanged'}</span>
       </div>
     </>}
   </section>;
