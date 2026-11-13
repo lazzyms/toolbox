@@ -15,6 +15,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResultList } from "../components/ResultList";
 import { FormattedPdfPreview, useFormattedPreview } from "./FormattedPdfPreview";
+import { defaultFont, FontSettings, FontsUsed, type DocumentFont } from "./FormattedPdfFonts";
 import { RunStateContext } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { chooseCreatedDocumentSavePath } from "../components/saveStep";
@@ -70,8 +71,6 @@ const pageSummary = (page: PageSettings) => `${pageSizes[page.pageSize].name}, $
 const bandSummary = (page: PageSettings) => [
   page.header.trim() && "Header", page.footer.trim() && "Footer", page.pageNumbers && "Page numbers",
 ].filter(Boolean).join(", ").toLowerCase().replace(/^./, (first) => first.toUpperCase()) || "None";
-/** The font this version always uses; the font picker comes later. */
-const FONT = { family: "Liberation Serif", size: 11 } as const;
 
 let lastId = 0;
 const nextId = () => ++lastId;
@@ -191,8 +190,11 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [page, setPage] = useState<PageSettings>(defaultPage);
+  const [font, setFont] = useState<DocumentFont>(defaultFont);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<JobOutcome[] | null>(null);
+  /** The page settings the last save used, for the Fonts used table's header and footer row. */
+  const [savedPage, setSavedPage] = useState<PageSettings>(defaultPage);
   /** The path of an image the last save couldn't find; it stays flagged while a block still points there. */
   const [missing, setMissing] = useState<string | null>(null);
   const list = useRef<HTMLOListElement>(null);
@@ -517,7 +519,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   };
 
   // The preview gets the document a save would send, without the output path.
-  const typed = { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page, font: FONT };
+  const typed = { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page, font };
   const { preview, updating, error: previewError } = useFormattedPreview(typed.blocks.length > 0 ? typed : null);
   const [portraitWidth, portraitHeight] = pageSizes[page.pageSize].points;
   const previewSize = page.orientation === "portrait" ? [portraitWidth, portraitHeight] as const : [portraitHeight, portraitWidth] as const;
@@ -528,7 +530,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const save = async () => {
     if (empty || saving) return;
     const name = `${title.trim() || "Untitled"}.pdf`;
-    const outputPath = await chooseCreatedDocumentSavePath({ title: "Save the PDF", extension: "pdf" }, name, `${pageSizes[page.pageSize].name}${page.orientation === "landscape" ? " landscape" : ""}, Liberation Serif 11 pt`);
+    const outputPath = await chooseCreatedDocumentSavePath({ title: "Save the PDF", extension: "pdf" }, name, `${pageSizes[page.pageSize].name}${page.orientation === "landscape" ? " landscape" : ""}, ${font.family} ${font.size} pt`);
     if (!outputPath) return;
     setSaving(true);
     setMissing(null);
@@ -540,6 +542,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
       const lost = missingImage(outcomes, blocks);
       setMissing(lost);
       setSaved(lost ? null : outcomes);
+      setSavedPage(page);
     } catch (error) {
       setSaved([failedOutcome(outputPath, "processing", error instanceof Error ? error.message : String(error))]);
     } finally {
@@ -555,6 +558,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     setTitle("");
     setAuthor("");
     setPage(defaultPage);
+    setFont(defaultFont);
     setSaved(null);
     setMissing(null);
     lastSelection.current = null;
@@ -800,10 +804,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                   <p id="formatted-pdf-margins-hint" className="workspace-note">{marginLabels[page.margins].hint}</p>
                 </div>
               </fieldset>
-              <dl className="formatted-pdf-defaults">
-                <dt className="workspace-panel-label">Font</dt>
-                <dd className="workspace-note">Liberation Serif, 11 pt</dd>
-              </dl>
+              <FontSettings font={font} onChange={setFont} disabled={saving} />
               <fieldset className="workspace-field" disabled={saving} aria-describedby="formatted-pdf-band-summary">
                 <legend className="workspace-panel-label">Header and footer</legend>
                 <p id="formatted-pdf-band-summary" className="workspace-note">{bandSummary(page)}</p>
@@ -876,6 +877,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
           namedByOutput
         />
       )}
+      {saved && !saving && saved[0] && <FontsUsed outcome={saved[0]} band={savedPage} />}
       {saved && !saving && <Button variant="outline" className="formatted-pdf-new" onClick={startOver}>New document</Button>}
     </div>
   );
