@@ -3,6 +3,7 @@ pub mod document_info;
 pub mod page_ranges;
 pub mod privacy;
 pub mod scene;
+pub mod text_edit;
 pub mod editor;
 pub mod remaining;
 pub mod page_text;
@@ -231,7 +232,11 @@ pub(crate) fn resolve<'a>(document: &'a Document, mut value: &'a Object) -> Resu
     Ok(value)
 }
 
-pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+pub(crate) fn inherited(document: &Document, id: ObjectId, key: &[u8]) -> Result<Option<Object>, String> {
+    Ok(inherited_ref(document, id, key)?.cloned())
+}
+
+pub(crate) fn inherited_ref<'a>(document: &'a Document, mut id: ObjectId, key: &[u8]) -> Result<Option<&'a Object>, String> {
     let mut seen = HashSet::new();
     loop {
         if !seen.insert(id) {
@@ -239,7 +244,7 @@ pub(crate) fn inherited(document: &Document, mut id: ObjectId, key: &[u8]) -> Re
         }
         let page_tree = document.get_dictionary(id).map_err(|error| error.to_string())?;
         if let Ok(value) = page_tree.get(key) {
-            return Ok(Some(resolve(document, value)?.clone()));
+            return Ok(Some(resolve(document, value)?));
         }
         match page_tree.get(b"Parent") {
             Ok(parent) => id = parent.as_reference().map_err(|error| error.to_string())?,

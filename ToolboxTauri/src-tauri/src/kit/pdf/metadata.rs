@@ -18,6 +18,8 @@ pub struct PdfPageMetadata {
     pub page_box: [f32; 4],
     pub preview: Option<String>,
     pub text_runs: Option<Vec<PdfTextRun>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit_runs: Option<Vec<super::text_edit::TextEditRun>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +64,7 @@ pub fn inspect(path: &Path) -> Result<PdfDocumentMetadata, String> {
                 page_box,
                 preview: render_preview(path, index + 1, page_box[2] - page_box[0], page_box[3] - page_box[1]),
                 text_runs: None,
+                edit_runs: None,
             })
         }))
         .collect::<Result<Vec<_>, _>>()?;

@@ -29,7 +29,11 @@ test.beforeEach(async ({ page }) => {
           const key = `${args.request.path}:${pageIndex}`;
           const response = (w.sceneTextResponses[key] ?? 0) + 1;
           w.sceneTextResponses[key] = response;
-          return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }] };
+          return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }],
+            editRuns: [
+              { index: 0, text: 'Rent £1,450', x: 60, y: 120, width: 120, height: 14, fontName: 'Helvetica', fontSize: 12, reason: null },
+              { index: 1, text: 'Stamped by the Landlord', x: 60, y: 400, width: 200, height: 14, fontName: 'Helvetica', fontSize: 12, reason: 'picture' },
+            ] };
         }
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
@@ -82,6 +86,8 @@ test('PDF editor toolbars use roving keyboard focus and render the workspace', a
   const textTool = tools.getByRole('button', { name: 'Text', exact: true });
   await selectTool.focus();
   await page.keyboard.press('ArrowRight');
+  await expect(tools.getByRole('button', { name: 'Edit text', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowRight');
   await expect(textTool).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(textTool).toHaveAttribute('aria-pressed', 'true');
@@ -127,6 +133,8 @@ test('PDF editor toolbar uses roving keyboard focus and the inspector follows th
   const toolbar = page.getByRole('toolbar', { name: 'PDF editor tools' });
   const select = toolbar.getByRole('button', { name: 'Select', exact: true });
   await select.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(toolbar.getByRole('button', { name: 'Edit text', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowRight');
   await expect(toolbar.getByRole('button', { name: 'Text', exact: true })).toBeFocused();
   await page.keyboard.press('Home');
@@ -775,6 +783,82 @@ test('scene export sends only the scene sections and the invoke boundary accepts
   expect(results[0].state).toBe('succeeded');
   const accepted = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
   expect(accepted).toEqual(staged);
+});
+
+async function openEditText(page: Page) {
+  await openEditor(page);
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Edit text', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Properties' })).toContainText('Click text with a dashed outline to change it.');
+}
+async function replaceRun(page: Page, replacement: string) {
+  await page.getByRole('button', { name: 'Edit text: Rent £1,450' }).click();
+  const input = page.getByRole('textbox', { name: 'Replacement text' });
+  await expect(input).toHaveValue('Rent £1,450');
+  await input.fill(replacement);
+  await input.press('Enter');
+  await expect(input).toHaveCount(0);
+}
+
+test('Edit text outlines editable runs and marks picture text as not editable', async ({ page }) => {
+  await openEditText(page);
+  const editable = page.locator('[data-edit-run="0"]');
+  const blocked = page.locator('[data-edit-run="1"]');
+  await expect(editable).toHaveClass('scene-edit-run');
+  await expect(editable).toHaveAttribute('aria-label', 'Edit text: Rent £1,450');
+  await expect(blocked).toHaveClass('scene-edit-run-blocked');
+  await expect(blocked.locator('title')).toHaveText("This text is part of a picture, so it can't be edited.");
+
+  await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Select', exact: true }).click();
+  await expect(page.locator('[data-edit-run]')).toHaveCount(0);
+});
+
+test('not-editable text explains why and offers Add text instead', async ({ page }) => {
+  await openEditText(page);
+  await page.locator('[data-edit-run="1"]').click();
+  await expect(page.getByRole('textbox', { name: 'Replacement text' })).toHaveCount(0);
+  const alert = page.getByRole('region', { name: 'Properties' }).getByRole('alert');
+  await expect(alert).toContainText("This text can't be edited.");
+  await expect(alert).toContainText('It is part of a scanned picture, not real text.');
+  await alert.getByRole('button', { name: 'Cover it with Add text instead' }).click();
+  await expect(page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Text', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+test('a text edit is sent as textEdits to the preview and the export, and can be reverted', async ({ page }) => {
+  await openEditText(page);
+  await replaceRun(page, 'Rent £1,475');
+  await expect(page.locator('[data-edit-run="0"]')).toHaveAttribute('aria-label', 'Edit text: Rent £1,475');
+  const inspector = page.getByRole('region', { name: 'Properties' });
+  await expect(inspector.getByRole('group', { name: 'Selected text' })).toContainText('Helvetica · 12 pt');
+  await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toContainText('Page 1: “Rent £1,450” to “Rent £1,475”');
+  await expect(page.locator('.scene-edit-overflow')).toHaveCount(0);
+
+  const edit = { pageIndex: 0, run: 0, original: 'Rent £1,450', replacement: 'Rent £1,475' };
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'preview_pdf_scene_pages').at(-1).args.request.textEdits)).toEqual([edit]);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
+  expect(Object.keys(request).sort()).toEqual(['outputLocation', 'paths', 'scene', 'textEdits']);
+  expect(request.textEdits).toEqual([edit]);
+  expect(request.scene).toEqual({ pages: expect.any(Array) });
+
+  await inspector.getByRole('button', { name: 'Revert this text' }).click();
+  await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toBeVisible();
+});
+
+test('a replacement longer than the original line warns that it will be cut off', async ({ page }) => {
+  await openEditText(page);
+  await replaceRun(page, 'Rent £1,475 per calendar month');
+  await expect(page.locator('.scene-edit-overflow')).toHaveText('Text runs past the original line by 3 words. It will be cut off unless you make it shorter or smaller.');
+  await expect(page.getByRole('region', { name: 'Properties' }).getByRole('alert')).toContainText('This text is too long for its space.');
+  await page.locator('[data-edit-run="0"]').click();
+  await page.getByRole('textbox', { name: 'Replacement text' }).fill('Rent £1,475');
+  await page.getByRole('textbox', { name: 'Replacement text' }).press('Enter');
+  await expect(page.locator('.scene-edit-overflow')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Properties' }).getByRole('alert')).toHaveCount(0);
 });
 
 test('Edit PDF shows where the export goes and names it by the contributing tool', async ({ page }) => {
