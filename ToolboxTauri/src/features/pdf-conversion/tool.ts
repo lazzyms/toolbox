@@ -3,6 +3,7 @@ import type { RunContext } from "../../components/ToolScaffold";
 import type { AtomicToolId, OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
 import type { EntrySortOption, IntakeCopy } from "../../components/intake";
 import type { PdfDocument } from "../pdf-editor";
+import { formatPageSpans, type PageSpan } from "../../shared/pageRanges";
 
 export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string; picks: PagePicks };
 
@@ -28,6 +29,8 @@ export type OptionsPanelProps<Options> = {
   selectedPages: number[];
   pageRange: string;
   choosePageRange: (value: string) => void;
+  /** True when the range was written by picking thumbnails rather than typed. */
+  pageRangeFromPicks: boolean;
   picks: PagePicks;
   pageCounts: Record<string, PageCount>;
   /** True while a run is in flight, so a panel can disable its inputs. */
@@ -40,6 +43,12 @@ export interface ConversionTool<Options = unknown> {
   /** Options to start from when another tool hands its files over. */
   handoffOptions?: Options;
   inspectsPdf: boolean;
+  /**
+   * One typed range applies to every file in the batch and is shortened to each file's
+   * length natively. Thumbnails are offered only for a single PDF, picking writes the
+   * range, and picking nothing means every page.
+   */
+  batchPageRange?: boolean;
   sortOptions?: readonly EntrySortOption[];
   /** Intake wording for a tool whose list flags files that will be skipped or aren't available yet. */
   intakeCopy?(utility: ToolDefinition): IntakeCopy;
@@ -57,20 +66,13 @@ export interface ConversionTool<Options = unknown> {
 }
 
 export const formatPageRange = (pages: number[]) => {
-  const oneBased = [...pages].sort((left, right) => left - right).map((page) => page + 1);
-  const ranges: string[] = [];
-  for (const page of oneBased) {
-    const previous = ranges[ranges.length - 1];
-    if (!previous) {
-      ranges.push(String(page));
-      continue;
-    }
-    const [start, end] = previous.split("-").map(Number);
-    const last = end ?? start;
-    if (page === last + 1) ranges[ranges.length - 1] = `${start}-${page}`;
-    else ranges.push(String(page));
+  const spans: PageSpan[] = [];
+  for (const page of [...new Set(pages)].sort((left, right) => left - right).map((index) => index + 1)) {
+    const previous = spans[spans.length - 1];
+    if (previous?.last === page - 1) previous.last = page;
+    else spans.push({ first: page, last: page });
   }
-  return ranges.join(",");
+  return formatPageSpans(spans);
 };
 
 export const inspectedPages = ({ document, selectedPages }: PageSelection) => document ? selectedPages : null;

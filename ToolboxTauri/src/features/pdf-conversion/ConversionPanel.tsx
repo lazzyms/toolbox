@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { parsePageRange, selectedPageLabel } from "../../shared/workspaceValidation";
+import { pagesWithin, parsePageRanges } from "../../shared/pageRanges";
 import type { PdfDocument } from "../pdf-editor";
 import type { AtomicToolId, ToolDefinition } from "../../contracts";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +46,21 @@ type ConversionPanelProps = {
 
 const countFailure = (error: unknown): PageCount => /password|encrypt/i.test(String(error)) ? "locked" : "unreadable";
 
+const pagesLabel = (count: number) => `${count} ${count === 1 ? "page" : "pages"}`;
+
+const inWords = (parts: string[]) => parts.length < 2 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+
+/** What the picks mean for the one PDF on show, in the board's words. */
+const pickStatus = (picks: number[], pageCount: number, pageRange: string, fromPicks: boolean) => {
+  if (picks.length) {
+    const range = formatPageRange(picks);
+    const picked = `${picks.length} of ${pagesLabel(pageCount)} picked: ${inWords(range.split(", "))}.`;
+    return fromPicks ? `${picked} The Pages range now says ${range}.` : picked;
+  }
+  if (pageRange.trim()) return `No pages of this PDF are in ${pageRange.trim()}, so it will be skipped. Pick pages or change the range.`;
+  return `No pages picked, so ${pageCount === 1 ? "its 1 page runs" : `all ${pageCount} pages run`}. Pick pages to limit them.`;
+};
+
 export const ConversionPanel = ({
   destination,
   runLabel,
@@ -69,7 +85,10 @@ export const ConversionPanel = ({
   onSelectTool,
 }: ConversionPanelProps) => {
   const pagesPerPdf = tool.pagesPerPdf;
-  const inputPath = pagesPerPdf ? files[selectedFileIndex] ?? files[0] : files[0];
+  const batchRange = tool.batchPageRange === true;
+  // A batch-wide range offers thumbnails only while the list holds exactly one PDF.
+  const inputPath = batchRange ? (files.length === 1 ? files[0] : undefined) : pagesPerPdf ? files[selectedFileIndex] ?? files[0] : files[0];
+  const [pageRangeFromPicks, setPageRangeFromPicks] = useState(false);
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
   const [pageCounts, setPageCounts] = useState<Record<string, PageCount>>({});
   const acceptedExtensions = new Set(activeUtility.capability.acceptedExtensions.map((extension) => extension.toLowerCase()));
@@ -87,10 +106,16 @@ export const ConversionPanel = ({
   const inputPolicyIssue = inputCardinalityIssue ?? inputFormatIssue;
 
   useEffect(() => {
+    setPageRange("");
+    setPageRangeFromPicks(false);
+  }, [tool, setPageRange]);
+
+  useEffect(() => {
     let current = true;
     setDocument(null);
     setSelectedPages([]);
-    if (!pagesPerPdf) setPageRange("");
+    // A batch-wide or per-PDF range belongs to the whole list, so it outlives a change of files.
+    if (!pagesPerPdf && !batchRange) setPageRange("");
     setInspectError("");
     if (!inputPath || inputPolicyIssue) {
       setInspection({ kind: "idle" });
@@ -108,7 +133,7 @@ export const ConversionPanel = ({
         if (!current) return;
         setDocument(value);
         setSelectedPages(tool.initialPages?.(value) ?? value.pages.map((page) => page.index));
-        if (!pagesPerPdf) setPageRange("");
+        if (!pagesPerPdf && !batchRange) setPageRange("");
         setInspection({ kind: "ready", path: inputPath });
       })
       .catch((error) => {
@@ -119,7 +144,7 @@ export const ConversionPanel = ({
     return () => {
       current = false;
     };
-  }, [tool, pagesPerPdf, inputPath, inputPolicyIssue, setDocument, setInspectError, setPageRange, setSelectedPages]);
+  }, [tool, pagesPerPdf, batchRange, inputPath, inputPolicyIssue, setDocument, setInspectError, setPageRange, setSelectedPages]);
 
   const fileKey = files.join("\0");
   useEffect(() => {
@@ -139,39 +164,47 @@ export const ConversionPanel = ({
   }, [pagesPerPdf, fileKey]);
 
   const inspectedPicks = inputPath ? picks[inputPath] : undefined;
+  const inspectedDocument = inspection.kind === "ready" && inspection.path === inputPath ? document : null;
+  // A batch-wide range is checked only for its form here: pages past a file's end are left out natively.
+  const typedRange = batchRange && pageRange.trim() ? parsePageRanges(pageRange) : null;
+  const rangePicks = !batchRange ? selectedPages : inspectedDocument && typedRange?.ok ? pagesWithin(typedRange.value, inspectedDocument.pages.length) : [];
   const togglePage = (page: number) => {
     if (pagesPerPdf) {
       const current = shownPages;
-      setPicks({ ...picks, [inputPath]: current.includes(page) ? current.filter((selected) => selected !== page) : [...current, page].sort((left, right) => left - right) });
+      if (inputPath) setPicks({ ...picks, [inputPath]: current.includes(page) ? current.filter((selected) => selected !== page) : [...current, page].sort((left, right) => left - right) });
       return;
     }
-    const nextPages = selectedPages.includes(page)
-      ? selectedPages.filter((selected) => selected !== page)
-      : [...selectedPages, page].sort((left, right) => left - right);
+    const nextPages = rangePicks.includes(page)
+      ? rangePicks.filter((selected) => selected !== page)
+      : [...rangePicks, page].sort((left, right) => left - right);
     setSelectedPages(nextPages);
     setPageRange(nextPages.length ? formatPageRange(nextPages) : "");
+    setPageRangeFromPicks(nextPages.length > 0);
   };
 
-  const inspectedDocument = inspection.kind === "ready" && inspection.path === inputPath ? document : null;
   const choosePageRange = (value: string) => {
     setPageRange(value);
-    if (!inspectedDocument || pagesPerPdf) return;
+    setPageRangeFromPicks(false);
+    if (!inspectedDocument || pagesPerPdf || batchRange) return;
     const parsed = parsePageRange(value, inspectedDocument.pages.length);
     setSelectedPages(Array.isArray(parsed) ? parsed : []);
   };
   const inspectionReady = inspection.kind === "ready" && inspection.path === inputPath && inspectedDocument !== null;
-  const parsedSelection = inspectedDocument ? parsePageRange(pageRange, inspectedDocument.pages.length) : [];
+  const parsedSelection = inspectedDocument && !batchRange ? parsePageRange(pageRange, inspectedDocument.pages.length) : [];
   const selectionIssue = Array.isArray(parsedSelection) ? null : parsedSelection;
-  const selectionCount = inspectedDocument ? selectedPages.length : 0;
+  const selectionCount = inspectedDocument ? rangePicks.length : 0;
   const needsPageSelection = activeUtility.capability.supportsPageSelection;
   const shownPages = !inspectedDocument ? [] : pagesPerPdf
     ? inspectedPicks ?? pagesPerPdf(options, pageRange, inspectedDocument.pages.length) ?? []
-    : selectedPages;
+    : rangePicks;
   const emptyPicks = pagesPerPdf ? files.some((path) => picks[path]?.length === 0) : false;
   const canExport = files.length > 0 && activeUtility.capability.nativeAvailability === "available" && !tool.exportBlocked?.(options, files, pageRange)
-    && (pagesPerPdf ? !emptyPicks : !tool.inspectsPdf || inspectionReady);
-  const pageSelectionBlocked = needsPageSelection && !pagesPerPdf && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null);
+    && (pagesPerPdf ? !emptyPicks : !tool.inspectsPdf || batchRange || inspectionReady);
+  const pageSelectionBlocked = batchRange
+    ? typedRange !== null && !typedRange.ok
+    : needsPageSelection && !pagesPerPdf && (!inspectedDocument || selectionCount === 0 || selectionIssue !== null);
   const useRangeInstead = () => {
+    if (!inputPath) return;
     const { [inputPath]: _dropped, ...rest } = picks;
     setPicks(rest);
   };
@@ -210,9 +243,17 @@ export const ConversionPanel = ({
               ))}
             </div>
           ) : (
-            <p className="workspace-note">{inspection.kind === "error" && inspection.path === inputPath ? inspectError : "Select a PDF to load its page previews."}</p>
+            <p className="workspace-note">{inspection.kind === "error" && inspection.path === inputPath
+              ? inspectError
+              : batchRange && files.length > 1 ? "With one PDF in the list, its pages appear here as thumbnails to pick from." : "Select a PDF to load its page previews."}</p>
           )}
-          {inspectedDocument && !pagesPerPdf && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
+          {inspectedDocument && !pagesPerPdf && !batchRange && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
+          {inspectedDocument && batchRange && typedRange?.ok !== false && (
+            <>
+              <p className="workspace-note" role="status">{pickStatus(rangePicks, inspectedDocument.pages.length, pageRange, pageRangeFromPicks)}</p>
+              <p className="workspace-panel-copy">Click a page or press Space to pick it. Picked pages always run in page order. Picking nothing means every page.</p>
+            </>
+          )}
           {inspectedDocument && pagesPerPdf && (
             <div className="grid gap-2">
               <p className="workspace-note" role="status">
@@ -223,7 +264,7 @@ export const ConversionPanel = ({
                   : "Pick pages here to replace the range for this PDF only."}
               </p>
               <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" onClick={() => setPicks({ ...picks, [inputPath]: inspectedDocument.pages.map((page) => page.index) })}>Pick all</Button>
+                <Button variant="outline" size="sm" onClick={() => inputPath && setPicks({ ...picks, [inputPath]: inspectedDocument.pages.map((page) => page.index) })}>Pick all</Button>
                 {inspectedPicks && <Button variant="ghost" size="sm" onClick={useRangeInstead}>Use the range instead</Button>}
               </div>
             </div>
@@ -254,6 +295,7 @@ export const ConversionPanel = ({
           selectedPages={selectedPages}
           pageRange={pageRange}
           choosePageRange={choosePageRange}
+          pageRangeFromPicks={pageRangeFromPicks}
           picks={picks}
           pageCounts={pageCounts}
           loading={loading}
