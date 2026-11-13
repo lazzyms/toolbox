@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import type { CompressFilesRequest, CompressImagesRequest, CompressLevel, ToolDefinition, ToolResult } from "../contracts";
@@ -11,10 +11,11 @@ import { Switch } from "@/components/ui/switch";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 
-const levels: { value: CompressLevel; name: string; summary: string; pdf: string }[] = [
-  { value: "low", name: "Low", summary: "Least saving, detail stays", pdf: "Repacked without loss. Images untouched." },
-  { value: "medium", name: "Medium", summary: "Good for sharing and email", pdf: "Images inside recompressed and scaled down." },
-  { value: "high", name: "High", summary: "Smallest, photos look softer", pdf: "Images at lower quality and resolution." },
+// What each strength does to each supported format, in the board's order.
+const levels: { value: CompressLevel; name: string; summary: string; does: [format: string, effect: string][] }[] = [
+  { value: "low", name: "Low", summary: "Least saving, detail stays", does: [["PDF", "Repacked without loss. Images untouched."], ["JPEG", "Re-saved at high quality."]] },
+  { value: "medium", name: "Medium", summary: "Good for sharing and email", does: [["PDF", "Images inside recompressed and scaled down."], ["JPEG", "Re-saved at medium quality."]] },
+  { value: "high", name: "High", summary: "Smallest, photos look softer", does: [["PDF", "Images at lower quality and resolution."], ["JPEG", "Re-saved at low quality."]] },
 ];
 
 const exifHint = (on: boolean) => on
@@ -72,8 +73,12 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
                 <div className="workspace-field">
                   <span className="workspace-panel-label" id="compress-effect-label">What {selected.name} does</span>
                   <dl className="workspace-field-grid m-0" aria-labelledby="compress-effect-label">
-                    <dt>PDF</dt>
-                    <dd className="m-0 text-foreground">{selected.pdf}</dd>
+                    {selected.does.map(([format, effect]) => (
+                      <Fragment key={format}>
+                        <dt>{format}</dt>
+                        <dd className="m-0 text-foreground">{effect}</dd>
+                      </Fragment>
+                    ))}
                   </dl>
                   <p className="workspace-note mt-0">Text, transparency and colour profiles always stay.</p>
                 </div>

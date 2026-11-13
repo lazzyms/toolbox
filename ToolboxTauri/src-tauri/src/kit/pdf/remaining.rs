@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::{self, bytes_label, duration_label, StoppableHelper};
 use crate::kit::common::{renamed_warning, FolderReservation, JobOutcome, OutputLocation, OutputNaming, OutputReservation};
+use crate::kit::compress::NO_SAVINGS;
 use crate::kit::contracts::{JpegColour, LimitKind, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::images::source::{self, ImageFamily};
 use crate::kit::images::{self, OutputFormat};
@@ -1327,7 +1328,6 @@ fn jpeg_color_space(bytes: &[u8]) -> Option<&'static str> {
 }
 
 pub const PDF_PASSWORD_PROTECTED: &str = "This PDF is password-protected. Unlock it first, then compress the unlocked copy.";
-pub const NO_SAVINGS: &str = "No savings: already well compressed";
 const PAGE_BOXES: [&[u8]; 5] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"];
 
 /// Compresses one PDF for Compress Files. With `images`, eligible photographs are first recompressed

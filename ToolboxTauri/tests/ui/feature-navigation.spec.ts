@@ -792,35 +792,71 @@ test("Compress defaults to Medium, describes each strength and sends the paths i
 });
 
 for (const theme of ["light", "dark"] as const) {
-    test(`Compress explains what each strength does to PDFs and sends that strength in the ${theme} theme`, async ({ page }) => {
+    test(`Compress explains what each strength does to PDFs and JPEGs and sends that strength in the ${theme} theme`, async ({ page }) => {
         await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
         await page.goto("/");
         await openFromHome(page, "Compress");
         await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
         const strength = page.getByRole("radiogroup", { name: "Strength" });
-        const effect = page.getByRole("definition");
-        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = [["/local/scan.pdf"]]; });
+        const paths = ["/local/scan.pdf", "/local/IMG_4012.jpg", "/local/IMG_4031.jpeg"];
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
         await page.getByRole("button", { name: "Choose files to process" }).click();
-        await expect(page.locator(".file-selection-count")).toHaveText("1 file");
+        await expect(page.locator(".file-selection-count")).toHaveText("3 files");
 
         const expected = [
-            { level: "low", name: "Low", pdf: "Repacked without loss. Images untouched." },
-            { level: "medium", name: "Medium", pdf: "Images inside recompressed and scaled down." },
-            { level: "high", name: "High", pdf: "Images at lower quality and resolution." },
+            { level: "low", name: "Low", pdf: "Repacked without loss. Images untouched.", jpeg: "Re-saved at high quality." },
+            { level: "medium", name: "Medium", pdf: "Images inside recompressed and scaled down.", jpeg: "Re-saved at medium quality." },
+            { level: "high", name: "High", pdf: "Images at lower quality and resolution.", jpeg: "Re-saved at low quality." },
         ] as const;
-        for (const [index, { name, pdf }] of expected.entries()) {
+        for (const [index, { name, pdf, jpeg }] of expected.entries()) {
             await strength.getByRole("radio", { name: new RegExp(`^${name}`) }).click();
             await expect(page.getByText(`What ${name} does`, { exact: true })).toBeVisible();
-            await expect(page.getByRole("term")).toHaveText("PDF");
-            await expect(effect).toHaveText(pdf);
-            await page.getByRole("button", { name: "Compress 1 file", exact: true }).click();
+            await expect(page.getByRole("term")).toHaveText(["PDF", "JPEG"]);
+            await expect(page.getByRole("definition")).toHaveText([pdf, jpeg]);
+            await page.getByRole("button", { name: "Compress 3 files", exact: true }).click();
             await expect.poll(() => invocationCount(page, "compress_files")).toBe(index + 1);
         }
 
         const levels = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
             .filter(({ command }) => command === "compress_files")
             .map(({ args }) => (args as { request: { level: string; paths: string[] } }).request));
-        expect(levels).toEqual(expected.map(({ level }) => ({ paths: ["/local/scan.pdf"], level, stripExif: false, outputLocation: "alongsideInput" })));
+        expect(levels).toEqual(expected.map(({ level }) => ({ paths, level, stripExif: false, outputLocation: "alongsideInput" })));
+    });
+
+    test(`Compress toggles Strip EXIF from the keyboard, explains it and sends it with JPEGs in the ${theme} theme`, async ({ page }) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        await openFromHome(page, "Compress");
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        const paths = ["/local/IMG_4012.jpg", "/local/receipt.pdf", "/local/IMG_4031.JPEG"];
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await expect(page.locator(".file-selection-count")).toHaveText("3 files");
+        await expect(page.getByText("Text, transparency and colour profiles always stay.", { exact: true })).toBeVisible();
+
+        const exif = page.getByRole("switch", { name: "Strip EXIF" });
+        await exif.focus();
+        await expect(exif).toBeFocused();
+        await page.keyboard.press("Space");
+        await expect(exif).toBeChecked();
+        await expect(exif).toHaveAccessibleDescription("On: removes camera, date and GPS details from JPEG, PNG and WebP. Photos stay upright. PDFs aren't changed.");
+        await page.getByRole("button", { name: "Compress 3 files", exact: true }).click();
+        await expect.poll(() => invocationCount(page, "compress_files")).toBe(1);
+
+        await exif.focus();
+        await page.keyboard.press("Enter");
+        await expect(exif).not.toBeChecked();
+        await expect(exif).toHaveAccessibleDescription("Off: camera, date and GPS details stay in the copies.");
+        await page.getByRole("button", { name: "Compress 3 files", exact: true }).click();
+        await expect.poll(() => invocationCount(page, "compress_files")).toBe(2);
+
+        const requests = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+            .filter(({ command }) => command === "compress_files")
+            .map(({ args }) => (args as { request: unknown }).request));
+        expect(requests).toEqual([
+            { paths, level: "medium", stripExif: true, outputLocation: "alongsideInput" },
+            { paths, level: "medium", stripExif: false, outputLocation: "alongsideInput" },
+        ]);
     });
 }
 
