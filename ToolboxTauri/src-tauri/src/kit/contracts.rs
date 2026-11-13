@@ -1009,6 +1009,11 @@ mod tests {
     }
 
     #[test]
+    fn convert_images_accepts_tiff_at_the_native_boundary() {
+        assert!(validate_command_inputs("convert_images", &[PathBuf::from("scan.tif"), PathBuf::from("scan.TIFF"), PathBuf::from("photo.png")]).is_ok());
+    }
+
+    #[test]
     fn capability_registry_rejects_unsupported_extensions_at_the_boundary() {
         let outcomes = validate_command_inputs("convert_images", &[PathBuf::from("source.pdf")]).unwrap_err();
 
@@ -1154,7 +1159,9 @@ mod tests {
             assert!(native_capability(retired).is_none(), "{retired} is retired: Edit Image exports through the stack");
         }
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
-        assert_eq!(native_capability("convert_images").unwrap().input_cardinality, InputCardinality::Multiple);
+        let convert = native_capability("convert_images").unwrap();
+        assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
+        assert_eq!(convert.accepted_extensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"]);
         let rendered = native_capability("pdf_to_images").unwrap();
         assert_eq!(rendered.output_formats.as_deref(), Some([".jpg", ".png", ".webp"].map(String::from).as_slice()));
         assert_eq!(rendered.output_suffix, "-page");

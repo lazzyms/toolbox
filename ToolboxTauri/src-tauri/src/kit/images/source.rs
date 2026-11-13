@@ -96,7 +96,7 @@ fn read_single_image(path: &Path) -> image::ImageResult<(DynamicImage, Option<Or
     Ok((DynamicImage::from_decoder(decoder)?, orientation))
 }
 
-fn channel_bits(color: ColorType) -> u8 {
+pub(crate) fn channel_bits(color: ColorType) -> u8 {
     color.bytes_per_pixel() / color.channel_count() * 8
 }
 
@@ -115,24 +115,49 @@ fn is_baseline_jpeg(bytes: &[u8]) -> bool {
 }
 
 fn read_tiff_pages(path: &Path) -> Result<(Vec<DynamicImage>, Option<Orientation>), String> {
-    let mut decoder = open_tiff(path)?;
-    let total = count_tiff_pages(&mut decoder)?;
-    decoder.seek_to_image(0).map_err(|error| format!("Could not read TIFF: {error}"))?;
-    let orientation = decoder
-        .find_tag_unsigned::<u8>(tiff::tags::Tag::Orientation)
-        .ok()
-        .flatten()
-        .and_then(Orientation::from_exif)
-        .filter(|orientation| *orientation != Orientation::NoTransforms);
-    let mut pages = Vec::with_capacity(total);
-    for index in 0..total {
-        if index > 0 {
-            decoder.seek_to_image(index).map_err(|error| format!("TIFF page {} of {total} can't be read. {error}", index + 1))?;
-        }
-        let page = read_tiff_page(&mut decoder).map_err(|error| format!("TIFF page {} of {total} can't be read. {error}", index + 1))?;
+    let mut tiff = TiffPages::open(path)?;
+    let mut pages = Vec::with_capacity(tiff.total());
+    let mut orientation = None;
+    for index in 0..tiff.total() {
+        let (page, page_orientation) = tiff.read(index)?;
+        if index == 0 { orientation = page_orientation; }
         pages.push(page);
     }
     Ok((pages, orientation))
+}
+
+/// Reads a TIFF one page at a time, so a tool can save each page before the
+/// next one is decoded.
+pub(crate) struct TiffPages {
+    decoder: tiff::decoder::Decoder<File>,
+    total: usize,
+}
+
+impl TiffPages {
+    pub(crate) fn open(path: &Path) -> Result<Self, String> {
+        let mut decoder = open_tiff(path)?;
+        let total = count_tiff_pages(&mut decoder)?;
+        Ok(Self { decoder, total })
+    }
+
+    pub(crate) fn total(&self) -> usize {
+        self.total
+    }
+
+    /// Decodes the page at `index` with its own orientation tag.
+    pub(crate) fn read(&mut self, index: usize) -> Result<(DynamicImage, Option<Orientation>), String> {
+        let total = self.total;
+        let failed = |error: String| format!("TIFF page {} of {total} can't be read. {error}", index + 1);
+        self.decoder.seek_to_image(index).map_err(|error| failed(error.to_string()))?;
+        let orientation = self.decoder
+            .find_tag_unsigned::<u8>(tiff::tags::Tag::Orientation)
+            .ok()
+            .flatten()
+            .and_then(Orientation::from_exif)
+            .filter(|orientation| *orientation != Orientation::NoTransforms);
+        let page = read_tiff_page(&mut self.decoder).map_err(failed)?;
+        Ok((page, orientation))
+    }
 }
 
 pub(crate) fn page_count(path: &Path) -> Result<usize, String> {

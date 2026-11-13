@@ -61,9 +61,9 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" | "edit_pdf_properties" | "bates_number_pdfs" => PDF,
         "compress_files" => ToolLimits { page_remedy: PageRemedy::SplitThen("compress"), ..PDF },
-        "convert_images" | "export_image_edit_plan" | "blur_faces"
+        "export_image_edit_plan" | "blur_faces"
         | "remove_image_background" | "generate_icon_set" | "create_gif" => IMAGE,
-        "extract_gif_frames" | "process_tiff_pages" | "images_to_pdf" => PAGED_IMAGE,
+        "extract_gif_frames" | "process_tiff_pages" | "images_to_pdf" | "convert_images" => PAGED_IMAGE,
         "export_image_edit_stack" => EDIT_IMAGE,
         _ => return None,
     })
@@ -638,6 +638,7 @@ mod tests {
         }
         assert_eq!(recorded("extract_gif_frames").and_then(|limits| limits.max_pages), Some(1_000));
         assert_eq!(recorded("images_to_pdf").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
+        assert_eq!(recorded("convert_images").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
         assert_eq!(MAX_IMAGE_PAGES, 1_000);
         assert_eq!(recorded("unknown"), None);
     }

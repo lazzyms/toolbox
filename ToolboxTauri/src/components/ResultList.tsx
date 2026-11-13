@@ -276,7 +276,8 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
         const busy = state.pending !== null;
         const name = view.name;
         const Icon = toneIcons[view.tone];
-        const listedOutputs = outputNoun && result.state === "succeeded" && result.outputPaths.length > 1 ? result.outputPaths : null;
+        // A failed file lists the outputs it saved before failing, such as the pages of a TIFF read before a bad page.
+        const listedOutputs = outputNoun && result.outputPaths.length > (result.state === "failed" ? 0 : 1) ? result.outputPaths : null;
         const outputsListed = listedOutputs !== null && expandedRows.has(index);
         const outputListId = `result-outputs-${index}`;
         const fontsOpen = fontRows.has(index);
@@ -308,7 +309,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                     )}
                     {listedOutputs && (
                         <Button variant="outline" size="xs" aria-expanded={outputsListed} aria-controls={outputListId} onClick={() => toggleOutputs(index)}>
-                            {outputsListed ? `Hide ${outputNoun}` : `Show ${listedOutputs.length} ${outputNoun}`}
+                            {outputsListed ? `Hide ${outputNoun}` : `Show ${listedOutputs.length} ${listedOutputs.length === 1 ? outputNoun?.replace(/s$/, "") : outputNoun}`}
                         </Button>
                     )}
                     {!listedOutputs && view.openOutput && (
