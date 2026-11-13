@@ -48,6 +48,10 @@ export type WebPageOptions = { pageSize: "a4" | "letter" | "legal"; margins: "na
 
 export const defaultWebPageOptions: WebPageOptions = { pageSize: "a4", margins: "normal", backgroundGraphics: true };
 
+export type EbookOptions = { pageSize: "a4" | "letter" | "legal"; fontScale: number };
+
+export const defaultEbookOptions: EbookOptions = { pageSize: "a4", fontScale: 100 };
+
 export const isPlainText = (path: string) => extensionOf(path) === ".txt";
 
 export const isMarkdown = (path: string) => [".md", ".markdown"].includes(extensionOf(path));
@@ -61,9 +65,11 @@ export const isPresentation = (path: string) => [".pptx", ".odp"].includes(exten
 /** HTML files and pasted markup, which stands in the list as an .html item. */
 export const isWebPage = (path: string) => [".html", ".htm"].includes(extensionOf(path));
 
-export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions; presentations: PresentationOptions; webPages: WebPageOptions };
+export const isEbook = (path: string) => extensionOf(path) === ".epub";
 
-export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions, spreadsheets: defaultSpreadsheetOptions, presentations: defaultPresentationOptions, webPages: defaultWebPageOptions };
+export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions; presentations: PresentationOptions; webPages: WebPageOptions; ebooks: EbookOptions };
+
+export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions, spreadsheets: defaultSpreadsheetOptions, presentations: defaultPresentationOptions, webPages: defaultWebPageOptions, ebooks: defaultEbookOptions };
 
 export const convertToPdfRequest = (paths: string[], outputLocation: unknown, options: ConvertToPdfOptions) => ({
   paths,
@@ -74,6 +80,7 @@ export const convertToPdfRequest = (paths: string[], outputLocation: unknown, op
   ...(paths.some(isSpreadsheet) ? { spreadsheets: options.spreadsheets } : {}),
   ...(paths.some(isPresentation) ? { presentations: options.presentations } : {}),
   ...(paths.some(isWebPage) ? { webPages: options.webPages } : {}),
+  ...(paths.some(isEbook) ? { ebooks: options.ebooks } : {}),
 });
 
 const unavailableFamily = (tool: ToolDefinition, path: string) =>
@@ -101,7 +108,7 @@ const appliesTo = (files: string[], plural: string) => `Applies to ${files.lengt
 type PanelProps<T> = { files: string[]; options: T; onChange: (options: T) => void; disabled: boolean };
 
 export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<ConvertToPdfOptions>) => {
-  if (![isSpreadsheet, isPresentation, isPlainText, isMarkdown, isWebPage, isTable].some((matches) => files.some(matches))) {
+  if (![isSpreadsheet, isPresentation, isPlainText, isMarkdown, isWebPage, isEbook, isTable].some((matches) => files.some(matches))) {
     return <p className="workspace-note">Options for each format appear here when a file of that format is in the list.</p>;
   }
   return (
@@ -110,6 +117,7 @@ export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }:
       <PresentationOptionsPanel files={files} options={options.presentations} onChange={(presentations) => onChange({ ...options, presentations })} disabled={disabled} />
       <MarkdownOptionsPanel files={files} options={options.markdown} onChange={(markdown) => onChange({ ...options, markdown })} disabled={disabled} />
       <WebPageOptionsPanel files={files} options={options.webPages} onChange={(webPages) => onChange({ ...options, webPages })} disabled={disabled} />
+      <EbookOptionsPanel files={files} options={options.ebooks} onChange={(ebooks) => onChange({ ...options, ebooks })} disabled={disabled} />
       <PlainTextOptionsPanel files={files} options={options.plainText} onChange={(plainText) => onChange({ ...options, plainText })} disabled={disabled} />
       <TablesOptionsPanel files={files} options={options.tables} onChange={(tables) => onChange({ ...options, tables })} disabled={disabled} />
     </>
@@ -274,6 +282,37 @@ const WebPageOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<
         </Label>
         <p id="web-pages-background-hint" className="workspace-note">Scripts never run, and nothing is loaded from the internet. Stylesheets and images next to the file are used.</p>
       </div>
+    </fieldset>
+  );
+};
+
+const EbookOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<EbookOptions>) => {
+  const books = files.filter(isEbook);
+  if (books.length === 0) return null;
+  const set = <K extends keyof EbookOptions>(key: K, value: EbookOptions[K]) => onChange({ ...options, [key]: value });
+  return (
+    <fieldset role="region" aria-label="eBooks options" className="grid gap-3" disabled={disabled}>
+      <div className="workspace-panel-intro">
+        <p className="workspace-panel-label">eBooks</p>
+        <p className="workspace-panel-copy">{appliesTo(books, "eBooks")}</p>
+      </div>
+      <div className="workspace-field-grid">
+        <div className="workspace-field">
+          <Label htmlFor="ebooks-page-size">Page size</Label>
+          <NativeSelect id="ebooks-page-size" value={options.pageSize} onChange={(event) => set("pageSize", event.target.value as EbookOptions["pageSize"])}>
+            <option value="a4">A4 (default)</option>
+            <option value="letter">Letter</option>
+            <option value="legal">Legal</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="ebooks-text-size">Text size</Label>
+          <NativeSelect id="ebooks-text-size" aria-describedby="ebooks-hint" value={String(options.fontScale)} onChange={(event) => set("fontScale", Number(event.target.value))}>
+            {[75, 90, 100, 110, 125, 150].map((scale) => <option key={scale} value={scale}>{scale === 100 ? "100% (default)" : `${scale}%`}</option>)}
+          </NativeSelect>
+        </div>
+      </div>
+      <p id="ebooks-hint" className="workspace-note">Each chapter starts a new page, and the book's table of contents becomes bookmarks. Copy-protected (DRM) eBooks can't be converted.</p>
     </fieldset>
   );
 };

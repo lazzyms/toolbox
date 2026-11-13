@@ -15,7 +15,7 @@ use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontReport, FontResolver, FontSource, FontStyle, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, expand_tabs, Align, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Paragraph, Span, Style, Theme};
 use crate::kit::pdf::presentation::Include;
-use crate::kit::pdf::{delimited, docx, html, markdown, odp, ods, odt, pptx, rtf, xlsx};
+use crate::kit::pdf::{delimited, docx, epub, html, markdown, odp, ods, odt, pptx, rtf, xlsx};
 
 pub const COMMAND: &str = "convert_to_pdf";
 /// Pasted markup is held in memory, so it stays well under the file limit.
@@ -38,6 +38,8 @@ const SLIDE_FAMILY: &str = "Arial";
 const SLIDE_SIZE: f32 = 18.;
 const NOTES_SIZE: f32 = 12.;
 const NOTES_MARGIN: f32 = 36.;
+/// Text size range for eBooks, as a percentage of the book's own sizes.
+const EBOOK_SCALES: std::ops::RangeInclusive<u16> = 50..=200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -197,6 +199,18 @@ impl Default for WebPageOptions {
     fn default() -> Self { Self { page_size: None, margins: None, background_graphics: true } }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EbookOptions {
+    #[serde(default)] pub page_size: Option<PageSize>,
+    /// Percentage applied to every text size in the book.
+    pub font_scale: u16,
+}
+
+impl Default for EbookOptions {
+    fn default() -> Self { Self { page_size: None, font_scale: 100 } }
+}
+
 /// Pasted markup has no source file, so the person picks where the PDF goes; an existing name gets the next numbered one.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -219,6 +233,7 @@ pub struct ConvertToPdfRequest {
     #[serde(default)] pub spreadsheets: Option<SpreadsheetOptions>,
     #[serde(default)] pub presentations: Option<PresentationOptions>,
     #[serde(default)] pub web_pages: Option<WebPageOptions>,
+    #[serde(default)] pub ebooks: Option<EbookOptions>,
 }
 
 pub struct ConvertJob<S: SystemFontLookup> {
@@ -283,6 +298,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "docx" | "odt" => word_file(job, &input, &extension),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
         "xlsx" | "ods" => spreadsheet_file(job, &job.request.spreadsheets.unwrap_or_default(), &input, &extension),
+        "epub" => ebook_file(job, &job.request.ebooks.unwrap_or_default(), &input),
         "pptx" | "odp" => presentation_file(job, &job.request.presentations.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
@@ -445,9 +461,14 @@ fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, defaults: &PageDefault
     let count = laid.pages.len();
     let document = assemble(&book, Assembly { size, pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: None })?;
 
-    let mut detail = format!("{}.", page_count(count));
-    let remote = &parsed.remote;
-    let left_out = [
+    let detail = format!("{}.{}", page_count(count), left_out(&parsed.remote, parsed.unreadable_images, parsed.unreadable_stylesheets));
+    Ok(WebPage { document, detail, fonts: book.reports() })
+}
+
+/// What a page of HTML had to leave out: remote content never loaded, and local files that couldn't be read.
+fn left_out(remote: &html::LeftOut, unreadable_images: usize, unreadable_stylesheets: usize) -> String {
+    let mut detail = String::new();
+    let skipped = [
         counted(remote.images.len(), "image", "images"),
         counted(remote.stylesheets.len(), "stylesheet", "stylesheets"),
         counted(remote.fonts.len(), "font", "fonts"),
@@ -456,18 +477,57 @@ fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, defaults: &PageDefault
     let total = remote.images.len() + remote.stylesheets.len() + remote.fonts.len() + remote.embeds.len();
     if total > 0 {
         let verb = if total == 1 { "wasn't" } else { "weren't" };
-        detail.push_str(&format!(" Remote content left out: {} from the internet {verb} loaded.", listed(&left_out)));
+        detail.push_str(&format!(" Remote content left out: {} from the internet {verb} loaded.", listed(&skipped)));
     }
     let unreadable = [
-        counted(parsed.unreadable_images, "local image", "local images"),
-        counted(parsed.unreadable_stylesheets, "local stylesheet", "local stylesheets"),
+        counted(unreadable_images, "local image", "local images"),
+        counted(unreadable_stylesheets, "local stylesheet", "local stylesheets"),
     ].into_iter().flatten().collect::<Vec<_>>();
-    let total = parsed.unreadable_images + parsed.unreadable_stylesheets;
+    let total = unreadable_images + unreadable_stylesheets;
     if total > 0 {
         let verb = if total == 1 { "was" } else { "were" };
         detail.push_str(&format!(" {} couldn't be read and {verb} left out.", listed(&unreadable)));
     }
-    Ok(WebPage { document, detail, fonts: book.reports() })
+    detail
+}
+
+/// An EPUB: chapters in spine order, a new page for each, with the book's table of contents as bookmarks.
+fn ebook_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &EbookOptions, input: &Path) -> Result<JobOutcome, ToolError> {
+    if !EBOOK_SCALES.contains(&options.font_scale) {
+        return Err(ToolError::invalid_input(format!("Text size must be between {}% and {}%.", EBOOK_SCALES.start(), EBOOK_SCALES.end())));
+    }
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let scale = f32::from(options.font_scale) / 100.;
+    let parsed = epub::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), scale)?;
+    let size = options.page_size.unwrap_or(job.request.page_defaults.page_size).points();
+    let geometry = Geometry::uniform(size.0, size.1, job.request.page_defaults.margins.points());
+    let mut theme = Theme::new(RTF_FAMILY, CODE_FAMILY, html::BODY_SIZE * scale, false);
+    theme.families = parsed.families.clone();
+
+    let mut book = FontBook::new(&job.fonts);
+    let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
+    let mut starts = Vec::with_capacity(parsed.chapters.len());
+    for (index, chapter) in parsed.chapters.iter().enumerate() {
+        if index > 0 { flow.blocks(&[Block::PageBreak])?; }
+        starts.push((chapter.path.clone(), flow.position()));
+        flow.blocks(&chapter.blocks)?;
+    }
+    let mut laid = flow.finish();
+    for (path, start) in starts { laid.anchors.entry(path).or_insert(start); }
+    if !parsed.navigation.is_empty() {
+        laid.bookmarks = parsed.navigation.iter().filter_map(|entry| {
+            let chapter = entry.target.split('#').next().unwrap_or_default();
+            let (page, y) = laid.anchors.get(&entry.target).or_else(|| laid.anchors.get(chapter)).copied()?;
+            Some(Bookmark { level: entry.level, title: entry.title.clone(), page, y })
+        }).collect();
+    }
+    let count = laid.pages.len();
+    let assembly = Assembly { size, pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: parsed.author.as_deref() };
+    let document = assemble(&book, assembly)?;
+    let path = save(&job.request.output_location, input, document)?;
+    let detail = format!("{}.{}", page_count(count), left_out(&parsed.remote, parsed.unreadable_images, parsed.unreadable_stylesheets));
+    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
 }
 
 fn page_geometry(page: PageSetup, defaults: &PageDefaults) -> Geometry {
@@ -1032,9 +1092,11 @@ mod tests {
         }
         let outcomes = convert_paths(&[&input], json!({ "markdown": { "bodyFont": "sans", "codeStyle": "shaded", "tableOfContents": false, "toc": true } }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
-        let outcomes = convert_paths(&[&input], json!({ "ebooks": {} }));
+        let outcomes = convert_paths(&[&input], json!({ "mobi": {} }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
-        assert_eq!(outcomes[0].error().unwrap().message, "Ebooks options come in a later update.");
+        assert_eq!(outcomes[0].error().unwrap().message, "Mobi options come in a later update.");
+        let outcomes = convert_paths(&[&input], json!({ "ebooks": { "fontScale": 100, "margins": "wide" } }));
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput, "eBooks take only a page size and a text size");
         let outcomes = convert_paths(&[&input], json!({ "webPages": { "backgroundGraphics": true, "runScripts": true } }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput, "web pages take no option to run scripts");
         let mobi = root.join("book.mobi");
@@ -2384,4 +2446,204 @@ mod tests {
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
         assert_eq!(names(&root), ["deck.pptx"]);
     }
+
+    const OPENING: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Opening</title>
+<link rel="stylesheet" type="text/css" href="../styles/book.css"/></head><body>
+<h1 id="start">Opening</h1>
+<p class="lead">First words of the book</p>
+<img src="../images/lamp%20light.png" alt="Lamp"/>
+<p><a href="closing.xhtml#end">Jump to the end</a> and <a href="https://example.com/author">the author</a></p>
+</body></html>"#;
+    const CLOSING: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Closing</title></head><body>
+<h1>Closing</h1><p>Middle words</p><h2 id="end">The end</h2><p>Last words of the book</p>
+</body></html>"#;
+    const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body>
+<nav epub:type="landmarks"><ol><li><a href="text/closing.xhtml">Landmark only</a></li></ol></nav>
+<nav epub:type="toc"><h1>Contents</h1><ol>
+<li><a href="text/opening.xhtml">Part one: Opening</a></li>
+<li><a href="text/closing.xhtml">Part two</a><ol><li><a href="text/closing.xhtml#end">Epilogue</a></li></ol></li>
+</ol></nav></body></html>"#;
+    const NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>
+<navPoint id="a"><navLabel><text>NCX opening</text></navLabel><content src="text/opening.xhtml"/>
+<navPoint id="b"><navLabel><text>NCX ending</text></navLabel><content src="text/closing.xhtml#end"/></navPoint></navPoint>
+</navMap></ncx>"#;
+
+    fn epub_package(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive.start_file("mimetype", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
+        std::io::Write::write_all(&mut archive, b"application/epub+zip").unwrap();
+        archive.start_file("META-INF/container.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut archive, br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        for (name, data) in files {
+            archive.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut archive, data).unwrap();
+        }
+        archive.finish().unwrap().into_inner()
+    }
+
+    /// A two-chapter book whose spine order differs from its manifest and file-name order.
+    fn epub_book(with_nav: bool, extra: &[(&str, &[u8])]) -> Vec<u8> {
+        let nav_item = if with_nav { r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"# } else { "" };
+        let opf = format!(r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:identifier id="id">urn:uuid:1</dc:identifier><dc:title>The Lighthouse</dc:title><dc:creator>Ada Byron</dc:creator><dc:language>en</dc:language></metadata>
+<manifest>{nav_item}<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+<item id="closing" href="text/closing.xhtml" media-type="application/xhtml+xml"/>
+<item id="opening" href="text/opening.xhtml" media-type="application/xhtml+xml"/>
+<item id="css" href="styles/book.css" media-type="text/css"/>
+<item id="lamp" href="images/lamp%20light.png" media-type="image/png"/></manifest>
+<spine toc="ncx"><itemref idref="opening"/><itemref idref="lamp"/><itemref idref="closing"/><itemref idref="opening"/></spine></package>"#);
+        let lamp = png(12, 6, [240, 200, 40]);
+        let mut files: Vec<(&str, &[u8])> = vec![
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/nav.xhtml", NAV.as_bytes()),
+            ("OEBPS/toc.ncx", NCX.as_bytes()),
+            ("OEBPS/text/opening.xhtml", OPENING.as_bytes()),
+            ("OEBPS/text/closing.xhtml", CLOSING.as_bytes()),
+            ("OEBPS/styles/book.css", b"p.lead { color: #ff0000 }"),
+            ("OEBPS/images/lamp light.png", &lamp),
+        ];
+        files.extend_from_slice(extra);
+        epub_package(&files)
+    }
+
+    fn ebook_options(page_size: &str, font_scale: u16) -> serde_json::Value {
+        json!({ "ebooks": { "pageSize": page_size, "fontScale": font_scale } })
+    }
+
+    fn bookmark_pages(document: &Document) -> Vec<u32> {
+        let root = document.catalog().unwrap().get(b"Outlines").unwrap().as_reference().unwrap();
+        let mut pages = Vec::new();
+        let mut stack = vec![document.get_dictionary(root).unwrap().get(b"First").unwrap().as_reference().unwrap()];
+        while let Some(id) = stack.pop() {
+            let item = document.get_dictionary(id).unwrap();
+            pages.push(page_of(document, item.get(b"Dest").unwrap()));
+            if let Ok(next) = item.get(b"Next").and_then(Object::as_reference) { stack.push(next); }
+            if let Ok(first) = item.get(b"First").and_then(Object::as_reference) { stack.push(first); }
+        }
+        pages
+    }
+
+    #[test]
+    fn epub_chapters_follow_the_spine_with_package_styles_images_navigation_bookmarks_and_metadata() {
+        let root = sandbox("epub");
+        let input = root.join("lighthouse.epub");
+        let source = epub_book(true, &[]);
+        fs::write(&input, &source).unwrap();
+
+        let outcomes = convert_paths(&[&input], ebook_options("letter", 100));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        assert_eq!(outcomes[0].detail, "2 pages.");
+        let document = Document::load(root.join("lighthouse.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), 2, "each chapter starts a page and the repeated spine entry is read once");
+        let first = document.extract_text(&[1]).unwrap();
+        let second = document.extract_text(&[2]).unwrap();
+        assert!(in_order(&first, &["Opening", "First words of the book", "Jump to the end"]), "{first}");
+        assert!(!first.contains("Last words"), "{first}");
+        assert!(in_order(&second, &["Closing", "Middle words", "The end", "Last words of the book"]), "{second}");
+        assert_eq!(page_images(&document, 1), 1, "the image inside the package is embedded");
+        assert!(page_content(&document, 1).contains("1 0 0 rg"), "the package stylesheet colours the lead paragraph");
+        assert_eq!(media_box(&document, 1), [0., 0., 612., 792.]);
+        assert_eq!(outline_titles(&document), ["Part one: Opening", "Part two", "Epilogue"], "the toc nav, not the landmarks or headings, becomes the bookmarks");
+        assert_eq!(bookmark_pages(&document), [1, 2, 2]);
+        let annotations = links(&document);
+        assert!(annotations.iter().any(|link| link.get(b"Dest").ok().is_some_and(|dest| page_of(&document, dest) == 2)), "the in-book link jumps to the second chapter");
+        assert!(annotations.iter().any(|link| link.get(b"A").and_then(Object::as_dict).and_then(|action| action.get(b"URI")).and_then(Object::as_str).ok() == Some(b"https://example.com/author".as_slice())));
+        assert_eq!(info(&document, b"Title"), b"The Lighthouse");
+        assert_eq!(info(&document, b"Author"), b"Ada Byron");
+        assert_eq!(fs::read(&input).unwrap(), source, "the original is never changed");
+
+        let outcomes = convert_paths(&[&input], ebook_options("letter", 100));
+        assert_eq!(outcomes[0].output_paths(), [root.join("lighthouse-1.pdf")], "an existing PDF is never replaced");
+        assert_eq!(fs::read(root.join("lighthouse-1.pdf")).unwrap(), fs::read(root.join("lighthouse.pdf")).unwrap(), "conversion is deterministic");
+    }
+
+    #[test]
+    fn epub2_books_take_their_bookmarks_from_the_ncx() {
+        let root = sandbox("epub_ncx");
+        let input = root.join("old.epub");
+        fs::write(&input, epub_book(false, &[])).unwrap();
+        let outcomes = convert_paths(&[&input], json!({}));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        let document = Document::load(root.join("old.pdf")).unwrap();
+        assert_eq!(outline_titles(&document), ["NCX opening", "NCX ending"]);
+        assert_eq!(bookmark_pages(&document), [1, 2]);
+        assert_eq!(media_box(&document, 1), [0., 0., 595.28, 841.89], "page defaults apply without an eBook page size");
+    }
+
+    #[test]
+    fn copy_protected_damaged_and_oversized_epubs_fail_alone_while_font_obfuscation_converts() {
+        let root = sandbox("epub_batch");
+        let encrypted = |algorithm: &str| format!(r#"<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData><enc:EncryptionMethod Algorithm="{algorithm}"/><enc:CipherData><enc:CipherReference URI="OEBPS/text/opening.xhtml"/></enc:CipherData></enc:EncryptedData></encryption>"#);
+        let aes = encrypted("http://www.w3.org/2001/04/xmlenc#aes128-cbc");
+        let fonts = encrypted("http://www.idpf.org/2008/embedding");
+        let books = [
+            ("encrypted.epub", epub_book(true, &[("META-INF/encryption.xml", aes.as_bytes())])),
+            ("rights.epub", epub_book(true, &[("META-INF/rights.xml", b"<rights/>")])),
+            ("fonts.epub", epub_book(true, &[("META-INF/encryption.xml", fonts.as_bytes())])),
+            ("damaged.epub", b"PK\x03\x04 not really a book".to_vec()),
+            ("bomb.epub", crate::kit::common::limits::fixtures::zip_with_deflated("OEBPS/text/opening.xhtml", &crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001), 500_000_001)),
+            ("good.epub", epub_book(true, &[])),
+        ];
+        let paths = books.iter().map(|(name, bytes)| { let path = root.join(name); fs::write(&path, bytes).unwrap(); path }).collect::<Vec<_>>();
+        let outcomes = convert_paths(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(), json!({}));
+        for index in [0, 1] {
+            let error = outcomes[index].error().unwrap_or_else(|| panic!("{:?}", outcomes[index]));
+            assert_eq!(error.kind, ErrorKind::InvalidInput);
+            assert_eq!(error.message, epub::PROTECTED);
+        }
+        assert!(succeeded(&outcomes[2]), "obfuscated fonts are not copy protection: {:?}", outcomes[2]);
+        assert_eq!(outcomes[3].error().unwrap().kind, ErrorKind::InvalidInput);
+        let limited = outcomes[4].error().unwrap();
+        assert_eq!(limited.kind, ErrorKind::LimitExceeded { limit: LimitKind::Decompression }, "{limited:?}");
+        assert!(limited.message.contains("500 MB"), "{}", limited.message);
+        assert!(succeeded(&outcomes[5]), "{:?}", outcomes[5]);
+        assert_eq!(names(&root), ["bomb.epub", "damaged.epub", "encrypted.epub", "fonts.epub", "fonts.pdf", "good.epub", "good.pdf", "rights.epub"]);
+        for ((_, bytes), path) in books.iter().zip(&paths) { assert_eq!(&fs::read(path).unwrap(), bytes); }
+    }
+
+    #[test]
+    fn epub_spines_past_the_limit_are_refused() {
+        let root = sandbox("epub_spine");
+        let count = epub::MAX_SPINE_ITEMS + 1;
+        let items = (0..count).map(|index| format!(r#"<item id="c{index}" href="c{index}.xhtml" media-type="application/xhtml+xml"/>"#)).collect::<String>();
+        let refs = (0..count).map(|index| format!(r#"<itemref idref="c{index}"/>"#)).collect::<String>();
+        let opf = format!(r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest>{items}</manifest><spine>{refs}</spine></package>"#);
+        let input = root.join("long.epub");
+        fs::write(&input, epub_package(&[("OEBPS/content.opf", opf.as_bytes())])).unwrap();
+        let error = convert_paths(&[&input], json!({}))[0].error().cloned().unwrap();
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::PageCount });
+        assert!(error.message.contains("5000 chapters"), "{}", error.message);
+    }
+
+    #[test]
+    fn epub_text_size_scales_the_text_and_the_page_count() {
+        let root = sandbox("epub_scale");
+        let paragraphs = (0..30).map(|index| format!("<p>Paragraph {index} of a long chapter, with enough words to fill most of a line.</p>")).collect::<String>();
+        let chapter = format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Long</h1>{paragraphs}<p style="font-size: 10pt">Small print</p></body></html>"#);
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#;
+        let input = root.join("long.epub");
+        fs::write(&input, epub_package(&[("OEBPS/content.opf", opf.as_bytes()), ("OEBPS/c.xhtml", chapter.as_bytes())])).unwrap();
+        let measure = |scale: u16| {
+            let outcomes = convert_paths(&[&input], ebook_options("a4", scale));
+            assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+            let document = Document::load(outcomes[0].output_paths()[0].clone()).unwrap();
+            let sizes = font_sizes(&document, 1);
+            (document.get_pages().len(), sizes.iter().copied().fold(0., f32::max), sizes.iter().copied().fold(f32::MAX, f32::min))
+        };
+        let (normal_pages, normal_largest, _) = measure(100);
+        let (large_pages, large_largest, _) = measure(200);
+        let (_, _, half_smallest) = measure(50);
+        assert!(large_pages > normal_pages, "{large_pages} pages at 200% vs {normal_pages} at 100%");
+        assert!((large_largest - 2. * normal_largest).abs() < 0.5, "{large_largest} vs {normal_largest}");
+        assert!((half_smallest - 5.).abs() < 0.5, "the book's own 10pt text is scaled too: {half_smallest}");
+        let outcomes = convert_paths(&[&input], ebook_options("a4", 300));
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
+    }
+
 }

@@ -1374,21 +1374,21 @@ mod tests {
         assert_eq!(families, [
             ("plain-text", true, false), ("pdf", true, false), ("word", true, false), ("rich-text", true, false), ("spreadsheets", true, false),
             ("presentations", true, false), ("markdown", true, false), ("web-pages", true, false), ("tables", true, false),
-            ("ebooks", false, false), ("legacy-office", false, true), ("mobi", false, false),
+            ("ebooks", true, false), ("legacy-office", false, true), ("mobi", false, false),
         ]);
         assert!(convert.native_available && convert.output_suffix.is_empty() && !convert.many_to_one);
         assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
 
         let paths = ["/in/notes.txt", "/in/report.PDF", "/in/book.mobi", "/in/book.epub", "/in/photo.png"].map(PathBuf::from);
         let validation = partition_command_inputs("convert_to_pdf", &paths).unwrap();
-        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1, 3]);
         let rejected = validation.rejected.iter().map(|(index, outcome)| {
             let error = outcome.error().unwrap();
             (*index, error.kind.clone(), error.message.as_str())
         }).collect::<Vec<_>>();
         assert_eq!(rejected[0], (2, ErrorKind::Unavailable, "MOBI comes in a later update."));
-        assert_eq!(rejected[1], (3, ErrorKind::Unavailable, "EPUB comes in a later update."));
-        assert_eq!((rejected[2].0, &rejected[2].1), (4, &ErrorKind::InvalidInput));
+        assert_eq!((rejected[1].0, &rejected[1].1), (4, &ErrorKind::InvalidInput));
+        assert_eq!(rejected.len(), 2);
     }
 
     #[test]

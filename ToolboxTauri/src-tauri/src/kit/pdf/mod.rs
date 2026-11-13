@@ -19,6 +19,7 @@ pub mod font_resolver;
 pub mod layout;
 pub mod markdown;
 pub mod html;
+pub mod epub;
 pub mod rtf;
 pub mod wordprocessing;
 pub mod docx;

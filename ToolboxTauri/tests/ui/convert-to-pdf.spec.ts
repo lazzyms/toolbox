@@ -92,14 +92,14 @@ test("Convert to PDF sits in the PDF Conversion rail and shows text options only
 
 test("unsupported drops are refused with a reason, and later formats and PDFs are flagged on their own rows", async ({ page }) => {
     await openConvert(page);
-    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/novel.epub", "/local/signed.pdf"]);
+    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/novel.mobi", "/local/signed.pdf"]);
 
     await expect(page.getByText(/archive\.zip/).first()).toBeVisible();
     await expect(fileRow(page, "archive.zip")).toHaveCount(0);
     await expect(fileRow(page, "photo.png")).toContainText("This file type can't become a PDF here.");
     await expect(fileRow(page, "photo.png")).toContainText("Won't run");
-    await expect(fileRow(page, "novel.epub")).toContainText("Not available yet");
-    await expect(fileRow(page, "novel.epub")).toContainText("EPUB comes in a later update");
+    await expect(fileRow(page, "novel.mobi")).toContainText("Not available yet");
+    await expect(fileRow(page, "novel.mobi")).toContainText("MOBI comes in a later update");
     await expect(fileRow(page, "signed.pdf")).toContainText("Will be skipped");
     await expect(fileRow(page, "signed.pdf")).toContainText("Already a PDF");
     await expect(fileRow(page, "notes.txt")).not.toContainText("Will be skipped");
@@ -669,4 +669,41 @@ test("the pasted save step opens in the last-used folder, and cancelling it conv
         outputPath: "/Users/test/Menus/Specials.pdf",
         webPages: { pageSize: "a4", margins: "normal", backgroundGraphics: true },
     });
+});
+
+test("the eBooks section appears only while an EPUB is listed, a run carries its options, and a copy-protected book is refused on its row", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/notes.txt"]);
+    await expect(page.getByRole("region", { name: "eBooks options" })).toHaveCount(0);
+
+    await drop(page, ["/local/novel.epub"]);
+    const ebooks = page.getByRole("region", { name: "eBooks options" });
+    await expect(ebooks).toContainText("Applies to novel.epub");
+    await expect(ebooks.getByLabel("Page size")).toHaveValue("a4");
+    await expect(ebooks.getByLabel("Text size")).toHaveValue("100");
+    await expect(ebooks.getByLabel("Text size")).toHaveAccessibleDescription(/Copy-protected \(DRM\) eBooks can't be converted\.$/);
+    await expect(fileRow(page, "novel.epub")).not.toContainText("later update");
+
+    await fileRow(page, "novel.epub").getByRole("button", { name: /Remove/ }).click();
+    await expect(page.getByRole("region", { name: "eBooks options" })).toHaveCount(0);
+
+    await drop(page, ["/local/novel.epub", "/local/locked.EPUB"]);
+    await ebooks.getByLabel("Page size").selectOption("letter");
+    await ebooks.getByLabel("Text size").selectOption("125");
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/notes.txt", "/local/novel.epub", "/local/locked.EPUB"],
+        outputLocation: "alongsideInput",
+        plainText: { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true },
+        ebooks: { pageSize: "letter", fontScale: 125 },
+    });
+
+    const protectedBook = "This eBook is copy-protected (DRM), so it can't be converted. Only eBooks without copy protection can become PDFs.";
+    await page.evaluate((protectedBook) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/notes.txt", outputPaths: ["/local/notes.pdf"], detail: "1 page.", state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+        { inputPath: "/local/novel.epub", outputPaths: ["/local/novel.pdf"], detail: "12 pages.", state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+        { inputPath: "/local/locked.EPUB", outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: protectedBook, pointer: null }, reason: null, warnings: [] },
+    ]), protectedBook);
+    await expect(resultRows(page).filter({ hasText: "novel.epub" })).toContainText("12 pages.");
+    await expect(resultRows(page).filter({ hasText: "locked.EPUB" })).toContainText(protectedBook);
 });
