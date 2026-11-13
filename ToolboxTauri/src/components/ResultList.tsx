@@ -104,6 +104,7 @@ interface ResultListProps {
     runningVerb: string;
     runningDetail?: string;
     signatureRemovedNote?: string;
+    precisionReducedIsNote?: boolean;
     live: LiveRun | null;
     combinedInputs?: string[] | null;
     combined?: CombinedResult;
@@ -120,7 +121,7 @@ interface ResultListProps {
     summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, signatureRemovedNote, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, signatureRemovedNote, precisionReducedIsNote = false, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
     const namedByOutput = namedByOutputProp || combinedInputs !== null;
     const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
@@ -269,7 +270,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
 
     const finishedRow = (result: JobOutcome, index: number) => {
         const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
-        const baseView = rowView(result, resultVerb, namedByOutput, outputNoun, installedPacks, signatureRemovedNote);
+        const baseView = rowView(result, resultVerb, namedByOutput, outputNoun, installedPacks, signatureRemovedNote, precisionReducedIsNote);
         const view = group
             ? { ...baseView, detailLines: [{ text: group.hint, tone: null }, ...result.warnings.map((warning) => warningDetail(warning, signatureRemovedNote))], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
             : baseView;
@@ -581,7 +582,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
         );
     }
 
-    const summary = resultSummary(results, resultVerb, resultNoun);
+    const summary = resultSummary(results, resultVerb, resultNoun, precisionReducedIsNote);
     const hints = [...packHints(results, packJobs, installedPacks), ...summary.hints];
     const total = batchTotal(results, resultVerb);
     const extraHint = resultsHint?.(results) ?? null;
