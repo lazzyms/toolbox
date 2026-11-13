@@ -958,7 +958,7 @@ fn blank_pages(text: &str, pages: &[u32]) -> Vec<u32> {
 }
 
 /// Groups sorted page numbers into the contiguous runs pdftotext reads with -f and -l.
-fn page_runs(pages: &[u32]) -> Vec<(u32, u32)> {
+pub(crate) fn page_runs(pages: &[u32]) -> Vec<(u32, u32)> {
     let mut runs: Vec<(u32, u32)> = Vec::new();
     for &page in pages {
         match runs.last_mut() {

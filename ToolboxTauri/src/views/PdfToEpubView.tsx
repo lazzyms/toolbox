@@ -10,10 +10,12 @@ import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
+import { parsePageRanges } from "../shared/pageRanges";
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
 type Cover = "firstPage" | "none";
+type PageScope = "all" | "range";
 /** The title and author shown for the one PDF being converted; `edited` stops a late read from replacing what was typed. */
 type BookDetails = { path: string; title: string; author: string; edited: boolean };
 
@@ -69,6 +71,10 @@ export const PdfToEpubView = ({ utility, initialPaths = [], onFilesChange }: { u
   const [removeHeadersAndFooters, setRemoveHeadersAndFooters] = useState(true);
   const [cover, setCover] = useState<Cover>("firstPage");
   const [details, setDetails] = useState<BookDetails | null>(null);
+  const [pageScope, setPageScope] = useState<PageScope>("all");
+  const [pageRange, setPageRange] = useState("");
+  const parsedRange = pageScope === "range" ? parsePageRanges(pageRange) : null;
+  const rangeIssue = parsedRange && !parsedRange.ok ? parsedRange.message : null;
   const overrides = (paths: readonly string[]) =>
     paths.length === 1 && details?.path === paths[0] ? { title: details.title, author: details.author } : {};
   return (
@@ -82,11 +88,18 @@ export const PdfToEpubView = ({ utility, initialPaths = [], onFilesChange }: { u
       emptyHint="Accepts PDF. Makes one EPUB for each PDF. Works best on text-heavy books, reports and articles."
       exampleHint="An existing name is never replaced; the new one gets -1, -2."
       destinationMentionsSettingKept
-      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>("pdf_to_epub", { runId, request: { paths, outputLocation, removeHeadersAndFooters, cover, ...overrides(paths) } })}
+      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>("pdf_to_epub", { runId, request: {
+        paths,
+        outputLocation,
+        removeHeadersAndFooters,
+        cover,
+        pageRange: pageScope === "range" ? pageRange.trim() : null,
+        ...overrides(paths),
+      } })}
     >
       {({ files, run, loading, destination }) => {
         const runLabel = files.length === 0 ? "Convert" : `Convert ${count(files.length, "PDF")}`;
-        const blocker = files.length === 0 ? "Add PDFs to start" : null;
+        const blocker = files.length === 0 ? "Add PDFs to start" : rangeIssue ? "Fix the page range first" : null;
         return (
           <Card className="workspace-control-panel py-0">
             <CardContent className="workspace-control-panel-content grid gap-4 p-4">
@@ -94,6 +107,41 @@ export const PdfToEpubView = ({ utility, initialPaths = [], onFilesChange }: { u
                 <h2 className="workspace-active-command">{utility.title}</h2>
                 <p className="workspace-panel-copy">{utility.blurb}</p>
               </div>
+              <fieldset className="workspace-field" disabled={loading}>
+                <legend className="workspace-panel-label">Pages</legend>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Pages"
+                  value={pageScope}
+                  disabled={loading}
+                  onValueChange={(value) => { if (value) setPageScope(value as PageScope); }}
+                >
+                  <ToggleGroupItem value="all">All pages</ToggleGroupItem>
+                  <ToggleGroupItem value="range">Range</ToggleGroupItem>
+                </ToggleGroup>
+                {pageScope === "range" && (
+                  <>
+                    <Label htmlFor="epub-page-range" className="sr-only">Page range for every PDF</Label>
+                    <Input
+                      id="epub-page-range"
+                      value={pageRange}
+                      placeholder="1-3, 5, 8-"
+                      aria-invalid={rangeIssue !== null && pageRange.trim() !== ""}
+                      aria-describedby={rangeIssue && pageRange.trim() ? "epub-range-error epub-range-hint" : "epub-range-hint epub-range-scope"}
+                      onChange={(event) => setPageRange(event.target.value)}
+                    />
+                    {rangeIssue && pageRange.trim() && <p id="epub-range-error" className="workspace-note" role="alert">{rangeIssue}</p>}
+                    <p id="epub-range-hint" className="workspace-note">Commas and dashes, like 1-3, 5, 8-. 8- means page 8 to the end.</p>
+                  </>
+                )}
+                <p id="epub-range-scope" className="workspace-note">
+                  {pageScope === "range"
+                    ? "One range applies to every PDF. Pages past a PDF's last page are left out, and a PDF with no pages left is skipped."
+                    : "Every page of every PDF."}
+                </p>
+              </fieldset>
               <fieldset className="workspace-field" disabled={loading}>
                 <legend className="workspace-panel-label">Clean up</legend>
                 <Label className="workspace-check" htmlFor="epub-remove-running-text">
@@ -123,7 +171,7 @@ export const PdfToEpubView = ({ utility, initialPaths = [], onFilesChange }: { u
                   <ToggleGroupItem value="firstPage">First page</ToggleGroupItem>
                   <ToggleGroupItem value="none">No cover</ToggleGroupItem>
                 </ToggleGroup>
-                <p id="epub-cover-hint" className="workspace-note">The first page becomes the cover.</p>
+                <p id="epub-cover-hint" className="workspace-note">The first page in the range becomes the cover.</p>
               </fieldset>
               <BookDetailsFields files={files} details={details} setDetails={setDetails} disabled={loading} />
               {destination}
