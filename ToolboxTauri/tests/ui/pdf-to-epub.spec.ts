@@ -210,6 +210,59 @@ test("PDF to EPUB shows each PDF's own result with Open and Reveal on converted 
     await expect(rows.nth(2).getByRole("button", { name: /^Show in/ })).toHaveCount(0);
 });
 
+const damaged = "This file is damaged or isn't a PDF, so it couldn't be read.";
+const overPages = "6,200 pages is over the limit of 5,000 pages for one PDF. Split it, then convert each part.";
+const overSize = "The EPUB would be larger than the limit of 1 GB for one EPUB. Split the PDF, then convert each part.";
+const attentionPaths = ["/Users/test/books/payslip-sept.pdf", "/Users/test/books/old-contract.pdf", "/Users/test/books/archive-catalogue.pdf", "/Users/test/books/atlas.pdf", "/Users/test/books/notes.pdf"];
+
+/** Runs the board's "Needs attention" batch: a locked, a damaged, an over-the-page-limit and an over-the-output-limit PDF beside one that converts. */
+const runNeedingAttention = async (page: Page) => {
+    await openToolBySearch(page, "PDF to EPUB");
+    await choose(page, attentionPaths);
+    await page.evaluate(({ paths, locked, damaged, overPages, overSize }) => {
+        const failed = (inputPath: string, failure: unknown) => ({ inputPath, outputPaths: [], detail: "", state: "failed", failure, reason: null, warnings: [] });
+        (window as unknown as EpubWindow).__outcomes = [
+            failed(paths[0], { kind: "invalidInput", message: locked, pointer: { kind: "tool", toolId: "lock-unlock" } }),
+            failed(paths[1], { kind: "processing", message: damaged, pointer: null }),
+            failed(paths[2], { kind: "limitExceeded", details: { limit: "pageCount" }, message: overPages, pointer: { kind: "tool", toolId: "pdf-split" } }),
+            failed(paths[3], { kind: "limitExceeded", details: { limit: "outputSize" }, message: overSize, pointer: { kind: "tool", toolId: "pdf-split" } }),
+            { inputPath: paths[4], outputPaths: ["/Users/test/books/notes.epub"], detail: "12 pages.", state: "succeeded", failure: null, reason: null, warnings: [] },
+        ];
+    }, { paths: attentionPaths, locked, damaged, overPages, overSize });
+    await page.getByRole("button", { name: "Convert 5 PDFs", exact: true }).click();
+    const rows = page.locator(".result-row");
+    await expect(rows).toHaveCount(5);
+    return rows;
+};
+
+test("PDF to EPUB shows the unlock, damaged and limit errors on their own rows with the board's actions", async ({ page }) => {
+    const rows = await runNeedingAttention(page);
+    for (const index of [0, 1, 2, 3]) {
+        await expect(rows.nth(index)).toHaveAttribute("data-state", "failed");
+        await expect(rows.nth(index).getByRole("button", { name: /^Show in/ })).toHaveCount(0);
+    }
+    await expect(rows.nth(0)).toContainText(locked);
+    await expect(rows.nth(0).getByRole("button", { name: "Remove Password for payslip-sept.pdf", exact: true })).toHaveText("Remove Password");
+    await expect(rows.nth(1)).toContainText(damaged);
+    await expect(rows.nth(1).getByRole("button", { name: /^(Remove Password|Split PDF|Open )/ })).toHaveCount(0);
+    await expect(rows.nth(2)).toContainText(overPages);
+    await expect(rows.nth(2).getByRole("button", { name: "Split PDF for archive-catalogue.pdf", exact: true })).toHaveText("Split PDF");
+    await expect(rows.nth(3)).toContainText(overSize);
+    await expect(rows.nth(3).getByRole("button", { name: "Split PDF for atlas.pdf", exact: true })).toBeVisible();
+    await expect(rows.nth(4)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(4).getByRole("button", { name: "Open notes.epub", exact: true })).toBeVisible();
+
+    await rows.nth(0).getByRole("button", { name: "Remove Password for payslip-sept.pdf", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+});
+
+test("PDF to EPUB's Split PDF action on an over-the-limit row opens Split PDF", async ({ page }) => {
+    const rows = await runNeedingAttention(page);
+    await rows.nth(2).getByRole("button", { name: "Split PDF for archive-catalogue.pdf", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Split PDF", pressed: true })).toBeVisible();
+    await expect(page.getByRole("radiogroup", { name: "Split by" })).toBeVisible();
+});
+
 test("PDF to EPUB shows how many images the book kept and names an image it left out", async ({ page }) => {
     const path = "/Users/test/books/field guide.pdf";
     const leftOut = "Page 63, image 2 — JBIG2 isn't supported in this version. Left out; the rest of the book converted.";

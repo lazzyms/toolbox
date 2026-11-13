@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress as ProgressBar } from "@/components/ui/progress";
-import type { JobOutcome, OutcomePointer, PackNeed, Progress } from "../contracts";
+import type { JobOutcome, OutcomePointer, PackNeed, Progress, ToolDefinition } from "../contracts";
 import { shortenHomePath, useHomeDir } from "../homePath";
 import type { CombinedResult } from "../registry/saveSteps";
 import { formatBytes, PACK_CHANGED_EVENT, PROGRESS_EVENT, type PackProgress } from "../views/PacksSection";
@@ -107,6 +107,8 @@ interface ResultListProps {
     /** Count the live run in pages, for tools whose single files can take minutes. */
     progressByPage?: boolean;
     signatureRemovedNote?: string;
+    /** Replaces the shared "Open {tool}" label on a row's button to another tool. */
+    pointerLabels?: ToolDefinition["pointerLabels"];
     precisionReducedIsNote?: boolean;
     live: LiveRun | null;
     combinedInputs?: string[] | null;
@@ -124,7 +126,7 @@ interface ResultListProps {
     summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, progressByPage = false, signatureRemovedNote, precisionReducedIsNote = false, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, progressByPage = false, signatureRemovedNote, pointerLabels, precisionReducedIsNote = false, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
     const namedByOutput = namedByOutputProp || combinedInputs !== null;
     const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
@@ -273,7 +275,10 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
 
     const finishedRow = (result: JobOutcome, index: number) => {
         const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
-        const baseView = rowView(result, resultVerb, namedByOutput, outputNoun, installedPacks, signatureRemovedNote, precisionReducedIsNote);
+        const rowBase = rowView(result, resultVerb, namedByOutput, outputNoun, installedPacks, signatureRemovedNote, precisionReducedIsNote);
+        // A board that names the action, such as Remove Password, also names it for its file, as pack buttons are.
+        const ownLabel = rowBase.pointer?.pointer.kind === "tool" ? pointerLabels?.[rowBase.pointer.pointer.toolId] : undefined;
+        const baseView = ownLabel && rowBase.pointer ? { ...rowBase, pointer: { ...rowBase.pointer, label: ownLabel } } : rowBase;
         const view = group
             ? { ...baseView, detailLines: [{ text: group.hint, tone: null }, ...result.warnings.map((warning) => warningDetail(warning, signatureRemovedNote))], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
             : baseView;
@@ -381,7 +386,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                                 {view.pointer.label}
                             </Button>
                         ) : (
-                            <Button variant="outline" size="xs" onClick={() => view.pointer && view.pointer.pointer.kind !== "pack" && followPointer(view.pointer.pointer, result.inputPath)}>
+                            <Button variant="outline" size="xs" aria-label={ownLabel ? `${ownLabel} for ${name}` : undefined} onClick={() => view.pointer && view.pointer.pointer.kind !== "pack" && followPointer(view.pointer.pointer, result.inputPath)}>
                                 {view.pointer.label}
                             </Button>
                         )
