@@ -125,6 +125,8 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
     const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    // Page details start open, the way the board shows them; a row can fold its own away.
+    const [foldedDetails, setFoldedDetails] = useState<Record<number, boolean>>({});
     const [revealAll, setRevealAll] = useState<RowActionState>(idleActionState);
     const [packJobs, setPackJobs] = useState<Record<string, PackJob>>({});
     const [installedPacks, setInstalledPacks] = useState<ReadonlySet<string>>(new Set());
@@ -159,6 +161,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
         setActionStates({});
         setExpanded(new Set());
         setPasswordRow(null);
+        setFoldedDetails({});
         setRevealAll(idleActionState);
         setInstalledPacks(new Set());
         setFontRows(new Set());
@@ -276,6 +279,9 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
         const busy = state.pending !== null;
         const name = view.name;
         const Icon = toneIcons[view.tone];
+        const pageDetails = result.pageDetails ?? [];
+        const detailsOpen = !foldedDetails[index];
+        const detailsId = `page-details-${index}`;
         // A failed file lists the outputs it saved before failing, such as the pages of a TIFF read before a bad page.
         const listedOutputs = outputNoun && result.outputPaths.length > (result.state === "failed" ? 0 : 1) ? result.outputPaths : null;
         const outputsListed = listedOutputs !== null && expandedRows.has(index);
@@ -302,6 +308,17 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                     <span className="sr-only">{view.spokenState}</span>
                 </span>
                 <span className="result-row-actions">
+                    {pageDetails.length > 0 && (
+                        <Button
+                            variant="ghost"
+                            size="xs"
+                            aria-expanded={detailsOpen}
+                            aria-controls={detailsId}
+                            onClick={() => setFoldedDetails((folded) => ({ ...folded, [index]: detailsOpen }))}
+                        >
+                            {detailsOpen ? "Hide page details" : "Show page details"}
+                        </Button>
+                    )}
                     {view.fonts.length > 0 && (
                         <Button variant="ghost" size="xs" aria-expanded={fontsOpen} aria-controls={fontListId} onClick={() => toggleFonts(index)}>
                             {fontsOpen ? "Hide fonts" : "Show fonts"}
@@ -380,6 +397,16 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                         </Button>
                     )}
                 </span>
+                {pageDetails.length > 0 && detailsOpen && (
+                    <ul id={detailsId} className="result-page-details" aria-label={`Page details for ${name}`}>
+                        {pageDetails.map((detail) => (
+                            <li key={detail.label}>
+                                <span className="result-page-details-label">{detail.label}</span>
+                                <span>{detail.value}</span>
+                            </li>
+                        ))}
+                    </ul>
+                )}
                 {view.canRetryWithPassword && onRetryWithPassword && !live && passwordRow === index && (
                     <PasswordRetryForm
                         name={name}
