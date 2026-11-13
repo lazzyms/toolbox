@@ -257,10 +257,11 @@ const PackRow = ({ pack, checking, job, removal, offline, actions }: { pack: Pac
               <span style={{ width: `${bar.percent}%` }} />
             </span>
           )}
-          <span className="pack-row-status settings-row-hint" role={state === "inUse" ? "alert" : "status"} data-status={state}>{status}</span>
+          <span className="pack-row-status settings-row-hint" role={state === "inUse" || state === "damaged" ? "alert" : "status"} data-status={state}>{status}</span>
           {job && job.phase !== "failed" && action("Cancel", () => actions.cancel(job.runId))}
           {job?.phase === "failed" && action("Try again", actions.install)}
           {!job && !checking && pack.status === "notInstalled" && action("Install", actions.install, offlineRow)}
+          {!job && !checking && pack.status === "damaged" && download !== null && action("Repair", actions.install, offline)}
           {!job && !checking && installed && action("Remove…", actions.remove, removal === "removing" || removal === "inUse", "ghost")}
         </span>
       </div>
@@ -289,7 +290,7 @@ const Banner = ({ role, tone, title, text, action }: { role: "status" | "alert";
   </Card>
 );
 
-/** Lists packs, downloads and installs them one at a time, installs one from a pack file, and removes them. Updating arrives later. */
+/** Lists packs, downloads and installs them one at a time, installs one from a pack file, repairs damaged ones by installing them again, and removes them. Updating arrives later. */
 export const PacksSection = () => {
   const request = useRef<Promise<PackList> | null>(null);
   const [list, setList] = useState<PackList | null>(null);
@@ -403,6 +404,8 @@ export const PacksSection = () => {
   const blocked = failures.some(({ error }) => error.kind === "serverBlocked");
   const inUse = (list?.packs ?? []).find((pack) => removals[pack.id] === "inUse");
   const lowSpace = failures.flatMap(({ pack, error }) => error.kind === "notEnoughSpace" ? [{ pack, ...error.details }] : [])[0];
+  // A damaged pack whose repair is not running. Its row says why a repair failed.
+  const damaged = (list?.packs ?? []).find((pack) => pack.status === "damaged" && (jobs[pack.id] === undefined || jobs[pack.id].phase === "failed") && checking !== pack.id);
   return (
     <div className="packs">
       <div className="packs-intro">
@@ -432,6 +435,18 @@ export const PacksSection = () => {
           tone="destructive"
           title={`Not enough space for ${lowSpace.pack.name}.`}
           text={`It needs ${formatBytes(lowSpace.neededBytes)} free and this disk has ${formatBytes(lowSpace.freeBytes)}. Free up at least ${formatBytes(lowSpace.neededBytes - lowSpace.freeBytes)}, then try again.`}
+        />
+      ) : damaged ? (
+        <Banner
+          role="alert"
+          tone="destructive"
+          title={`${damaged.name} is damaged.`}
+          text={damaged.downloadBytes === null
+            ? `${toolList(damaged.toolIds)} won't use it until it's repaired. Install it again from a pack file.`
+            : `${toolList(damaged.toolIds)} won't use it until it's repaired. Repair downloads a fresh copy, ${formatBytes(damaged.downloadBytes)}.`}
+          action={damaged.downloadBytes === null
+            ? (checking === null ? { label: "Install from file…", onClick: () => void chooseFile() } : undefined)
+            : { label: "Repair", onClick: () => void download(damaged) }}
         />
       ) : null}
       <ul className="pack-list" aria-label="Packs">

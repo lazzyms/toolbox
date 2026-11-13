@@ -583,6 +583,45 @@ mod tests {
     }
 
     #[test]
+    fn repair_downloads_the_pack_again_and_a_failed_repair_leaves_it_damaged_with_nothing_left_over() {
+        use super::super::uninstall::{resolve_pack_resource, PackHolds};
+        const MODEL: &str = "tessdata/hin.traineddata";
+        let setup = Setup::new("repair", &["ocr-hindi"]);
+        let server = Server::start();
+        setup.serve(&server);
+        let downloads = Downloads::new(transport(server.base())).unwrap();
+        let attempt = || setup.install(&downloads, "ocr-hindi", &CancelFlag::default(), &|_, _, _| {});
+        attempt().unwrap();
+        let model = setup.app_data.join(PACKS_DIR).join("ocr-hindi/2.0").join(MODEL);
+        let original = std::fs::read(&model).unwrap();
+        let mut changed = original.clone();
+        changed[0] ^= 1;
+        std::fs::write(&model, changed).unwrap();
+        let resolve = || resolve_pack_resource(MODEL, &setup.app_data, "ocr-hindi", None, None, &mut PackHolds::default());
+        assert!(resolve().is_err());
+        assert_eq!(setup.status("ocr-hindi"), PackStatus::Damaged);
+
+        let path = format!("/releases/{}", pack_path("ocr-hindi"));
+        let mut corrupt = setup.file("ocr-hindi");
+        let middle = corrupt.len() / 2;
+        corrupt[middle] ^= 0xff;
+        for (case, reply) in [("server error", Reply::Status(500)), ("corrupt download", Reply::File(corrupt)), ("cut short", Reply::CutShort(setup.file("ocr-hindi")))] {
+            server.route(&path, reply);
+            assert!(attempt().is_err(), "{case}");
+            assert_eq!(setup.status("ocr-hindi"), PackStatus::Damaged, "{case}");
+            assert!(resolve().is_err(), "{case}");
+            assert!(!setup.app_data.join("pack-staging").exists() && !setup.app_data.join(DOWNLOADS_DIR).exists(), "{case}: files were left");
+        }
+
+        setup.serve(&server);
+        attempt().unwrap();
+        assert_eq!(setup.status("ocr-hindi"), PackStatus::Installed);
+        assert!(!setup.app_data.join("pack-staging").exists() && !setup.app_data.join(DOWNLOADS_DIR).exists());
+        let resolved = resolve().unwrap();
+        assert_eq!(std::fs::read(resolved.path).unwrap(), original);
+    }
+
+    #[test]
     fn the_production_command_path_runs_off_the_async_runtime() {
         let setup = Setup::new("blocking", &["ocr-hindi"]);
         let server = Server::start();

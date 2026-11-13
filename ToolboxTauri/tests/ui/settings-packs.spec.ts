@@ -43,6 +43,11 @@ const everyStatus: PackList = {
     totalBytes: 415 * MB,
 };
 
+const damagedBanner = "Text recognition, French is damaged. OCR PDF won't use it until it's repaired. Repair downloads a fresh copy, 12 MB.";
+const damagedStatus = "Damaged. A file in this pack was changed or is missing.";
+/** The alerts every list with the damaged French pack shows: its banner and its row. */
+const damagedAlerts = [`${damagedBanner}Repair`, damagedStatus];
+
 const openPacks = async (page: Page, result: PackList | string) => {
     await page.addInitScript((result) => { (window as unknown as PacksWindow).__packs = result; }, result);
     await page.goto("/");
@@ -154,7 +159,8 @@ test("Packs shows every status with sizes, license, tools, total disk usage and 
     await expect(rows.update).toContainText("Used by OCR PDF. 300 MB on this disk.");
     await expect(rows.damaged).toContainText("Used by OCR PDF. 9 MB on this disk.");
     await expect(rows.incompatible).toContainText("Used by OCR PDF and Edit PDF. 10 MB on this disk.");
-    await expect(rows.damaged.getByRole("status")).toHaveCSS("color", await page.evaluate(() => {
+    // Damaged is an alert, on its row and above the list.
+    await expect(rows.damaged.getByRole("alert")).toHaveCSS("color", await page.evaluate(() => {
         const probe = document.createElement("span");
         probe.style.color = "var(--destructive)";
         document.body.append(probe);
@@ -165,8 +171,11 @@ test("Packs shows every status with sizes, license, tools, total disk usage and 
 
     await expect(region.getByRole("status").last()).toHaveText("4 installed, 415 MB used.");
 
-    // The pack that isn't installed offers Install and every installed pack offers Remove: updating and repairing arrive later.
-    await expect(list.getByRole("button")).toHaveCount(10);
+    // The pack that isn't installed offers Install, the damaged one Repair, and every installed pack offers Remove: updating arrives later.
+    await expect(list.getByRole("button")).toHaveCount(11);
+    await expect(rows.damaged.getByRole("button", { name: "Repair Text recognition, French" })).toBeEnabled();
+    await expect(list.getByRole("button", { name: /^Repair / })).toHaveCount(1);
+    await expect(region.getByRole("alert").first()).toHaveText(`${damagedBanner}Repair`);
     await expect(list.getByRole("button", { name: /^Details for / })).toHaveCount(5);
     await expect(rows.notInstalled.getByRole("button", { name: "Install Text recognition, Hindi" })).toBeEnabled();
     await expect(rows.notInstalled.getByRole("button", { name: /^Remove/ })).toHaveCount(0);
@@ -392,7 +401,7 @@ test("Cancel sends the download's run id and leaves the pack not installed", asy
     const row = region.getByRole("listitem", { name: `${hindi}, Not installed` });
     await expect(row.getByRole("button", { name: `Install ${hindi}` })).toBeEnabled();
     await expect(row.getByRole("progressbar")).toHaveCount(0);
-    await expect(region.getByRole("alert")).toHaveCount(0);
+    await expect(region.getByRole("alert")).toHaveText(damagedAlerts);
 });
 
 const threePacks: PackList = {
@@ -463,7 +472,7 @@ for (const [name, error, text] of rowErrors) {
         expect(second.packId).toBe("ocr-hindi");
         expect(second.runId).not.toBe(first.runId);
         await expect(region.getByRole("listitem", { name: `${hindi}, 0 of 12 MB` })).toBeVisible();
-        await expect(region.getByRole("alert")).toHaveCount(0);
+        await expect(region.getByRole("alert")).toHaveText(damagedAlerts);
     });
 }
 
@@ -473,7 +482,9 @@ test("a blocked release server is explained above the list with a way to install
     await region.getByRole("button", { name: `Install ${hindi}` }).click();
     await settle(page, 0, { error: { kind: "serverBlocked", message: "HTTP status 403 Forbidden" } });
 
-    const banner = region.getByRole("alert");
+    // One note above the list at a time: the blocked server comes before the damaged pack.
+    const banner = region.getByRole("alert").first();
+    await expect(region.getByRole("alert")).toHaveCount(2);
     await expect(banner).toHaveText("Couldn't reach the Toolbox release server. Your internet works, but something on this network is blocking downloads from Toolbox. Try again later or on another network, or install from a pack file.Install from file…");
     await banner.getByRole("button", { name: "Install from file…" }).click();
     await expect(page.getByRole("dialog", { name: "Install this pack?" })).toBeVisible();
@@ -483,7 +494,7 @@ test("not enough free space names the pack and how much to free up", async ({ pa
     const region = await openPacks(page, everyStatus);
     await region.getByRole("button", { name: `Install ${hindi}` }).click();
     await settle(page, 0, { error: { kind: "notEnoughSpace", details: { neededBytes: 310 * MB, freeBytes: 120 * MB }, message: "" } });
-    await expect(region.getByRole("alert")).toHaveText(`Not enough space for ${hindi}. It needs 310 MB free and this disk has 120 MB. Free up at least 190 MB, then try again.`);
+    await expect(region.getByRole("alert").first()).toHaveText(`Not enough space for ${hindi}. It needs 310 MB free and this disk has 120 MB. Free up at least 190 MB, then try again.`);
 });
 
 test("offline shows the offline note and holds Install until the network returns", async ({ page }) => {
@@ -537,7 +548,7 @@ test("Remove sends the pack id and the row returns to not installed with updated
     await expect(removed.getByRole("button", { name: `Install ${writing}` })).toBeEnabled();
     await expect(removed.getByRole("button", { name: /^Remove/ })).toHaveCount(0);
     await expect(region.getByRole("status").last()).toHaveText("3 installed, 319 MB used.");
-    await expect(region.getByRole("alert")).toHaveCount(0);
+    await expect(region.getByRole("alert")).toHaveText(damagedAlerts);
 });
 
 test("a pack in use is not removed: the refusal says why above the list and on its row, and nothing else changes", async ({ page }) => {
@@ -579,4 +590,89 @@ test("a removal that fails for another reason says so on its row and Remove can 
     await expect(region.getByText("wasn't removed.")).toHaveCount(0);
     await row.getByRole("button", { name: `Remove… ${writing}` }).click();
     expect(await calls(page, "uninstall_pack")).toEqual([{ packId: "scripts" }, { packId: "scripts" }]);
+});
+
+const french = "Text recognition, French";
+const afterRepair: PackList = {
+    ...everyStatus,
+    packs: everyStatus.packs.map((entry) => entry.id === "ocr-french" ? { ...entry, status: "installed", diskBytes: 31 * MB } : entry),
+    totalBytes: 437 * MB,
+};
+
+test("Repair on a damaged pack sends its id, shows the download's progress and then the pack installed", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    const damaged = region.getByRole("listitem", { name: `${french}, ${damagedStatus}` });
+    await expect(damaged.getByRole("alert")).toHaveText(damagedStatus);
+    await damaged.getByRole("button", { name: `Repair ${french}` }).click();
+
+    const [started] = await downloads(page);
+    expect(await calls(page, "install_pack")).toEqual([{ packId: "ocr-french", runId: started.runId }]);
+    const row = region.getByRole("listitem", { name: new RegExp(`^${french}, `) });
+    await expect(row.getByRole("status")).toHaveText("0 of 12 MB");
+    await expect(row.getByRole("button", { name: `Repair ${french}` })).toHaveCount(0);
+    await expect(row.getByRole("button", { name: `Cancel ${french}` })).toBeVisible();
+    // The note above the list gives way to the repair's progress.
+    await expect(region.getByRole("alert")).toHaveCount(0);
+
+    await progress(page, { runId: started.runId, packId: "ocr-french", phase: "downloading", receivedBytes: 7 * MB, totalBytes: 12 * MB });
+    await expect(row).toHaveAccessibleName(`${french}, 7 of 12 MB`);
+    await expect(row.getByRole("progressbar", { name: `Downloading ${french}` })).toHaveAttribute("aria-valuenow", "58");
+    await progress(page, { runId: started.runId, packId: "ocr-french", phase: "verifying", receivedBytes: 12 * MB, totalBytes: 12 * MB });
+    await expect(row.getByRole("status")).toHaveText("Checking the download…");
+
+    await settle(page, 0, { ok: afterRepair });
+    const installed = region.getByRole("listitem", { name: `${french}, Installed, version 2.0` });
+    await expect(installed).toContainText("Used by OCR PDF. 31 MB on this disk.");
+    await expect(installed.getByRole("progressbar")).toHaveCount(0);
+    await expect(installed.getByRole("button", { name: /^(Repair|Cancel|Try again) / })).toHaveCount(0);
+    await expect(installed.getByRole("button", { name: `Remove… ${french}` })).toBeEnabled();
+    await expect(region.getByRole("alert")).toHaveCount(0);
+    await expect(region.getByRole("status").last()).toHaveText("4 installed, 437 MB used.");
+});
+
+test("the damaged note's Repair starts the same repair, and a failed repair keeps the pack damaged", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("alert").first().getByRole("button", { name: "Repair", exact: true }).click();
+    const [started] = await downloads(page);
+    expect(started.packId).toBe("ocr-french");
+
+    await settle(page, 0, { error: { kind: "checksumMismatch", message: "" } });
+    const failed = "The download didn't pass its safety check, so it was deleted. Nothing was installed.";
+    const row = region.getByRole("listitem", { name: `${french}, ${failed}` });
+    await expect(row).toContainText("Used by OCR PDF. 9 MB on this disk.");
+    // The pack is still damaged, so the note comes back with Repair.
+    await expect(region.getByRole("alert").first()).toHaveText(`${damagedBanner}Repair`);
+    await row.getByRole("button", { name: `Try again ${french}` }).click();
+    const [, again] = await downloads(page);
+    expect(again.packId).toBe("ocr-french");
+    expect(again.runId).not.toBe(started.runId);
+    await expect(region.getByRole("listitem", { name: `${french}, 0 of 12 MB` })).toBeVisible();
+});
+
+test("offline, a damaged pack keeps its status and Repair waits for the network", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Install ${hindi}` }).click();
+    await settle(page, 0, { error: { kind: "offline", message: "dns error" } });
+
+    const row = region.getByRole("listitem", { name: `${french}, ${damagedStatus}` });
+    await expect(row.getByRole("button", { name: `Repair ${french}` })).toBeDisabled();
+    await expect(region.getByText(damagedBanner)).toHaveCount(0);
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(row.getByRole("button", { name: `Repair ${french}` })).toBeEnabled();
+    await expect(region.getByRole("alert").first()).toHaveText(`${damagedBanner}Repair`);
+});
+
+test("a damaged pack the catalog no longer offers is repaired from a pack file", async ({ page }) => {
+    await arrangeFile(page, [hindiFile], { ok: hindiSummary });
+    const region = await openPacks(page, {
+        packs: [pack({ id: "ocr-french", name: french, status: "damaged", installedVersion: "2.0", downloadBytes: null, installedBytes: null, diskBytes: 9 * MB })],
+        installedCount: 1,
+        totalBytes: 9 * MB,
+    });
+    const banner = region.getByRole("alert").first();
+    await expect(banner).toHaveText(`${french} is damaged. OCR PDF won't use it until it's repaired. Install it again from a pack file.Install from file…`);
+    await expect(region.getByRole("button", { name: `Repair ${french}` })).toHaveCount(0);
+    await expect(region.getByRole("button", { name: `Remove… ${french}` })).toBeEnabled();
+    await banner.getByRole("button", { name: "Install from file…" }).click();
+    await expect(page.getByRole("dialog", { name: "Install this pack?" })).toBeVisible();
 });
