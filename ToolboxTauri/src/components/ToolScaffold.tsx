@@ -1005,6 +1005,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runningDetail={utility.runningDetail}
                 progressByPage={utility.progressByPage}
                 signatureRemovedNote={utility.signatureRemovedNote}
+                pointerLabels={utility.pointerLabels}
                 precisionReducedIsNote={utility.precisionReducedIsNote}
                 live={live}
                 combinedInputs={combinedInputs}

@@ -283,6 +283,8 @@ export interface ToolDefinition {
   lockedNote?: string;
   /** The tool's own words for a result row whose copy lost its digital signature, when its board has them. */
   signatureRemovedNote?: string;
+  /** The tool's own words for a result row's button to another tool, by that tool's id, when its board names them. */
+  pointerLabels?: Partial<Record<AtomicToolId, string>>;
   /** Its rows show a lower bit depth as a note, because the tool only reads the photo and needs nothing from the user. */
   precisionReducedIsNote?: boolean;
   blurb: string;

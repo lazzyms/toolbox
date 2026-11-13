@@ -28,8 +28,9 @@ use unicode_script::{Script, UnicodeScript};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, System, ZipArchive, ZipWriter};
 
+use crate::kit::common::limits::bytes_label;
 use crate::kit::common::{note_renamed, JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{OutcomeDetail, OutcomePointer, OutcomeWarning, ReflowLayout, SkipCode, SkipReason, ToolError, WarningKind};
+use crate::kit::contracts::{LimitKind, OutcomeDetail, OutcomePointer, OutcomeWarning, ReflowLayout, SkipCode, SkipReason, ToolError, WarningKind};
 use super::document_info;
 use super::embedded_image::{self, Extracted, NotSaved};
 use super::page_text::{read_document_text, PageImageSource, PageText, PageTextRun};
@@ -111,8 +112,17 @@ const DOCUMENT_TEXT_LIMIT: usize = 100_000;
 const BOOKMARK_MAX_DEPTH: usize = 64;
 const BOOKMARK_MAX_COUNT: usize = 10_000;
 
-/// Converts one PDF and reports it as one outcome.
+/// The largest EPUB one PDF may make; a bigger book fails before anything is written.
+pub(crate) const MAX_EPUB_BYTES: u64 = 1_000_000_000;
+
+/// Converts one PDF and reports it as one outcome. A PDF that can't be read fails as damaged; an
+/// encrypted one fails pointing at Lock & Unlock. A signed PDF converts like any other: the EPUB is a
+/// new file, so there is no signature to keep or remove.
 pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
+    convert_within(request, input, MAX_EPUB_BYTES)
+}
+
+fn convert_within(request: &PdfToEpubRequest, input: PathBuf, max_epub_bytes: u64) -> JobOutcome {
     let bytes = match fs::read(&input) {
         Ok(bytes) => bytes,
         Err(error) => return JobOutcome::failure(input, ToolError::processing(format!("Could not read the PDF: {error}"))),
@@ -121,7 +131,7 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         Ok(document) if document.is_encrypted() => return password_protected(input),
         Ok(document) => document,
         Err(lopdf::Error::InvalidPassword | lopdf::Error::Decryption(_)) => return password_protected(input),
-        Err(_) => return JobOutcome::failure(input, ToolError::invalid_input(PDF_DAMAGED)),
+        Err(_) => return JobOutcome::failure(input, ToolError::processing(PDF_DAMAGED)),
     };
     let pages = match read_document_text(&document) {
         Ok(pages) => pages,
@@ -189,6 +199,9 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         Ok(epub) => epub,
         Err(error) => return JobOutcome::failure(input, ToolError::processing(format!("Could not build the EPUB: {error}"))),
     };
+    if epub.len() as u64 > max_epub_bytes {
+        return JobOutcome::failure(input, epub_too_large(max_epub_bytes));
+    }
     let path = match save(&input, &request.output_location, &epub) {
         Ok(path) => path,
         Err(error) => return JobOutcome::failure(input, error),
@@ -259,6 +272,14 @@ fn selected_pages(input: &Path, range: Option<&str>, page_count: usize) -> Resul
 /// Page numbers as runs, like "3-6, 8-11, 13".
 fn page_spans(pages: &[u32]) -> String {
     page_runs(pages).into_iter().map(|(first, last)| if first == last { first.to_string() } else { format!("{first}-{last}") }).collect::<Vec<_>>().join(", ")
+}
+
+fn epub_too_large(max_epub_bytes: u64) -> ToolError {
+    ToolError::limit_exceeded(
+        LimitKind::OutputSize,
+        format!("The EPUB would be larger than the limit of {} for one EPUB. Split the PDF, then convert each part.", bytes_label(max_epub_bytes)),
+    )
+    .with_pointer(OutcomePointer::Tool { tool_id: "pdf-split".into() })
 }
 
 fn password_protected(input: PathBuf) -> JobOutcome {
@@ -1749,6 +1770,26 @@ mod tests {
         let warning = &outcome.warnings[0];
         assert_eq!(warning.kind, WarningKind::ImageDamaged { page: 1, image: 2 });
         assert_eq!(warning.message, "Page 1, image 2 — The image data is damaged. Left out; the rest of the book converted.");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_epub_over_the_output_limit_fails_before_anything_is_written() {
+        assert_eq!(MAX_EPUB_BYTES, 1_000_000_000, "the recorded limit for one EPUB is 1 GB");
+        let root = folder("output-limit");
+        let input = root.join("long.pdf");
+        pdf_with_pages(&input, &["BT /F1 12 Tf 72 700 Td (A book that fits any limit but this one.) Tj ET"]);
+        let destination = root.join("out");
+        fs::create_dir_all(&destination).unwrap();
+        let limited = PdfToEpubRequest { output_location: OutputLocation::CustomFolder(destination.clone()), ..request(&input, true) };
+        let outcome = convert_within(&limited, input.clone(), 1_000);
+        let failure = outcome.error().unwrap_or_else(|| panic!("{outcome:?}"));
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(failure.kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: LimitKind::OutputSize });
+        assert_eq!(failure.message, "The EPUB would be larger than the limit of 1 KB for one EPUB. Split the PDF, then convert each part.");
+        assert_eq!(failure.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-split".into() }));
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0, "no EPUB, temporary file or claim is left");
+        assert!(matches!(convert(&limited, input).state, OutcomeState::Succeeded { .. }), "the same book fits the recorded limit");
         let _ = fs::remove_dir_all(root);
     }
 

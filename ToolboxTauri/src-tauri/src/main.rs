@@ -2759,28 +2759,129 @@ mod command_tests {
         let text_pdf = root.join("text.pdf");
         let locked = root.join("locked.pdf");
         let damaged = root.join("damaged.pdf");
+        let truncated = root.join("truncated.pdf");
+        let signed = root.join("signed.pdf");
         scanned_pdf(&scan, &[&["Only pixels here"]]);
         make_pdf(&text_pdf, 2);
         remaining::tests::password_protected_pdf(&locked);
         std::fs::write(&damaged, b"%PDF-1.7 not really").unwrap();
-        let paths = vec![scan.clone(), text_pdf.clone(), locked.clone(), damaged.clone()];
+        let whole = std::fs::read(&text_pdf).unwrap();
+        std::fs::write(&truncated, &whole[..whole.len() / 3]).unwrap();
+        remaining::tests::structured_pdf(&signed, remaining::tests::Structure { sizes: &[(612, 792), (612, 792)], signed: true, ..Default::default() });
+        let paths = vec![scan.clone(), text_pdf.clone(), locked.clone(), damaged.clone(), truncated.clone(), signed.clone()];
         let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
 
         let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(paths.clone(), location(&root, "books"))));
-        let written = std::fs::read_dir(root.join("books")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let mut written = std::fs::read_dir(root.join("books")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        written.sort();
         let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
         let _ = std::fs::remove_dir_all(&root);
 
-        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "one outcome per PDF, in order");
         let OutcomeState::Skipped { reason } = &outcomes[0].state else { panic!("the scan needs OCR: {:?}", outcomes[0]) };
         assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NeedsOcr, to_epub::NO_SELECTABLE_TEXT));
         assert_eq!(reason.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
         assert!(outcomes[1].error().is_none(), "the text PDF still converts: {:?}", outcomes[1]);
         let locked_error = outcomes[2].error().unwrap();
+        assert_eq!(locked_error.kind, ErrorKind::InvalidInput, "an encrypted PDF is the user's to unlock");
         assert_eq!((locked_error.message.as_str(), locked_error.pointer.clone()), (to_epub::PASSWORD_PROTECTED, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() })));
-        assert_eq!(outcomes[3].error().unwrap().message, remaining::PDF_DAMAGED);
-        assert_eq!(written, vec!["text.epub".to_string()], "only the text PDF makes a book");
+        for damaged in &outcomes[3..5] {
+            let error = damaged.error().unwrap_or_else(|| panic!("{} must fail: {damaged:?}", damaged.input_path.display()));
+            assert_eq!((error.kind.clone(), error.message.as_str(), error.pointer.clone()), (ErrorKind::Processing, remaining::PDF_DAMAGED, None), "{}", damaged.input_path.display());
+            assert!(damaged.output_paths().is_empty());
+        }
+        assert!(outcomes[5].error().is_none(), "the signed PDF converts: {:?}", outcomes[5]);
+        assert!(outcomes[5].warnings.is_empty(), "an EPUB has no signature to remove, so nothing is said about one: {:?}", outcomes[5].warnings);
+        assert_eq!(written, ["signed.epub", "text.epub"], "only the readable PDFs make books, and nothing partial is left");
         assert_eq!(after, originals);
+    }
+
+    /// Converts `offender` beside a good two-page PDF and checks neither original changed.
+    fn epub_pair(root: &PathBuf, offender: &PathBuf) -> Vec<JobOutcome> {
+        let good = root.join("good.pdf");
+        make_pdf(&good, 2);
+        let originals = [Original::of(offender), Original::of(&good)];
+        let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![offender.clone(), good.clone()], location(root, "books"))));
+        for original in &originals { original.assert_untouched(); }
+        outcomes
+    }
+
+    fn written_books(root: &PathBuf) -> Vec<String> {
+        let mut names = std::fs::read_dir(root.join("books")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn pdf_to_epub_fails_a_pdf_over_the_recorded_size_alone() {
+        let root = sandbox("epub-limit-size");
+        let offender = root.join("oversized.pdf");
+        std::fs::write(&offender, b"%PDF-1.7\n").unwrap();
+        std::fs::OpenOptions::new().write(true).open(&offender).unwrap().set_len(1_000_000_001).unwrap();
+        let outcomes = epub_pair(&root, &offender);
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::FileSize, "1 GB");
+        assert_eq!(written_books(&root), ["good.epub"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdf_to_epub_fails_a_pdf_over_the_recorded_page_count_alone_and_points_at_split() {
+        use crate::kit::contracts::OutcomePointer;
+        let root = sandbox("epub-limit-pages");
+        let offender = root.join("long.pdf");
+        make_pdf(&offender, 5_001);
+        let outcomes = epub_pair(&root, &offender);
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::PageCount, "5,000");
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.message, "5,001 pages is over the limit of 5,000 pages for one PDF. Split it, then convert each part.");
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-split".into() }));
+        assert_eq!(written_books(&root), ["good.epub"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdf_to_epub_fails_a_stream_expanding_past_the_recorded_size_alone() {
+        let root = sandbox("epub-limit-expansion");
+        let offender = root.join("bomb.pdf");
+        std::fs::write(&offender, crate::kit::common::limits::fixtures::pdf_with_stream(&crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001))).unwrap();
+        let outcomes = epub_pair(&root, &offender);
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::Decompression, "500 MB");
+        assert_eq!(written_books(&root), ["good.epub"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdf_to_epub_fails_a_pdf_past_its_time_limit_alone_and_saves_nothing_for_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let root = sandbox("epub-limit-time");
+        let slow = root.join("slow.pdf");
+        let good = root.join("good.pdf");
+        make_pdf(&slow, 2);
+        make_pdf(&good, 2);
+        let originals = [Original::of(&slow), Original::of(&good)];
+        let request = Arc::new(epub_request(vec![slow.clone(), good.clone()], location(&root, "books")));
+        let recorded = crate::kit::common::limits::recorded("pdf_to_epub").unwrap();
+        assert_eq!(recorded.max_duration, std::time::Duration::from_secs(5 * 60), "PDF to EPUB records five minutes per PDF");
+        let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(1), ..recorded };
+        let (released, finished) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+        let (job_released, job_finished, job_slow) = (Arc::clone(&released), Arc::clone(&finished), slow.clone());
+        let outcomes = BatchRunner::run_with_limits(&RunEvents::silent(), "pdf_to_epub", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
+            let is_slow = path == job_slow;
+            while is_slow && !job_released.load(Ordering::SeqCst) { std::thread::sleep(std::time::Duration::from_millis(10)); }
+            let outcome = to_epub::convert(request, path);
+            if is_slow { job_finished.store(true, Ordering::SeqCst); }
+            outcome
+        });
+        released.store(true, Ordering::SeqCst);
+        // The stopped job runs on detached; wait for it so a late publish would show.
+        let waited = std::time::Instant::now();
+        while !finished.load(Ordering::SeqCst) && waited.elapsed() < std::time::Duration::from_secs(30) { std::thread::sleep(std::time::Duration::from_millis(10)); }
+        assert!(finished.load(Ordering::SeqCst), "the stopped conversion finished");
+        assert_only_offender_limited(&outcomes, &slow, LimitKind::Time, "1 second");
+        assert!(outcomes[0].error().unwrap().message.contains("Nothing was saved"), "{}", outcomes[0].error().unwrap().message);
+        assert_eq!(written_books(&root), ["good.epub"], "the stopped conversion's late publish is refused");
+        for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn ranged_epub_request(paths: Vec<PathBuf>, output_location: OutputLocation, range: &str) -> to_epub::PdfToEpubRequest {
