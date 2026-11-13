@@ -69,6 +69,36 @@ impl fmt::Debug for PasswordRequest {
     }
 }
 
+/// An optional open password for the batch plus per-file overrides, for tools that open a PDF
+/// with a password only when it needs one. An override wins, and an empty password counts as
+/// none, so files that open without one are read directly.
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPasswords {
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub password_overrides: HashMap<PathBuf, String>,
+}
+
+impl OpenPasswords {
+    pub fn password_for(&self, path: &Path) -> Option<&str> {
+        self.password_overrides.get(path).or(self.password.as_ref()).map(String::as_str).filter(|password| !password.is_empty())
+    }
+}
+
+impl fmt::Debug for OpenPasswords {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut overridden = self.password_overrides.keys().collect::<Vec<_>>();
+        overridden.sort();
+        formatter
+            .debug_struct("OpenPasswords")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("password_overrides", &overridden)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompressImagesRequest {

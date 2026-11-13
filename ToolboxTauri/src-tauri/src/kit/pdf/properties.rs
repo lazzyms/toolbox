@@ -1,4 +1,7 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Instant;
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream, StringFormat};
 use md5::{Digest, Md5};
@@ -9,10 +12,10 @@ use quick_xml::{NsReader, Writer};
 use serde::Deserialize;
 
 use super::document_info::{self, DocumentProperty, PdfDate, PdfProperties, DC, RDF, XMP, XMP_MAX_BYTES};
-use crate::kit::common::OutputNaming;
-use crate::kit::contracts::{ErrorKind, OutputLocation, JobOutcome, SkipCode, SkipReason, ToolError};
+use super::qpdf;
+use crate::kit::common::{OutputNaming, TempDir};
+use crate::kit::contracts::{ErrorKind, JobOutcome, LimitKind, OpenPasswords, OutputLocation, SkipCode, SkipReason, ToolError};
 
-pub const PROTECTED: &str = "Edit Properties can't edit a password-protected PDF yet. Nothing was saved.";
 const NO_CHANGE_ASKED: &str = "Every field is set to Keep, so nothing would change. Choose Set or Clear for a field.";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -91,12 +94,16 @@ pub struct EditPropertiesRequest {
     pub paths: Vec<PathBuf>,
     pub patch: PropertiesPatch,
     pub output_location: OutputLocation,
+    #[serde(flatten)]
+    pub passwords: OpenPasswords,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadPropertiesRequest {
     pub paths: Vec<PathBuf>,
+    #[serde(flatten)]
+    pub passwords: OpenPasswords,
 }
 
 fn label(property: DocumentProperty) -> &'static str {
@@ -129,19 +136,20 @@ pub fn validate(request: &EditPropertiesRequest) -> Result<(), Vec<JobOutcome>> 
     }
 }
 
-fn open(input: &Path) -> Result<Document, ToolError> {
+/// Opens and decrypts a PDF, with the password that opened it: empty for a file that needs none
+/// to open, which a file with only restrictions still opens with.
+fn open<'a>(input: &Path, password: Option<&'a str>) -> Result<(Document, &'a str), ToolError> {
     let bytes = document_info::read_bytes(input)?;
-    let document = document_info::load(&bytes, None).map_err(|error| if matches!(error.kind, ErrorKind::InvalidInput | ErrorKind::WrongPassword) { ToolError::invalid_input(PROTECTED) } else { error })?;
-    if document.was_encrypted() {
-        return Err(ToolError::invalid_input(PROTECTED));
+    match (document_info::load(&bytes, Some("")), password) {
+        (Err(error), Some(password)) if error.kind == ErrorKind::WrongPassword => Ok((document_info::load(&bytes, Some(password))?, password)),
+        (opened, _) => Ok((opened?, "")),
     }
-    Ok(document)
 }
 
 /// Each field's current value: the document information value, or the XMP one when the dictionary has none.
-pub fn read_job(_request: &ReadPropertiesRequest, input: PathBuf) -> JobOutcome {
-    let document = match open(&input) {
-        Ok(document) => document,
+pub fn read_job(request: &ReadPropertiesRequest, input: PathBuf) -> JobOutcome {
+    let document = match open(&input, request.passwords.password_for(&input)) {
+        Ok((document, _)) => document,
         Err(error) => return JobOutcome::failure(input, error),
     };
     let current = document_info::from_document(&document);
@@ -178,7 +186,8 @@ enum Edited {
 
 fn edit(request: &EditPropertiesRequest, input: &Path) -> Result<Edited, ToolError> {
     let edits = request.patch.edits().map_err(ToolError::invalid_input)?;
-    let mut document = open(input)?;
+    let (mut document, password) = open(input, request.passwords.password_for(input))?;
+    let input_encryption = encryption(&document);
     let page_count = document.get_pages().len();
     let current = document_info::from_document(&document);
     let packet = xmp_packet(&document)?;
@@ -223,13 +232,82 @@ fn edit(request: &EditPropertiesRequest, input: &Path) -> Result<Edited, ToolErr
         None => {}
     }
     let bytes = save_with_stable_id(&mut document).map_err(|error| ToolError::processing(format!("Could not write the edited PDF: {error}")))?;
-    check_output(&bytes, page_count, &effective)?;
+    check_output(&Document::load_mem(&bytes).map_err(|_| not_checked("it could not be reopened"))?, page_count, &effective)?;
 
     let output = OutputNaming::reserve_destination(input, &request.output_location, "-edited", "pdf").map_err(|error| ToolError::processing(format!("Could not reserve the edited PDF: {error}")))?;
-    std::fs::write(output.path(), &bytes).map_err(|error| ToolError::processing(format!("Could not write the edited PDF: {error}")))?;
-    let path = output.publish().map_err(|error| ToolError::processing(format!("Could not publish the edited PDF: {error}")))?;
     let changes = effective.iter().map(|(property, edit)| format!("{} {}", label(*property), if matches!(edit, FieldEdit::Set(_)) { "set" } else { "cleared" })).collect::<Vec<_>>().join(", ");
-    Ok(Edited::Saved(path, format!("{}{}.", changes[..1].to_uppercase(), &changes[1..])))
+    let mut detail = format!("{}{}.", changes[..1].to_uppercase(), &changes[1..]);
+    match &input_encryption {
+        None => std::fs::write(output.path(), &bytes).map_err(|error| ToolError::processing(format!("Could not write the edited PDF: {error}")))?,
+        Some(expected) => {
+            encrypt_like(&bytes, page_count, input, password, output.path())?;
+            let saved = std::fs::read(output.path()).map_err(|error| ToolError::processing(format!("Could not write the edited PDF: {error}")))?;
+            let saved = document_info::load(&saved, Some(password)).map_err(|_| not_checked("it no longer opens with the same password"))?;
+            if encryption(&saved).as_ref() != Some(expected) {
+                return Err(not_checked("its encryption changed"));
+            }
+            check_output(&saved, page_count, &effective)?;
+            detail.push_str(if password.is_empty() { " It keeps its restrictions." } else { " It keeps its open password." });
+        }
+    }
+    let path = output.publish().map_err(|error| ToolError::processing(format!("Could not publish the edited PDF: {error}")))?;
+    Ok(Edited::Saved(path, detail))
+}
+
+/// What decides who can open a PDF and what they may do with it: the same values mean the same
+/// passwords and the same permissions.
+#[derive(PartialEq)]
+struct Encryption {
+    version: i64,
+    revision: i64,
+    key_length: Option<usize>,
+    encrypt_metadata: bool,
+    permissions: u64,
+    owner_value: Vec<u8>,
+    user_value: Vec<u8>,
+    file_encryption_key: Vec<u8>,
+}
+
+fn encryption(document: &Document) -> Option<Encryption> {
+    document.encryption_state.as_ref().map(|state| Encryption {
+        version: state.version(),
+        revision: state.revision(),
+        key_length: state.key_length(),
+        encrypt_metadata: state.encrypt_metadata(),
+        permissions: state.permissions().bits(),
+        owner_value: state.owner_value().to_vec(),
+        user_value: state.user_value().to_vec(),
+        file_encryption_key: state.file_encryption_key().to_vec(),
+    })
+}
+
+/// Writes `plain` to `output` encrypted exactly as `input` is. lopdf saves only plain PDFs, so
+/// qpdf copies the input's encryption, reading the password that opens it from its standard
+/// input. The plain copy lives only in a private temporary folder, removed when this returns.
+fn encrypt_like(plain: &[u8], page_count: usize, input: &Path, password: &str, output: &Path) -> Result<(), ToolError> {
+    if password.contains(['\n', '\r']) {
+        return Err(ToolError::invalid_input(qpdf::PASSWORD_LINE_BREAK));
+    }
+    let helper = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).map_err(ToolError::unavailable)?;
+    let temp = TempDir::new().map_err(|error| ToolError::processing(format!("Could not prepare the edited PDF: {error}")))?;
+    let plain_path = temp.0.join("edited.pdf");
+    std::fs::write(&plain_path, plain).map_err(|error| ToolError::processing(format!("Could not prepare the edited PDF: {error}")))?;
+    let mut copy_encryption = OsString::from("--copy-encryption=");
+    copy_encryption.push(input);
+    let mut command = Command::new(helper);
+    command.arg(qpdf::PASSWORDS_FROM_STDIN).arg(&plain_path).arg(copy_encryption).arg(output);
+    let limit = super::pdf_lock_time_limit(page_count);
+    let timed_out = format!("Keeping the password took longer than {} seconds and was stopped. Nothing was saved.", limit.as_secs());
+    let result = match qpdf::run_with_passwords(command, &[("--encryption-file-password", password)], Instant::now() + limit, &timed_out) {
+        Ok(result) => result,
+        Err(message) if message == timed_out => return Err(ToolError::limit_exceeded(LimitKind::Time, message)),
+        Err(message) => return Err(ToolError::unavailable(message)),
+    };
+    if !matches!(result.status.code(), Some(0 | 3)) {
+        let detail = String::from_utf8_lossy(&result.stderr).trim().lines().last().map(str::to_string).unwrap_or_else(|| "qpdf could not keep the password.".to_string());
+        return Err(ToolError::processing(format!("{detail} Nothing was saved.")));
+    }
+    Ok(())
 }
 
 fn sentence_list(parts: &[String]) -> String {
@@ -488,13 +566,15 @@ fn save_with_stable_id(document: &mut Document) -> Result<Vec<u8>, lopdf::Error>
     Ok(bytes)
 }
 
-fn check_output(bytes: &[u8], page_count: usize, edits: &[(DocumentProperty, FieldEdit)]) -> Result<(), ToolError> {
-    let invalid = |reason: &str| ToolError::processing(format!("The edited PDF did not check out ({reason}). Nothing was saved."));
-    let document = Document::load_mem(bytes).map_err(|_| invalid("it could not be reopened"))?;
+fn not_checked(reason: &str) -> ToolError {
+    ToolError::processing(format!("The edited PDF did not check out ({reason}). Nothing was saved."))
+}
+
+fn check_output(document: &Document, page_count: usize, edits: &[(DocumentProperty, FieldEdit)]) -> Result<(), ToolError> {
     if document.get_pages().len() != page_count {
-        return Err(invalid("its page count changed"));
+        return Err(not_checked("its page count changed"));
     }
-    let saved = document_info::from_document(&document);
+    let saved = document_info::from_document(document);
     for (property, edit) in edits {
         let expected = match edit {
             FieldEdit::Set(value) => Some(value.as_str()),
@@ -507,7 +587,7 @@ fn check_output(bytes: &[u8], page_count: usize, edits: &[(DocumentProperty, Fie
             (expected, Some(found)) => found.as_deref() == expected,
         };
         if text(&saved.info, *property).as_deref() != expected || !xmp_matches {
-            return Err(invalid(&format!("its {} did not change", label(*property))));
+            return Err(not_checked(&format!("its {} did not change", label(*property))));
         }
     }
     Ok(())
@@ -613,7 +693,15 @@ mod tests {
     }
 
     fn run(paths: &[PathBuf], patch: PropertiesPatch) -> Vec<JobOutcome> {
-        let request = Arc::new(EditPropertiesRequest { paths: paths.to_vec(), patch, output_location: OutputLocation::AlongsideInput });
+        run_with(paths, patch, OpenPasswords::default())
+    }
+
+    fn passwords(batch: &str, overrides: &[(&Path, &str)]) -> OpenPasswords {
+        OpenPasswords { password: Some(batch.to_string()), password_overrides: overrides.iter().map(|(path, password)| (path.to_path_buf(), password.to_string())).collect() }
+    }
+
+    fn run_with(paths: &[PathBuf], patch: PropertiesPatch, passwords: OpenPasswords) -> Vec<JobOutcome> {
+        let request = Arc::new(EditPropertiesRequest { paths: paths.to_vec(), patch, output_location: OutputLocation::AlongsideInput, passwords });
         if let Err(outcomes) = validate(&request) {
             return outcomes;
         }
@@ -635,6 +723,11 @@ mod tests {
     fn deserializes_the_wire_patch() {
         let request: EditPropertiesRequest = serde_json::from_str(r#"{"paths":["a.pdf"],"patch":{"title":{"action":"set","value":"Q3"},"author":{"action":"clear"}},"outputLocation":"alongsideInput"}"#).unwrap();
         assert_eq!(request.patch, patch(set("Q3"), FieldEdit::Clear, FieldEdit::Keep));
+        let with_passwords: EditPropertiesRequest = serde_json::from_str(r#"{"paths":["a.pdf","b.pdf"],"patch":{"title":{"action":"clear"}},"outputLocation":"alongsideInput","password":"batch-secret","passwordOverrides":{"b.pdf":"own-secret"}}"#).unwrap();
+        assert_eq!(with_passwords.passwords.password_for(Path::new("a.pdf")), Some("batch-secret"));
+        assert_eq!(with_passwords.passwords.password_for(Path::new("b.pdf")), Some("own-secret"));
+        let printed = format!("{with_passwords:?}");
+        assert!(!printed.contains("batch-secret") && !printed.contains("own-secret"), "{printed}");
     }
 
     #[test]
@@ -729,20 +822,125 @@ mod tests {
         assert_eq!(ids[1].as_str().unwrap().len(), 16);
     }
 
+    fn real_qpdf() -> Option<PathBuf> {
+        match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
+            Ok(qpdf) => Some(qpdf),
+            Err(_) if std::env::var_os("TOOLBOX_REQUIRE_QPDF").is_some() => panic!("qpdf is required for this test run"),
+            Err(_) => {
+                eprintln!("skipping: qpdf not available");
+                None
+            }
+        }
+    }
+
+    /// An AES-256 copy of `plain`, written by qpdf the way Protect writes one.
+    fn aes_256(qpdf: &Path, plain: &Path, output: &Path, user: &str, owner: &str) {
+        let mut command = Command::new(qpdf);
+        command.arg(plain).arg(output).args(["--encrypt", qpdf::PASSWORDS_FROM_STDIN, "--bits=256", "--print=none", "--"]);
+        let result = qpdf::run_with_passwords(command, &[("--user-password", user), ("--owner-password", owner)], Instant::now() + std::time::Duration::from_secs(30), "timed out").unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    }
+
+    fn opened(path: &Path, password: &str) -> Result<Document, ToolError> {
+        document_info::load(&std::fs::read(path).unwrap(), Some(password))
+    }
+
     #[test]
-    fn protected_pdfs_fail_without_output_and_do_not_stop_the_batch() {
-        let sandbox = Sandbox::new("protected");
-        let locked = sandbox.file("locked.pdf", &pdf(None, None, Some(("owner", "user"))));
-        let restricted = sandbox.file("restricted.pdf", &pdf(None, None, Some(("owner", ""))));
+    fn encrypted_pdfs_opened_with_their_password_give_edited_copies_with_the_same_encryption() {
+        let Some(qpdf) = real_qpdf() else { return };
+        let sandbox = Sandbox::new("encrypted");
+        let info = || Some(dictionary! { "Title" => literal("Draft"), "Author" => literal("Ann") });
+        let locked = sandbox.file("locked.pdf", &pdf(info(), None, Some(("owner-secret", crate::kit::TEST_PASSWORD))));
+        let restricted = sandbox.file("restricted.pdf", &pdf(info(), None, Some(("owner-secret", ""))));
+        let plain = sandbox.file("plain.pdf", &pdf(info(), None, None));
+        let aes = sandbox.0.join("aes.pdf");
+        aes_256(&qpdf, &plain, &aes, crate::kit::TEST_OVERRIDE_PASSWORD, "aes-owner-secret");
+        let inputs = [locked.clone(), restricted.clone(), aes.clone(), plain.clone()];
+        let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = run_with(&inputs, patch(set("Final"), FieldEdit::Keep, FieldEdit::Keep), passwords(crate::kit::TEST_PASSWORD, &[(&aes, crate::kit::TEST_OVERRIDE_PASSWORD)]));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.detail.as_str()).collect::<Vec<_>>(), ["Title set. It keeps its open password.", "Title set. It keeps its restrictions.", "Title set. It keeps its open password.", "Title set."]);
+        for (input, original) in inputs.iter().zip(&originals) {
+            assert_eq!(&std::fs::read(input).unwrap(), original, "the original is never modified");
+        }
+        for (input, password) in [(&locked, crate::kit::TEST_PASSWORD), (&restricted, ""), (&aes, crate::kit::TEST_OVERRIDE_PASSWORD)] {
+            let output = sandbox.0.join(format!("{}-edited.pdf", input.file_stem().unwrap().to_string_lossy()));
+            let (before, after) = (opened(input, password).unwrap(), opened(&output, password).unwrap());
+            assert!(after.was_encrypted(), "{output:?} is still encrypted");
+            assert!(encryption(&before) == encryption(&after), "{output:?} keeps the same passwords and permissions");
+            let info = document_info::from_document(&after);
+            assert_eq!((info.info.title.as_deref(), info.info.author.as_deref()), (Some("Final"), Some("Ann")));
+            assert!(after.get_page_content(*after.get_pages().values().next().unwrap()).starts_with(CONTENT), "the page is kept");
+            if !password.is_empty() {
+                assert_eq!(opened(&output, "").unwrap_err().kind, ErrorKind::WrongPassword, "{output:?} still needs its open password");
+            }
+        }
+        let kept = opened(&sandbox.0.join("restricted-edited.pdf"), "").unwrap().encryption_state.unwrap().permissions();
+        assert!(kept.contains(Permissions::PRINTABLE) && !kept.contains(Permissions::MODIFIABLE) && !kept.contains(Permissions::COPYABLE), "{kept:?}");
+        assert_eq!(sandbox.names(), ["aes-edited.pdf", "aes.pdf", "locked-edited.pdf", "locked.pdf", "plain-edited.pdf", "plain.pdf", "restricted-edited.pdf", "restricted.pdf"]);
+    }
+
+    #[test]
+    fn a_wrong_or_missing_password_fails_only_that_file_and_never_shows_the_password() {
+        let sandbox = Sandbox::new("wrong-password");
+        let locked = sandbox.file("locked.pdf", &pdf(None, None, Some(("owner-secret", crate::kit::TEST_PASSWORD))));
         let broken = sandbox.file("broken.pdf", b"not a pdf");
         let plain = sandbox.file("plain.pdf", &pdf(None, None, None));
-        let outcomes = run(&[locked, restricted, broken, plain], patch(FieldEdit::Keep, FieldEdit::Keep, set("Budget")));
-        for outcome in &outcomes[..2] {
-            assert_eq!(outcome.error().unwrap().message, PROTECTED);
+        let secret = "wrong-secret-1234";
+
+        let outcomes = run_with(&[locked.clone(), broken, plain.clone()], patch(FieldEdit::Keep, FieldEdit::Keep, set("Budget")), passwords(secret, &[]));
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.kind, ErrorKind::WrongPassword);
+        assert!(outcomes[1].error().is_some_and(|error| error.kind != ErrorKind::WrongPassword));
+        assert_eq!(outcomes[2].detail, "Subject set.");
+        for outcome in &outcomes {
+            assert!(!serde_json::to_string(outcome).unwrap().contains(secret), "{outcome:?}");
         }
-        assert!(outcomes[2].error().is_some());
-        assert_eq!(outcomes[3].detail, "Subject set.");
-        assert_eq!(sandbox.names(), vec!["broken.pdf", "locked.pdf", "plain-edited.pdf", "plain.pdf", "restricted.pdf"]);
+        let missing = run(&[locked.clone()], patch(FieldEdit::Keep, FieldEdit::Keep, set("Budget")));
+        assert_eq!(missing[0].error().unwrap().kind, ErrorKind::WrongPassword);
+        let other_file = run_with(&[locked], patch(FieldEdit::Keep, FieldEdit::Keep, set("Budget")), passwords(secret, &[(&plain, crate::kit::TEST_PASSWORD)]));
+        assert_eq!(other_file[0].error().unwrap().kind, ErrorKind::WrongPassword, "an override for another file is never tried on this one");
+        assert_eq!(sandbox.names(), ["broken.pdf", "locked.pdf", "plain-edited.pdf", "plain.pdf"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_qpdf_call_that_keeps_the_password_reads_it_from_standard_input_only() {
+        use crate::kit::common::fake_helper::{secret_exposure, Exposure, FakeHelper};
+        let _guard = crate::kit::lock_process_env();
+        let Some(qpdf) = real_qpdf() else { return };
+        let sandbox = Sandbox::new("qpdf-call");
+        let helper = FakeHelper::install(&sandbox.0, "qpdf", Some(&qpdf));
+        let locked = sandbox.file("locked.pdf", &pdf(None, None, Some(("owner-secret", crate::kit::TEST_PASSWORD))));
+        let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
+        std::env::set_var("TOOLBOX_QPDF_PATH", &helper.script);
+        let outcomes = run_with(&[locked.clone()], patch(set("Final"), FieldEdit::Keep, FieldEdit::Keep), passwords(crate::kit::TEST_PASSWORD, &[]));
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
+            None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
+        }
+
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
+        let calls = helper.invocations().into_iter().filter(|call| call.arguments.iter().any(|argument| argument.contains(&locked.display().to_string()))).collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1, "{:?}", calls.iter().map(|call| &call.arguments).collect::<Vec<_>>());
+        assert_eq!(calls[0].arguments.iter().filter(|argument| *argument == qpdf::PASSWORDS_FROM_STDIN).count(), 1);
+        assert_eq!(secret_exposure(&calls, crate::kit::TEST_PASSWORD), Exposure::default(), "the password reached qpdf's arguments or environment");
+    }
+
+    #[test]
+    fn reads_current_values_once_the_right_password_is_given() {
+        let sandbox = Sandbox::new("read-locked");
+        let locked = sandbox.file("locked.pdf", &pdf(Some(dictionary! { "Title" => literal("Offer letter") }), None, Some(("owner-secret", crate::kit::TEST_PASSWORD))));
+        let read = |passwords: OpenPasswords| {
+            let request = Arc::new(ReadPropertiesRequest { paths: vec![locked.clone()], passwords });
+            BatchRunner::inspect(&RunEvents::silent(), "edit_pdf_properties", vec![locked.clone()], &request, read_job).remove(0)
+        };
+        assert_eq!(read(OpenPasswords::default()).error().unwrap().kind, ErrorKind::WrongPassword);
+        assert_eq!(read(passwords("wrong-secret", &[])).error().unwrap().kind, ErrorKind::WrongPassword);
+        let values: serde_json::Value = serde_json::from_str(&read(passwords("", &[(&locked, crate::kit::TEST_PASSWORD)])).detail).unwrap();
+        assert_eq!(values["title"], "Offer letter");
+        assert_eq!(sandbox.names(), ["locked.pdf"]);
     }
 
     fn info_entry(document: &Document, key: &[u8]) -> Option<Vec<u8>> {
@@ -772,7 +970,7 @@ mod tests {
             let error = outcomes[0].error().unwrap_or_else(|| panic!("{patch:?}"));
             assert_eq!(error.kind, ErrorKind::InvalidInput);
             assert_eq!(error.message, message);
-            let direct = edit_job(&EditPropertiesRequest { paths: vec![input.clone()], patch, output_location: OutputLocation::AlongsideInput }, input.clone());
+            let direct = edit_job(&EditPropertiesRequest { paths: vec![input.clone()], patch, output_location: OutputLocation::AlongsideInput, passwords: OpenPasswords::default() }, input.clone());
             assert_eq!(direct.error().unwrap().kind, ErrorKind::InvalidInput);
         }
         assert_eq!(sandbox.names(), vec!["report.pdf"]);
@@ -855,7 +1053,7 @@ mod tests {
         let sandbox = Sandbox::new("read");
         let description = r#"<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator><rdf:Seq><rdf:li>Ann</rdf:li></rdf:Seq></dc:creator></rdf:Description>"#;
         let input = sandbox.file("read.pdf", &pdf(Some(dictionary! { "Title" => literal("Info title") }), Some(&xmp(description)), None));
-        let request = Arc::new(ReadPropertiesRequest { paths: vec![input.clone()] });
+        let request = Arc::new(ReadPropertiesRequest { paths: vec![input.clone()], passwords: OpenPasswords::default() });
         let outcomes = BatchRunner::inspect(&RunEvents::silent(), "edit_pdf_properties", vec![input], &request, read_job);
         let values: serde_json::Value = serde_json::from_str(&outcomes[0].detail).unwrap();
         assert_eq!(values["title"], "Info title");

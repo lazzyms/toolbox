@@ -4,12 +4,13 @@ import { CircleAlert } from "lucide-react";
 import { ToolScaffold } from "../../components/ToolScaffold";
 import { ShortcutHint } from "../../components/ShortcutHint";
 import { shortcutTarget } from "../../shortcuts";
-import type { JobOutcome, ToolDefinition, ToolResult } from "../../contracts";
+import type { JobOutcome, PasswordSet, ToolDefinition, ToolResult } from "../../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { fileName } from "../../components/resultRow";
+import { BatchPasswordFields, FilePasswordCell, ForgetClosedFiles, passwordsFor, usePasswordSet } from "../../components/PasswordFields";
 
 type Field = "title" | "author" | "subject" | "creationDate" | "modificationDate";
 type Action = "keep" | "set" | "clear";
@@ -18,7 +19,8 @@ type Current = Record<Field, string | null>;
 type Read = { state: "read"; values: Current } | { state: "locked" } | { state: "unreadable" };
 type FieldSpec = { id: Field; label: string; noun: string; article: string; summaryNoun: string; date?: true };
 
-const PROTECTED = "Edit Properties can't edit a password-protected PDF yet. Nothing was saved.";
+const LOCKED_NOTE = "Needs an open password. The one for all files is tried.";
+const RETYPE_DELAY_MS = 400;
 const NONE = "(none)";
 const DATE_PLACEHOLDER = "YYYY-MM-DD HH:MM, your local time";
 const DATE_FORMAT = "Use YYYY-MM-DD HH:MM, like 2026-02-28 09:00.";
@@ -108,31 +110,52 @@ const patchFor = (choices: Record<Field, Choice>) => Object.fromEntries(fields.m
   return [field.id, choice.action === "set" ? { action: "set", value: setValue(field, choice.value) } : { action: choice.action }];
 }));
 
-/** Reads each added PDF's current title, author, subject and dates once. */
-const useCurrentValues = (files: readonly string[]) => {
+const passwordFor = (path: string, passwords: PasswordSet) => passwords.overrides[path] ?? passwords.batch;
+
+/** Reads each added PDF's current title, author, subject and dates once, and again for a locked one when the password it would be opened with changes. */
+const useCurrentValues = (files: readonly string[], passwords: PasswordSet) => {
   const [reads, setReads] = useState(() => new Map<string, Read>());
-  const requested = useRef(new Set<string>());
+  const tried = useRef(new Map<string, string>());
+  const readsRef = useRef(reads);
+  readsRef.current = reads;
   useEffect(() => {
-    const paths = files.filter((path) => !requested.current.has(path));
-    if (paths.length === 0) return;
-    paths.forEach((path) => requested.current.add(path));
-    void invoke<JobOutcome[]>("read_pdf_properties", { request: { paths } }).then((outcomes) => {
-      setReads((previous) => {
-        const next = new Map(previous);
-        for (const outcome of outcomes) {
-          next.set(outcome.inputPath, outcome.state === "succeeded"
-            ? { state: "read", values: JSON.parse(outcome.detail) as Current }
-            : outcome.failure?.message === PROTECTED ? { state: "locked" } : { state: "unreadable" });
-        }
-        return next;
-      });
-    }, () => paths.forEach((path) => requested.current.delete(path)));
-  }, [files]);
+    const open = new Set(files);
+    for (const path of tried.current.keys()) if (!open.has(path)) tried.current.delete(path);
+    const unread = files.filter((path) => !tried.current.has(path));
+    const retry = files.filter((path) => readsRef.current.get(path)?.state === "locked" && tried.current.get(path) !== passwordFor(path, passwords));
+    const read = (paths: string[]) => {
+      if (paths.length === 0) return;
+      const sent = new Map(paths.map((path) => [path, passwordFor(path, passwords)]));
+      sent.forEach((password, path) => tried.current.set(path, password));
+      void invoke<JobOutcome[]>("read_pdf_properties", { request: { paths, ...passwordsFor(paths, passwords) } }).then((outcomes) => {
+        const current = outcomes.filter((outcome) => tried.current.get(outcome.inputPath) === sent.get(outcome.inputPath));
+        if (current.length === 0) return;
+        setReads((previous) => {
+          const next = new Map(previous);
+          for (const outcome of current) {
+            next.set(outcome.inputPath, outcome.state === "succeeded"
+              ? { state: "read", values: JSON.parse(outcome.detail) as Current }
+              : outcome.failure?.kind === "wrongPassword" ? { state: "locked" } : { state: "unreadable" });
+          }
+          return next;
+        });
+      }, () => paths.forEach((path) => { if (tried.current.get(path) === sent.get(path)) tried.current.delete(path); }));
+    };
+    read(unread);
+    if (retry.length === 0) return;
+    const timer = window.setTimeout(() => read(retry), RETYPE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [files, passwords.batch, passwords.overrides]);
   return reads;
 };
 
 const CurrentValues = ({ read }: { read: Read | undefined }) => {
-  if (read?.state === "locked") return <span className="pdf-properties-now"><span className="pdf-properties-cell" data-empty="true">Locked</span></span>;
+  if (read?.state === "locked") return (
+    <span className="pdf-properties-now">
+      <span className="pdf-properties-cell" data-empty="true">Locked</span>
+      <span className="pdf-properties-cell pdf-properties-locked" title={LOCKED_NOTE}>{LOCKED_NOTE}</span>
+    </span>
+  );
   if (read?.state !== "read") return null;
   const { title, author, modificationDate } = read.values;
   const cells: [string, string | null][] = [["Title now", title], ["Author now", author], ["Modified now", modificationDate && modificationDate.slice(0, 10)]];
@@ -152,7 +175,8 @@ export const PdfPropertiesSurface = ({ utility, initialPaths, onFilesChange }: {
 }) => {
   const [files, setFiles] = useState<readonly string[]>(initialPaths ?? []);
   const [choices, setChoices] = useState(keepAll);
-  const reads = useCurrentValues(files);
+  const passwords = usePasswordSet();
+  const reads = useCurrentValues(files, passwords.set);
   const filesChanged = useCallback((paths: readonly string[]) => {
     setFiles(paths);
     onFilesChange?.(paths);
@@ -166,13 +190,22 @@ export const PdfPropertiesSurface = ({ utility, initialPaths, onFilesChange }: {
       utility={utility}
       initialPaths={initialPaths}
       onFilesChange={filesChanged}
-      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>(utility.command, { runId, request: { paths, patch: patchFor(choices), outputLocation } })}
-      renderFileExtra={(path) => <CurrentValues read={reads.get(path)} />}
+      onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>(utility.command, { runId, request: { paths, ...passwordsFor(paths, passwords.set), patch: patchFor(choices), outputLocation } })}
+      retryWithPassword={(inputPath, password) => (paths, outputLocation, { runId }) =>
+        invoke<ToolResult>(utility.command, { runId, request: { paths, ...passwordsFor(paths, { batch: "", overrides: { [inputPath]: password } }), patch: patchFor(choices), outputLocation } })}
+      renderFileExtra={(path, selected, locked) => (
+        <>
+          <CurrentValues read={reads.get(path)} />
+          <FilePasswordCell mode="open" path={path} passwords={passwords} selected={selected} disabled={locked} />
+        </>
+      )}
     >
       {({ files, run, loading, destination }) => {
         const reason = reasonFor(choices, files.length);
+        const needsPassword = files.length > 1 || files.some((path) => reads.get(path)?.state === "locked");
         return (
           <Card className="workspace-control-panel py-0">
+            <ForgetClosedFiles files={files} passwords={passwords} />
             <CardContent className="workspace-control-panel-content grid gap-4 p-4">
               <div>
                 <h2 className="workspace-active-command">{utility.title}</h2>
@@ -226,6 +259,7 @@ export const PdfPropertiesSurface = ({ utility, initialPaths, onFilesChange }: {
                   </div>
                 );
               })}
+              {needsPassword && <BatchPasswordFields mode="open" passwords={passwords} files={files} />}
               {destination}
               <p className="workspace-note" data-testid="pdf-properties-reason">{reason ?? describe(choices, files.length)}</p>
               <Button

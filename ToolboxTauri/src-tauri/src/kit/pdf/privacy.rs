@@ -1,7 +1,5 @@
 //! Privacy Check: reads what a PDF reveals besides its pages. It only reads, so it shares no code path that writes a PDF.
 
-use std::collections::HashMap;
-use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -12,37 +10,14 @@ use super::document_info::{self, PdfProperties, PropertyConflict, XmpSummary};
 use super::hidden_content::{self, HiddenContent};
 use crate::kit::common::batch_runner::READ_ONLY_OUTPUT_MESSAGE;
 use crate::kit::common::OutputNaming;
-use crate::kit::contracts::{JobOutcome, OutcomePointer, OutputLocation, ToolError};
+use crate::kit::contracts::{JobOutcome, OpenPasswords, OutcomePointer, OutputLocation, ToolError};
 
-/// The open password for the batch plus per-file overrides, as in the shared password request.
-/// An empty password counts as none, so files that open without one are read directly.
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyRequest {
     pub paths: Vec<PathBuf>,
-    #[serde(default)]
-    pub password: Option<String>,
-    #[serde(default)]
-    pub password_overrides: HashMap<PathBuf, String>,
-}
-
-impl PrivacyRequest {
-    pub fn password_for(&self, path: &Path) -> Option<&str> {
-        self.password_overrides.get(path).or(self.password.as_ref()).map(String::as_str).filter(|password| !password.is_empty())
-    }
-}
-
-impl fmt::Debug for PrivacyRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut overridden = self.password_overrides.keys().collect::<Vec<_>>();
-        overridden.sort();
-        formatter
-            .debug_struct("PrivacyRequest")
-            .field("paths", &self.paths)
-            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
-            .field("password_overrides", &overridden)
-            .finish()
-    }
+    #[serde(flatten)]
+    pub passwords: OpenPasswords,
 }
 
 /// One PDF's report. Every category is present; an empty one means none found.
@@ -168,7 +143,7 @@ pub fn inspect(path: &Path, password: Option<&str>) -> Result<PrivacyReport, Too
 
 /// The batch job: one report per file in the outcome's detail, and never an output path.
 pub fn inspect_job(request: &PrivacyRequest, input: PathBuf) -> JobOutcome {
-    match inspect(&input, request.password_for(&input)) {
+    match inspect(&input, request.passwords.password_for(&input)) {
         Ok(report) => match serde_json::to_string(&report) {
             Ok(detail) => JobOutcome::succeeded(input, Vec::new(), detail),
             Err(error) => JobOutcome::failure(input, ToolError::processing(format!("Could not build the report: {error}"))),
@@ -730,7 +705,7 @@ mod tests {
         let paths = fixtures.iter().map(|(name, bytes)| sandbox.file(name, bytes)).collect::<Vec<_>>();
         let before = sandbox.names();
 
-        let request = Arc::new(PrivacyRequest { paths: paths.clone(), password: None, password_overrides: HashMap::new() });
+        let request = Arc::new(PrivacyRequest { paths: paths.clone(), passwords: OpenPasswords::default() });
         let outcomes = BatchRunner::inspect(&RunEvents::silent(), "inspect_pdf_privacy", paths.clone(), &request, inspect_job);
 
         assert_eq!(sandbox.names(), before, "inspection must create no files");
@@ -784,8 +759,7 @@ mod tests {
     fn privacy_request(paths: &[PathBuf], password: Option<&str>, overrides: &[(&PathBuf, &str)]) -> Arc<PrivacyRequest> {
         Arc::new(PrivacyRequest {
             paths: paths.to_vec(),
-            password: password.map(str::to_owned),
-            password_overrides: overrides.iter().map(|(path, password)| ((*path).clone(), password.to_string())).collect(),
+            passwords: OpenPasswords { password: password.map(str::to_owned), password_overrides: overrides.iter().map(|(path, password)| ((*path).clone(), password.to_string())).collect() },
         })
     }
 
@@ -805,15 +779,15 @@ mod tests {
             "password": "batch-secret",
             "passwordOverrides": { "/in/b.pdf": "own-secret" },
         })).unwrap();
-        assert_eq!(request.password_for(Path::new("/in/a.pdf")), Some("batch-secret"));
-        assert_eq!(request.password_for(Path::new("/in/b.pdf")), Some("own-secret"));
+        assert_eq!(request.passwords.password_for(Path::new("/in/a.pdf")), Some("batch-secret"));
+        assert_eq!(request.passwords.password_for(Path::new("/in/b.pdf")), Some("own-secret"));
         let printed = format!("{request:?}");
         assert!(!printed.contains("batch-secret") && !printed.contains("own-secret"), "{printed}");
 
         let empty: PrivacyRequest = serde_json::from_value(serde_json::json!({ "paths": ["/in/a.pdf"], "password": "", "passwordOverrides": {} })).unwrap();
-        assert_eq!(empty.password_for(Path::new("/in/a.pdf")), None);
+        assert_eq!(empty.passwords.password_for(Path::new("/in/a.pdf")), None);
         let paths_only: PrivacyRequest = serde_json::from_value(serde_json::json!({ "paths": ["/in/a.pdf"] })).unwrap();
-        assert_eq!(paths_only.password_for(Path::new("/in/a.pdf")), None);
+        assert_eq!(paths_only.passwords.password_for(Path::new("/in/a.pdf")), None);
     }
 
     #[test]

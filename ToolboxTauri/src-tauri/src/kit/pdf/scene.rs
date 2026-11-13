@@ -1,11 +1,11 @@
-use std::{collections::{BTreeMap, HashMap, HashSet}, fs, io::Write, path::{Path, PathBuf}, process::Command, sync::atomic::{AtomicU64, Ordering}, time::{Instant}};
+use std::{collections::{BTreeMap, HashMap, HashSet}, fs, io::Write, path::{Path, PathBuf}, process::Command, time::{Instant}};
 use base64::Engine;
 use rustybuzz::ttf_parser;
 use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{batch_runner::report_progress, limits, note_renamed, watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition}, JobOutcome, OutputLocation, OutputNaming}, contracts::{LimitKind, OutcomePointer, OutcomeWarning, ToolError}};
+use crate::kit::{common::{batch_runner::report_progress, limits, note_renamed, watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition}, JobOutcome, OutputLocation, OutputNaming, TempDir}, contracts::{LimitKind, OutcomePointer, OutcomeWarning, ToolError}};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, text_edit, PdfMutationIntent};
 
@@ -1483,22 +1483,6 @@ fn remove_hidden_data(doc:&mut Document, page_ids:&[ObjectId], redacted:&BTreeMa
     Ok(())
 }
 
-static NONCE:AtomicU64=AtomicU64::new(0);
-struct TempDir(PathBuf);
-impl TempDir {
-    fn new()->Result<Self,String> {
-        for _ in 0..1000 {
-            let path=std::env::temp_dir().join(format!("toolbox-scene-{}-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(err)?.as_nanos(),NONCE.fetch_add(1,Ordering::Relaxed)));
-            let mut builder = fs::DirBuilder::new();
-            #[cfg(unix)] {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&path) { Ok(())=>return Ok(Self(path)),Err(e) if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,Err(e)=>return Err(err(e)) }
-        } Err("Could not reserve preview directory".into())
-    }
-}
-impl Drop for TempDir { fn drop(&mut self) { let _=fs::remove_dir_all(&self.0); } }
 fn renderer()->Result<PathBuf,String> {
     crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)
 }
