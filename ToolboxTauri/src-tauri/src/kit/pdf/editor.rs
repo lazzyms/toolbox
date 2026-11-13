@@ -39,9 +39,18 @@ pub enum RangedPageScope {
 #[serde(rename_all = "camelCase")]
 pub struct CropPdfRequest {
     pub paths: Vec<PathBuf>,
-    pub rectangle: PdfRect,
+    pub spec: CropSpec,
     pub scope: RangedPageScope,
     pub output_location: OutputLocation,
+}
+
+/// What to keep on each page. Rectangle is in PDF user space; margins are points inset from the page's
+/// displayed edges, so a rotated page loses them from the sides the reader sees.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CropSpec {
+    Rectangle { rectangle: PdfRect },
+    Margins { top: f32, right: f32, bottom: f32, left: f32 },
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -352,29 +361,59 @@ fn validate_operation_targets(operation: &PdfEditOperation, deleted_pages: &[usi
 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_or_skip_pdf(input, &request.output_location, "-cropped", PdfMutationIntent::General, SignedPdf::RemoveSignature, |document, pages, preflight| {
-        validate_rect(&request.rectangle)?;
+    // Only the crop box changes, so page objects, annotations, links, forms and structure stay valid.
+    transform_or_skip_pdf_checked(input, &request.output_location, "-cropped", PdfMutationIntent::ValidateOnly, SignedPdf::RemoveSignature, |document, pages, _preflight| {
+        if let CropSpec::Rectangle { rectangle } = &request.spec { validate_rect(rectangle).map_err(ToolError::invalid_input)?; }
+        if let CropSpec::Margins { top, right, bottom, left } = request.spec {
+            if [top, right, bottom, left].iter().any(|margin| !margin.is_finite() || *margin < 0.0) {
+                return Err(ToolError::invalid_input("Margins must be zero or more points."));
+            }
+        }
         let (selected, notes) = match &request.scope {
             RangedPageScope::All => ((0..pages.len()).collect(), Vec::new()),
-            RangedPageScope::Selected { pages: selected } => (selected_indices(selected, pages.len())?, Vec::new()),
-            RangedPageScope::Range { ranges } => match PageRanges::parse(ranges)?.clamp_or_skip(pages.len()) {
+            RangedPageScope::Selected { pages: selected } => (selected_indices(selected, pages.len()).map_err(ToolError::invalid_input)?, Vec::new()),
+            RangedPageScope::Range { ranges } => match PageRanges::parse(ranges).map_err(ToolError::invalid_input)?.clamp_or_skip(pages.len()) {
                 Ok(clamped) => (clamped.page_indices(), clamped.notes),
                 Err(reason) => return Ok(Edited::Skipped(reason)),
             },
         };
-        reject_annotated_pages(preflight, pages, selected.iter().copied(), "cropped")?;
         for page_index in selected {
             let page_id = pages[page_index];
-            validate_rect_for_page(document, page_id, &request.rectangle)?;
-            super::set_page_box_family(document, page_id, [
-                request.rectangle.x,
-                request.rectangle.y,
-                request.rectangle.x + request.rectangle.width,
-                request.rectangle.y + request.rectangle.height,
-            ], true)?;
+            let crop_box = match &request.spec {
+                CropSpec::Rectangle { rectangle } => {
+                    validate_rect_for_page(document, page_id, rectangle).map_err(ToolError::invalid_input)?;
+                    [rectangle.x, rectangle.y, rectangle.x + rectangle.width, rectangle.y + rectangle.height]
+                }
+                &CropSpec::Margins { top, right, bottom, left } => margin_crop_box(document, page_id, page_index, [top, right, bottom, left])?,
+            };
+            let page = document.get_dictionary_mut(page_id).map_err(|error| ToolError::processing(error.to_string()))?;
+            page.set("CropBox", crop_box.iter().copied().map(Object::Real).collect::<Vec<_>>());
         }
         Ok(Edited::Saved(if notes.is_empty() { "PDF saved".to_string() } else { format!("PDF saved. {}", notes.join(" ")) }))
     })
+}
+
+/// Insets the page's visible area by margins given for its displayed top, right, bottom and left edges.
+fn margin_crop_box(document: &Document, page_id: ObjectId, page_index: usize, [top, right, bottom, left]: [f32; 4]) -> Result<[f32; 4], ToolError> {
+    let [x0, y0, x1, y1] = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
+    let user_unit = match document.get_dictionary(page_id).ok().and_then(|page| page.get(b"UserUnit").ok()) {
+        Some(value) => super::resolve(document, value).and_then(super::metadata::number).map_err(ToolError::processing)?,
+        None => 1.0,
+    };
+    if !user_unit.is_finite() || user_unit <= 0.0 { return Err(ToolError::processing("PDF page has an invalid UserUnit.")); }
+    // User-space insets (left, bottom, right, top) for each clockwise /Rotate value.
+    let [inset_left, inset_bottom, inset_right, inset_top] = match page_rotation(document, page_id) {
+        0 => [left, bottom, right, top],
+        90 => [top, left, bottom, right],
+        180 => [right, top, left, bottom],
+        270 => [bottom, right, top, left],
+        rotation => return Err(ToolError::processing(format!("Page {} has an unsupported rotation of {rotation} degrees.", page_index + 1))),
+    }.map(|inset| inset / user_unit);
+    let crop_box = [x0 + inset_left, y0 + inset_bottom, x1 - inset_right, y1 - inset_top];
+    if crop_box[2] <= crop_box[0] || crop_box[3] <= crop_box[1] {
+        return Err(ToolError::invalid_input(format!("Page {} has no area left after these margins.", page_index + 1)));
+    }
+    Ok(crop_box)
 }
 
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
@@ -874,6 +913,12 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
 
 fn transform_or_skip_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, signed: SignedPdf, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<Edited, String> {
+    transform_or_skip_pdf_checked(input, location, suffix, intent, signed, |document, pages, preflight| edit(document, pages, preflight).map_err(ToolError::processing))
+}
+
+/// Like `transform_or_skip_pdf`, but the edit chooses its error kind, such as InvalidInput for a bad request.
+fn transform_or_skip_pdf_checked<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, signed: SignedPdf, edit: F) -> JobOutcome
+where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<Edited, ToolError> {
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     if document.is_encrypted() { return failure(input, "Unlock the PDF before editing".to_string()); }
     let pages: Vec<_> = document.get_pages().values().copied().collect();
@@ -889,7 +934,7 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
     let detail = match edit(&mut document, &pages, &preflight) {
         Ok(Edited::Saved(detail)) => detail,
         Ok(Edited::Skipped(reason)) => return JobOutcome::skipped(input, reason),
-        Err(error) => return failure(input, error),
+        Err(error) => return JobOutcome::failure(input, error),
     };
     let output = match OutputNaming::reserve_destination(&input, location, suffix, "pdf") {
         Ok(output) => output,
@@ -1381,7 +1426,7 @@ mod session_tests {
     }
 
     #[test]
-    fn crop_clamps_all_existing_page_boxes_to_the_new_media_box() {
+    fn crop_rectangle_sets_only_the_crop_box_and_keeps_every_other_page_box() {
         let source = temp_path("crop-box-family.pdf");
         let output_dir = temp_path("crop-box-family-output");
         std::fs::create_dir_all(&output_dir).unwrap();
@@ -1396,26 +1441,197 @@ mod session_tests {
 
         let outcome = crop(&CropPdfRequest {
             paths: vec![source.clone()],
-            rectangle: PdfRect { x: 100.0, y: 100.0, width: 200.0, height: 300.0 },
+            spec: CropSpec::Rectangle { rectangle: PdfRect { x: 100.0, y: 100.0, width: 200.0, height: 300.0 } },
             scope: RangedPageScope::All,
             output_location: editor_request_location(&output_dir),
         }, source.clone());
         assert!(outcome.error().is_none(), "crop failed: {:?}", outcome.error());
         let output_document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
         let page = output_document.get_pages().values().next().copied().unwrap();
-        let page = output_document.get_dictionary(page).unwrap();
-        for key in [b"MediaBox".as_slice(), b"CropBox", b"BleedBox", b"ArtBox"] {
-            assert_eq!(page.get(key).unwrap().as_array().unwrap().iter().map(|value| value.as_i64().unwrap() as f32).collect::<Vec<_>>(), vec![100.0, 100.0, 300.0, 400.0]);
-        }
-        assert_eq!(page.get(b"TrimBox").unwrap().as_array().unwrap().iter().map(|value| value.as_i64().unwrap() as f32).collect::<Vec<_>>(), vec![100.0, 100.0, 150.0, 200.0]);
+        assert_eq!(page_box(&output_document, page, b"CropBox"), [100.0, 100.0, 300.0, 400.0]);
+        assert_eq!(page_box(&output_document, page, b"MediaBox"), [0.0, 0.0, 612.0, 792.0]);
+        assert_eq!(page_box(&output_document, page, b"BleedBox"), [0.0, 0.0, 612.0, 792.0]);
+        assert_eq!(page_box(&output_document, page, b"TrimBox"), [50.0, 50.0, 150.0, 200.0]);
+        assert_eq!(page_box(&output_document, page, b"ArtBox"), [500.0, 700.0, 700.0, 900.0]);
 
         let _ = std::fs::remove_file(source);
         let _ = std::fs::remove_file(outcome.output_paths().first().unwrap());
         let _ = std::fs::remove_dir(output_dir);
     }
 
+    fn page_box(document: &Document, page: ObjectId, key: &[u8]) -> [f32; 4] {
+        let values = document.get_dictionary(page).unwrap().get(key).unwrap().as_array().unwrap();
+        let values = values.iter().map(|value| super::super::metadata::number(value).unwrap()).collect::<Vec<_>>();
+        [values[0], values[1], values[2], values[3]]
+    }
+
+    fn assert_box_near(actual: [f32; 4], expected: [f32; 4], label: &str) {
+        assert!(actual.iter().zip(expected).all(|(a, e)| (a - e).abs() < 0.01), "{label}: {actual:?} != {expected:?}");
+    }
+
+    const MM: f32 = 72.0 / 25.4;
+
+    /// One page with the given media box, every ancillary box, an optional crop box and rotation.
+    fn make_boxed_pdf(path: &Path, media: [f32; 4], crop_box: Option<[f32; 4]>, rotate: Option<i64>) {
+        make_pdf_with_pages(path, 1);
+        let mut document = Document::load(path).unwrap();
+        let page = document.get_pages().values().next().copied().unwrap();
+        let page = document.get_dictionary_mut(page).unwrap();
+        let real = |values: [f32; 4]| values.iter().copied().map(Object::Real).collect::<Vec<_>>();
+        page.set("MediaBox", real(media));
+        page.set("BleedBox", real(media));
+        page.set("TrimBox", real([media[0] + 9.0, media[1] + 9.0, media[2] - 9.0, media[3] - 9.0]));
+        page.set("ArtBox", real([media[0] + 18.0, media[1] + 18.0, media[2] - 18.0, media[3] - 18.0]));
+        if let Some(crop_box) = crop_box { page.set("CropBox", real(crop_box)); }
+        if let Some(rotate) = rotate { page.set("Rotate", rotate); }
+        document.save(path).unwrap();
+    }
+
+    fn margins(top: f32, right: f32, bottom: f32, left: f32) -> CropSpec { CropSpec::Margins { top, right, bottom, left } }
+
+    fn crop_margins(source: &Path, output_dir: &Path, spec: CropSpec) -> JobOutcome {
+        crop(&CropPdfRequest {
+            paths: vec![source.to_path_buf()], spec, scope: RangedPageScope::All, output_location: location(output_dir),
+        }, source.to_path_buf())
+    }
+
     #[test]
-    fn crop_rejects_internal_page_links_and_malformed_page_counts_before_output() {
+    fn crop_margins_inset_the_visible_page_and_leave_every_other_box_and_the_content() {
+        let a4 = [0.0, 0.0, 595.2756, 841.8898];
+        let letter = [0.0, 0.0, 612.0, 792.0];
+        let offset_existing_crop = [0.0, 0.0, 612.0, 792.0];
+        for (name, media, existing, rotate, spec, expected) in [
+            // Displayed top, right, bottom, left of 10, 20, 30, 40 mm on an upright A4 page.
+            ("a4", a4, None, None, margins(10.0 * MM, 20.0 * MM, 30.0 * MM, 40.0 * MM), [40.0 * MM, 30.0 * MM, a4[2] - 20.0 * MM, a4[3] - 10.0 * MM]),
+            ("letter", letter, None, None, margins(72.0, 36.0, 18.0, 9.0), [9.0, 18.0, 576.0, 720.0]),
+            // /Rotate 90 shows the user-space left edge at the top and the top edge on the right.
+            ("rotate-90", letter, None, Some(90), margins(72.0, 36.0, 18.0, 9.0), [72.0, 9.0, 594.0, 756.0]),
+            ("rotate-180", letter, None, Some(180), margins(72.0, 36.0, 18.0, 9.0), [36.0, 72.0, 603.0, 774.0]),
+            // /Rotate 270 shows the user-space right edge at the top and the top edge on the left.
+            ("rotate-270", letter, None, Some(-90), margins(72.0, 36.0, 18.0, 9.0), [18.0, 36.0, 540.0, 783.0]),
+            // An existing crop box is the starting point, not the media box.
+            ("existing-crop", [-50.0, -50.0, 700.0, 900.0], Some([100.0, 100.0, 500.0, 700.0]), None, margins(10.0, 20.0, 30.0, 40.0), [140.0, 130.0, 480.0, 690.0]),
+            ("existing-crop-rotated", [-50.0, -50.0, 700.0, 900.0], Some([100.0, 100.0, 500.0, 700.0]), Some(90), margins(10.0, 20.0, 30.0, 40.0), [110.0, 140.0, 470.0, 680.0]),
+            // A crop box larger than the media box is clipped to it first.
+            ("crop-past-media", offset_existing_crop, Some([-100.0, -100.0, 900.0, 900.0]), None, margins(1.0, 2.0, 3.0, 4.0), [4.0, 3.0, 610.0, 791.0]),
+            ("zero", letter, None, None, margins(0.0, 0.0, 0.0, 0.0), [0.0, 0.0, 612.0, 792.0]),
+        ] {
+            let source = temp_path(&format!("crop-margins-{name}.pdf"));
+            let output_dir = temp_path(&format!("crop-margins-{name}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_boxed_pdf(&source, media, existing, rotate);
+            let original = std::fs::read(&source).unwrap();
+            let before = Document::load(&source).unwrap();
+            let before_page = before.get_pages().values().next().copied().unwrap();
+
+            let outcome = crop_margins(&source, &output_dir, spec);
+
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            let output = outcome.output_paths().first().cloned().unwrap();
+            assert!(output.file_name().unwrap().to_string_lossy().ends_with("-cropped.pdf"), "{name}: {output:?}");
+            let after = Document::load(&output).unwrap();
+            let page = after.get_pages().values().next().copied().unwrap();
+            assert_box_near(page_box(&after, page, b"CropBox"), expected, name);
+            for key in [b"MediaBox".as_slice(), b"BleedBox", b"TrimBox", b"ArtBox"] {
+                assert_eq!(page_box(&after, page, key), page_box(&before, before_page, key), "{name}: {}", String::from_utf8_lossy(key));
+            }
+            assert_eq!(after.get_page_content(page), before.get_page_content(before_page), "{name}: content must stay");
+            assert_eq!(std::fs::read(&source).unwrap(), original, "{name}: original must stay");
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir_all(output_dir);
+        }
+    }
+
+    #[test]
+    fn crop_margins_on_annotated_pages_keep_links_comments_and_form_fields_unchanged() {
+        let source = temp_path("crop-margins-annotated.pdf");
+        let output_dir = temp_path("crop-margins-annotated-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_navigation_and_form_pdf(&source);
+        let mut document = Document::load(&source).unwrap();
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        let comment = document.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![300.into(), 300.into(), 320.into(), 320.into()],
+            "Contents" => Object::string_literal("Check this"), "P" => Object::Reference(pages[1]),
+        });
+        let annots = document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap().clone();
+        document.get_dictionary_mut(pages[1]).unwrap().set("Annots", annots.into_iter().chain([Object::Reference(comment)]).collect::<Vec<_>>());
+        document.save(&source).unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let before = Document::load(&source).unwrap();
+
+        let outcome = crop_margins(&source, &output_dir, margins(36.0, 36.0, 36.0, 36.0));
+
+        assert!(outcome.error().is_none(), "annotated crop failed: {:?}", outcome.error());
+        let after = Document::load(outcome.output_paths().first().unwrap()).unwrap();
+        for page in after.get_pages().values().copied() {
+            assert_eq!(page_box(&after, page, b"CropBox"), [36.0, 36.0, 576.0, 756.0]);
+            let annots = after.get_dictionary(page).unwrap().get(b"Annots").unwrap().as_array().unwrap();
+            assert_eq!(annots, before.get_dictionary(page).unwrap().get(b"Annots").unwrap().as_array().unwrap());
+            for annotation in annots {
+                let id = annotation.as_reference().unwrap();
+                assert_eq!(after.get_dictionary(id).unwrap(), before.get_dictionary(id).unwrap(), "annotation {id:?} must stay");
+            }
+        }
+        let catalog = |document: &Document| document.get_dictionary(document.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap().clone();
+        for key in [b"AcroForm".as_slice(), b"Names", b"Outlines"] {
+            assert_eq!(catalog(&after).get(key).unwrap(), catalog(&before).get(key).unwrap());
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn crop_margins_that_leave_no_area_fail_with_invalid_input_naming_the_page_and_write_nothing() {
+        let source = temp_path("crop-margins-too-wide.pdf");
+        let output_dir = temp_path("crop-margins-too-wide-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf_with_pages(&source, 3);
+        let mut document = Document::load(&source).unwrap();
+        let third = document.get_pages().values().copied().nth(2).unwrap();
+        document.get_dictionary_mut(third).unwrap().set("MediaBox", vec![0.into(), 0.into(), 200.into(), 792.into()]);
+        document.save(&source).unwrap();
+        let original = std::fs::read(&source).unwrap();
+
+        // 250 pt from both sides fits a 612 pt Letter page but not the 200 pt third page.
+        let outcome = crop_margins(&source, &output_dir, margins(0.0, 100.0, 0.0, 150.0));
+
+        let error = outcome.error().expect("too-wide margins must fail");
+        assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "{error:?}");
+        assert!(error.message.contains("Page 3"), "{}", error.message);
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+
+        for (name, spec) in [("negative", margins(-1.0, 0.0, 0.0, 0.0)), ("nan", margins(0.0, f32::NAN, 0.0, 0.0))] {
+            let outcome = crop_margins(&source, &output_dir, spec);
+            assert!(outcome.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)), "{name}: {:?}", outcome.error());
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0, "{name}");
+        }
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn crop_margins_outputs_never_overwrite_an_earlier_crop() {
+        let source = temp_path("crop-collision.pdf");
+        let output_dir = temp_path("crop-collision-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf_with_pages(&source, 1);
+        let stem = source.file_stem().unwrap().to_string_lossy().to_string();
+        let names = (0..3).map(|_| {
+            let outcome = crop_margins(&source, &output_dir, margins(10.0, 10.0, 10.0, 10.0));
+            assert!(outcome.error().is_none(), "{:?}", outcome.error());
+            outcome.output_paths()[0].file_name().unwrap().to_string_lossy().to_string()
+        }).collect::<Vec<_>>();
+        assert_eq!(names, vec![format!("{stem}-cropped.pdf"), format!("{stem}-cropped-1.pdf"), format!("{stem}-cropped-2.pdf")]);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn crop_keeps_internal_page_links_and_rejects_malformed_page_counts_before_output() {
         for (name, action) in [("dest", false), ("action", true)] {
             let source = temp_path(&format!("internal-link-{name}.pdf"));
             let output_dir = temp_path(&format!("internal-link-{name}-output"));
@@ -1432,14 +1648,16 @@ mod session_tests {
             document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(annotation)]);
             document.save(&source).unwrap();
             let outcome = crop(&CropPdfRequest {
-                paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+                paths: vec![source.clone()], spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
                 scope: RangedPageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
-            assert!(outcome.error().is_some_and(|error| error.message.contains("navigation")), "{name}: {:?}", outcome.error());
-            assert!(outcome.output_paths().is_empty());
-            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            let output = Document::load(outcome.output_paths().first().unwrap()).unwrap();
+            let link = output.get_dictionary(annotation).unwrap();
+            let target = if action { link.get(b"A").unwrap().as_dict().unwrap().get(b"D").unwrap() } else { link.get(b"Dest").unwrap() };
+            assert_eq!(target.as_array().unwrap()[0].as_reference().unwrap(), page, "{name}: link must still target its page");
             let _ = std::fs::remove_file(source);
-            let _ = std::fs::remove_dir(output_dir);
+            let _ = std::fs::remove_dir_all(output_dir);
         }
 
         for count in [-1, 2] {
@@ -1453,7 +1671,7 @@ mod session_tests {
             document.get_dictionary_mut(pages).unwrap().set("Count", count);
             document.save(&source).unwrap();
             let outcome = crop(&CropPdfRequest {
-                paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+                paths: vec![source.clone()], spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
                 scope: RangedPageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
             assert!(outcome.error().is_some_and(|error| error.message.contains("page-tree")), "count {count}: {:?}", outcome.error());
@@ -1474,7 +1692,7 @@ mod session_tests {
 
         let outcome = crop(&CropPdfRequest {
             paths: vec![source.clone()],
-            rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+            spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
             scope: RangedPageScope::All,
             output_location: location(&output_dir),
         }, source.clone());
@@ -1488,7 +1706,7 @@ mod session_tests {
     }
 
     #[test]
-    fn crop_rejects_plain_annotations_before_reserving_and_preserves_the_original() {
+    fn crop_keeps_plain_annotations_and_preserves_the_original() {
         let source = temp_path("crop-annotation-output");
         let output_dir = temp_path("crop-annotation-output-dir");
         std::fs::create_dir_all(&output_dir).unwrap();
@@ -1499,16 +1717,17 @@ mod session_tests {
         let original = std::fs::read(&source).unwrap();
 
         let outcome = crop(&CropPdfRequest {
-            paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+            paths: vec![source.clone()], spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
             scope: RangedPageScope::All, output_location: location(&output_dir),
         }, source.clone());
 
-        assert!(outcome.error().is_some_and(|error| error.message.contains("annotation")), "unexpected result: {:?}", outcome.error());
-        assert!(outcome.output_paths().is_empty());
+        assert!(outcome.error().is_none(), "unexpected result: {:?}", outcome.error());
+        let output = Document::load(outcome.output_paths().first().unwrap()).unwrap();
+        let page = output.get_pages().values().next().copied().unwrap();
+        assert_eq!(output.get_dictionary(page).unwrap().get(b"Annots").unwrap().as_array().unwrap().len(), 1);
         assert_eq!(std::fs::read(&source).unwrap(), original);
-        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
         let _ = std::fs::remove_file(source);
-        let _ = std::fs::remove_dir(output_dir);
+        let _ = std::fs::remove_dir_all(output_dir);
     }
 
     #[test]
@@ -1588,7 +1807,7 @@ mod session_tests {
             let original = std::fs::read(&source).unwrap();
 
             let outcome = crop(&CropPdfRequest {
-                paths: vec![source.clone()], rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 },
+                paths: vec![source.clone()], spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
                 scope: RangedPageScope::All, output_location: location(&output_dir),
             }, source.clone());
 

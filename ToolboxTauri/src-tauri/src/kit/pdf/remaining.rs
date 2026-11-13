@@ -1807,7 +1807,7 @@ pub(crate) mod tests {
 
         let cropped = crate::kit::pdf::editor::crop(&crate::kit::pdf::editor::CropPdfRequest {
             paths: vec![input.clone()],
-            rectangle: crate::kit::pdf::editor::PdfRect { x: 0.0, y: 0.0, width: 128.0, height: 128.0 },
+            spec: crate::kit::pdf::editor::CropSpec::Rectangle { rectangle: crate::kit::pdf::editor::PdfRect { x: 0.0, y: 0.0, width: 128.0, height: 128.0 } },
             scope: crate::kit::pdf::editor::RangedPageScope::All,
             output_location: OutputLocation::AlongsideInput,
         }, input.clone());

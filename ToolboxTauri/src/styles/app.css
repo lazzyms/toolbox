@@ -344,6 +344,18 @@ body {
 .workspace-field-wide {
   grid-column: 1 / -1;
 }
+.workspace-unit-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.workspace-unit-input > span {
+  min-width: 2ch;
+  color: var(--muted-foreground);
+}
+.workspace-field-error { margin: 0; color: var(--destructive); font-size: 12px; line-height: 1.5; display: flex; gap: 6px; align-items: flex-start; }
+.workspace-field-error svg { flex: none; width: 14px; height: 14px; margin-top: 2px; }
+.workspace-note.workspace-note-error { color: var(--destructive); }
 .workspace-password-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
