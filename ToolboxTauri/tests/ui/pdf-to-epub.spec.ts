@@ -365,3 +365,45 @@ test("PDF to EPUB notes the pages it left out for having no text and points them
     await expect(row.getByRole("button", { name: "Open OCR PDF", exact: true })).toBeVisible();
     await expect(row.getByRole("list", { name: "Page details for road-atlas.pdf" }).getByRole("listitem").first()).toHaveText("Pages converted3-6, 8-11, 13-18");
 });
+
+test("PDF to EPUB names the pages it could not reflow as warnings and unmapped text as a note", async ({ page }) => {
+    const guide = "/Users/test/books/field-guide-birds.pdf";
+    const study = "/Users/test/books/climate-study.pdf";
+    const columns = "Pages 40-44 — Two-column layout. Joined into one column, so captions may sit away from their pictures.";
+    const table = "Page 151 — A table was flowed as plain paragraphs.";
+    const unmapped = "Page 15 — Some text has no reliable character mapping, so it was left out.";
+    await openToolBySearch(page, "PDF to EPUB");
+    await choose(page, [guide, study]);
+    await page.evaluate(({ guide, study, columns, table, unmapped }) => {
+        (window as unknown as EpubWindow).__outcomes = [{
+            inputPath: guide, outputPaths: ["/Users/test/books/field-guide-birds.epub"], state: "succeeded", failure: null, reason: null,
+            detail: "186 pages. Contents from headings in the text, 9 entries. 2 parts may read out of order.",
+            warnings: [
+                { code: "notReflowed", message: columns, details: { layout: "columns", pages: [40, 41, 42, 43, 44] } },
+                { code: "notReflowed", message: table, details: { layout: "table", pages: [151] } },
+            ],
+        }, {
+            inputPath: study, outputPaths: ["/Users/test/books/climate-study.epub"], state: "succeeded", failure: null, reason: null,
+            detail: "18 pages. Contents from headings in the text, 6 entries.",
+            warnings: [{ code: "unmappedText", message: unmapped, details: { pages: [15] } }],
+        }];
+    }, { guide, study, columns, table, unmapped });
+    await page.getByRole("button", { name: "Convert 2 PDFs", exact: true }).click();
+
+    const rows = page.locator(".result-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(0)).toHaveAttribute("data-tone", "warn");
+    const guideDetails = rows.nth(0).locator(".result-row-detail");
+    await expect(guideDetails).toHaveText([columns, table, "186 pages. Contents from headings in the text, 9 entries. 2 parts may read out of order."]);
+    await expect(guideDetails.nth(0)).toHaveAttribute("data-tone", "warn");
+    await expect(guideDetails.nth(1)).toHaveAttribute("data-tone", "warn");
+    await expect(rows.nth(0).getByRole("button", { name: "Open field-guide-birds.epub", exact: true })).toBeVisible();
+
+    await expect(rows.nth(1)).toHaveAttribute("data-state", "succeeded");
+    await expect(rows.nth(1)).toHaveAttribute("data-tone", "note");
+    const studyDetails = rows.nth(1).locator(".result-row-detail");
+    await expect(studyDetails).toHaveText([unmapped, "18 pages. Contents from headings in the text, 6 entries."]);
+    await expect(studyDetails.nth(0)).not.toHaveAttribute("data-tone", "warn");
+    await expect(rows.nth(1).getByRole("button", { name: "Open OCR PDF", exact: true })).toHaveCount(0);
+});
