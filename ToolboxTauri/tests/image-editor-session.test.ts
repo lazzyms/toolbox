@@ -8,7 +8,10 @@ import {
   defaultImageResizeStep,
   defaultImageRotateStep,
   defaultImageToneStep,
+  defaultImageWatermarkStep,
   imageToneStepProblem,
+  imageWatermarkOptions,
+  imageWatermarkStepProblem,
   isNeutralImageToneStep,
   imageEditStackPreviewPlan,
   imageEditStackExtension,
@@ -144,6 +147,47 @@ test("Colour and Tone is one step that runs after Rotate and Flip and is named -
   assert.deepEqual(Object.keys(imageEditStackRequestSteps(stack)), ["crop", "rotate", "tone"], "tone added first is still sent after rotate");
   assert.deepEqual(imageEditStackRequestSteps({ tone: adjusted }), { tone: adjusted });
   assert.deepEqual(imageEditStackPreviewPlan(stack).edits.at(-1), { kind: "tone", ...adjusted });
+});
+
+test("Watermark is one step that runs last and is named -watermarked on its own", () => {
+  const watermark = { ...defaultImageWatermarkStep(), text: "DRAFT" };
+  assert.deepEqual(defaultImageWatermarkStep(), { mark: "text", text: "", logoPath: "", size: 30, opacity: 70, color: "#FFFFFF", rotation: 0, placement: "position", anchorX: 1, anchorY: 1 });
+  assert.equal(imageEditStackSuffix({ watermark }), "-watermarked");
+  assert.equal(imageEditStackSuffix({ watermark, tone: defaultImageToneStep() }), "-edited");
+  const stack = { watermark, tone: defaultImageToneStep(), crop: defaultImageCropStep() };
+  assert.deepEqual(presentImageEditSteps(stack), ["crop", "tone", "watermark"]);
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps(stack)), ["crop", "tone", "watermark"], "watermark added first is still sent last");
+  const options = { text: "DRAFT", color: "#FFFFFF", size: 0.3, opacity: 70, rotation: 0, position: { anchorX: 1, anchorY: 1 } };
+  assert.deepEqual(imageEditStackRequestSteps({ watermark }), { watermark: options });
+  assert.deepEqual(imageEditStackPreviewPlan(stack).edits.at(-1), { kind: "watermark", ...options });
+});
+
+test("watermark options send only what the chosen mark uses", () => {
+  const base = defaultImageWatermarkStep();
+  assert.deepEqual(
+    imageWatermarkOptions({ ...base, text: "© Studio", color: "#ff8800", size: 45, opacity: 20, rotation: -8, anchorX: 0, anchorY: 0.5 }),
+    { text: "© Studio", color: "#FF8800", size: 0.45, opacity: 20, rotation: -8, position: { anchorX: 0, anchorY: 0.5 } },
+  );
+  // A picture keeps its own colours, and its text is ignored even when one was typed before.
+  assert.deepEqual(
+    imageWatermarkOptions({ ...base, mark: "picture", text: "left over", logoPath: "/brand/logo.png", placement: "tile" }),
+    { logoPath: "/brand/logo.png", size: 0.3, opacity: 70, rotation: 0, position: "tile" },
+  );
+});
+
+test("watermark values are checked against the native limits", () => {
+  const text = { ...defaultImageWatermarkStep(), text: "DRAFT" };
+  assert.equal(imageWatermarkStepProblem(text), null);
+  assert.deepEqual(imageWatermarkStepProblem({ ...text, text: "" }), { field: "text", message: "Enter the watermark text." });
+  assert.deepEqual(imageWatermarkStepProblem({ ...text, mark: "picture" }), { field: "picture", message: "Choose a picture for the watermark." });
+  assert.equal(imageWatermarkStepProblem({ ...text, mark: "picture", logoPath: "/brand/logo.png", color: "nonsense" }), null, "colour is not checked for a picture");
+  assert.equal(imageWatermarkStepProblem({ ...text, size: 0 })?.field, "size");
+  assert.equal(imageWatermarkStepProblem({ ...text, size: 101 })?.field, "size");
+  assert.equal(imageWatermarkStepProblem({ ...text, size: 12.5 })?.field, "size");
+  assert.equal(imageWatermarkStepProblem({ ...text, opacity: 0 })?.field, "opacity");
+  assert.deepEqual(imageWatermarkStepProblem({ ...text, color: "#FFF" }), { field: "colour", message: "Enter a colour such as #FFFFFF." });
+  assert.equal(imageWatermarkStepProblem({ ...text, rotation: -180 }), null);
+  assert.deepEqual(imageWatermarkStepProblem({ ...text, rotation: 181 }), { field: "angle", message: "Enter an angle from −180 to 180 degrees." });
 });
 
 test("tone values are checked against the native range of -100 to 100", () => {

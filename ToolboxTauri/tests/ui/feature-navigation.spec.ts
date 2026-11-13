@@ -1226,39 +1226,6 @@ test("PDF editor protects the last page and supports unified history", async ({ 
     await expect(page.locator(".scene-object-hit")).toHaveCount(0);
 });
 
-test("Image editor previews a reversible edit stack and exports one combined plan", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Watermark", exact: true }).click();
-    await expect(page.getByRole("img", { name: `Preview of ${fixtureName}` })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Redo" })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Reset edits" })).toBeDisabled();
-    await expect(page.getByText("Edits are applied in order. Undo removes one edit at a time.", { exact: true })).toBeVisible();
-    await expect(page.getByRole("tablist", { name: "Edit Image" })).toBeVisible();
-    await expect(page.getByRole("toolbar", { name: "Image Editor tools" })).toBeVisible();
-    await expect(page.locator(".workspace-primary-action")).toHaveCount(1);
-
-    await page.getByLabel("Watermark text").fill("First");
-    await expect.poll(async () =>
-        (await page.evaluate(() => (window as TestWindow).__toolboxInvocations ?? []))
-            .some(({ command }) => command === "inspect_image_edit_preview"),
-    ).toBe(true);
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByLabel("Watermark text").fill("Second");
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
-    await expect(page.locator(".image-edit-timeline li")).toContainText(["Watermark · First", "Watermark · Second"]);
-    await page.getByRole("button", { name: "Export edited images" }).click();
-
-    const invocation = await page.evaluate(() =>
-        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "export_image_edit_plan"),
-    );
-    expect(invocation?.args).toMatchObject({ request: { plan: { edits: expect.any(Array) } } });
-    expect((invocation?.args as { request: { plan: { edits: unknown[] } } } | undefined)?.request.plan.edits).toHaveLength(2);
-});
-
 test("Image crop keeps the source interaction surface and shows a separate result", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Crop Images");
@@ -1397,32 +1364,6 @@ test("Image crop clears an old result and disables Run for an empty rectangle", 
 
     await expect(page.getByRole("region", { name: "Result preview" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeDisabled();
-});
-
-test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
-    await page.getByRole("button", { name: "Choose files to process" }).click();
-    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Watermark", exact: true }).click();
-    await page.getByLabel("Watermark text").fill("First");
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
-    await page.getByLabel("Watermark text").fill("Second");
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
-
-    await expect(page.getByRole("button", { name: "Undo" })).toBeEnabled();
-    await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Undo" }).click();
-    await expect(page.getByText("1 committed edit", { exact: true })).toBeVisible();
-    await expect(page.locator(".image-edit-timeline li")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
-    await expect(page.getByRole("button", { name: "Redo" })).toBeEnabled();
-
-    await page.getByRole("button", { name: "Redo" }).click();
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
-    await expect(page.getByText("2 committed edits", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Reset edits" }).click();
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
-    await expect(page.getByText("0 committed edits", { exact: true })).toBeVisible();
 });
 
 test("PDF to Images identifies source selection and summarizes its non-previewable output", async ({ page }) => {
@@ -2849,7 +2790,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await openFromHome(page, utility.title);
     // Image Metadata and Convert Image Format live in the Image Editor but run on their own screen, without an edit plan.
     // Crop runs through the shared edit stack, which Crop fills with its default step.
-    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "heic-convert", "crop", "resize", "rotate", "image-tone"].includes(utility.id);
+    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "heic-convert", "crop", "resize", "rotate", "image-tone", "image-watermark"].includes(utility.id);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = utility.id === "convert-to-pdf"
@@ -2872,9 +2813,6 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         } else if (utility.id === "pdf-remove-pages") await page.getByRole("button", { name: "Rotate selected pages", exact: true }).click(); else if (utility.id === "pdf-watermark") await page.getByRole("button", { name: "Add watermark", exact: true }).click();
         else await drawSceneMark(page, utility.id === "pdf-sign" ? "Signature" : utility.id === "pdf-watermark" ? "Watermark" : "Text");
     }
-    if (usesImageEditPlan) {
-        if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
-    }
     if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     if (utility.id === "pdf-redact") await drawRedactionBox(page);
     if (utility.id === "pdf-properties") await page.getByRole("group", { name: "Title", exact: true }).getByRole("radio", { name: "Clear", exact: true }).click();
@@ -2888,6 +2826,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (utility.id === "resize") await page.getByLabel("Longest side, pixels").fill("640");
     if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
+    if (utility.id === "image-watermark") await page.getByLabel("Text", { exact: true }).fill("Test watermark");
 
     const action = page.locator(".workspace-primary-action");
     await expect(action).toBeEnabled();
@@ -2914,10 +2853,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     const request = (run?.args as { request: RunRequest }).request;
     expect(composedCommand === "export_image_edit_plan" ? request.plan?.outputLocation : request.outputLocation).toEqual(expectedOutputLocation);
     if (utility.id === "image-watermark") {
-        expect(request.plan?.edits).toContainEqual({ kind: "watermark", text: "Test watermark", opacity: 20, position: { x: 0, y: 0 } });
-        // Edit PDF watermarks send the same shared option set (tests/ui/pdf-scene.spec.ts).
-        const watermarkEdit = request.plan?.edits?.find((edit: { kind: string }) => edit.kind === "watermark");
-        expect(Object.keys(watermarkEdit ?? {}).filter((key) => key !== "kind").every((key) => ["text", "logoPath", "size", "opacity", "color", "position", "rotation"].includes(key))).toBe(true);
+        expect((request as RunRequest & { steps?: { watermark?: unknown } }).steps?.watermark).toEqual({ text: "Test watermark", color: "#FFFFFF", size: 0.3, opacity: 70, rotation: 0, position: { anchorX: 1, anchorY: 1 } });
     }
 };
 
