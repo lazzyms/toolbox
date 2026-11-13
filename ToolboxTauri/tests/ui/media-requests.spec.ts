@@ -473,9 +473,9 @@ test.describe("Media requests", () => {
         await openToolBySearch(page, "Create GIF");
         await choose(page, ["/local/frames/frame-1.png", "/local/frames/frame-2.png"]);
 
-        const strip = page.getByRole("region", { name: "Frame order" });
-        await expect(strip.locator(".media-frame-list button")).toHaveCount(2);
-        await expect(strip.locator(".media-frame-preview")).toHaveCount(2);
+        const strip = page.getByRole("listbox", { name: "Frames, in play order" });
+        await expect(strip.getByRole("option")).toHaveCount(2);
+        await expect(strip.locator(".media-frame-picture img")).toHaveCount(2);
         expect(await invocationsOf(page, "inspect_image_preview")).toEqual([
             { request: { path: "/local/frames/frame-1.png" } },
             { request: { path: "/local/frames/frame-2.png" } },
@@ -484,22 +484,157 @@ test.describe("Media requests", () => {
         expect(await runOnce(page, "create_gif", "frame-1-animated.gif")).toEqual({ runId, request: {
             paths: ["/local/frames/frame-1.png", "/local/frames/frame-2.png"],
             frameDelayMs: 100,
+            frameDelayOverrides: [],
             loopForever: true,
             outputLocation: "alongsideInput",
             outputPath: "/local/frames/frame-1-animated.gif",
         } });
 
         await page.getByRole("button", { name: "Move frame-2.png up" }).click();
-        await expect(strip.locator(".media-frame-list button").first()).toContainText("frame-2.png");
-        await page.getByLabel("Frame delay in milliseconds").fill("250");
-        await page.getByRole("switch", { name: "Loop animation" }).click();
+        await expect(strip.getByRole("option").first()).toHaveAccessibleName("Frame 1, frame-2.png, 100 ms");
+        await page.getByLabel("Delay for every frame").fill("250");
+        await page.getByRole("switch", { name: "Loop forever" }).click();
         expect(await runOnce(page, "create_gif", "frame-2-animated.gif")).toEqual({ runId, request: {
             paths: ["/local/frames/frame-2.png", "/local/frames/frame-1.png"],
             frameDelayMs: 250,
+            frameDelayOverrides: [],
             loopForever: false,
             outputLocation: "alongsideInput",
             outputPath: "/local/frames/frame-2-animated.gif",
         } });
+    });
+
+    test("Create GIF frame grid reorders by drag and keyboard, and own delays move with their frames", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/a.png", "/local/frames/b.png", "/local/frames/c.png"]);
+
+        const grid = page.getByRole("listbox", { name: "Frames, in play order" });
+        const frames = grid.getByRole("option");
+        const status = page.getByRole("status").filter({ hasText: /^(Frame|Dragging) / });
+        const names = () => frames.evaluateAll((options) => options.map((option) => option.getAttribute("aria-label")));
+        await expect(frames).toHaveCount(3);
+        await expect(frames.nth(0)).toHaveAccessibleName("Frame 1, a.png, 100 ms");
+        await expect(frames.nth(0)).toContainText("Sets size");
+        await expect(page.getByText("Frames play in this order. Drag a frame, or select it and press ⌘+Arrow to move it. Delete removes it.")).toBeVisible();
+        await expect(page.getByText("300 ms per loop")).toHaveCount(0);
+        await expect(page.getByText("0.3 s per loop")).toBeVisible();
+
+        // Frame 2 gets its own delay; the global delay changes every other frame.
+        await grid.getByRole("button", { name: "Frame 2, b.png, 100 ms" }).click();
+        await expect(status).toHaveText("Frame 2, b.png, selected.");
+        const frameSection = page.getByRole("group", { name: "Frame 2, b.png" });
+        await expect(frameSection).toContainText("Uses 100 ms, the delay for every frame.");
+        await frameSection.getByRole("checkbox", { name: "Own delay" }).click();
+        const ownDelay = page.getByLabel("Delay for frame 2, milliseconds");
+        await expect(ownDelay).toBeFocused();
+        await expect(ownDelay).toHaveValue("100");
+        await ownDelay.fill("1500");
+        await expect(frameSection).toContainText("Clear Own delay to use the delay for every frame again.");
+        await page.getByLabel("Delay for every frame").fill("70");
+        expect(await names()).toEqual(["Frame 1, a.png, 70 ms", "Frame 2, b.png, 1500 ms, own delay", "Frame 3, c.png, 70 ms"]);
+        await expect(page.getByText("1.64 s per loop")).toBeVisible();
+        await expect(status).toHaveText("Frame 2, b.png, selected. Own delay 1500 ms.");
+
+        // Drag c.png onto the first tile: it lands at position 1 and b.png's own delay follows b.png.
+        await grid.getByRole("button", { name: "Frame 3, c.png, 70 ms" }).hover();
+        await page.mouse.down();
+        await grid.getByRole("button", { name: "Frame 1, a.png, 70 ms" }).hover();
+        await expect(status).toHaveText("Dragging c.png. Drop it at position 1.");
+        await expect(frames.nth(2)).toHaveAttribute("data-dragging", "true");
+        await expect(frames.nth(0)).toHaveAttribute("data-drop-target", "before");
+        await page.mouse.up();
+        expect(await names()).toEqual(["Frame 1, c.png, 70 ms", "Frame 2, a.png, 70 ms", "Frame 3, b.png, 1500 ms, own delay"]);
+        await expect(status).toHaveText("Frame 1, c.png, selected.");
+        expect(await runOnce(page, "create_gif", "c-animated.gif")).toEqual({ runId, request: {
+            paths: ["/local/frames/c.png", "/local/frames/a.png", "/local/frames/b.png"],
+            frameDelayMs: 70,
+            frameDelayOverrides: [{ index: 2, delayMs: 1500 }],
+            loopForever: true,
+            outputLocation: "alongsideInput",
+            outputPath: "/local/frames/c-animated.gif",
+        } });
+
+        // The keyboard moves the selected frame to the front, keeping focus on it.
+        const moved = grid.getByRole("button", { name: "Frame 3, b.png, 1500 ms, own delay" });
+        await moved.click();
+        await page.keyboard.press("Meta+ArrowLeft");
+        await page.keyboard.press("Meta+ArrowUp");
+        expect(await names()).toEqual(["Frame 1, b.png, 1500 ms, own delay", "Frame 2, c.png, 70 ms", "Frame 3, a.png, 70 ms"]);
+        await expect(grid.getByRole("button", { name: "Frame 1, b.png, 1500 ms, own delay" })).toBeFocused();
+        await expect(status).toHaveText("Frame 1, b.png, selected. Own delay 1500 ms.");
+        await page.keyboard.press("ArrowRight");
+        await expect(grid.getByRole("button", { name: "Frame 2, c.png, 70 ms" })).toBeFocused();
+        await expect(page.getByRole("group", { name: "Frame 2, c.png" })).toContainText("Uses 70 ms, the delay for every frame. Frame 1 has its own delay.");
+        await page.getByRole("switch", { name: "Loop forever" }).click();
+        expect(await runOnce(page, "create_gif", "b-animated.gif")).toEqual({ runId, request: {
+            paths: ["/local/frames/b.png", "/local/frames/c.png", "/local/frames/a.png"],
+            frameDelayMs: 70,
+            frameDelayOverrides: [{ index: 0, delayMs: 1500 }],
+            loopForever: false,
+            outputLocation: "alongsideInput",
+            outputPath: "/local/frames/b-animated.gif",
+        } });
+
+        // Delete removes the selected frame from the list, not from disk.
+        await grid.getByRole("button", { name: "Frame 2, c.png, 70 ms" }).click();
+        await page.keyboard.press("Delete");
+        expect(await names()).toEqual(["Frame 1, b.png, 1500 ms, own delay", "Frame 2, a.png, 70 ms"]);
+    });
+
+    test("Create GIF gives one copy of a repeated frame its own delay", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/a.png", "/local/frames/b.png", "/local/frames/a.png"]);
+
+        const grid = page.getByRole("listbox", { name: "Frames, in play order" });
+        await grid.getByRole("button", { name: "Frame 3, a.png, 100 ms" }).click();
+        await page.getByRole("checkbox", { name: "Own delay" }).click();
+        await page.getByLabel("Delay for frame 3, milliseconds").fill("500");
+        await expect(grid.getByRole("option")).toHaveText([/^1\s*100 ms/, /^2\s*100 ms/, /^3\s*500 ms/]);
+        expect(await runOnce(page, "create_gif", "a-animated.gif")).toMatchObject({ request: {
+            paths: ["/local/frames/a.png", "/local/frames/b.png", "/local/frames/a.png"],
+            frameDelayMs: 100,
+            frameDelayOverrides: [{ index: 2, delayMs: 500 }],
+        } });
+    });
+
+    test("Create GIF refuses delays outside 1 to 60000 ms with a message and no run", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Create GIF");
+        await choose(page, ["/local/frames/a.png", "/local/frames/b.png"]);
+        const action = page.locator(".workspace-primary-action");
+        const everyFrame = page.getByLabel("Delay for every frame");
+        await expect(page.getByText("ms, 1 to 60000")).toBeVisible();
+
+        for (const value of ["0", "60001", "", "2.5"]) {
+            await everyFrame.fill(value);
+            await expect(page.getByRole("alert")).toHaveText("The delay for every frame must be a whole number from 1 to 60000 ms.");
+            await expect(everyFrame).toHaveAttribute("aria-invalid", "true");
+            await expect(action).toBeDisabled();
+        }
+        await everyFrame.fill("60000");
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        await expect(everyFrame).toHaveAttribute("aria-invalid", "false");
+        await expect(action).toBeEnabled();
+
+        await page.getByRole("checkbox", { name: "Own delay" }).click();
+        const ownDelay = page.getByLabel("Delay for frame 1, milliseconds");
+        await expect(ownDelay).toHaveValue("60000");
+        await ownDelay.fill("0");
+        await expect(page.getByRole("alert")).toHaveText("Frame 1's own delay must be a whole number from 1 to 60000 ms.");
+        await expect(ownDelay).toHaveAttribute("aria-invalid", "true");
+        await expect(page.getByRole("option", { name: "Frame 1, a.png, Check delay, own delay" })).toBeVisible();
+        await expect(page.getByText("s per loop")).toHaveCount(0);
+        await expect(action).toBeDisabled();
+        // The message stays while another frame is selected.
+        await page.getByRole("button", { name: "Frame 2, b.png, 60000 ms" }).click();
+        await expect(page.getByRole("alert")).toHaveText("Frame 1's own delay must be a whole number from 1 to 60000 ms.");
+        await expect(action).toBeDisabled();
+        await page.getByRole("button", { name: "Frame 1, a.png, Check delay, own delay" }).click();
+        await ownDelay.fill("1");
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        expect(await runOnce(page, "create_gif", "a-animated.gif")).toMatchObject({ request: { frameDelayMs: 60000, frameDelayOverrides: [{ index: 0, delayMs: 1 }] } });
     });
 
     test("Create GIF proposes the first frame's name in the resolved folder, and cancelling sends nothing", async ({ page }) => {
@@ -518,6 +653,7 @@ test.describe("Media requests", () => {
         expect(await runOnce(page, "create_gif", "IMG_2210-animated.gif")).toEqual({ runId, request: {
             paths: ["/local/frames/IMG_2210.heic", "/local/frames/IMG_2211.png"],
             frameDelayMs: 100,
+            frameDelayOverrides: [],
             loopForever: true,
             outputLocation: { customFolder: "/Users/test/Media out" },
             outputPath: "/Users/test/Media out/IMG_2210-animated.gif",
@@ -576,16 +712,16 @@ test.describe("Media requests", () => {
         await start(page);
         await openToolBySearch(page, "Create GIF");
         await choose(page, ["/local/frames/frame-1.png", "/local/frames/frame-2.png"]);
-        await page.getByLabel("Frame delay in milliseconds").fill("40");
-        await page.getByRole("switch", { name: "Loop animation" }).click();
+        await page.getByLabel("Delay for every frame").fill("40");
+        await page.getByRole("switch", { name: "Loop forever" }).click();
 
         await selectRailTool(page, "Generate App Icons");
         const android = page.getByRole("group", { name: "Make icons for" }).getByRole("checkbox", { name: "Android" });
         await expect(android).not.toBeChecked();
         await android.click();
         await selectRailTool(page, "Create GIF");
-        await expect(page.getByLabel("Frame delay in milliseconds")).toHaveValue("40");
-        await expect(page.getByRole("switch", { name: "Loop animation" })).not.toBeChecked();
+        await expect(page.getByLabel("Delay for every frame")).toHaveValue("40");
+        await expect(page.getByRole("switch", { name: "Loop forever" })).not.toBeChecked();
 
         expect(await runOnce(page, "create_gif", "frame-1-animated.gif")).toMatchObject({ request: { frameDelayMs: 40, loopForever: false } });
         await selectRailTool(page, "Generate App Icons");
@@ -597,6 +733,7 @@ test.describe("Media requests", () => {
         await openToolBySearch(page, "Extract GIF Frames");
         await choose(page, ["/local/gifs/wave.gif", "/local/gifs/spin.gif"]);
         await expect(page.getByRole("region", { name: "Frame order" })).toHaveCount(0);
+        await expect(page.getByRole("listbox", { name: "Frames, in play order" })).toHaveCount(0);
 
         expect(await runOnce(page, "extract_gif_frames")).toEqual({ runId, request: {
             paths: ["/local/gifs/wave.gif", "/local/gifs/spin.gif"],

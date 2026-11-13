@@ -847,7 +847,7 @@ mod command_tests {
             (pasted.clone(), "receipt-1.pdf", 1, tauri::async_runtime::block_on(run_convert_pasted_html(convert::PastedHtmlRequest { markup: "<h1>Receipt</h1><p>Paid</p>".into(), output_path: pasted.clone(), page_defaults: Default::default(), web_pages: None }, no_packs()))),
             (merge.clone(), "statement-1.pdf", 2, tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
             (combined.clone(), "scans-1.pdf", 1, tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
-            (gif.clone(), "loop-1.gif", 1, tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
+            (gif.clone(), "loop-1.gif", 1, tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
             (tiff_out.clone(), "pages-1.tiff", 1, tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
         ];
         for (existing, expected_name, entries, outcomes) in runs {
@@ -1796,7 +1796,7 @@ mod command_tests {
         let inputs = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
 
         let outcomes = tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest {
-            paths: paths.clone(), frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(chosen_folder.join("first-animated.gif")),
+            paths: paths.clone(), frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: OutputLocation::AlongsideInput, output_path: Some(chosen_folder.join("first-animated.gif")),
         }));
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
         assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()));
@@ -1836,10 +1836,10 @@ mod command_tests {
             paths: vec![image.clone(), missing_image.clone()], output_location: location(&root, "images-missing"), output_path: None,
         }));
         assert_aggregate_success("GIF valid inputs", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest {
-            paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-valid"), output_path: None,
+            paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: location(&root, "gif-valid"), output_path: None,
         }));
         assert_aggregate_failure("GIF missing later input", &[image.clone(), missing_gif_frame.clone()], &missing_gif_frame, run_create_gif(&GifCreateRequest {
-            paths: vec![image.clone(), missing_gif_frame.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif-missing"), output_path: None,
+            paths: vec![image.clone(), missing_gif_frame.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: location(&root, "gif-missing"), output_path: None,
         }));
         assert_aggregate_success("TIFF valid inputs", &[tiff.clone(), tiff_two.clone()], run_combine_tiff_pages(&TiffRequest {
             mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"), output_path: None,
@@ -4307,7 +4307,7 @@ mod command_tests {
             assert_eq!(fixtures::red_edge(&first), if input == &oriented { "top" } else { "left" });
         }
         let gif = assert_aggregate_success("GIF from HEIC frames", &[heic.clone(), deep.clone(), oriented.clone()], run_create_gif(&GifCreateRequest {
-            paths: vec![heic.clone(), deep.clone(), oriented.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif"), output_path: None,
+            paths: vec![heic.clone(), deep.clone(), oriented.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: location(&root, "gif"), output_path: None,
         }));
         assert!(gif[0].extension().is_some_and(|extension| extension == "gif"));
         for (path, bytes) in inputs { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
@@ -5080,7 +5080,7 @@ mod command_tests {
         let cropped_icon = image::open(cropped[0].output_paths()[0].join("custom/custom-48.png")).unwrap().to_rgba8();
         assert_eq!(cropped_icon, image::imageops::crop_imm(&wide, 24, 0, 48, 48).to_image(), "centre-crop keeps the centred 48 px square");
         assert_eq!(std::fs::read(&wide_master).unwrap(), wide_bytes);
-        outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
+        outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
         let image_plan = ImageEditPlan {
             edits: vec![
