@@ -57,14 +57,30 @@ export const selectPagesByRange = (order: string[], value: string): PageSelectio
 
 export const selectionCountLabel = (count: number) => (count === 0 ? "No pages selected" : selectedPageLabel(count));
 
+const quarterTurns = (degrees: number) => ((degrees % 360) + 360) % 360;
+const turnWords: Record<number, string> = { 90: "90° right", 180: "180°", 270: "90° left" };
 const orientationWords: Record<number, string> = { 90: "rotated 90° right", 180: "rotated 180°", 270: "rotated 90° left" };
+const orientationBadges: Record<number, string> = { 90: "↻ 90°", 180: "↻ 180°", 270: "↺ 90°" };
+
+/** A page's turn for its details: "Rotated 90° right", "Rotated 180°", "Rotated 90° left" or "As in the original". */
+export const orientationLabel = (rotation: number) => {
+  const words = orientationWords[quarterTurns(rotation)];
+  return words ? words[0].toUpperCase() + words.slice(1) : "As in the original";
+};
+
+/** The short mark a turned page shows on its thumbnail, or null when it is as in the original. */
+export const orientationBadge = (rotation: number) => orientationBadges[quarterTurns(rotation)] ?? null;
+
+/** Announces a turn of the pages, for example "Pages 4 to 6 rotated 90° left". */
+export const rotationAnnouncement = (positions: number[], degrees: number) =>
+  `${pagePositionsLabel(positions)} rotated ${turnWords[quarterTurns(degrees)] ?? "0°"}`;
 
 const previewWords = { loading: "preview loading", failed: "preview unavailable" } as const;
 
 export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIndex" | "rotation">, selected: boolean, preview?: keyof typeof previewWords) => {
   const parts = [`Position ${position}`];
   if (page.sourceIndex !== null) parts.push(`original page ${page.sourceIndex + 1}`);
-  const orientation = orientationWords[((page.rotation % 360) + 360) % 360];
+  const orientation = orientationWords[quarterTurns(page.rotation)];
   if (orientation) parts.push(orientation);
   if (preview) parts.push(previewWords[preview]);
   if (selected) parts.push("selected");
