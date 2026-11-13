@@ -4633,7 +4633,7 @@ mod command_tests {
             "document": {
                 "title": "Move-out checklist", "author": "Sam Lee",
                 "blocks": [{ "kind": "heading1", "text": "Move-out checklist" }, { "kind": "paragraph", "runs": [{ "text": "Return the ", "bold": false, "italic": false }, { "text": "keys", "bold": true, "italic": false }, { "text": ".", "bold": false, "italic": false }] }],
-                "page": { "pageSize": "a4", "margins": "normal" }, "font": { "family": "Liberation Serif", "size": 11 },
+                "page": { "pageSize": "a4", "orientation": "portrait", "margins": "normal", "header": "", "footer": "", "pageNumbers": false }, "font": { "family": "Liberation Serif", "size": 11 },
             },
             "outputPath": output_path,
         })).unwrap()

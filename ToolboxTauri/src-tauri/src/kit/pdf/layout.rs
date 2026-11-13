@@ -412,6 +412,9 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
         Ok(())
     }
 
+    /// The height a header or footer band of `blocks` takes, without drawing it.
+    pub fn band_height(&mut self, blocks: &[Block]) -> Result<f32, ToolError> { self.band(blocks, 0.).map(|(_, height, _)| height) }
+
     fn band(&mut self, blocks: &[Block], top: f32) -> Result<(PageOut, f32, usize), ToolError> {
         let geometry = Geometry { top, bottom: 0., ..self.geometry };
         let (x, width) = (geometry.left, geometry.width - geometry.left - geometry.right);
