@@ -927,7 +927,7 @@ test("the settings sidebar switches sections and lists only the built ones", asy
     await page.goto("/");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const sections = page.getByRole("navigation", { name: "Settings sections" });
-    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Quick actions", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]);
+    await expect(sections.getByRole("button")).toHaveText(["Appearance", "Output location", "Quick actions", "Packs", "Privacy", "Updates", "About and support", "Keyboard shortcuts"]);
     await expect(page.getByText("Changes save as you make them.")).toBeVisible();
 
     const about = await openSettingsSection(page, "About and support", false);
