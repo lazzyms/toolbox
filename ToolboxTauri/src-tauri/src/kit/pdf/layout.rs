@@ -4,7 +4,7 @@ use std::path::Path;
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream, StringFormat};
 
 use crate::kit::contracts::ToolError;
-use crate::kit::pdf::font_resolver::{FontReport, FontResolver, FontStyle, SystemFontLookup};
+use crate::kit::pdf::font_resolver::{EmbeddedFont, FontReport, FontResolver, FontStyle, SystemFontLookup};
 use crate::kit::pdf::unicode_font::UnicodeFont;
 
 const MAX_PICTURE_SIDE: u32 = 20_000;
@@ -15,12 +15,15 @@ const LINK_INK: [f32; 3] = [0.05, 0.33, 0.75];
 const SHADE: [f32; 3] = [0.94, 0.94, 0.94];
 const RULE: [f32; 3] = [0.7, 0.7, 0.7];
 const TABLE_PAD: f32 = 4.;
+pub const PAGE_NUMBER: char = '\u{E000}';
+pub const PAGE_COUNT: char = '\u{E001}';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Face { index: usize, oblique: bool, heavy: bool }
 
 pub struct FontBook<'r, S: SystemFontLookup> {
     resolver: &'r FontResolver<S>,
+    embedded: Vec<EmbeddedFont>,
     requests: BTreeMap<(String, FontStyle), Face>,
     files: BTreeMap<(String, FontStyle), usize>,
     fonts: Vec<UnicodeFont>,
@@ -29,14 +32,16 @@ pub struct FontBook<'r, S: SystemFontLookup> {
 }
 
 impl<'r, S: SystemFontLookup> FontBook<'r, S> {
-    pub fn new(resolver: &'r FontResolver<S>) -> Self {
-        Self { resolver, requests: BTreeMap::new(), files: BTreeMap::new(), fonts: Vec::new(), reports: Vec::new(), char_widths: HashMap::new() }
+    pub fn new(resolver: &'r FontResolver<S>) -> Self { Self::with_embedded(resolver, Vec::new()) }
+
+    pub fn with_embedded(resolver: &'r FontResolver<S>, embedded: Vec<EmbeddedFont>) -> Self {
+        Self { resolver, embedded, requests: BTreeMap::new(), files: BTreeMap::new(), fonts: Vec::new(), reports: Vec::new(), char_widths: HashMap::new() }
     }
 
     pub fn face(&mut self, family: &str, style: FontStyle) -> Result<Face, ToolError> {
         let key = (family.to_string(), style);
         if let Some(face) = self.requests.get(&key) { return Ok(*face); }
-        let resolved = self.resolver.resolve(family, style, &[])?;
+        let resolved = self.resolver.resolve(family, style, &self.embedded)?;
         let report = resolved.report;
         let file = (format!("{:?}:{}", report.source, report.font_used), report.style_used);
         let index = match self.files.get(&file) {
@@ -161,6 +166,9 @@ pub struct PageOut { pub content: String, pub links: Vec<Link> }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bookmark { pub level: u8, pub title: String, pub page: usize, pub y: f32 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct PageSetup { pub width: Option<f32>, pub height: Option<f32>, pub left: Option<f32>, pub right: Option<f32>, pub top: Option<f32>, pub bottom: Option<f32> }
+
 #[derive(Debug, Clone, Copy)]
 pub struct Geometry { pub width: f32, pub height: f32, pub left: f32, pub right: f32, pub top: f32, pub bottom: f32 }
 
@@ -244,6 +252,47 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
     }
 
     pub fn finish(self) -> Laid { Laid { pages: self.pages, bookmarks: self.bookmarks, anchors: self.anchors } }
+
+    pub fn bands(&mut self, header: &[Block], footer: &[Block], header_top: f32, footer_bottom: f32) -> Result<(), ToolError> {
+        let total = self.pages.len();
+        for index in 0..total {
+            let numbers = [(PAGE_NUMBER, (index + 1).to_string()), (PAGE_COUNT, total.to_string())];
+            if !header.is_empty() {
+                let (band, _) = self.band(&numbered(header, &numbers), header_top)?;
+                self.overlay(index, band);
+            }
+            if !footer.is_empty() {
+                let footer = numbered(footer, &numbers);
+                let (_, height) = self.band(&footer, 0.)?;
+                let (band, _) = self.band(&footer, (self.geometry.height - footer_bottom - height).max(0.))?;
+                self.overlay(index, band);
+            }
+        }
+        Ok(())
+    }
+
+    fn band(&mut self, blocks: &[Block], top: f32) -> Result<(PageOut, f32), ToolError> {
+        let pages = std::mem::replace(&mut self.pages, vec![PageOut::default()]);
+        let geometry = self.geometry;
+        let cursor = std::mem::replace(&mut self.cursor, 0.);
+        let (bookmarks, anchors) = (self.bookmarks.len(), self.anchors.clone());
+        self.geometry = Geometry { top, bottom: 0., ..geometry };
+        let drawn = self.blocks(blocks);
+        let height = self.cursor;
+        let band = std::mem::replace(&mut self.pages, pages).into_iter().next().unwrap_or_default();
+        self.geometry = geometry;
+        self.cursor = cursor;
+        self.bookmarks.truncate(bookmarks);
+        self.anchors = anchors;
+        drawn?;
+        Ok((band, height))
+    }
+
+    fn overlay(&mut self, index: usize, band: PageOut) {
+        let page = &mut self.pages[index];
+        page.content.push_str(&band.content);
+        page.links.extend(band.links);
+    }
 
     fn left(&self) -> f32 { self.geometry.left }
     fn text_width(&self) -> f32 { self.geometry.width - self.geometry.left - self.geometry.right }
@@ -659,6 +708,23 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
         }
         Ok(())
     }
+}
+
+fn numbered(blocks: &[Block], numbers: &[(char, String)]) -> Vec<Block> {
+    let spans = |spans: &[Span]| spans.iter().map(|span| {
+        let text = numbers.iter().fold(span.text.clone(), |text, (field, value)| text.replace(*field, value));
+        Span { text, ..span.clone() }
+    }).collect::<Vec<_>>();
+    let rows = |rows: &[Vec<Vec<Span>>]| rows.iter().map(|row| row.iter().map(|cell| spans(cell)).collect()).collect();
+    blocks.iter().map(|block| match block {
+        Block::Heading { level, spans: content, anchor } => Block::Heading { level: *level, spans: spans(content), anchor: anchor.clone() },
+        Block::Paragraph(content) => Block::Paragraph(spans(content)),
+        Block::Formatted(paragraph) => Block::Formatted(Paragraph { spans: spans(&paragraph.spans), ..paragraph.clone() }),
+        Block::Quote(inner) => Block::Quote(numbered(inner, numbers)),
+        Block::List { start, items } => Block::List { start: *start, items: items.iter().map(|item| numbered(item, numbers)).collect() },
+        Block::Table { aligns, head, rows: body } => Block::Table { aligns: aligns.clone(), head: head.iter().map(|cell| spans(cell)).collect(), rows: rows(body) },
+        other => other.clone(),
+    }).collect()
 }
 
 pub fn expand_tabs(line: &str) -> String {

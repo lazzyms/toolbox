@@ -9,10 +9,12 @@ use serde::Deserialize;
 
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{native_capabilities, SkipCode, SkipReason, ToolError};
-use crate::kit::pdf::font_resolver::{FontResolver, FontStyle, SystemFontLookup};
-use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Face, FontBook, Flow, Geometry, PageOut, Theme};
-use crate::kit::pdf::{delimited, markdown, rtf};
+use crate::kit::common::limits;
+use crate::kit::contracts::{native_capabilities, OutcomePointer, SkipCode, SkipReason, ToolError};
+use crate::kit::office;
+use crate::kit::pdf::font_resolver::{FontResolver, FontSource, FontStyle, SystemFontLookup};
+use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Face, FontBook, Flow, Geometry, PageOut, PageSetup, Theme};
+use crate::kit::pdf::{delimited, docx, markdown, rtf};
 
 pub const COMMAND: &str = "convert_to_pdf";
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
@@ -22,6 +24,8 @@ const MARKDOWN_SIZE: f32 = 11.;
 const CODE_FAMILY: &str = "Courier New";
 const RTF_FAMILY: &str = "Times New Roman";
 const RTF_SIZE: f32 = 12.;
+const BAND_DISTANCE: f32 = 36.;
+const LOCKED: &str = "It's password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.";
 const MIN_PAGE_SIDE: f32 = 72.;
 const MAX_PAGE_SIDE: f32 = 14_400.;
 const TABLE_FAMILY: &str = "Arial";
@@ -220,6 +224,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "pdf" => return JobOutcome::skipped(input, SkipReason::new(SkipCode::AlreadyInTargetFormat, ALREADY_PDF)),
         "md" | "markdown" => markdown_file(job, &job.request.markdown.unwrap_or_default(), &input),
         "rtf" => rich_text(job, &input),
+        "docx" => word_file(job, &input),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
@@ -324,7 +329,7 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
 }
 
-fn rtf_geometry(page: rtf::PageSetup, defaults: &PageDefaults) -> Geometry {
+fn page_geometry(page: PageSetup, defaults: &PageDefaults) -> Geometry {
     let (default_width, default_height) = defaults.page_size.points();
     let margin = defaults.margins.points();
     let side = |value: Option<f32>, fallback: f32| value.filter(|value| (MIN_PAGE_SIDE..=MAX_PAGE_SIDE).contains(value)).unwrap_or(fallback);
@@ -343,7 +348,7 @@ fn rtf_geometry(page: rtf::PageSetup, defaults: &PageDefaults) -> Geometry {
 fn rich_text<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let parsed = rtf::parse(&bytes)?;
-    let geometry = rtf_geometry(parsed.page, &job.request.page_defaults);
+    let geometry = page_geometry(parsed.page, &job.request.page_defaults);
     let mut theme = Theme::new(parsed.body_family.as_deref().unwrap_or(RTF_FAMILY), CODE_FAMILY, RTF_SIZE, false);
     theme.families = parsed.families.clone();
     theme.leading = 1.2;
@@ -357,13 +362,50 @@ fn rich_text<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<J
     let document = assemble(&book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
 
-    let mut detail = format!("{}.", page_count(count));
-    match parsed.omitted_pictures {
-        0 => {}
-        1 => detail.push_str(" Omitted content: 1 picture couldn't be shown and was left out."),
-        count => detail.push_str(&format!(" Omitted content: {count} pictures couldn't be shown and were left out.")),
-    }
+    let detail = format!("{}.{}", page_count(count), omitted_pictures(parsed.omitted_pictures));
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
+}
+
+fn omitted_pictures(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        1 => " Omitted content: 1 picture couldn't be shown and was left out.".to_string(),
+        count => format!(" Omitted content: {count} pictures couldn't be shown and were left out."),
+    }
+}
+
+fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<JobOutcome, ToolError> {
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    match office::is_encrypted(&bytes, "docx") {
+        Ok(false) => {}
+        Ok(true) => return Err(ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() })),
+        Err(_) => return Err(ToolError::invalid_input(docx::DAMAGED)),
+    }
+    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let parsed = docx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?;
+    let geometry = page_geometry(parsed.page, &job.request.page_defaults);
+    let mut theme = Theme::new(parsed.body_family.as_deref().unwrap_or(RTF_FAMILY), CODE_FAMILY, parsed.body_size, false);
+    theme.families = parsed.families.clone();
+    theme.leading = 1.2;
+
+    let mut book = FontBook::with_embedded(&job.fonts, parsed.embedded);
+    let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
+    flow.blocks(&parsed.blocks)?;
+    flow.bands(&parsed.header, &parsed.footer, parsed.header_distance.unwrap_or(BAND_DISTANCE), parsed.footer_distance.unwrap_or(BAND_DISTANCE))?;
+    let laid = flow.finish();
+    let count = laid.pages.len();
+    let assembly = Assembly { size: (geometry.width, geometry.height), pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: parsed.author.as_deref() };
+    let document = assemble(&book, assembly)?;
+    let path = save(&job.request.output_location, input, document)?;
+
+    let reports = book.reports();
+    let mut detail = format!("{}.", page_count(count));
+    if !reports.is_empty() && reports.iter().all(|report| report.source == FontSource::Embedded) {
+        let fonts = reports.iter().map(|report| report.font_used.as_str()).collect::<std::collections::BTreeSet<_>>().len();
+        detail.push_str(&if fonts == 1 { " 1 font, embedded from the file.".to_string() } else { format!(" {fonts} fonts, all embedded from the file.") });
+    }
+    detail.push_str(&omitted_pictures(parsed.omitted_pictures));
+    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(reports))
 }
 
 fn grouped(count: usize) -> String {
@@ -907,6 +949,161 @@ mod tests {
 
         let outcomes = convert_paths(&[&good], json!({ "richText": {} }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
+    }
+
+    fn docx_fixture() -> Vec<u8> {
+        let mut png = Vec::new();
+        image::RgbaImage::from_fn(8, 6, |x, _| image::Rgba([30, 90, 200, if x < 4 { 255 } else { 128 }]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let paragraph = |text: &str| format!("<w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>");
+        let styled = |style: &str, text: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#);
+        let listed = |id: u8, text: &str| format!(r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="{id}"/></w:numPr></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#);
+        let body = [
+            r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="0" w:name="summary"/><w:r><w:t>Quarterly summary</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>"#.to_string(),
+            r#"<w:p><w:r><w:t xml:space="preserve">Plain text with </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:r><w:rPr><w:color w:val="C80000"/></w:rPr><w:t>red</w:t></w:r><w:r><w:rPr><w:vanish/></w:rPr><w:t>hidden words</w:t></w:r><w:del w:id="1" w:author="A"><w:r><w:delText>removed text</w:delText></w:r></w:del><w:ins w:id="2" w:author="A"><w:r><w:t xml:space="preserve"> added text</w:t></w:r></w:ins></w:p>"#.to_string(),
+            r#"<w:p><w:hyperlink r:id="rIdLink"><w:r><w:t>Example link</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:hyperlink r:id="rIdFile"><w:r><w:t>local file</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:hyperlink w:anchor="summary"><w:r><w:t>back to top</w:t></w:r></w:hyperlink></w:p>"#.to_string(),
+            listed(1, "Bullet item"),
+            listed(1, "Second bullet"),
+            listed(2, "Step one"),
+            listed(2, "Step two"),
+            r#"<w:tbl><w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>Region</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Revenue</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>1,200</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#.to_string(),
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="762000" cy="571500"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rIdImage"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#.to_string(),
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="762000" cy="571500"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:link="rIdRemote"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#.to_string(),
+            paragraph("After the table"),
+            r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#.to_string(),
+            styled("Heading2", "Second page"),
+            paragraph("Closing words"),
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>"#.to_string(),
+        ].concat();
+        let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="259" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:rFonts w:asciiTheme="majorHAnsi" w:hAnsiTheme="majorHAnsi"/><w:b/><w:sz w:val="32"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="26"/></w:rPr></w:style></w:styles>"#;
+        let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme><a:majorFont><a:latin typeface="Cambria"/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+        let numbering = r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#;
+        let header = format!(r#"<w:hdr {}><w:p><w:r><w:t>Header text</w:t></w:r></w:p></w:hdr>"#, docx::fixtures::W);
+        let footer = format!(r#"<w:ftr {}><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>9</w:t></w:r></w:fldSimple><w:r><w:t xml:space="preserve"> of </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> NUMPAGES </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>9</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>"#, docx::fixtures::W);
+        let core = r#"<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Quarterly report</dc:title><dc:creator>Dana Whitfield</dc:creator></cp:coreProperties>"#;
+        docx::fixtures::docx(&body, &[
+            ("rIdStyles", "styles", "styles.xml", false),
+            ("rIdTheme", "theme", "theme/theme1.xml", false),
+            ("rIdNumbering", "numbering", "numbering.xml", false),
+            ("rIdHeader", "header", "header1.xml", false),
+            ("rIdFooter", "footer", "footer1.xml", false),
+            ("rIdImage", "image", "media/image1.png", false),
+            ("rIdRemote", "image", "http://127.0.0.1:9/remote.png", true),
+            ("rIdLink", "hyperlink", "https://example.com/docx", true),
+            ("rIdFile", "hyperlink", "file:///etc/hosts", true),
+        ], &[
+            ("word/styles.xml", styles.as_bytes()),
+            ("word/theme/theme1.xml", theme.as_bytes()),
+            ("word/numbering.xml", numbering.as_bytes()),
+            ("word/header1.xml", header.as_bytes()),
+            ("word/footer1.xml", footer.as_bytes()),
+            ("word/media/image1.png", &png),
+            ("docProps/core.xml", core.as_bytes()),
+        ])
+    }
+
+    #[test]
+    fn word_keeps_headings_lists_tables_pictures_bands_links_and_page_setup() {
+        let root = sandbox("docx");
+        let input = root.join("report.docx");
+        let source = docx_fixture();
+        fs::write(&input, &source).unwrap();
+
+        let outcomes = convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "a4", "margins": "wide" } }));
+        let outcome = &outcomes[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "2 pages. Omitted content: 1 picture couldn't be shown and was left out.");
+        for family in ["Calibri", "Cambria"] {
+            assert!(outcome.fonts.iter().any(|font| font.requested_family == family), "{family} missing from {:?}", outcome.fonts);
+        }
+
+        let document = Document::load(root.join("report.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), 2);
+        assert_eq!(media_box(&document, 1), [0., 0., 612., 792.], "the document's own page setup wins");
+        let first = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&first, &["Quarterly summary", "Plain text with", "bold", "red", "added text", "Example link", "local file", "back to top", "\u{2022}", "Bullet item", "Second bullet", "1.", "Step one", "2.", "Step two", "Region", "Revenue", "North", "1,200", "After the table", "Header text", "Page 1 of 2"]), "{first}");
+        for absent in ["hidden words", "removed text", "Second page", "Closing words"] {
+            assert!(!first.contains(absent), "{absent:?} should not be on page 1: {first}");
+        }
+        let second = document.extract_text(&[2]).unwrap();
+        assert!(in_order(&second, &["Second page", "Closing words", "Header text", "Page 2 of 2"]), "{second}");
+
+        let content = String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&1])).into_owned();
+        assert!(content.contains("60.00 0 0 45.00 72.00"), "the picture keeps its stored size and the document's left margin");
+        assert!(content.contains("0.78431374 0 0 rg"), "the red colour is applied");
+        assert!(font_sizes(&document, 1).contains(&16.), "Heading 1 keeps its 16 pt style size");
+
+        let links = links(&document);
+        let uris = links.iter().filter_map(|link| link.get(b"A").and_then(Object::as_dict).and_then(|action| action.get(b"URI")).and_then(Object::as_str).ok().map(<[u8]>::to_vec)).collect::<Vec<_>>();
+        assert_eq!(uris, [b"https://example.com/docx".to_vec()], "only the web link is linked; file links are left as text");
+        let internal = links.iter().find_map(|link| link.get(b"Dest").ok().cloned()).expect("the bookmark link points inside the document");
+        assert_eq!(page_of(&document, &internal), 1);
+        assert_eq!(outline_titles(&document), ["Quarterly summary", "Second page"]);
+        assert_eq!(info(&document, b"Title"), b"Quarterly report");
+        assert_eq!(info(&document, b"Author"), b"Dana Whitfield");
+
+        assert!(succeeded(&convert_paths(&[&input], json!({}))[0]));
+        assert_eq!(fs::read(&input).unwrap(), source);
+        assert_eq!(names(&root), ["report-1.pdf", "report.docx", "report.pdf"]);
+    }
+
+    #[test]
+    fn word_uses_fonts_embedded_in_the_document_first() {
+        let root = sandbox("docx_fonts");
+        let input = root.join("brand.docx");
+        let key = "{6C0C5D0E-1B2A-4F3E-9D8C-7B6A59483726}";
+        let mut font = fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Pacifico-Regular.ttf")).unwrap();
+        docx::deobfuscate(&mut font, key);
+        let body = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Brand Script" w:hAnsi="Brand Script"/></w:rPr><w:t>Hello from the brand</w:t></w:r></w:p>"#;
+        let table = format!(r#"<w:fonts {}><w:font w:name="Brand Script"><w:embedRegular r:id="rIdFont" w:fontKey="{key}"/></w:font></w:fonts>"#, docx::fixtures::W);
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdFont" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font1.odttf"/></Relationships>"#;
+        let styles = r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Brand Script" w:hAnsi="Brand Script"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>"#;
+        fs::write(&input, docx::fixtures::docx(body, &[("rIdFonts", "fontTable", "fontTable.xml", false), ("rIdStyles", "styles", "styles.xml", false)], &[
+            ("word/fontTable.xml", table.as_bytes()),
+            ("word/_rels/fontTable.xml.rels", rels.as_bytes()),
+            ("word/fonts/font1.odttf", &font),
+            ("word/styles.xml", styles.as_bytes()),
+        ])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({}))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        let report = outcome.fonts.iter().find(|font| font.requested_family == "Brand Script").expect("the embedded family is reported");
+        assert_eq!(report.source, FontSource::Embedded, "{:?}", outcome.fonts);
+        assert_eq!(outcome.detail, "1 page. 1 font, embedded from the file.");
+        let text = Document::load(root.join("brand.pdf")).unwrap().extract_text(&[1]).unwrap();
+        assert!(text.contains("ello from the brand"), "{text:?}");
+    }
+
+    #[test]
+    fn locked_damaged_and_oversized_word_documents_fail_alone() {
+        let root = sandbox("docx_batch");
+        let plain = root.join("plain.docx");
+        fs::write(&plain, crate::kit::office::test_minimal_ooxml_package("docx")).unwrap();
+        fs::create_dir_all(root.join("locked")).unwrap();
+        let protected = crate::kit::office::OfficeProcessor::protect(plain.clone(), crate::kit::TEST_PASSWORD, &OutputLocation::CustomFolder(root.join("locked")));
+        let locked = protected.output_paths().first().cloned().unwrap_or_else(|| panic!("{protected:?}"));
+        let damaged = root.join("damaged.docx");
+        fs::write(&damaged, b"PK\x03\x04 not really a package").unwrap();
+        let bomb = root.join("bomb.docx");
+        fs::write(&bomb, crate::kit::common::limits::fixtures::zip_with_deflated("word/document.xml", &crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001), 500_000_001)).unwrap();
+        let good = root.join("letter.docx");
+        fs::write(&good, docx::fixtures::docx("<w:p><w:r><w:t>Dear reader,</w:t></w:r></w:p>", &[], &[])).unwrap();
+        let originals = [&locked, &damaged, &bomb, &good].map(|path| fs::read(path).unwrap());
+
+        let outcomes = convert_paths(&[&locked, &good, &damaged, &bomb], json!({ "pageDefaults": { "pageSize": "letter", "margins": "narrow" } }));
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert_eq!(error.message, "It's password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.");
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        assert_eq!(outcomes[2].error().unwrap().message, docx::DAMAGED);
+        let limited = outcomes[3].error().unwrap();
+        assert_eq!(limited.kind, ErrorKind::LimitExceeded { limit: crate::kit::contracts::LimitKind::Decompression }, "{limited:?}");
+        assert!(limited.message.contains("500 MB"), "{}", limited.message);
+        assert!(succeeded(&outcomes[1]), "{outcomes:?}");
+        assert_eq!(outcomes[1].detail, "1 page.");
+        assert_eq!(media_box(&Document::load(root.join("letter.pdf")).unwrap(), 1), [0., 0., 612., 792.], "without page setup the page defaults apply");
+        assert_eq!([&locked, &damaged, &bomb, &good].map(|path| fs::read(path).unwrap()), originals);
+        assert!(!root.join("damaged.pdf").exists() && !root.join("bomb.pdf").exists());
     }
 
     fn media_box(document: &Document, page: u32) -> Vec<f32> {

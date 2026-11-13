@@ -80,6 +80,16 @@ impl ToolLimits {
         })
     }
 
+    pub fn expansion_error(&self, path: &Path) -> ToolError {
+        ToolError::limit_exceeded(
+            LimitKind::Decompression,
+            format!(
+                "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
+                Format::for_path(path).part(), bytes_label(self.max_expanded_bytes),
+            ),
+        )
+    }
+
     pub fn check(&self, path: &Path) -> Result<(), ToolError> {
         let Ok(metadata) = std::fs::metadata(path) else { return Ok(()) };
         let format = Format::for_path(path);
@@ -92,13 +102,7 @@ impl ToolLimits {
         let Ok(bytes) = std::fs::read(path) else { return Ok(()) };
         let shape = Shape::read(&bytes, self.max_pages.unwrap_or(u32::MAX), self.max_expanded_bytes);
         if shape.largest_part > self.max_expanded_bytes {
-            return Err(ToolError::limit_exceeded(
-                LimitKind::Decompression,
-                format!(
-                    "{} expands to more than {} when opened, which is over the limit. It may be damaged or unsafe to open.",
-                    format.part(), bytes_label(self.max_expanded_bytes),
-                ),
-            ));
+            return Err(self.expansion_error(path));
         }
         match self.max_pages {
             Some(max_pages) if shape.pages > u64::from(max_pages) => Err(ToolError::limit_exceeded(
@@ -467,6 +471,32 @@ pub mod fixtures {
             if self.filled > 0 { self.bytes.push(self.current); }
             self.bytes
         }
+    }
+
+    pub fn zip_with_deflated(name: &str, zlib: &[u8], expanded: u32) -> Vec<u8> {
+        let deflated = &zlib[2..zlib.len() - 4];
+        let header = |signature: u32, central: bool| {
+            let mut bytes = signature.to_le_bytes().to_vec();
+            if central { bytes.extend_from_slice(&20u16.to_le_bytes()); }
+            for value in [20u16, 0, 8, 0, 0] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            for value in [0u32, deflated.len() as u32, expanded] { bytes.extend_from_slice(&value.to_le_bytes()); }
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&0u16.to_le_bytes());
+            if central { bytes.extend_from_slice(&[0; 14]); }
+            bytes.extend_from_slice(name.as_bytes());
+            bytes
+        };
+        let mut zip = header(0x0403_4b50, false);
+        zip.extend_from_slice(deflated);
+        let central_at = zip.len() as u32;
+        let central = header(0x0201_4b50, true);
+        let central_len = central.len() as u32;
+        zip.extend(central);
+        zip.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        for value in [0u16, 0, 1, 1] { zip.extend_from_slice(&value.to_le_bytes()); }
+        for value in [central_len, central_at] { zip.extend_from_slice(&value.to_le_bytes()); }
+        zip.extend_from_slice(&0u16.to_le_bytes());
+        zip
     }
 
     pub fn pdf_with_stream(stream: &[u8]) -> Vec<u8> {

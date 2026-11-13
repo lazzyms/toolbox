@@ -90,14 +90,14 @@ test("Convert to PDF sits in the PDF Conversion rail and shows text options only
 
 test("unsupported drops are refused with a reason, and later formats and PDFs are flagged on their own rows", async ({ page }) => {
     await openConvert(page);
-    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/report.docx", "/local/signed.pdf"]);
+    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/report.odt", "/local/signed.pdf"]);
 
     await expect(page.getByText(/archive\.zip/).first()).toBeVisible();
     await expect(fileRow(page, "archive.zip")).toHaveCount(0);
     await expect(fileRow(page, "photo.png")).toContainText("This file type can't become a PDF here.");
     await expect(fileRow(page, "photo.png")).toContainText("Won't run");
-    await expect(fileRow(page, "report.docx")).toContainText("Not available yet");
-    await expect(fileRow(page, "report.docx")).toContainText("DOCX comes in a later update");
+    await expect(fileRow(page, "report.odt")).toContainText("Not available yet");
+    await expect(fileRow(page, "report.odt")).toContainText("ODT comes in a later update");
     await expect(fileRow(page, "signed.pdf")).toContainText("Will be skipped");
     await expect(fileRow(page, "signed.pdf")).toContainText("Already a PDF");
     await expect(fileRow(page, "notes.txt")).not.toContainText("Will be skipped");
@@ -246,6 +246,36 @@ test("an RTF file needs no format section, sends no RTF section, and its row lis
         /Arial.*Liberation Sans.*Bundled fallback, same widths/,
         /Brand Grotesk.*DejaVu Sans.*Bundled default font/,
     ]);
+});
+
+test("a Word document needs no format section, and a password-protected one points to Lock & Unlock on its row", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/report.docx", "/local/locked.DOCX"]);
+    for (const name of ["report.docx", "locked.DOCX"]) {
+        await expect(fileRow(page, name)).not.toContainText("Not available yet");
+        await expect(fileRow(page, name)).not.toContainText("Won't run");
+    }
+    await expect(page.getByText("Options for each format appear here when a file of that format is in the list.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: /options/ })).toHaveCount(0);
+    await expect(page.getByText("This will make 2 PDFs", { exact: true })).toBeVisible();
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({ paths: ["/local/report.docx", "/local/locked.DOCX"], outputLocation: "alongsideInput" });
+
+    const locked = "It's password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.";
+    await page.evaluate((locked) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/report.docx", outputPaths: ["/local/report.pdf"], detail: "2 pages. 1 font, embedded from the file.", state: "succeeded", failure: null, reason: null, warnings: [],
+            fonts: [{ requestedFamily: "Brand Script", requestedStyle: "regular", fontUsed: "Brand Script", styleUsed: "regular", source: "embedded" }] },
+        { inputPath: "/local/locked.DOCX", outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: locked, pointer: { kind: "tool", toolId: "lock-unlock" } }, reason: null, warnings: [] },
+    ]), locked);
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    const saved = rows.filter({ hasText: "report.docx" });
+    await expect(saved).toContainText("2 pages. 1 font, embedded from the file.");
+    await saved.getByRole("button", { name: "Show fonts" }).click();
+    await expect(page.getByRole("list", { name: "Fonts used in report.docx" }).getByRole("listitem")).toHaveText([/Brand Script.*Embedded/]);
+    const failed = rows.filter({ hasText: "locked.DOCX" });
+    await expect(failed).toContainText(locked);
+    await failed.getByRole("button", { name: "Open Lock & Unlock" }).click();
+    await expect(page.getByRole("heading", { name: "Lock & Unlock" }).first()).toBeVisible();
 });
 
 test("the Tables section appears only while a CSV or TSV is listed and picks the delimiter by file type", async ({ page }) => {
