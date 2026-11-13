@@ -31,7 +31,6 @@ const OCR_DEADLINE: HelperDeadline = HelperDeadline { per_file: Duration::from_s
 const ENGLISH: &str = crate::packs::BUILT_IN_OCR_LANGUAGE.0;
 /// Development builds read `<code>.traineddata` from this folder when the language's pack is not installed.
 const OCR_LANGUAGE_DIR_ENV: &str = "TOOLBOX_OCR_LANGUAGE_DIR";
-const OCR_LANGUAGES: &[&str] = &[ENGLISH];
 const OCR_TEXT_SUFFIX: &str = "-ocr";
 const OCR_PAGE_SEGMENTATION: &str = "3";
 const OCR_NO_TEXT: &str = "OCR completed but found no readable text.";
@@ -64,7 +63,7 @@ pub struct OcrRequest {
     pub languages: Vec<String>,
     pub output_location: OutputLocation,
     /// Files read in another language than `languages`, by Tesseract code, as in `hin`.
-    #[serde(default)] pub language_overrides: HashMap<PathBuf, String>,
+    #[serde(default)] pub language_overrides: HashMap<PathBuf, Vec<String>>,
 }
 
 impl OcrRequest {
@@ -78,26 +77,33 @@ impl OcrRequest {
         }
     }
 
-    /// The languages `path` is read in: its override when it has one, else the request's languages.
+    /// The languages `path` is read in, in the order they go to the engine: its override when it
+    /// has one, else the request's languages.
     pub fn languages_for(&self, path: &Path) -> Vec<String> {
-        match self.language_overrides.get(path) {
-            Some(code) => vec![code.clone()],
-            None => self.languages.clone(),
-        }
+        self.language_overrides.get(path).unwrap_or(&self.languages).clone()
     }
 
-    fn check_languages(&self) -> Result<(), String> {
-        if self.languages.is_empty() { return Err("Choose at least one recognition language.".to_string()); }
-        match self.languages.iter().find(|code| !OCR_LANGUAGES.contains(&code.as_str())) {
-            Some(code) => Err(format!("\"{code}\" is not a recognition language Toolbox knows.")),
-            None => Ok(()),
+    /// Every language list must name at least one language, and only English or a language a
+    /// catalog pack reads. Whether that pack is installed is checked per file when it runs.
+    fn check_languages(&self, packs: &RunPacks) -> Result<(), String> {
+        for languages in std::iter::once(&self.languages).chain(self.language_overrides.values()) {
+            if languages.is_empty() { return Err("Choose at least one recognition language.".to_string()); }
+            if let Some(code) = languages.iter().find(|code| !knows_language(packs, code)) {
+                return Err(format!("\"{code}\" is not a recognition language Toolbox knows."));
+            }
         }
+        Ok(())
     }
 }
 
-pub fn validate_ocr_request(request: &OcrRequest) -> Result<(), Vec<JobOutcome>> {
+/// English, or a language a catalog pack reads.
+fn knows_language(packs: &RunPacks, code: &str) -> bool {
+    code == ENGLISH || packs.catalog().is_ok_and(|catalog| catalog.packs.iter().any(|pack| pack.ocr_language.as_ref().is_some_and(|language| language.code == code)))
+}
+
+pub fn validate_ocr_request(request: &OcrRequest, packs: &RunPacks) -> Result<(), Vec<JobOutcome>> {
     validate_page_ranges(&request.paths, request.page_range())?;
-    let Err(error) = request.mode().and_then(|_| request.check_languages()) else { return Ok(()) };
+    let Err(error) = request.mode().and_then(|_| request.check_languages(packs)) else { return Ok(()) };
     let error = ToolError::invalid_input(error);
     if request.paths.is_empty() { return Err(vec![JobOutcome::failure(PathBuf::new(), error)]); }
     Err(request.paths.iter().cloned().map(|path| JobOutcome::failure(path, error.clone())).collect())
@@ -143,15 +149,53 @@ fn ocr_language(packs: &RunPacks, code: &str) -> Result<OcrLanguage, ToolError> 
     Ok(OcrLanguage { data: resolved.path, name: language.name.clone() })
 }
 
-/// The folder Tesseract reads every language of one file from, and the languages' names.
-fn ocr_languages(packs: &RunPacks, codes: &[String]) -> Result<(PathBuf, Vec<String>), ToolError> {
+/// The languages one file is read in.
+struct OcrLanguages {
+    /// The folder the engine reads every language's data from.
+    tessdata_dir: PathBuf,
+    /// The languages' names, in the order they go to the engine.
+    names: Vec<String>,
+    /// Holds the folder the languages were gathered into when their data lives in different
+    /// folders, such as English in the app and Hindi in its pack. It is removed with this.
+    _gathered: Option<OcrWorkspace>,
+}
+
+/// The engine reads every language from one folder, so data from different folders is gathered
+/// into a private one first.
+fn ocr_languages(packs: &RunPacks, codes: &[String]) -> Result<OcrLanguages, ToolError> {
     let languages = codes.iter().map(|code| ocr_language(packs, code)).collect::<Result<Vec<_>, _>>()?;
-    let mut folders = languages.iter().map(|language| language.data.parent());
-    let folder = folders.next().flatten().ok_or_else(|| ToolError::processing("OCR language data has no parent directory."))?;
-    if folders.any(|other| other != Some(folder)) {
-        return Err(ToolError::unavailable("These recognition languages can't be read together yet. Choose one language."));
+    let folders = languages.iter().map(|language| language.data.parent()).collect::<Option<Vec<_>>>()
+        .filter(|folders| !folders.is_empty())
+        .ok_or_else(|| ToolError::processing("OCR language data has no parent directory."))?;
+    let (tessdata_dir, gathered) = if folders.iter().all(|folder| *folder == folders[0]) {
+        (folders[0].to_path_buf(), None)
+    } else {
+        let workspace = OcrWorkspace::new().map_err(ToolError::processing)?;
+        for (code, language) in codes.iter().zip(&languages) {
+            link_language(&language.data, &workspace.0.join(format!("{code}.traineddata")))
+                .map_err(|error| ToolError::processing(format!("Could not prepare the recognition languages: {error}")))?;
+        }
+        (workspace.0.clone(), Some(workspace))
+    };
+    Ok(OcrLanguages { tessdata_dir, names: languages.into_iter().map(|language| language.name).collect(), _gathered: gathered })
+}
+
+/// Puts a language's data where the engine looks for it without copying it where the system
+/// allows: a symbolic link, else a hard link, else a copy.
+fn link_language(data: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if std::os::unix::fs::symlink(data, link).is_ok() { return Ok(()); }
+    if std::fs::hard_link(data, link).is_ok() { return Ok(()); }
+    std::fs::copy(data, link).map(|_| ())
+}
+
+/// "English", "English and Hindi", "English, Hindi and Tamil".
+fn spoken_names(names: &[String]) -> String {
+    match names.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
     }
-    Ok((folder.to_path_buf(), languages.into_iter().map(|language| language.name).collect()))
 }
 
 pub fn ocr_pdf(run: &OcrRun, input: PathBuf) -> JobOutcome {
@@ -197,7 +241,7 @@ fn image_within(run: &OcrRun, input: PathBuf, mode: OcrMode, deadline: HelperDea
     };
     if input_size > OCR_MAX_INPUT_BYTES { return JobOutcome::failure(input, too_large("Image")); }
     let languages = request.languages_for(&input);
-    let (tessdata_dir, language_names) = match ocr_languages(&run.packs, &languages) {
+    let OcrLanguages { tessdata_dir, names: language_names, _gathered } = match ocr_languages(&run.packs, &languages) {
         Ok(found) => found,
         Err(error) => return JobOutcome::failure(input, error),
     };
@@ -548,7 +592,7 @@ fn text_file_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> J
     };
     // A language whose pack is missing, damaged or does not fit points at that pack. Nothing is saved.
     let languages = request.languages_for(&input);
-    let (tessdata_dir, language_names) = match ocr_languages(&run.packs, &languages) {
+    let OcrLanguages { tessdata_dir, names: language_names, _gathered } = match ocr_languages(&run.packs, &languages) {
         Ok(found) => found,
         Err(error) => return JobOutcome::failure(input, error),
     };
@@ -604,8 +648,9 @@ fn load_ocr_document(input: &Path) -> Result<Document, ToolError> {
     Ok(document)
 }
 
+/// "31 pages recognized. English and Hindi."
 fn recognized_detail(pages: usize, languages: &[String]) -> String {
-    format!("{} recognized. {}.", count(pages, "page", "pages"), languages.join(", "))
+    format!("{} recognized. {}.", count(pages, "page", "pages"), spoken_names(languages))
 }
 
 fn count(number: usize, one: &str, many: &str) -> String { format!("{number} {}", if number == 1 { one } else { many }) }
@@ -976,7 +1021,7 @@ fn searchable_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline)
         Err(error) => return unavailable(input, error.to_string()),
     };
     let languages = request.languages_for(&input);
-    let (tessdata_dir, language_names) = match ocr_languages(&run.packs, &languages) {
+    let OcrLanguages { tessdata_dir, names: language_names, _gathered } = match ocr_languages(&run.packs, &languages) {
         Ok(found) => found,
         Err(error) => return JobOutcome::failure(input, error),
     };
@@ -1428,7 +1473,7 @@ fn stderr(result: std::process::Output, fallback: &str) -> String { String::from
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_ocr_text, ocr_pdf, ocr_pdf_within, validate_cutout, validate_face_blur, validate_ocr_request, OcrRequest, OcrRun, OCR_DEADLINE};
+    use super::{normalize_ocr_text, ocr_pdf, ocr_pdf_within, validate_cutout, validate_face_blur, OcrRequest, OcrRun, OCR_DEADLINE};
     use crate::kit::common::limits::HelperDeadline;
     use crate::packs::uninstall::RunPacks;
     use crate::kit::common::OutputLocation;
@@ -1454,6 +1499,11 @@ mod tests {
             output_location: OutputLocation::CustomFolder(output_root.to_path_buf()),
             language_overrides: Default::default(),
         }
+    }
+
+    /// The boundary check with no packs to find, so English is the only language it knows.
+    fn validate_ocr_request(request: &OcrRequest) -> Result<(), Vec<crate::kit::common::JobOutcome>> {
+        super::validate_ocr_request(request, &RunPacks::new(Err("No packs in this test.".into()), "1.0.14", Err("No catalog in this test.".into())))
     }
 
     /// A run of `request` with no packs to find, so it reads English only.
@@ -1503,8 +1553,9 @@ mod tests {
 
     #[cfg(unix)]
     impl MixedBatch {
-        /// One English and one Hindi PDF, an engine that prints the language it was asked for and
-        /// the language file it read, and a renderer that needs no PDF tools.
+        /// One English and one Hindi PDF, an engine that prints the languages it was asked for and
+        /// each language's file in that order, all from the one folder it is given, and a renderer
+        /// that needs no PDF tools.
         fn new(name: &str) -> Self {
             let root = crate::packs::install::tests::sandbox(&format!("ocr-{name}"));
             let batch = Self { english: root.join("english.pdf"), hindi: root.join("hindi.pdf"), output: root.join("output"), root };
@@ -1513,7 +1564,7 @@ mod tests {
             fs::create_dir_all(&batch.output).unwrap();
             fs::create_dir_all(batch.root.join("eng")).unwrap();
             fs::write(batch.root.join("eng/eng.traineddata"), "english data").unwrap();
-            executable(&batch.root.join("engine.sh"), "#!/bin/sh\ndata=''\nlanguage=''\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --tessdata-dir) data=\"$2\"; shift ;;\n    -l) language=\"$2\"; shift ;;\n  esac\n  shift\ndone\nprintf '%s: ' \"$language\"\ncat \"$data/$language.traineddata\"\nprintf '\\n'\n");
+            executable(&batch.root.join("engine.sh"), "#!/bin/sh\ndata=''\nlanguage=''\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --tessdata-dir) data=\"$2\"; shift ;;\n    -l) language=\"$2\"; shift ;;\n  esac\n  shift\ndone\nprintf '%s:' \"$language\"\nfor code in $(printf '%s' \"$language\" | tr '+' ' '); do\n  printf ' '\n  cat \"$data/$code.traineddata\" || exit 1\ndone\nprintf '\\n'\n");
             executable(&batch.root.join("renderer.sh"), "#!/bin/sh\n: > \"${10}.png\"\n");
             batch
         }
@@ -1521,6 +1572,11 @@ mod tests {
         /// Runs the English file in English and the Hindi file in Hindi as one batch, and checks
         /// the originals are untouched. The outcomes come back in input order.
         fn run(&self, app_data: &Path, app_version: &str, language_dir: Option<&Path>) -> Vec<crate::kit::common::JobOutcome> {
+            self.run_reading(app_data, app_version, language_dir, &["hin"])
+        }
+
+        /// Runs the batch with the Hindi file read in `hindi_languages`, in that order.
+        fn run_reading(&self, app_data: &Path, app_version: &str, language_dir: Option<&Path>, hindi_languages: &[&str]) -> Vec<crate::kit::common::JobOutcome> {
             let originals = [fs::read(&self.english).unwrap(), fs::read(&self.hindi).unwrap()];
             let outcomes = {
                 let _guard = crate::kit::lock_process_env();
@@ -1537,7 +1593,7 @@ mod tests {
                     force: false,
                     languages: vec!["eng".into()],
                     output_location: OutputLocation::CustomFolder(self.output.clone()),
-                    language_overrides: [(self.hindi.clone(), "hin".to_string())].into_iter().collect(),
+                    language_overrides: [(self.hindi.clone(), hindi_languages.iter().map(|code| code.to_string()).collect())].into_iter().collect(),
                 };
                 let packs = RunPacks::new(Ok(app_data.to_path_buf()), app_version, Ok(crate::packs::install::tests::Fixture::new().catalog()));
                 // One run for the whole batch, each file through the job the batch runner calls. The
@@ -1588,6 +1644,42 @@ mod tests {
         let outcomes = batch.run(&batch.root.join("app-data"), "1.0.14", None);
         batch.assert_english_read(&outcomes[0]);
         batch.assert_needs_pack(&outcomes[1], PackNeed::NotInstalled, "Needs the Hindi text recognition pack, which isn't installed. Nothing was saved.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_language_list_with_one_pack_not_installed_fails_that_file_with_the_pack_named_while_the_others_succeed() {
+        let batch = MixedBatch::new("list-not-installed");
+        let outcomes = batch.run_reading(&batch.root.join("app-data"), "1.0.14", None, &["eng", "hin"]);
+        batch.assert_english_read(&outcomes[0]);
+        batch.assert_needs_pack(&outcomes[1], PackNeed::NotInstalled, "Needs the Hindi text recognition pack, which isn't installed. Nothing was saved.");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn english_and_an_override_language_reach_the_engine_in_the_order_chosen_and_repeat_byte_for_byte() {
+        let batch = MixedBatch::new("two-languages");
+        let language_dir = batch.root.join("languages");
+        fs::create_dir_all(&language_dir).unwrap();
+        fs::write(language_dir.join("hin.traineddata"), "fixture hindi").unwrap();
+        let app_data = batch.root.join("app-data");
+        // English comes from the app and Hindi from the override folder, so both are gathered
+        // into the one folder the engine reads.
+        for (order, expected, detail) in [
+            (["eng", "hin"], "eng+hin: english data fixture hindi\n", "1 page recognized. English and Hindi."),
+            (["hin", "eng"], "hin+eng: fixture hindi english data\n", "1 page recognized. Hindi and English."),
+        ] {
+            let first = batch.run_reading(&app_data, "1.0.14", Some(&language_dir), &order);
+            let second = batch.run_reading(&app_data, "1.0.14", Some(&language_dir), &order);
+            for outcomes in [&first, &second] {
+                batch.assert_english_read(&outcomes[0]);
+                assert!(outcomes[1].error().is_none(), "{:?}", outcomes[1]);
+                assert_eq!(fs::read_to_string(&outcomes[1].output_paths()[0]).unwrap(), expected);
+                assert_eq!(outcomes[1].detail, detail);
+            }
+            assert_ne!(first[1].output_paths(), second[1].output_paths(), "a second run never overwrites the first");
+            assert_eq!(fs::read(&first[1].output_paths()[0]).unwrap(), fs::read(&second[1].output_paths()[0]).unwrap(), "the same list gives the same output");
+        }
     }
 
     #[cfg(unix)]
