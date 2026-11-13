@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
+import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfEditRun, PdfFlattenChoice, PdfFormEntry, PdfFormField, PdfFormInspection, PdfFormValue, PdfPage, PdfTextEdit, PdfTextRun } from '../features/pdf-editor/contracts';
@@ -39,7 +40,9 @@ import { pdfEditorBatchTools, type PdfEditorBatchTools } from '../features/pdf-e
 import { PdfEditorBatchSurface } from '../features/pdf-editor/BatchSurface';
 import { PdfPropertiesSurface } from '../features/pdf-editor/PropertiesSurface';
 import { PDFConversionWorkspaceView } from './PDFConversionWorkspaceView';
-import { matchShortcut, pressShortcutTarget, shortcutLabel, shortcutTarget } from '../shortcuts';
+import { matchShortcut, pressShortcutTarget, primaryModifierPressed, shortcutLabel, shortcutTarget } from '../shortcuts';
+import { clearPageSelection, clickPage, extendPageSelection, pageOptionName, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage } from '../features/pdf-editor/pageSelection';
+import type { PageSelection } from '../features/pdf-editor/pageSelection';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
@@ -305,7 +308,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const organizeGrid = useRef<HTMLDivElement>(null);
   useEffect(() => setTool(initialTool), [initialTool]);
   const [currentId, setCurrentId] = useState<string | null>(null);
-  const [selectedPages, setSelectedPages] = useState<string[]>([]);
+  // Page selection is view state, not an edit, so it never adds an undo step.
+  const [pageSelection, setPageSelection] = useState<PageSelection>(clearPageSelection);
+  const [pageRange, setPageRange] = useState('');
+  const [pageRangeError, setPageRangeError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -417,7 +423,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       setDocument(value);
       const initial = sceneFromDocument(value);
       setHistory({ past: [], present: initial, future: [] });
-      setCurrentId(initial.pages[0].id); setSelectedPages([initial.pages[0].id]);
+      setCurrentId(initial.pages[0].id); setPageSelection(clearPageSelection()); setPageRange(''); setPageRangeError(null);
     }).catch((reason) => {
       if (!active) return;
       const failure = openFailureFor(reason, path);
@@ -587,7 +593,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     window.addEventListener('toolbox:editor-command', onShellCommand);
     return () => window.removeEventListener('toolbox:editor-command', onShellCommand);
   }, [canExport, onExport, redo, undo, marks.length]);
-  const selectMark = (mark: ListedMark) => { endGroup(); setCurrentId(mark.pageId); setSelectedPages([mark.pageId]); setSelectedId(mark.id); };
+  const selectMark = (mark: ListedMark) => { endGroup(); setCurrentId(mark.pageId); setPageSelection(clickPage(pageOrder, pageSelection, mark.pageId, {})); setSelectedId(mark.id); };
   const removeMarks = (ids: string[]) => {
     if (!availability.allows('pdf-redact')) return;
     commit({ pages: scene.pages.map((item) => item.redactions?.some((mark) => ids.includes(mark.id))
@@ -697,12 +703,17 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       updateObject({ watermark: { ...options, logoPath: picked, size: undefined }, watermarkPreview: previewSource, watermarkImageSize: size }, 'watermark-picture');
     } catch (reason) { setWatermarkPictureError(reason instanceof Error ? reason.message : String(reason)); }
   };
-  const selectPage = (id: string, additive = false, range = false) => {
-    if (range && page) {
-      const other = scene.pages.findIndex((item) => item.id === id);
-      setSelectedPages(scene.pages.slice(Math.min(currentIndex, other), Math.max(currentIndex, other) + 1).map((item) => item.id));
-    } else setSelectedPages((old) => additive ? old.includes(id) ? old.filter((item) => item !== id) : [...old, id] : [id]);
+  const pageOrder = scene.pages.map((item) => item.id);
+  const selectPage = (id: string, toggle = false, range = false) => {
+    setPageSelection(clickPage(pageOrder, pageSelection, id, { toggle, range, focused: page?.id ?? null }));
     setCurrentId(id); setSelectedId(null); setSelectedRun(null); group.current = null;
+  };
+  const replacePageSelection = (next: PageSelection) => { setPageSelection(next); setPageRangeError(null); };
+  const applyPageRange = () => {
+    const result = selectPagesByRange(pageOrder, pageRange);
+    if (result && 'message' in result) setPageRangeError(result.message);
+    else if (result) replacePageSelection(result);
+    else setPageRangeError(null);
   };
   const goToField = (field: PdfFormField) => {
     const target = scene.pages.find((item) => item.sourceIndex === field.widgets[0].page);
@@ -719,13 +730,13 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     goToField(next);
   };
   const formUnavailable = Boolean(form && (form.unsupported || !form.fields.length));
-  const pageTargets = selectedPages.filter((id) => scene.pages.some((item) => item.id === id));
+  const pageTargets = pageSelection.ids.filter((id) => pageOrder.includes(id));
   const targets = pageTargets.length ? pageTargets : page ? [page.id] : [];
   const deletePages = () => {
     if (!availability.allows('pdf-remove-pages')) return;
     const next = removePages(scene, targets);
     if (!next) return;
-    commit(next); setCurrentId(next.pages[Math.min(currentIndex, next.pages.length - 1)].id); setSelectedPages([]); setSelectedId(null);
+    commit(next); setCurrentId(next.pages[Math.min(currentIndex, next.pages.length - 1)].id); setPageSelection(clearPageSelection()); setSelectedId(null);
   };
   const movePages = (targetId: string) => {
     if (!availability.allows('pdf-organize')) return;
@@ -770,20 +781,45 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     return () => window.removeEventListener('keydown', onDuplicate);
   });
   const pageViewTool = tools.find((item) => item.id !== 'organize' && availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
-  const focusGridPage = (index: number) => {
+  // Moving through the grid moves focus only. Selection changes on click, Space, Shift with an arrow key, or the Select buttons.
+  const focusGridPage = (index: number, extend: boolean) => {
     const target = scene.pages[Math.max(0, Math.min(scene.pages.length - 1, index))];
     if (!target) return;
-    selectPage(target.id);
+    if (extend) setPageSelection(extendPageSelection(pageOrder, pageSelection, page?.id ?? null, target.id));
+    setCurrentId(target.id); setSelectedId(null); group.current = null;
     requestAnimationFrame(() => organizeGrid.current?.querySelector<HTMLButtonElement>(`[data-page-index="${scene.pages.indexOf(target)}"]`)?.focus());
   };
+  const gridColumns = () => {
+    const options = Array.from(organizeGrid.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+    const firstRow = options.findIndex((option) => option.offsetTop !== options[0].offsetTop);
+    return firstRow > 0 ? firstRow : Math.max(1, options.length);
+  };
   const gridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const next = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? currentIndex + 1
-      : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? currentIndex - 1
+    if (event.altKey || !page) return;
+    const primary = primaryModifierPressed(event);
+    if (primary && event.key.toLowerCase() === 'a') {
+      event.preventDefault(); replacePageSelection(selectAllPages(pageOrder)); return;
+    }
+    if (event.metaKey || event.ctrlKey) return;
+    if (event.key === 'Escape') {
+      // With nothing selected, Escape keeps its usual meaning and leaves the workspace.
+      if (pageSelection.ids.length) { event.preventDefault(); replacePageSelection(clearPageSelection()); }
+      return;
+    }
+    if (event.key === ' ') { event.preventDefault(); replacePageSelection(togglePage(pageOrder, pageSelection, page.id)); return; }
+    if (event.key === 'Enter') { event.preventDefault(); if (pageViewTool) { endGroup(); setTool(pageViewTool); } return; }
+    const next = event.key === 'ArrowRight' ? currentIndex + 1 : event.key === 'ArrowLeft' ? currentIndex - 1
+      : event.key === 'ArrowDown' ? currentIndex + gridColumns() : event.key === 'ArrowUp' ? currentIndex - gridColumns()
         : event.key === 'Home' ? 0 : event.key === 'End' ? scene.pages.length - 1 : null;
     if (next === null) return;
     event.preventDefault();
-    focusGridPage(next);
+    if (next < 0 || next >= scene.pages.length) return;
+    focusGridPage(next, event.shiftKey);
   };
+  // A focused button activates on Space key-up in some engines; the grid already handled Space on key-down.
+  const gridKeyUp = (event: ReactKeyboardEvent<HTMLDivElement>) => { if (event.key === ' ') event.preventDefault(); };
+  const selectionCount = selectionCountLabel(pageTargets.length);
+  const selectionLocked = exporting || !page;
   const documentName = path ? fileName(path) : '';
   const pageCount = `${scene.pages.length} ${scene.pages.length === 1 ? 'page' : 'pages'}`;
   const editRuns: PdfEditRun[] = page?.sourceIndex == null ? [] : document?.pages[page.sourceIndex]?.editRuns ?? [];
@@ -905,6 +941,27 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
           <h2>{documentName}</h2>
           <p>{pageCount}{dirty ? '. Changes not exported' : ''}</p>
         </div>
+        <div className="scene-organize-actions" role="toolbar" aria-label={`Page actions, ${selectionCount}`} aria-orientation="horizontal">
+          <span role="status" className="scene-organize-count">{selectionCount}</span>
+        </div>
+      </div>
+      <div className="scene-organize-select">
+        <span className="scene-organize-hint" id="scene-select-by-label">Select</span>
+        <div className="scene-organize-select-group" role="group" aria-labelledby="scene-select-by-label">
+          <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(selectAllPages(pageOrder))}>All<ShortcutHint id="selectAll" /></Button>
+          <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(selectPagesByParity(pageOrder, 'odd'))}>Odd</Button>
+          <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(selectPagesByParity(pageOrder, 'even'))}>Even</Button>
+          <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(clearPageSelection())}>None<ShortcutHint id="cancel" /></Button>
+        </div>
+        <span className="scene-toolbar-divider" aria-hidden="true" />
+        <div className="scene-organize-range">
+          <Label htmlFor="scene-page-range" className="scene-organize-hint">Pages</Label>
+          <Input id="scene-page-range" className="scene-organize-range-input h-7" placeholder="For example 1-3, 7" value={pageRange} disabled={selectionLocked}
+            aria-invalid={pageRangeError ? true : undefined} aria-describedby={pageRangeError ? 'scene-page-range-error' : undefined}
+            onChange={(event) => { setPageRange(event.target.value); setPageRangeError(null); }}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); applyPageRange(); } }} />
+          {pageRangeError && <p id="scene-page-range-error" role="alert" className="scene-organize-range-error">{pageRangeError}</p>}
+        </div>
         <div className="scene-organize-size">
           <span id="scene-thumbnail-size-label">Thumbnails</span>
           <ToggleGroup type="single" variant="outline" size="sm" aria-labelledby="scene-thumbnail-size-label" value={thumbnailSize}
@@ -916,7 +973,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
         </div>
       </div>
       <div className="scene-organize-body">
-        <div ref={organizeGrid} className="scene-organize-grid" role="listbox" aria-label={`Pages of ${documentName}, in order`} data-size={thumbnailSize} onKeyDown={gridKeyDown}>
+        <div ref={organizeGrid} className="scene-organize-grid" role="listbox" aria-multiselectable="true" aria-label={`Pages of ${documentName}, in order`}
+          aria-describedby="scene-organize-grid-help" data-size={thumbnailSize} onKeyDown={gridKeyDown} onKeyUp={gridKeyUp}>
           {scene.pages.map((item, index) => {
             const position = index + 1;
             const original = item.sourceIndex === null ? null : item.sourceIndex + 1;
@@ -924,14 +982,17 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
             const thumbnailKey = path ? previewCacheKey(path, index, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
             const thumb = cached?.key === thumbnailKey ? cached.value.dataUrl : item.sourceIndex === null ? null : document?.pages[item.sourceIndex]?.preview;
             const focused = item.id === page.id;
-            return <Button key={item.id} role="option" aria-selected={focused} tabIndex={focused ? 0 : -1} data-page-index={index}
-              variant={focused ? 'secondary' : 'ghost'} className="scene-organize-page h-auto flex-col gap-2 p-2"
-              aria-label={original === null ? `Position ${position}` : `Position ${position}, original page ${original}`} onClick={() => selectPage(item.id)}>
-              <span className="scene-organize-thumb">{thumb && <img alt="" src={thumb} />}</span>
+            const isSelected = pageTargets.includes(item.id);
+            return <Button key={item.id} role="option" aria-selected={isSelected} tabIndex={focused ? 0 : -1} data-page-index={index}
+              variant={isSelected ? 'secondary' : 'ghost'} className="scene-organize-page h-auto flex-col gap-2 p-2"
+              aria-label={pageOptionName(position, item, isSelected)}
+              onClick={(event) => selectPage(item.id, primaryModifierPressed(event), event.shiftKey)}>
+              <span className="scene-organize-thumb" data-selected={isSelected || undefined}>{thumb && <img alt="" src={thumb} />}{isSelected && <span className="scene-organize-check" aria-hidden="true">✓</span>}</span>
               <span className="scene-organize-label"><strong>{position}</strong>{original !== null && original !== position && <span> · was page {original}</span>}</span>
             </Button>;
           })}
         </div>
+        <p id="scene-organize-grid-help" className="sr-only">Arrow keys move focus. Space selects. Shift with an arrow key extends the selection. Enter opens the page in page view.</p>
         <aside className="scene-organize-focus" aria-label="Preview of the focused page">
           <div className="scene-organize-focus-heading"><strong>Page {currentIndex + 1}</strong><span>of {scene.pages.length}</span></div>
           <div className="scene-organize-focus-frame">

@@ -5,6 +5,9 @@ export const currentPlatform = (): Platform =>
 
 export const isWindows = () => currentPlatform() === "windows";
 
+// Cmd on macOS, Ctrl on Windows. Ctrl-click on macOS opens a context menu, so it never counts.
+export const primaryModifierPressed = (event: { metaKey: boolean; ctrlKey: boolean }) => (isWindows() ? event.ctrlKey : event.metaKey);
+
 export type ShortcutId =
   | "find"
   | "settings"
