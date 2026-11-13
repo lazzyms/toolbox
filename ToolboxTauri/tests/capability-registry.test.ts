@@ -105,7 +105,7 @@ test("UI capabilities are the shared native contract facts", () => {
     skippedExtensions: [],
     inputCardinality: "none",
     supportsPageSelection: false,
-    supportsPreview: false,
+    supportsPreview: true,
     nativeAvailability: "available",
     outputSuffix: "",
     manyToOne: false,
