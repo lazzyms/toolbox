@@ -1309,55 +1309,6 @@
     "screen": "CompressResults--state-many-results.jpg"
   },
   {
-    "board": "ImageEditResults.dc.html",
-    "title": "Edit Image results: progress, Skipped, failures",
-    "state": "default",
-    "query": "",
-    "screen": "ImageEditResults--default.jpg"
-  },
-  {
-    "board": "ImageEditResults.dc.html",
-    "title": "Edit Image results: progress, Skipped, failures",
-    "state": "state-running",
-    "query": "state=Running",
-    "screen": "ImageEditResults--state-running.jpg"
-  },
-  {
-    "board": "ImageEditResults.dc.html",
-    "title": "Edit Image results: progress, Skipped, failures",
-    "state": "state-resize-to-jpeg",
-    "query": "state=Resize%20to%20JPEG",
-    "screen": "ImageEditResults--state-resize-to-jpeg.jpg"
-  },
-  {
-    "board": "ImageEditResults.dc.html",
-    "title": "Edit Image results: progress, Skipped, failures",
-    "state": "state-metadata-removed",
-    "query": "state=Metadata%20removed",
-    "screen": "ImageEditResults--state-metadata-removed.jpg"
-  },
-  {
-    "board": "ImageEditResults.dc.html",
-    "title": "Edit Image results: progress, Skipped, failures",
-    "state": "state-watermark-failed",
-    "query": "state=Watermark%20failed",
-    "screen": "ImageEditResults--state-watermark-failed.jpg"
-  },
-  {
-    "board": "ImageEditNarrow.dc.html",
-    "title": "Edit Image below 1000 px: tools strip and More",
-    "state": "default",
-    "query": "",
-    "screen": "ImageEditNarrow--default.jpg"
-  },
-  {
-    "board": "ImageEditNarrow.dc.html",
-    "title": "Edit Image below 1000 px: tools strip and More",
-    "state": "state-more-open",
-    "query": "state=More%20open",
-    "screen": "ImageEditNarrow--state-more-open.jpg"
-  },
-  {
     "board": "AppIcons.dc.html",
     "title": "App icon set: good and non-square source",
     "state": "default",
@@ -1706,6 +1657,146 @@
     "state": "retryOpen-true",
     "query": "retryOpen=true",
     "screen": "SecResults--retryOpen-true.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "default",
+    "query": "",
+    "screen": "CropResize--default.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "CropResize--state-empty.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-empty-resize",
+    "query": "state=Empty%2C%20resize",
+    "screen": "CropResize--state-empty-resize.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-adjusting",
+    "query": "state=Crop%2C%20adjusting",
+    "screen": "CropResize--state-crop-adjusting.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-margins",
+    "query": "state=Crop%2C%20margins",
+    "screen": "CropResize--state-crop-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-same-margins",
+    "query": "state=Crop%2C%20same%20margins",
+    "screen": "CropResize--state-crop-same-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-crop-invalid-margins",
+    "query": "state=Crop%2C%20invalid%20margins",
+    "screen": "CropResize--state-crop-invalid-margins.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-preset",
+    "query": "state=Resize%2C%20preset",
+    "screen": "CropResize--state-resize-preset.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-actual-size",
+    "query": "state=Resize%2C%20actual%20size",
+    "screen": "CropResize--state-resize-actual-size.jpg"
+  },
+  {
+    "board": "CropResize.dc.html",
+    "title": "Crop and Resize PDF: batch tool, ten states",
+    "state": "state-resize-invalid-size",
+    "query": "state=Resize%2C%20invalid%20size",
+    "screen": "CropResize--state-resize-invalid-size.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "default",
+    "query": "",
+    "screen": "CropResizeResults--default.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "state-resize-results",
+    "query": "state=Resize%20results",
+    "screen": "CropResizeResults--state-resize-results.jpg"
+  },
+  {
+    "board": "CropResizeResults.dc.html",
+    "title": "Crop and Resize PDF: running and results",
+    "state": "state-running",
+    "query": "state=Running",
+    "screen": "CropResizeResults--state-running.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "default",
+    "query": "",
+    "screen": "ImageEditResults--default.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-running",
+    "query": "state=Running",
+    "screen": "ImageEditResults--state-running.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-resize-to-jpeg",
+    "query": "state=Resize%20to%20JPEG",
+    "screen": "ImageEditResults--state-resize-to-jpeg.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-metadata-removed",
+    "query": "state=Metadata%20removed",
+    "screen": "ImageEditResults--state-metadata-removed.jpg"
+  },
+  {
+    "board": "ImageEditResults.dc.html",
+    "title": "Edit Image results: progress, Skipped, failures",
+    "state": "state-watermark-failed",
+    "query": "state=Watermark%20failed",
+    "screen": "ImageEditResults--state-watermark-failed.jpg"
+  },
+  {
+    "board": "ImageEditNarrow.dc.html",
+    "title": "Edit Image below 1000 px: tools strip and More",
+    "state": "default",
+    "query": "",
+    "screen": "ImageEditNarrow--default.jpg"
+  },
+  {
+    "board": "ImageEditNarrow.dc.html",
+    "title": "Edit Image below 1000 px: tools strip and More",
+    "state": "state-more-open",
+    "query": "state=More%20open",
+    "screen": "ImageEditNarrow--state-more-open.jpg"
   },
   {
     "board": "PackResults.dc.html",
