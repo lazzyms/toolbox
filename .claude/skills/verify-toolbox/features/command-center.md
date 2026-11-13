@@ -38,7 +38,7 @@ Preconditions:
 ## Gotchas
 
 - There is no Recent filter, Quick access row, or Tool categories list any more. Older notes that name them are stale.
-- Each `Open <tool title>` button carries a help description. Lock & Unlock's still reads "Remove a password you know from PDF, Word, Excel and PowerPoint files." That copy is stale after the 2026-10-20 Unlock decision.
+- Each `Open <tool title>` button carries a help description. Lock & Unlock's reads "Add a password to PDF, Word, Excel and PowerPoint files, or remove one you know."
 - Favorites persist in the verification profile. Restore the starting state.
 - `super+k` keeps the last query in `Search tools`. Clear the field before you type a new search.
 - `type_text` into the search field can report fewer characters delivered than it sent while the text did land. Re-read the field value before trusting either report.

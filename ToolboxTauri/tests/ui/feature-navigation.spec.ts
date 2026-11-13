@@ -1179,9 +1179,19 @@ test("Find a tool on the settings page opens the tool search", async ({ page }) 
     await findTool.click();
     await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
 
+    const search = page.getByRole("textbox", { name: "Search tools" });
+    await search.fill("Resize");
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.keyboard.press("Meta+k");
-    await expect(page.getByRole("textbox", { name: "Search tools" })).toBeFocused();
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue("Resize");
+    expect(await search.evaluate((input: HTMLInputElement) => [input.selectionStart, input.selectionEnd])).toEqual([0, "Resize".length]);
+});
+
+test("the Lock & Unlock card describes both modes", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: "Open Lock & Unlock", exact: true }))
+        .toHaveAccessibleDescription("Add a password to PDF, Word, Excel and PowerPoint files, or remove one you know.");
 });
 
 test("view links and rail tools render their design icon masks", async ({ page }) => {
@@ -3735,6 +3745,17 @@ const changeForRun = async (page: Page, folder: string) => {
 };
 
 test.describe("per-run destination", () => {
+    for (const tool of ["Extract from PDF", "Lock & Unlock"]) {
+        test(`${tool} states the name-collision rule once`, async ({ page }) => {
+            await page.goto("/");
+            await openFromHome(page, tool);
+            await chooseFixture(page, pdfFixturePath);
+            if (tool === "Extract from PDF") await page.getByRole("radio", { name: "Text", exact: true }).click();
+            await expect(page.getByRole("region", { name: "Destination" }).getByText("An existing name gets -1, -2 and so on. Nothing is replaced.")).toBeVisible();
+            await expect(page.getByText(/An existing name gets -1, -2/)).toHaveCount(1);
+        });
+    }
+
     test("example names use the extension each tool writes", async ({ page }) => {
         await page.goto("/");
         const example = page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example");

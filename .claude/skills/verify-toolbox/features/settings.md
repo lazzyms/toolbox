@@ -43,4 +43,4 @@ Preconditions:
 - The verification config replaces the update endpoint with a dead local address. A build without that overlay contacts GitHub on `Check now` and checks again at launch.
 - An update status does not authorize installation. Stop before any download, install, or relaunch action.
 - About and support contains `Sponsor on GitHub` and `Open notices`. Both are display-only for this recipe.
-- The window title keeps the last tool view's name while Settings is open.
+- The window title reads `Toolbox — Settings` while Settings is open, and returns to the tool view's title when you leave.
