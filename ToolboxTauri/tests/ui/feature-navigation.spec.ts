@@ -432,7 +432,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(38);
+    expect(UtilityRegistry).toHaveLength(39);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -3456,6 +3456,16 @@ const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number], expectedOutputLocation: unknown = "alongsideInput") => {
     await page.goto("/");
     await openFromHome(page, utility.title);
+    // A creation tool starts from nothing: it saves where the person chooses, not to an output location.
+    if (utility.capability.inputCardinality === "none") {
+        await page.getByRole("textbox", { name: "Block 1, Paragraph" }).fill("Test paragraph");
+        await page.locator(".workspace-primary-action").click();
+        await confirmSave(page);
+        await expect(page.getByText("Test output", { exact: true })).toBeVisible();
+        const created = await lastInvocation(page, utility.command);
+        expect((created?.args as { request: { outputPath: string; outputLocation?: unknown } }).request).toMatchObject({ outputPath: "/Users/test/Documents/Untitled.pdf" });
+        return;
+    }
     // Convert Image Format lives in the Image Editor but runs on its own screen, without an edit plan.
     // The stack tools run through the shared edit stack, which each fills with its default step.
     const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "heic-convert", "crop", "resize", "rotate", "image-tone", "image-watermark"].includes(utility.id);
@@ -3526,7 +3536,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(38);
+    expect(UtilityRegistry).toHaveLength(39);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {

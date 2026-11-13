@@ -54,7 +54,7 @@ function registry() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { source, atomic, ids: registryIds, factoryEntries } = registry();
   const requiredFields = ["command", "verification", "view"];
-  const expectedToolCount = 38;
+  const expectedToolCount = 39;
 
   if (registryIds.length !== expectedToolCount) throw new Error(`Tauri registry has ${registryIds.length} tools, expected ${expectedToolCount}`);
   if (new Set(registryIds).size !== registryIds.length) throw new Error("Tauri registry contains duplicate IDs");

@@ -38,6 +38,7 @@ pub mod doc;
 pub mod xls;
 pub mod ppt;
 pub mod convert;
+pub mod formatted;
 pub mod properties;
 mod embedded_image;
 mod inline_image;

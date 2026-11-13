@@ -339,6 +339,20 @@ impl FontResolver<InstalledSystemFonts> {
     }
 }
 
+/// Finds no installed fonts, so a document laid out with it comes out the same on every computer.
+pub struct BundledOnly;
+
+impl SystemFontLookup for BundledOnly {
+    fn faces(&self, _family: &str) -> Vec<SystemFace> { Vec::new() }
+}
+
+impl FontResolver<BundledOnly> {
+    /// Resolves every family to the bundled fonts only.
+    pub fn bundled() -> Result<Self, ToolError> {
+        Ok(Self::new(BundledFonts::discover_installed()?, BundledOnly))
+    }
+}
+
 impl<S: SystemFontLookup> FontResolver<S> {
     pub fn new(bundled: BundledFonts, system: S) -> Self { Self { bundled, system } }
 
