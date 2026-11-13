@@ -69,6 +69,7 @@ export const MainPage = () => {
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
   const [initialPaths, setInitialPaths] = useState<readonly string[]>([]);
   const [handoffs, setHandoffs] = useState(0);
+  const [handoffTool, setHandoffTool] = useState<AtomicToolId | null>(null);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const focusWorkspaceHeadingOnNavigation = useRef(false);
   const [fileActivation, setFileActivation] = useState<Extract<ShellEvent, { kind: "files" }> | null>(null);
@@ -124,7 +125,7 @@ export const MainPage = () => {
   const leaveGuard = useRef<DiscardGuard | null>(null);
   const registerLeaveGuard = useCallback((guard: DiscardGuard | null) => { leaveGuard.current = guard; }, []);
   const guarded = useCallback((leave: () => void) => leaveGuard.current ? leaveGuard.current(leave) : leave(), []);
-  const openTool = useCallback((tool: ToolDefinition, paths: readonly string[] = []) => {
+  const openTool = useCallback((tool: ToolDefinition, paths: readonly string[] = [], handoff = false) => {
     if (!availability.allows(tool.id)) return;
     guarded(() => {
       setFileActivation(null);
@@ -134,6 +135,7 @@ export const MainPage = () => {
       setWorkspaceSourceAction(null);
       setInitialPaths([...paths]);
       setSelectedTool(tool);
+      setHandoffTool(handoff ? tool.id : null);
       const recent: string[] = JSON.parse(localStorage.getItem(recentStorageKey) || "[]");
       localStorage.setItem(recentStorageKey, JSON.stringify([tool.id, ...recent.filter((id) => id !== tool.id)].slice(0, 8)));
     });
@@ -429,7 +431,7 @@ export const MainPage = () => {
       if (!tool) return;
       if (typeof detail === "string") return openTool(tool);
       setHandoffs((count) => count + 1);
-      openTool(tool, detail.paths);
+      openTool(tool, detail.paths, true);
     };
     window.addEventListener("toolbox:open", openFromCompatibilityNav);
     return () =>
@@ -608,6 +610,7 @@ export const MainPage = () => {
                         key={handoffs}
                         utility={selectedTool}
                         initialPaths={initialPaths}
+                        handoff={handoffTool === selectedTool.id}
                         fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}
                         onActivationAccepted={acceptActivation}
                         onFilesChange={publishDocumentPath}
@@ -724,9 +727,10 @@ export const MainPage = () => {
   );
 };
 
-const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onLeaveGuard, onSelectTool, onWorkspaceSourceAction }: {
+const ViewFor = ({ utility, initialPaths, handoff, fileActivation, onActivationAccepted, onFilesChange, onNavigate, onLeaveGuard, onSelectTool, onWorkspaceSourceAction }: {
   utility: ToolDefinition;
   initialPaths?: readonly string[];
+  handoff?: boolean;
   fileActivation?: Extract<ShellEvent, { kind: "files" }>;
   onActivationAccepted?: (activationId: string) => void;
   onFilesChange?: (paths: readonly string[]) => void;
@@ -745,7 +749,7 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   if (utility.id === "pdf-extract") return <ExtractFromPdfView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (utility.id === "pdf-bates") return <BatesView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onLeaveGuard={onLeaveGuard} onSelectTool={onSelectTool} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
-  if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
+  if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} handoff={handoff} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
   // Convert Image Format runs per file on its own screen, without an edit plan.
   const runsWithoutEditPlan = utility.id === "heic-convert";
   if (workspace.id === "image-editor" && !runsWithoutEditPlan) return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;

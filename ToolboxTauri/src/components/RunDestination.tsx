@@ -22,7 +22,6 @@ export const sameLocation = (a: OutputLocation, b: OutputLocation) =>
 // Commands that always write a different file type than they read, as named by the native output code.
 const FIXED_OUTPUT_EXTENSIONS: Partial<Record<ToolCommand, string>> = {
     extract_from_pdf: 'txt',
-    ocr_pdf: 'txt',
     remove_image_background: 'png',
     blur_faces: 'png',
     generate_icon_set: 'png',

@@ -6,12 +6,13 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use image::GenericImageView;
-use lopdf::Document;
+use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 
 use crate::kit::common::limits::{self, HelperDeadline, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::{LimitKind, OutcomePointer, PackNeed, ToolError};
-use crate::kit::pdf::metadata::page_bounds;
+use crate::kit::pdf::metadata::{effective_crop_bounds, page_bounds, page_rotation};
+use crate::kit::pdf::unicode_font::UnicodeFont;
 use crate::kit::pdf::page_ranges::{validate_page_ranges, PageRanges};
 use crate::kit::resources;
 use crate::packs::uninstall::{RequiredPack, RunPacks};
@@ -31,6 +32,8 @@ const OCR_LANGUAGES: &[&str] = &[ENGLISH];
 const OCR_TEXT_SUFFIX: &str = "-ocr";
 const OCR_PAGE_SEGMENTATION: &str = "3";
 const OCR_NO_TEXT: &str = "OCR completed but found no readable text.";
+/// The resource name the invisible text layer's font is registered under on each page.
+const OCR_LAYER_FONT: &str = "ToolboxOcr";
 const OCR_PASSWORD_PROTECTED: &str = "It's password-protected. Remove its password in File Security, then run OCR again.";
 
 #[derive(Debug, Clone, Copy)]
@@ -153,10 +156,15 @@ pub fn ocr_pdf(run: &OcrRun, input: PathBuf) -> JobOutcome {
 }
 
 fn ocr_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
-    let request = &run.request;
-    if request.mode() != Ok(OcrMode::Text) {
-        return unavailable(input, "Searchable PDF output is not available yet. Choose a text file.".to_string());
+    match run.request.mode() {
+        Ok(OcrMode::SearchablePdf) => searchable_pdf_within(run, input, deadline),
+        Ok(OcrMode::Text) => text_file_within(run, input, deadline),
+        Err(error) => JobOutcome::failure(input, ToolError::invalid_input(error)),
     }
+}
+
+fn text_file_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
+    let request = &run.request;
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, OCR_TEXT_SUFFIX, "txt") {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve OCR output: {error}")),
@@ -181,7 +189,7 @@ fn ocr_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> Job
         Ok(pages) => pages,
         Err(error) => return JobOutcome::failure(input, error),
     };
-    let text = match run_ocr(&resources, &tessdata_dir, &input, &pages, &languages, deadline).and_then(|pages| ocr_text(&pages).map_err(ToolError::processing)) {
+    let text = match run_ocr(&resources, &tessdata_dir, &input, &pages, &languages, &[], deadline).and_then(|pages| ocr_text(&pages).map_err(ToolError::processing)) {
         Ok(text) => text,
         Err(error) => return JobOutcome::failure(input, error),
     };
@@ -201,11 +209,15 @@ fn recognized_detail(pages: usize, languages: &[String]) -> String {
 }
 
 fn selected_ocr_pages(input: &Path, range: Option<&str>) -> Result<Vec<OcrPage>, ToolError> {
+    selected_document_pages(&load_ocr_document(input)?, range).map_err(ToolError::processing)
+}
+
+fn load_ocr_document(input: &Path) -> Result<Document, ToolError> {
     let document = Document::load(input).map_err(|error| ToolError::processing(format!("Could not inspect PDF for OCR: {error}")))?;
     if document.is_encrypted() {
         return Err(ToolError::invalid_input(OCR_PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
     }
-    selected_document_pages(&document, range).map_err(ToolError::processing)
+    Ok(document)
 }
 
 fn selected_document_pages(document: &Document, range: Option<&str>) -> Result<Vec<OcrPage>, String> {
@@ -303,7 +315,8 @@ impl OcrResources {
 /// Recognises each page on its own, so the text keeps page order and page breaks.
 /// The engine runs on one thread with a fixed segmentation mode, resolution and
 /// language data, so the same file gives the same text every time.
-fn run_ocr(resources: &OcrResources, tessdata_dir: &Path, input: &Path, pages: &[OcrPage], languages: &[String], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
+/// `settings` are extra engine arguments, such as `WORD_BOX_OUTPUT`; none gives plain text.
+fn run_ocr(resources: &OcrResources, tessdata_dir: &Path, input: &Path, pages: &[OcrPage], languages: &[String], settings: &[&str], deadline: HelperDeadline) -> Result<Vec<Vec<u8>>, ToolError> {
     let limit = deadline.limit(1, pages.len());
     let stop_at = Instant::now() + limit;
     let timed_out = format!("Recognising took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
@@ -318,7 +331,8 @@ fn run_ocr(resources: &OcrResources, tessdata_dir: &Path, input: &Path, pages: &
             .arg("--tessdata-dir").arg(tessdata_dir)
             .arg("-l").arg(languages.join("+"))
             .arg("--psm").arg(OCR_PAGE_SEGMENTATION)
-            .arg("--dpi").arg(OCR_RENDER_DPI.to_string());
+            .arg("--dpi").arg(OCR_RENDER_DPI.to_string())
+            .args(settings);
         let result = run_ocr_helper(command, stop_at, &timed_out)?;
         if !result.status.success() { return Err(ToolError::processing(stderr(result, "OCR engine failed."))); }
         total = total.saturating_add(result.stdout.len()).saturating_add(1);
@@ -335,6 +349,253 @@ fn ocr_text(pages: &[Vec<u8>]) -> Result<String, String> {
     let pages = pages.iter().map(|page| normalize_ocr_text(page)).collect::<Result<Vec<_>, _>>()?;
     if pages.iter().all(String::is_empty) { return Ok(String::new()); }
     Ok(pages.iter().map(|page| if page.is_empty() { String::new() } else { format!("{page}\n") }).collect::<Vec<_>>().join("\u{c}"))
+}
+
+/// Makes a copy of the scan whose pages look the same but carry an invisible text
+/// layer placed from the engine's word boxes, so the text can be selected, copied and
+/// searched. The original content streams, resources and page boxes are kept as they
+/// are; each recognised page only gains a font and one more content stream.
+fn searchable_pdf_within(run: &OcrRun, input: PathBuf, deadline: HelperDeadline) -> JobOutcome {
+    let request = &run.request;
+    let output = match OutputNaming::reserve_destination(&input, &request.output_location, OCR_TEXT_SUFFIX, "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(input, format!("Could not reserve OCR output: {error}")),
+    };
+    let resources = match OcrResources::resolve() {
+        Ok(resources) => resources,
+        Err(error) => return unavailable(input, error.to_string()),
+    };
+    let languages = request.languages_for(&input);
+    let (tessdata_dir, language_names) = match ocr_languages(&run.packs, &languages) {
+        Ok(found) => found,
+        Err(error) => return JobOutcome::failure(input, error),
+    };
+    let input_size = match std::fs::metadata(&input) {
+        Ok(metadata) => metadata.len(),
+        Err(error) => return failure(input, format!("Could not inspect PDF for OCR: {error}")),
+    };
+    if input_size > OCR_MAX_INPUT_BYTES { return failure(input, "PDF exceeds the 100 MiB OCR input limit.".to_string()); }
+    let mut document = match load_ocr_document(&input) {
+        Ok(document) => document,
+        Err(error) => return JobOutcome::failure(input, error),
+    };
+    let pages = match selected_document_pages(&document, request.page_range()).and_then(|pages| upright_uncropped_pages(&document, pages)) {
+        Ok(pages) => pages,
+        Err(error) => return failure(input, error),
+    };
+    let layouts = match run_ocr(&resources, &tessdata_dir, &input, &pages, &languages, WORD_BOX_OUTPUT, deadline)
+        .and_then(|recognized| recognized.iter().map(|tsv| word_boxes(tsv)).collect::<Result<Vec<_>, _>>().map_err(ToolError::processing))
+    {
+        Ok(layouts) => layouts,
+        Err(error) => return JobOutcome::failure(input, error),
+    };
+    if layouts.iter().all(|layout| layout.lines.is_empty()) { return failure(input, OCR_NO_TEXT.to_string()); }
+    let original = document.clone();
+    let signature_removed = match crate::kit::pdf::remove_signatures(&mut document) {
+        Ok(removed) => removed,
+        Err(error) => return failure(input, error),
+    };
+    let page_ids = document.get_pages();
+    let layered = pages.iter().zip(layouts).filter_map(|(page, layout)| page_ids.get(&page.number).map(|id| (page.number, *id, layout))).collect::<Vec<_>>();
+    let expected = match crate::kit::images::tools::bundled_text_font_bytes().map_err(ToolError::processing).and_then(|font| add_text_layer(&mut document, &layered, font)) {
+        Ok(expected) => expected,
+        Err(error) => return JobOutcome::failure(input, error),
+    };
+    if let Err(error) = document.save(output.path()) { return failure(input, format!("Could not write OCR output: {error}")); }
+    #[cfg(test)]
+    if BREAK_SEARCHABLE_OUTPUT_FOR.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(input.as_path()) {
+        let _ = std::fs::write(output.path(), b"%PDF-1.7\nnot a PDF any more\n");
+    }
+    if let Err(error) = validate_searchable_pdf(&original, output.path(), &expected) {
+        return failure(input, format!("The searchable PDF didn't pass its check, so it wasn't saved: {error}"));
+    }
+    match output.publish() {
+        Ok(path) => crate::kit::pdf::note_signature_removed(success(input, path, &recognized_detail(pages.len(), &language_names)), signature_removed),
+        Err(error) => failure(input, format!("Could not publish OCR output: {error}")),
+    }
+}
+
+/// Asks the engine for word boxes as TSV through settings rather than its `tsv` config
+/// file, because only the language data ships with the app, not the engine's configs.
+const WORD_BOX_OUTPUT: &[&str] = &["-c", "tessedit_create_tsv=1", "-c", "tessedit_create_txt=0"];
+
+/// Test seam: the searchable PDF written for this input is damaged after it is saved,
+/// so tests can see reopen validation keep it from being published.
+#[cfg(test)]
+pub(crate) static BREAK_SEARCHABLE_OUTPUT_FOR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Rotated and cropped pages render to a picture that no longer lines up with the
+/// MediaBox, so their word boxes would land in the wrong place. They come later.
+fn upright_uncropped_pages(document: &Document, pages: Vec<OcrPage>) -> Result<Vec<OcrPage>, String> {
+    let page_ids = document.get_pages();
+    for page in &pages {
+        let id = *page_ids.get(&page.number).ok_or_else(|| "PDF page is missing.".to_string())?;
+        let (left, bottom, right, top) = page_bounds(document, id)?;
+        if page_rotation(document, id) != 0 || effective_crop_bounds(document, id)? != [left, bottom, right, top] {
+            return Err(format!("Page {} is rotated or cropped. Searchable PDFs support upright, uncropped pages for now. Save a text file instead.", page.number));
+        }
+    }
+    Ok(pages)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct OcrWord { text: String, left: f32, width: f32 }
+
+#[derive(Debug, Clone, PartialEq)]
+struct OcrLine { top: f32, bottom: f32, words: Vec<OcrWord> }
+
+/// Recognised words on one rendered page, in reading order, in raster pixels.
+#[derive(Debug, Clone, PartialEq)]
+struct OcrLayout { width: f32, height: f32, lines: Vec<OcrLine> }
+
+/// Reads the engine's TSV: the page row gives the raster size, line rows give each
+/// line's height, and word rows give each word and its box.
+fn word_boxes(tsv: &[u8]) -> Result<OcrLayout, String> {
+    let tsv = std::str::from_utf8(tsv).map_err(|_| "OCR helper produced invalid UTF-8 text.".to_string())?;
+    let mut size = None;
+    let mut lines: Vec<((u32, u32, u32), OcrLine)> = Vec::new();
+    for row in tsv.lines().map(|row| row.trim_end_matches('\r')).filter(|row| !row.is_empty() && !row.starts_with("level")) {
+        let fields = row.splitn(12, '\t').collect::<Vec<_>>();
+        if fields.len() < 11 { return Err("OCR helper produced unreadable word boxes.".to_string()); }
+        let number = |index: usize| fields[index].trim().parse::<f32>().map_err(|_| "OCR helper produced unreadable word boxes.".to_string());
+        let key = |index: usize| fields[index].trim().parse::<u32>().unwrap_or(0);
+        let (level, left, top, width, height) = (number(0)? as u32, number(6)?, number(7)?, number(8)?, number(9)?);
+        let line_key = (key(2), key(3), key(4));
+        match level {
+            1 => size = Some((width, height)),
+            4 => lines.push((line_key, OcrLine { top, bottom: top + height, words: Vec::new() })),
+            5 => {
+                let text = fields.get(11).map(|text| text.trim()).unwrap_or_default();
+                if text.is_empty() || width <= 0. || height <= 0. { continue; }
+                let word = OcrWord { text: text.to_string(), left, width };
+                match lines.iter_mut().rev().find(|(key, _)| *key == line_key) {
+                    Some((_, line)) => {
+                        line.top = line.top.min(top);
+                        line.bottom = line.bottom.max(top + height);
+                        line.words.push(word);
+                    }
+                    None => lines.push((line_key, OcrLine { top, bottom: top + height, words: vec![word] })),
+                }
+            }
+            _ => {}
+        }
+    }
+    let lines = lines.into_iter().map(|(_, line)| line).filter(|line| !line.words.is_empty() && line.bottom > line.top).collect::<Vec<_>>();
+    match size {
+        Some((width, height)) if width > 0. && height > 0. => Ok(OcrLayout { width, height, lines }),
+        _ if lines.is_empty() => Ok(OcrLayout { width: 1., height: 1., lines }),
+        _ => Err("OCR helper reported words without a page size.".to_string()),
+    }
+}
+
+/// What the text layer on one page must give back when the output is reopened.
+struct ExpectedLayer { page: u32, words: Vec<String> }
+
+/// Writes each page's words in invisible text (rendering mode 3) with an embedded,
+/// subset Unicode font. A word starts at its box's left edge on its line's baseline and
+/// is stretched to its box's width, so selecting it highlights the word in the scan.
+/// The page's own content runs first inside q/Q, so its graphics state can't move the
+/// text. Numbers have fixed precision, so the same words always give the same bytes.
+fn add_text_layer(document: &mut Document, pages: &[(u32, ObjectId, OcrLayout)], font: Vec<u8>) -> Result<Vec<ExpectedLayer>, ToolError> {
+    let mut font = UnicodeFont::parse(font)?;
+    let (ascent, descent) = font.vertical_metrics();
+    let mut layers = Vec::new();
+    for (number, page_id, layout) in pages {
+        if layout.lines.is_empty() { continue; }
+        let (left, bottom, right, top) = page_bounds(document, *page_id).map_err(ToolError::processing)?;
+        let (scale_x, scale_y) = ((right - left) / layout.width, (top - bottom) / layout.height);
+        let name = layer_font_name(document, *page_id).map_err(ToolError::processing)?;
+        let mut content = String::new();
+        let mut words = Vec::new();
+        for line in &layout.lines {
+            let size = (line.bottom - line.top) * scale_y / (ascent - descent);
+            let baseline = top - line.bottom * scale_y - descent * size;
+            content.push_str(&format!("BT\n3 Tr\n/{name} {size:.2} Tf\n"));
+            for word in &line.words {
+                let natural = font.show_unshaped(&word.text, size)?.width;
+                let run = font.show_unshaped(&format!("{} ", word.text), size)?;
+                let stretch = if natural > 0. { 100. * word.width * scale_x / natural } else { 100. };
+                content.push_str(&format!("{stretch:.2} Tz 1 0 0 1 {:.2} {baseline:.2} Tm {}\n", left + word.left * scale_x, run.operators));
+                words.push(word.text.clone());
+            }
+            content.push_str("ET\n");
+        }
+        layers.push((*page_id, name, content, ExpectedLayer { page: *number, words }));
+    }
+    let font_id = font.embed(document)?;
+    for (page_id, name, content, _) in &layers {
+        attach_text_layer(document, *page_id, name, font_id, content).map_err(ToolError::processing)?;
+    }
+    Ok(layers.into_iter().map(|(_, _, _, expected)| expected).collect())
+}
+
+/// The page's resources as the page sees them, inherited or its own.
+fn page_resources(document: &Document, page_id: ObjectId) -> Result<(lopdf::Dictionary, lopdf::Dictionary), String> {
+    let resources = match crate::kit::pdf::inherited(document, page_id, b"Resources")? {
+        Some(Object::Dictionary(resources)) => resources,
+        Some(_) => return Err("PDF page resources are invalid.".to_string()),
+        None => lopdf::Dictionary::new(),
+    };
+    let fonts = match resources.get(b"Font") {
+        Ok(fonts) => crate::kit::pdf::resolve(document, fonts)?.as_dict().map_err(|_| "PDF page fonts are invalid.".to_string())?.clone(),
+        Err(_) => lopdf::Dictionary::new(),
+    };
+    Ok((resources, fonts))
+}
+
+fn layer_font_name(document: &Document, page_id: ObjectId) -> Result<String, String> {
+    let (_, fonts) = page_resources(document, page_id)?;
+    (0..).map(|index| if index == 0 { OCR_LAYER_FONT.to_string() } else { format!("{OCR_LAYER_FONT}{index}") })
+        .find(|name| !fonts.has(name.as_bytes()))
+        .ok_or_else(|| "PDF page has no free font name.".to_string())
+}
+
+/// Gives the page its own copy of its resources with the layer font added, so
+/// resources shared with other pages stay as they were, then wraps the original
+/// content streams, untouched, between a q stream and the text layer.
+fn attach_text_layer(document: &mut Document, page_id: ObjectId, name: &str, font_id: ObjectId, content: &str) -> Result<(), String> {
+    let (mut resources, mut fonts) = page_resources(document, page_id)?;
+    fonts.set(name.as_bytes().to_vec(), Object::Reference(font_id));
+    resources.set("Font", fonts);
+    let original = document.get_page_contents(page_id);
+    let open = document.add_object(Stream::new(dictionary! {}, b"q\n".to_vec()));
+    let mut layer = Stream::new(dictionary! {}, format!("\nQ\n{content}").into_bytes());
+    layer.compress().map_err(|error| format!("Could not compress the OCR text layer: {error}"))?;
+    let layer = document.add_object(layer);
+    let contents = std::iter::once(open).chain(original).chain(std::iter::once(layer)).map(Object::Reference).collect::<Vec<_>>();
+    let page = document.get_dictionary_mut(page_id).map_err(|error| error.to_string())?;
+    page.set("Resources", resources);
+    page.set("Contents", contents);
+    Ok(())
+}
+
+/// Reopens the written PDF and checks it before anyone can see it: the same pages,
+/// the same boxes, every original content stream byte for byte, and a text layer that
+/// gives back the recognized words through text extraction.
+fn validate_searchable_pdf(original: &Document, output: &Path, expected: &[ExpectedLayer]) -> Result<(), String> {
+    let reopened = Document::load(output).map_err(|error| format!("it could not be reopened ({error})."))?;
+    let (before, after) = (original.get_pages(), reopened.get_pages());
+    if before.len() != after.len() { return Err("its page count changed.".to_string()); }
+    let streams = |document: &Document, page: ObjectId| document.get_page_contents(page).into_iter()
+        .map(|id| document.get_object(id).and_then(Object::as_stream).map(|stream| stream.content.clone()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("its content could not be read ({error})."));
+    for ((number, old), new) in before.iter().zip(after.values()) {
+        if page_bounds(original, *old)? != page_bounds(&reopened, *new)? || effective_crop_bounds(original, *old)? != effective_crop_bounds(&reopened, *new)? {
+            return Err(format!("page {number}'s boxes changed."));
+        }
+        let (old_streams, new_streams) = (streams(original, *old)?, streams(&reopened, *new)?);
+        if !old_streams.is_empty() && !new_streams.windows(old_streams.len()).any(|window| window == old_streams.as_slice()) {
+            return Err(format!("page {number}'s original content changed."));
+        }
+    }
+    for layer in expected {
+        let text = reopened.extract_text(&[layer.page]).map_err(|error| format!("page {}'s text could not be read ({error}).", layer.page))?;
+        if !text.split_whitespace().collect::<Vec<_>>().join(" ").contains(&layer.words.join(" ")) {
+            return Err(format!("page {}'s text layer doesn't give back the recognized words.", layer.page));
+        }
+    }
+    Ok(())
 }
 
 fn render_ocr_page(renderer: &Path, input: &Path, workspace: &OcrWorkspace, page: OcrPage, deadline: Instant, timed_out: &str) -> Result<PathBuf, ToolError> {
@@ -1022,14 +1283,24 @@ mod tests {
     }
 
     #[test]
-    fn searchable_pdf_mode_is_not_processed_yet() {
-        let input = path("searchable-mode.pdf");
-        let output_root = path("searchable-mode-output");
-        let mut request = ocr_request(&input, None, &output_root);
-        request.mode = "searchablePdf".into();
-        let outcome = ocr_pdf(&run_of(request), input.clone());
-        assert_eq!(outcome.error().map(|error| error.kind.clone()), Some(ErrorKind::Unavailable));
-        assert!(!output_root.exists());
+    fn word_boxes_keep_reading_order_and_take_line_heights_from_line_rows() {
+        let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+1\t1\t0\t0\t0\t0\t0\t0\t1700\t2200\t-1\t\n\
+4\t1\t1\t1\t1\t0\t100\t200\t500\t60\t-1\t\n\
+5\t1\t1\t1\t1\t1\t100\t210\t200\t40\t96.1\tFirst\n\
+5\t1\t1\t1\t1\t2\t320\t205\t280\t50\t12.0\tline\n\
+5\t1\t1\t1\t1\t3\t620\t205\t0\t0\t-1\t \n\
+5\t1\t2\t1\t1\t1\t100\t400\t240\t50\t91.0\tПривет\r\n";
+        let layout = super::word_boxes(tsv.as_bytes()).unwrap();
+        assert_eq!((layout.width, layout.height), (1700., 2200.));
+        let lines = layout.lines.iter().map(|line| (line.top, line.bottom, line.words.iter().map(|word| (word.text.as_str(), word.left, word.width)).collect::<Vec<_>>())).collect::<Vec<_>>();
+        assert_eq!(lines, vec![
+            (200., 260., vec![("First", 100., 200.), ("line", 320., 280.)]),
+            (400., 450., vec![("Привет", 100., 240.)]),
+        ]);
+        assert_eq!(super::word_boxes(b"level\tpage_num\n1\t1\t0\t0\t0\t0\t0\t0\t1700\t2200\t-1\t\n").unwrap().lines, Vec::new());
+        assert!(super::word_boxes(b"5\t1\t1\t1\t1\t1\t1\t1\t9\t9\t90\tlost\n").is_err(), "words without a page size can't be placed");
+        assert!(super::word_boxes(b"5\t1\t1\tnot a box\n").is_err());
     }
 
     #[test]

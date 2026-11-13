@@ -1753,16 +1753,16 @@ test("PDF page-scoped conversions send the selected pages and reach OCR from the
     await ocrButton.click();
     await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
     await expect(page.getByText("Unavailable in this build.", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Output preview unavailable. Export recognizes the text on each page and saves it as a text file.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Output preview unavailable. Export recognizes the text on each page and saves it as a searchable PDF.", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
-    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: null, mode: "text" } });
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: null, mode: "searchablePdf" } });
     await page.getByRole("img", { name: "Source page preview 1" }).click();
     await expect(pageOne).not.toBeChecked();
     await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
-    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: "2-3", mode: "text" } });
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pageRange: "2-3", mode: "searchablePdf" } });
 });
 
-test("OCR sends scans as a text-file request to the folder chosen in Settings", async ({ page }) => {
+test("OCR saves searchable PDFs by default and a text file once Save as is switched, to the folder chosen in Settings", async ({ page }) => {
     await storeOutputSettings(page, { mode: "customFolder", folder: "/fake/shell/output" });
     await page.goto("/");
     await openFromHome(page, "Extract from PDF");
@@ -1770,17 +1770,71 @@ test("OCR sends scans as a text-file request to the folder chosen in Settings", 
     await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [pdfFixturePath, "/local/second-scan.pdf"]);
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByText("second-scan.pdf", { exact: true }).first()).toBeVisible();
-    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
 
-    const invocation = await lastInvocation(page, "ocr_pdf");
-    expect((invocation?.args as { request?: unknown } | undefined)?.request).toEqual({
+    const saveAs = page.getByRole("radiogroup", { name: "Save as" });
+    const example = page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example");
+    await expect(saveAs.getByRole("radio", { name: "Searchable PDF", exact: true })).toBeChecked();
+    await expect(saveAs.getByRole("radio", { name: "Text file", exact: true })).not.toBeChecked();
+    await expect(page.getByText("Looks exactly like the scan, with text you can select and search.", { exact: true })).toBeVisible();
+    await expect(example).toHaveText("document-ocr.pdf");
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    const request = {
         paths: [pdfFixturePath, "/local/second-scan.pdf"],
         pageRange: null,
-        mode: "text",
+        mode: "searchablePdf",
         force: false,
         languages: ["eng"],
         outputLocation: { customFolder: "/fake/shell/output" },
-    });
+    };
+    expect(((await lastInvocation(page, "ocr_pdf"))?.args as { request?: unknown } | undefined)?.request).toEqual(request);
+
+    await saveAs.getByRole("radio", { name: "Text file", exact: true }).click();
+    await expect(saveAs.getByRole("radio", { name: "Text file", exact: true })).toBeChecked();
+    await expect(page.getByText("Plain text, page by page. Pages that already have text add it as it is, so the file covers every page in scope.", { exact: true })).toBeVisible();
+    await expect(example).toHaveText("document-ocr.txt");
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    await expect.poll(async () => ((await lastInvocation(page, "ocr_pdf"))?.args as { request?: { mode?: string } } | undefined)?.request?.mode).toBe("text");
+    expect(((await lastInvocation(page, "ocr_pdf"))?.args as { request?: unknown } | undefined)?.request).toEqual({ ...request, mode: "text" });
+});
+
+test("OCR Save as switches by keyboard and its searchable PDF rows open and reveal the .pdf", async ({ page }) => {
+    const searchable = "/fake/shell/output/document-ocr.pdf";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded(pdfFixturePath, [searchable], { detail: "1 page recognized. English." }),
+        failed("/local/rotated.pdf", "processing", "Page 1 is rotated or cropped. Searchable PDFs support upright, uncropped pages for now. Save a text file instead."),
+    ]);
+    await openFromHome(page, "Extract from PDF");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await chooseFixture(page, pdfFixturePath);
+
+    const saveAs = page.getByRole("radiogroup", { name: "Save as" });
+    const pdfMode = saveAs.getByRole("radio", { name: "Searchable PDF", exact: true });
+    const textMode = saveAs.getByRole("radio", { name: "Text file", exact: true });
+    await pdfMode.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(textMode).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(textMode).toBeChecked();
+    await page.keyboard.press("ArrowLeft");
+    await expect(pdfMode).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(pdfMode).toBeChecked();
+    await expect(page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example")).toHaveText("document-ocr.pdf");
+
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+    expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { mode: "searchablePdf" } });
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("document-ocr.pdf");
+    await rows.nth(0).getByRole("button", { name: "Open document-ocr.pdf", exact: true }).click();
+    await rows.nth(0).getByRole("button", { name: "Show in Finder: document-ocr.pdf", exact: true }).click();
+    expect(await fileActionInvocations(page)).toEqual([
+        { command: "open_output_path", args: { path: searchable } },
+        { command: "reveal_output_path", args: { path: searchable } },
+    ]);
+    await expect(rows.nth(1)).toContainText("Page 1 is rotated or cropped.");
+    await expect(rows.nth(1).getByRole("button", { name: /^Show in Finder|^Open .*\.pdf$/ })).toHaveCount(0);
 });
 
 test("OCR shows a missing engine, a locked scan and a blank scan beside a saved text file", async ({ page }) => {
@@ -2069,6 +2123,7 @@ test.describe("Extract from PDF", () => {
         await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
         await expect(page.getByText("site-survey-scan.pdf", { exact: true }).first()).toBeVisible();
         await expect(page.getByText("report.pdf", { exact: true })).toHaveCount(0);
+        await expect(page.getByRole("radiogroup", { name: "Save as" }).getByRole("radio", { name: "Text file", exact: true })).toBeChecked();
         await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
         expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: [pdfs[1]], mode: "text" } });
     });

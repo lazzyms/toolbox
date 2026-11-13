@@ -37,6 +37,8 @@ export type OptionsPanelProps<Options> = {
 
 export interface ConversionTool<Options = unknown> {
   initialOptions?: Options;
+  /** Options to start from when another tool hands its files over. */
+  handoffOptions?: Options;
   inspectsPdf: boolean;
   sortOptions?: readonly EntrySortOption[];
   /** Intake wording for a tool whose list flags files that will be skipped or aren't available yet. */
