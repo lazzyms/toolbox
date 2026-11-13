@@ -31,17 +31,22 @@ fn tree(bytes: &[u8]) -> Result<Node, ToolError> { shared::tree(bytes, DAMAGED) 
 
 fn in_body(open: &[Node]) -> bool { open.len() == 3 && open[1].name == "body" && open[2].name == "text" }
 
+/// The media type of each manifest entry by path. A package with encrypted entries returns `locked` before any content is read.
+pub(super) fn manifest(package: &mut Package, damaged: &'static str, locked: ToolError) -> Result<HashMap<String, String>, ToolError> {
+    let mut media = HashMap::new();
+    let Some(manifest) = package.part("META-INF/manifest.xml")? else { return Ok(media) };
+    let manifest = shared::tree(&manifest, damaged)?;
+    if manifest.find("encryption-data").is_some() { return Err(locked); }
+    for entry in manifest.nodes().filter(|node| node.name == "file-entry") {
+        if let (Some(path), Some(kind)) = (entry.attr("full-path"), entry.attr("media-type")) { media.insert(path.trim_end_matches('/').to_string(), kind.to_string()); }
+    }
+    Ok(media)
+}
+
 /// Reads an ODT package. `budget` caps the bytes expanded across every part read; going over returns `exceeded`, and a password-protected package returns `locked`.
 pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError, locked: ToolError) -> Result<Parsed, ToolError> {
     let mut package = Package::open(bytes, budget, exceeded, DAMAGED)?;
-    let mut media = HashMap::new();
-    if let Some(manifest) = package.part("META-INF/manifest.xml")? {
-        let manifest = tree(&manifest)?;
-        if manifest.find("encryption-data").is_some() { return Err(locked); }
-        for entry in manifest.nodes().filter(|node| node.name == "file-entry") {
-            if let (Some(path), Some(kind)) = (entry.attr("full-path"), entry.attr("media-type")) { media.insert(path.trim_end_matches('/').to_string(), kind.to_string()); }
-        }
-    }
+    let media = manifest(&mut package, DAMAGED, locked)?;
 
     let mut styles = Styles::default();
     if let Some(bytes) = package.part("styles.xml")? { styles.read(&tree(&bytes)?); }
@@ -52,19 +57,8 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError, locked: ToolError) 
     let embedded = styles.embedded(&mut package)?;
 
     let base = styles.paragraph(Some("Standard"));
-    let mut converter = Converter {
-        fonts: Families { body: styles.font(&base.text), others: Vec::new() },
-        body_size: font_size(&base.text),
-        package,
-        styles,
-        media,
-        pictures: Vec::new(),
-        omitted: Omitted::default(),
-        headings: 0,
-        lists: 0,
-        band: false,
-        master: None,
-    };
+    let fonts = Families { body: styles.font(&base.text), others: Vec::new() };
+    let mut converter = Converter::new(package, styles, media, fonts);
     let mut out = Out::default();
     shared::walk(&content, in_body, DAMAGED, |node| converter.block(&node, &mut out))?;
     let blocks = out.finish();
@@ -123,7 +117,7 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError, locked: ToolError) 
         pictures: converter.pictures,
         families: converter.fonts.others,
         body_family: converter.fonts.body,
-        body_size: converter.body_size,
+        body_size: font_size(&base.text),
         embedded,
         title,
         author,
@@ -133,7 +127,7 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError, locked: ToolError) 
 }
 
 #[derive(Debug, Default)]
-struct StyleDef { parent: Option<String>, text: Props, paragraph: Props, graphic: Props, table: Props, master: Option<String>, outline: Option<u8> }
+struct StyleDef { parent: Option<String>, text: Props, paragraph: Props, graphic: Props, table: Props, page: Props, master: Option<String>, outline: Option<u8> }
 
 #[derive(Debug, Clone, Copy)]
 struct Level { bullet: bool, start: u64 }
@@ -200,6 +194,7 @@ impl Styles {
                     "paragraph-properties" => definition.paragraph = properties(child),
                     "graphic-properties" => definition.graphic = properties(child),
                     "table-properties" => definition.table = properties(child),
+                    "drawing-page-properties" => definition.page = properties(child),
                     _ => {}
                 }
             }
@@ -251,10 +246,33 @@ impl Styles {
         text
     }
 
-    fn graphic(&self, name: Option<&str>) -> Props {
+    /// The style chains a drawing names. Its drawing and presentation style names share one attribute name once prefixes are dropped, so every one is followed.
+    fn drawing_chains<'s>(&'s self, node: &'s Node) -> impl Iterator<Item = &'s StyleDef> + 's {
+        let names = node.attrs.iter().filter(|(key, _)| key == "style-name").map(|(_, name)| name.as_str());
+        names.flat_map(move |name| self.chain("presentation", Some(name)).into_iter().chain(self.chain("graphic", Some(name))))
+    }
+
+    fn graphic(&self, node: &Node) -> Props {
         let mut graphic = self.defaults.get("graphic").map(|def| def.graphic.clone()).unwrap_or_default();
-        for def in self.chain("graphic", name) { graphic.extend(def.graphic.clone()); }
+        for def in self.drawing_chains(node) { graphic.extend(def.graphic.clone()); }
         graphic
+    }
+
+    /// The text properties a drawing's style gives the text inside it.
+    pub(super) fn drawing_text(&self, node: &Node) -> Props {
+        let mut text = self.defaults.get("graphic").map(|def| def.text.clone()).unwrap_or_default();
+        for def in self.drawing_chains(node) { merge_text(&mut text, &def.text); }
+        text
+    }
+
+    /// The properties of a slide's drawing page style.
+    pub(super) fn drawing_page(&self, name: Option<&str>) -> Props {
+        self.chain("drawing-page", name).into_iter().fold(Props::new(), |mut page, def| { page.extend(def.page.clone()); page })
+    }
+
+    /// A master page by name, falling back to the first one.
+    pub(super) fn master(&self, name: Option<&str>) -> Option<&Node> {
+        name.and_then(|name| self.masters.iter().find(|page| page.attr("name") == Some(name))).or(self.masters.first())
     }
 
     /// The text properties of a spreadsheet cell style, starting from the default cell style.
@@ -288,7 +306,7 @@ impl Styles {
             .filter(|family| !family.is_empty())
     }
 
-    fn embedded(&self, package: &mut Package) -> Result<Vec<EmbeddedFont>, ToolError> {
+    pub(super) fn embedded(&self, package: &mut Package) -> Result<Vec<EmbeddedFont>, ToolError> {
         let mut faces = self.faces.values().collect::<Vec<_>>();
         faces.sort_by(|left, right| left.0.cmp(&right.0));
         let mut fonts = Vec::new();
@@ -319,22 +337,28 @@ pub(super) fn link_target(href: &str) -> Option<String> {
     }
 }
 
-struct Converter<'a> {
-    package: Package<'a>,
-    styles: Styles,
+/// Turns document content into blocks. With `slides` set, text inside a drawing starts from the text properties of the drawing's style, as presentations store them.
+pub(super) struct Converter<'a> {
+    pub(super) package: Package<'a>,
+    pub(super) styles: Styles,
     media: HashMap<String, String>,
-    fonts: Families,
-    body_size: f32,
-    pictures: Vec<Picture>,
-    omitted: Omitted,
+    pub(super) fonts: Families,
+    pub(super) pictures: Vec<Picture>,
+    pub(super) omitted: Omitted,
     headings: usize,
     lists: usize,
     band: bool,
     master: Option<String>,
+    pub(super) slides: bool,
+    base: Props,
 }
 
-impl Converter<'_> {
-    fn block(&mut self, node: &Node, out: &mut Out) -> Result<(), ToolError> {
+impl<'a> Converter<'a> {
+    pub(super) fn new(package: Package<'a>, styles: Styles, media: HashMap<String, String>, fonts: Families) -> Self {
+        Self { package, styles, media, fonts, pictures: Vec::new(), omitted: Omitted::default(), headings: 0, lists: 0, band: false, master: None, slides: false, base: Props::new() }
+    }
+
+    pub(super) fn block(&mut self, node: &Node, out: &mut Out) -> Result<(), ToolError> {
         match node.name.as_str() {
             "p" | "h" => self.paragraph(node, out)?,
             "list" => {
@@ -357,7 +381,12 @@ impl Converter<'_> {
     }
 
     fn collect(&mut self, node: &Node) -> Result<(Collected, ParaStyle), ToolError> {
-        let style = self.styles.paragraph(node.attr("style-name"));
+        let mut style = self.styles.paragraph(node.attr("style-name"));
+        if !self.base.is_empty() {
+            let mut text = self.base.clone();
+            merge_text(&mut text, &style.text);
+            style.text = text;
+        }
         let mut collected = Collected::new();
         self.inline(node, &style.text, None, &mut collected)?;
         Ok((collected, style))
@@ -533,8 +562,8 @@ impl Converter<'_> {
             "a" | "g" => for child in node.nodes() { self.drawing(child, out)?; },
             "frame" => self.frame(node, out)?,
             "custom-shape" | "rect" | "ellipse" | "circle" | "regular-polygon" => {
-                let blocks = self.text_box(node)?;
-                let graphic = self.styles.graphic(node.attr("style-name"));
+                let blocks = self.drawing_text(node, node)?;
+                let graphic = self.styles.graphic(node);
                 let (fill, line) = paint(&graphic, true);
                 self.place(node, &graphic, None, blocks, fill, line, out);
             }
@@ -544,7 +573,7 @@ impl Converter<'_> {
     }
 
     fn frame(&mut self, node: &Node, out: &mut Collected) -> Result<(), ToolError> {
-        let graphic = self.styles.graphic(node.attr("style-name"));
+        let graphic = self.styles.graphic(node);
         if let Some(object) = node.nodes().find(|child| child.name == "object" || child.name == "object-ole") {
             match self.image(node)? {
                 Some(index) => self.place(node, &graphic, Some(index), Vec::new(), None, None, out),
@@ -552,7 +581,7 @@ impl Converter<'_> {
                 None => self.omitted.objects += 1,
             }
         } else if let Some(content) = node.child("text-box") {
-            let blocks = self.text_box(content)?;
+            let blocks = self.drawing_text(node, content)?;
             let (fill, line) = paint(&graphic, false);
             self.place(node, &graphic, None, blocks, fill, line, out);
         } else if node.child("image").is_some() {
@@ -592,6 +621,15 @@ impl Converter<'_> {
         let mut out = Out::default();
         for child in content.nodes() { self.block(child, &mut out)?; }
         Ok(out.finish())
+    }
+
+    /// The blocks of the text in `content`, which belongs to the drawing `styled`.
+    pub(super) fn drawing_text(&mut self, styled: &Node, content: &Node) -> Result<Vec<Block>, ToolError> {
+        let base = if self.slides { self.styles.drawing_text(styled) } else { Props::new() };
+        let outer = std::mem::replace(&mut self.base, base);
+        let blocks = self.text_box(content);
+        self.base = outer;
+        blocks
     }
 
     #[allow(clippy::too_many_arguments)]
