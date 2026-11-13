@@ -4908,8 +4908,14 @@ mod command_tests {
         let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), picks: Vec::new(), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
+        // Extract from PDF is one tool with three modes, so the sweep runs Text, Images and Both, each in its own folder.
+        let mixed_pdf = root.join("mixed.pdf"); make_extract_pdf(&mixed_pdf, &[(true, true)]);
+        let mixed_pdf_bytes = std::fs::read(&mixed_pdf).unwrap();
         if pdftotext_available() {
             outputs.extend(named(&mut naming, "extract_from_pdf", pdf.clone(), assert_success("extract text from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, None, location(&root, "extract text"))))));
+            let both = assert_success("extract text and images from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![mixed_pdf.clone()], ExtractMode::Both, None, location(&root, "extract both"))));
+            assert_eq!(both, [root.join("extract both").join("mixed-text.txt"), root.join("extract both").join("mixed-images")], "Both saves the text file and the images folder together");
+            outputs.extend(named(&mut naming, "extract_from_pdf", mixed_pdf.clone(), both));
         }
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
         assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
@@ -5097,6 +5103,7 @@ mod command_tests {
         assert_outputs_use_declared_suffixes(&naming);
 
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "native E2E commands must not modify their PDF input");
+        assert_eq!(std::fs::read(&mixed_pdf).unwrap(), mixed_pdf_bytes, "native E2E commands must not modify the PDF they extract from");
         assert_eq!(std::fs::read(&image).unwrap(), plain_image_bytes, "native E2E commands must not modify their image input");
         assert_eq!(std::fs::read(&lossy_image).unwrap(), plain_lossy_image_bytes, "native E2E commands must not modify their lossy image input");
         assert_eq!(std::fs::read(&animated).unwrap(), animated_bytes, "native E2E commands must not modify their GIF input");
@@ -9113,6 +9120,62 @@ mod command_tests {
         assert_eq!(small[0].detail, "The 1 image is smaller than the minimum size, so only the text file was saved.");
 
         for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn extract_from_pdf_saves_where_the_location_says_and_reads_signed_pdfs_without_a_warning() {
+        if !pdftotext_available() { return; }
+        use crate::kit::contracts::OutcomeState;
+        let root = sandbox("extract-from-pdf-location");
+        let _ = std::fs::remove_dir_all(&root);
+        let originals_folder = root.join("originals");
+        let chosen = root.join("chosen");
+        std::fs::create_dir_all(&originals_folder).unwrap();
+        std::fs::create_dir_all(&chosen).unwrap();
+        let signed = originals_folder.join("signed.pdf");
+        let certified = originals_folder.join("certified.pdf");
+        for path in [&signed, &certified] { make_extract_pdf(path, &[(true, true)]); }
+        let mut document = lopdf::Document::load(&signed).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed).unwrap();
+        assert!(crate::kit::pdf::has_signed_signature_field(&lopdf::Document::load(&signed).unwrap()));
+        let mut document = lopdf::Document::load(&certified).unwrap();
+        let signature = document.add_object(lopdf::dictionary! { "Type" => "Sig" });
+        document.catalog_mut().unwrap().set("Perms", lopdf::dictionary! { "DocMDP" => signature });
+        document.save(&certified).unwrap();
+        let paths = vec![signed.clone(), certified.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let run = |mode, output_location| tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(paths.clone(), mode, None, output_location)));
+        // Extraction only reads the PDF, so a signed one succeeds like any other with no "signature removed" warning.
+        let outputs = |outcomes: Vec<JobOutcome>| outcomes.into_iter().map(|outcome| {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{outcome:?}");
+            assert!(outcome.warnings.is_empty(), "reading a signed PDF gives no warning: {outcome:?}");
+            outcome.output_paths().to_vec()
+        }).collect::<Vec<_>>();
+        let in_folder = |folder: &PathBuf, per_pdf: [&[&str]; 2]| per_pdf.map(|names| names.iter().map(|name| folder.join(name)).collect::<Vec<_>>()).to_vec();
+
+        // The default saves next to each original.
+        assert_eq!(outputs(run(ExtractMode::Both, OutputLocation::AlongsideInput)), in_folder(&originals_folder, [&["signed-text.txt", "signed-images"], &["certified-text.txt", "certified-images"]]));
+        assert_eq!(files_in(&originals_folder), ["certified-images", "certified-text.txt", "certified.pdf", "signed-images", "signed-text.txt", "signed.pdf"]);
+
+        // A chosen folder takes the text files and the image folders in every mode, and nothing more lands next to the originals.
+        let chosen_location = || OutputLocation::CustomFolder(chosen.clone());
+        assert_eq!(outputs(run(ExtractMode::Text, chosen_location())), in_folder(&chosen, [&["signed-text.txt"], &["certified-text.txt"]]));
+        assert_eq!(outputs(run(ExtractMode::Images, chosen_location())), in_folder(&chosen, [&["signed-images"], &["certified-images"]]));
+        assert_eq!(files_in(&chosen.join("signed-images")), ["page-1-image-1.jpg"]);
+
+        // Names already taken there, by an earlier run or by an unrelated file, get the next free number; nothing is replaced or reused.
+        assert_eq!(outputs(run(ExtractMode::Both, chosen_location())), in_folder(&chosen, [&["signed-text-1.txt", "signed-images-1"], &["certified-text-1.txt", "certified-images-1"]]));
+        std::fs::write(chosen.join("signed-text-2.txt"), "keep").unwrap();
+        std::fs::write(chosen.join("signed-images-2"), "keep").unwrap();
+        assert_eq!(outputs(run(ExtractMode::Both, chosen_location())), in_folder(&chosen, [&["signed-text-3.txt", "signed-images-3"], &["certified-text-2.txt", "certified-images-2"]]));
+        for name in ["signed-text-2.txt", "signed-images-2"] { assert_eq!(std::fs::read_to_string(chosen.join(name)).unwrap(), "keep"); }
+        for folder in ["signed-images", "signed-images-1", "signed-images-3"] { assert_eq!(files_in(&chosen.join(folder)), ["page-1-image-1.jpg"], "{folder}"); }
+        assert_eq!(std::fs::read_to_string(chosen.join("signed-text.txt")).unwrap(), std::fs::read_to_string(chosen.join("signed-text-3.txt")).unwrap());
+        assert_eq!(files_in(&originals_folder).len(), 6, "a chosen folder leaves the originals' folder alone");
+
+        for (path, original) in paths.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original, "{} was modified", path.display()); }
         let _ = std::fs::remove_dir_all(root);
     }
 

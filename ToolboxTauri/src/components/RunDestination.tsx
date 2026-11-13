@@ -45,13 +45,15 @@ interface RunDestinationProps {
     exampleName: string | readonly string[] | null;
     exampleHint?: string;
     savesOneFile?: boolean;
+    /** Ends the per-run hint by saying the saved setting is unchanged, where the tool's board says so. */
+    mentionsSettingKept?: boolean;
     label?: string;
     note?: string;
     onChange: () => void;
     onReset: () => void;
 }
 
-export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, exampleHint, savesOneFile = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, exampleHint, savesOneFile = false, mentionsSettingKept = false, label = 'Save to', note, onChange, onReset }: RunDestinationProps) => {
     const home = useHomeDir();
     return (
     <section aria-label="Destination" className="run-destination">
@@ -72,7 +74,7 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
         </div>
         {overridden && (
             <p className="run-destination-hint">
-                Your default is {defaultLocation === 'alongsideInput' ? 'next to each original' : shortenHomePath(defaultLocation.customFolder, home)}. This change ends when you leave {toolTitle}.
+                Your default is {defaultLocation === 'alongsideInput' ? 'next to each original' : shortenHomePath(defaultLocation.customFolder, home)}. This change ends when you leave {toolTitle}{mentionsSettingKept ? ', and your setting stays as it is.' : '.'}
             </p>
         )}
         </>}

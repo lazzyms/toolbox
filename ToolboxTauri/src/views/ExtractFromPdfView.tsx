@@ -70,6 +70,7 @@ export const ExtractFromPdfView = ({ utility, initialPaths = [], onFilesChange }
       utility={utility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
+      destinationMentionsSettingKept
       exampleName={mode === "images" ? (path) => exampleOutputName(path, utility.command, "-images", "") : undefined}
       onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>("extract_from_pdf", {
         runId,
