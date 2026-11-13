@@ -25,7 +25,7 @@ import { TablerIcon } from "../components/TablerIcon";
 import { RunStateContext, type DiscardGuard, type WorkspaceSourceAction } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { WorkspaceCommandRail } from "../components/WorkspaceCommandRail";
-import { matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
+import { isWindows, matchShortcut, pressShortcutTarget, shortcutAria, shortcutLabel, shortcutTarget } from "../shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -340,10 +340,12 @@ export const MainPage = () => {
     const onEditorKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || settingsSection || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
-      const command = key === "z" ? (event.shiftKey ? "redo" : "undo") : key === "y" && !event.shiftKey ? "redo" : key === "e" ? "export" : null;
+      // Windows also redoes with Ctrl+Y. On macOS, Cmd+Y belongs to other apps' history, so it does nothing here.
+      const command = key === "z" ? (event.shiftKey ? "redo" : "undo")
+        : key === "y" && isWindows() && event.ctrlKey && !event.shiftKey ? "redo" : key === "e" ? "export" : null;
       if (!command) return;
       const target = event.target instanceof HTMLElement ? event.target : null;
-      if ((key === "z" || key === "y") && target?.closest("input, textarea, [contenteditable='true']")) return;
+      if (command !== "export" && target?.closest("input, textarea, [contenteditable='true']")) return;
       event.preventDefault();
       dispatchEditorCommand(command);
     };

@@ -296,9 +296,9 @@ test('a password-protected export result reads plainly and points to Lock & Unlo
 test('native structure refusals still read as plain language on the result row', async ({ page }) => {
   const cases = [
     ['This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after crop or rotation; scene export was rejected before output',
-      'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.'],
+      'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop, rotation or mirror, or use a copy without them.'],
     ['This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output',
-      'This PDF has annotations or form fields that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.'],
+      'This PDF has annotations or form fields that cannot be preserved after this page edit. Undo the crop, rotation or mirror, or use a copy without them.'],
     ['This PDF contains navigation or form structures that could target a removed page; scene export was rejected before output',
       'This page edit could break bookmarks or form fields. Undo it, or use a copy without those structures.'],
     ['This tagged PDF contains structure mappings that cannot be remapped by scene edits; scene export was rejected before output',

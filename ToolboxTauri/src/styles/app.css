@@ -1721,6 +1721,10 @@ fieldset.scene-inspector-field { min-inline-size: 0; margin: 0; padding: 0; bord
 .scene-organize-count { min-width: 128px; font-size: 13px; font-weight: 600; text-align: right; }
 .scene-organize-select { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 16px; border-bottom: 1px solid var(--border); }
 .scene-organize-select .scene-organize-size { margin-left: auto; }
+.scene-shortcuts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; margin: 0; font-size: 14px; }
+.scene-shortcuts > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.scene-shortcuts dd { margin: 0; }
+@media (max-width: 560px) { .scene-shortcuts { grid-template-columns: minmax(0, 1fr); } }
 .scene-organize-hint { font-size: 12px; font-weight: 400; color: var(--muted-foreground); }
 .scene-organize-select-group { display: flex; align-items: center; gap: 2px; }
 .scene-organize-range { position: relative; display: flex; align-items: center; gap: 6px; }
