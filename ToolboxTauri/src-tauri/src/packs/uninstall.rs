@@ -8,13 +8,17 @@
 //!
 //! Uninstall moves `packs/<id>` out of `packs/` while the holds are locked, so a run can never
 //! start using a pack that is half removed, and then deletes it before returning.
+//!
+//! An update installs the new version beside the old one and records it, so the next resolution
+//! uses it. The old version folder is retired: removed at once when no run holds the pack, or else
+//! when the last run holding the pack finishes ([`retire_old_versions`]).
 
 use super::health::{self, Health};
 use super::install::{self, unavailable, PackInstallError, PackInstallErrorKind, INSTALL_LOCK};
-use super::{list_packs_in, load_catalog, PackList, PACKS_DIR};
+use super::{list_packs_in, load_catalog, read_record, PackList, PACKS_DIR};
 use crate::kit::contracts::{OutcomePointer, ToolError};
 use crate::kit::resources::{resolve_pack_backed, PackBackedLocations, ResolvedResource, ResourceSource};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
@@ -22,10 +26,17 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 /// volume. Anything left here by an interrupted uninstall is deleted by the next one.
 const REMOVING_DIR: &str = "pack-removing";
 
-/// How many runs hold each pack, by pack folder.
-static HOLDS: LazyLock<Mutex<HashMap<PathBuf, usize>>> = LazyLock::new(Default::default);
+#[derive(Default)]
+struct Holds {
+    /// How many runs hold each pack, by pack folder.
+    runs: HashMap<PathBuf, usize>,
+    /// Pack folders with an old version left for the runs holding them, removed when they finish.
+    retiring: HashSet<PathBuf>,
+}
 
-fn holds() -> MutexGuard<'static, HashMap<PathBuf, usize>> {
+static HOLDS: LazyLock<Mutex<Holds>> = LazyLock::new(Default::default);
+
+fn holds() -> MutexGuard<'static, Holds> {
     HOLDS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -49,32 +60,76 @@ impl PackHolds {
         if self.folders.contains(&folder) {
             return false;
         }
-        *holds().entry(folder.clone()).or_default() += 1;
+        *holds().runs.entry(folder.clone()).or_default() += 1;
         self.folders.insert(folder);
         true
     }
 
     fn release(&mut self, folder: &Path) {
-        if self.folders.remove(folder) {
-            unhold(&mut holds(), folder);
+        if self.folders.remove(folder) && unhold(&mut holds(), folder) {
+            finish_retiring(folder);
         }
     }
 }
 
 impl Drop for PackHolds {
     fn drop(&mut self) {
-        let mut holds = holds();
-        for folder in &self.folders {
-            unhold(&mut holds, folder);
+        let freed: Vec<&PathBuf> = {
+            let mut holds = holds();
+            self.folders.iter().filter(|folder| unhold(&mut holds, folder)).collect()
+        };
+        for folder in freed {
+            finish_retiring(folder);
         }
     }
 }
 
-fn unhold(holds: &mut HashMap<PathBuf, usize>, folder: &Path) {
-    if let Some(count) = holds.get_mut(folder) {
+/// Releases one hold. Returns whether that freed a pack with an old version waiting for removal.
+fn unhold(holds: &mut Holds, folder: &Path) -> bool {
+    if let Some(count) = holds.runs.get_mut(folder) {
         *count -= 1;
         if *count == 0 {
-            holds.remove(folder);
+            holds.runs.remove(folder);
+            return holds.retiring.contains(folder);
+        }
+    }
+    false
+}
+
+/// Called with the install lock held, once a new version of the pack in `folder` is recorded.
+/// Removes every other version folder now, or once no run holds the pack.
+pub(super) fn retire_old_versions(folder: &Path) {
+    let mut holds = holds();
+    if holds.runs.contains_key(folder) {
+        holds.retiring.insert(folder.to_path_buf());
+    } else {
+        holds.retiring.remove(folder);
+        remove_old_versions(folder);
+    }
+}
+
+/// The last run holding the pack in `folder` finished: removes the versions it left behind,
+/// unless another run holds the pack again by then.
+fn finish_retiring(folder: &Path) {
+    // Not while an install is recording a new version folder.
+    let _one_at_a_time = INSTALL_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut holds = holds();
+    if !holds.runs.contains_key(folder) && holds.retiring.remove(folder) {
+        remove_old_versions(folder);
+    }
+}
+
+/// Removes every version folder in the pack folder except the recorded one, including any an
+/// interrupted update left. Leaves everything when no record can be read.
+fn remove_old_versions(folder: &Path) {
+    let Some(record) = read_record(folder) else { return };
+    let Ok(entries) = std::fs::read_dir(folder) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let old = name.to_str().is_some_and(|name| name != record.version && install::is_plain_segment(name));
+        if old && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            // Only frees space: nothing resolves from a version that is not recorded.
+            let _ = install::remove_tree(&entry.path());
         }
     }
 }
@@ -82,21 +137,22 @@ fn unhold(holds: &mut HashMap<PathBuf, usize>, folder: &Path) {
 /// How many runs hold the pack now.
 #[cfg(test)]
 fn holders(app_data: &Path, pack_id: &str) -> usize {
-    holds().get(&pack_folder(app_data, pack_id)).copied().unwrap_or(0)
+    holds().runs.get(&pack_folder(app_data, pack_id)).copied().unwrap_or(0)
 }
 
 /// Resolves a pack-backed resource for a run. When it comes from the installed pack, the run holds
 /// the pack until `holds` is dropped. The hold is taken before the pack is read, so an uninstall
 /// either finishes first, and the resource is not resolved from the pack, or is refused.
 ///
-/// The pack is checked at its first use this session ([`health`]). A damaged pack fails with
+/// The pack is checked at its first use this session ([`health`]). A damaged pack, or one whose
+/// format or app range does not fit `app_version` (incompatible), fails with
 /// [`ErrorKind::Unavailable`](crate::kit::contracts::ErrorKind) pointing to the pack, and nothing
 /// past it, such as a development override, is used in its place. Each file the run would process
 /// with the resource fails with this error.
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn resolve_pack_resource(name: &str, app_data: &Path, pack_id: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>, holds: &mut PackHolds) -> Result<ResolvedResource, ToolError> {
+pub fn resolve_pack_resource(name: &str, app_data: &Path, pack_id: &str, app_version: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>, holds: &mut PackHolds) -> Result<ResolvedResource, ToolError> {
     let newly_held = holds.hold(app_data, pack_id);
-    let resolved = resolve_checked(name, app_data, pack_id, bundled_root, development_override);
+    let resolved = resolve_checked(name, app_data, pack_id, app_version, bundled_root, development_override);
     let from_pack = matches!(&resolved, Ok(resource) if resource.source == ResourceSource::InstalledPack);
     if newly_held && !from_pack {
         holds.release(&pack_folder(app_data, pack_id));
@@ -104,17 +160,24 @@ pub fn resolve_pack_resource(name: &str, app_data: &Path, pack_id: &str, bundled
     resolved
 }
 
-fn resolve_checked(name: &str, app_data: &Path, pack_id: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>) -> Result<ResolvedResource, ToolError> {
+fn resolve_checked(name: &str, app_data: &Path, pack_id: &str, app_version: &str, bundled_root: Option<PathBuf>, development_override: Option<PathBuf>) -> Result<ResolvedResource, ToolError> {
+    let pointer = || OutcomePointer::Pack { pack_id: pack_id.to_string() };
     let damaged = |reason: &str| ToolError::unavailable(format!("The {pack_id} pack is damaged. {reason} Repair it in Settings, Packs."))
-        .with_pointer(OutcomePointer::Pack { pack_id: pack_id.to_string() });
+        .with_pointer(pointer());
+    // Only a bundled copy, which never comes from the pack, may stand in for a pack that cannot be used.
+    let bundled_only = |bundled_root: Option<PathBuf>, error: ToolError| {
+        let bundled = PackBackedLocations { bundled_root, installed_pack_root: None, development_override: None };
+        resolve_pack_backed(name, &bundled).map_err(|_| error)
+    };
+    if read_record(&pack_folder(app_data, pack_id)).is_some_and(|record| !record.fits(app_version)) {
+        let incompatible = ToolError::unavailable(format!("The {pack_id} pack doesn't work with this version of Toolbox. Update Toolbox to use it, or update the pack in Settings, Packs."))
+            .with_pointer(pointer());
+        return bundled_only(bundled_root, incompatible);
+    }
     let installed_pack_root = match health::check(app_data, pack_id) {
         None => None,
         Some(Health::Verified(root)) => Some(root),
-        Some(Health::Damaged(reason)) => {
-            // Only a bundled copy, which never comes from the pack, may still be used.
-            let bundled = PackBackedLocations { bundled_root, installed_pack_root: None, development_override: None };
-            return resolve_pack_backed(name, &bundled).map_err(|_| damaged(&reason));
-        }
+        Some(Health::Damaged(reason)) => return bundled_only(bundled_root, damaged(&reason)),
     };
     let verified = installed_pack_root.is_some();
     let locations = PackBackedLocations { bundled_root, installed_pack_root, development_override };
@@ -152,8 +215,8 @@ pub fn uninstall(app_data: &Path, pack_id: &str) -> Result<(), PackInstallError>
     install::remove_tree(&removing).map_err(unavailable)?;
     let folder = pack_folder(app_data, pack_id);
     {
-        let holds = holds();
-        if let Some(count) = holds.get(&folder) {
+        let mut holds = holds();
+        if let Some(count) = holds.runs.get(&folder) {
             return Err(PackInstallError::new(PackInstallErrorKind::InUse, format!("{count} run(s) are using {pack_id}")));
         }
         if std::fs::symlink_metadata(&folder).is_err() {
@@ -161,6 +224,7 @@ pub fn uninstall(app_data: &Path, pack_id: &str) -> Result<(), PackInstallError>
         }
         std::fs::create_dir_all(&removing).map_err(unavailable)?;
         std::fs::rename(&folder, removing.join(pack_id)).map_err(unavailable)?;
+        holds.retiring.remove(&folder);
         health::forget(&folder);
     }
     // The pack is no longer under packs/: discovery and listing no longer see it.
@@ -205,7 +269,7 @@ mod tests {
         }
 
         fn resolve(&self, holds: &mut PackHolds) -> Result<ResolvedResource, ToolError> {
-            resolve_pack_resource(MODEL, &self.app_data, &self.fixture.id, None, None, holds)
+            resolve_pack_resource(MODEL, &self.app_data, &self.fixture.id, APP, None, None, holds)
         }
 
         fn uninstall(&self) -> Result<(), PackInstallError> {
@@ -307,7 +371,7 @@ mod tests {
         std::fs::copy(model.join(MODEL), bundled.join(MODEL)).unwrap();
         std::fs::copy(model.join("manifest.json"), bundled.join("manifest.json")).unwrap();
         let mut run = PackHolds::default();
-        let resolved = resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, Some(bundled), None, &mut run).unwrap();
+        let resolved = resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, APP, Some(bundled), None, &mut run).unwrap();
         assert_eq!(resolved.source, ResourceSource::Bundled);
         assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0);
         setup.uninstall().unwrap();
@@ -451,7 +515,7 @@ mod tests {
             let mut run = PackHolds::default();
             // Each input the run would process with the resource fails on its own.
             let outcomes = ["first.pdf", "second.pdf"].into_iter().map(|input| {
-                match resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, None, Some(development_override.clone()), &mut run) {
+                match resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, APP, None, Some(development_override.clone()), &mut run) {
                     Ok(resource) => panic!("{input} resolved {resource:?}"),
                     Err(error) => JobOutcome::failure(PathBuf::from(input), error),
                 }
@@ -501,6 +565,42 @@ mod tests {
         setup.uninstall().unwrap();
         assert_eq!(setup.status(), PackStatus::NotInstalled);
         setup.repair_from(&setup.pack_file()).unwrap();
+        assert_eq!(setup.resolve(&mut PackHolds::default()).unwrap().source, ResourceSource::InstalledPack);
+    }
+
+    #[test]
+    fn an_installed_pack_outside_its_format_or_app_range_is_listed_incompatible_and_never_resolved() {
+        let setup = Setup::new("incompatible");
+        let record_path = setup.folder().join(super::super::INSTALLED_FILE);
+        let compatible = std::fs::read_to_string(&record_path).unwrap();
+        let mut newer_format: serde_json::Value = serde_json::from_str(&compatible).unwrap();
+        newer_format["packFormat"] = serde_json::json!(super::super::PACK_FORMAT + 1);
+        let bundled = setup.app_data.parent().unwrap().join("bundled");
+        std::fs::create_dir_all(bundled.join("tessdata")).unwrap();
+        let installed = setup.folder().join(&setup.fixture.version);
+        std::fs::copy(installed.join(MODEL), bundled.join(MODEL)).unwrap();
+        std::fs::copy(installed.join("manifest.json"), bundled.join("manifest.json")).unwrap();
+
+        // An app older than the pack's range, and a pack format newer than this build reads.
+        for (case, app_version, record) in [("app range", "0.9.0", compatible.clone()), ("pack format", APP, newer_format.to_string())] {
+            std::fs::write(&record_path, record).unwrap();
+            let list = list_packs_in(&setup.catalog, &setup.app_data, &current_target(), app_version);
+            assert_eq!(list.packs[0].status, PackStatus::Incompatible, "{case}");
+
+            let development_override = installed.clone();
+            let mut run = PackHolds::default();
+            let error = resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, app_version, None, Some(development_override), &mut run).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Unavailable, "{case}");
+            assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: setup.fixture.id.clone() }), "{case}");
+            assert_eq!(error.message, "The ocr-hindi pack doesn't work with this version of Toolbox. Update Toolbox to use it, or update the pack in Settings, Packs.", "{case}");
+            assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0, "{case}: nothing was loaded from it");
+            // A bundled copy, which is not the pack, may still be used.
+            let resolved = resolve_pack_resource(MODEL, &setup.app_data, &setup.fixture.id, app_version, Some(bundled.clone()), None, &mut run).unwrap();
+            assert_eq!(resolved.source, ResourceSource::Bundled, "{case}");
+        }
+
+        // Back in range, the same files resolve from the pack again.
+        std::fs::write(&record_path, &compatible).unwrap();
         assert_eq!(setup.resolve(&mut PackHolds::default()).unwrap().source, ResourceSource::InstalledPack);
     }
 
