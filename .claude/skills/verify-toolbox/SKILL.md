@@ -13,16 +13,20 @@ Pick a run id like `20261020-222027-file-security` and set `run=.verification/ve
 
 ## Launch
 
-From `ToolboxTauri`, build the verification bundle once per code change and open it:
+From `ToolboxTauri`, stage the OCR helper, build the verification bundle once per code change, embed the PDF helpers and open it:
 
 ```sh
+npm run stage:ocr -- aarch64-apple-darwin
 npm run tauri -- build --debug --config ../.claude/skills/verify-toolbox/tauri.verify.json
+scripts/bundle-qpdf.sh "src-tauri/target/debug/bundle/macos/Toolbox Verification.app"
 open -n -W "src-tauri/target/debug/bundle/macos/Toolbox Verification.app"
 ```
 
+`bundle-qpdf.sh` needs the OCR manifest that `stage:ocr` writes. Without `bundle-qpdf.sh`, Extract from PDF fails with `PDF_TEXT_HELPER_MISSING`. Blur Faces and Remove Background stay unavailable whatever you stage, because `shared/tool-capabilities.json` marks them `unavailable`.
+
 Run the `open -W` line as a background task and keep its id. It returns when the app quits.
 
-The config names the bundle `Toolbox Verification` with identifier `com.toolbox.desktop.verify` and disables updater signing. Its window title stays `Toolbox`. App data stays apart from the installed `com.toolbox.desktop` app. It does not touch the preview on port 1420.
+The config names the bundle `Toolbox Verification` with identifier `com.toolbox.desktop.verify`. It skips updater artifacts and points the update check at a dead local endpoint, so no update prompt appears. In Settings, `Check now` reports `Could not check for updates`. Its window title stays `Toolbox`. App data stays apart from the installed `com.toolbox.desktop` app. It does not touch the preview on port 1420.
 
 The app is ready when `list_windows({app:"Toolbox Verification"})` returns a window titled `Toolbox` and its tree shows the `Search tools` field.
 
@@ -46,7 +50,7 @@ Make disposable inputs first:
 .claude/skills/verify-toolbox/helpers/make-fixtures.sh "$run"
 ```
 
-It writes `plain.pdf`, a permissions-only `restricted.pdf`, a `legacy.doc` stub and `inputs.sha256` into `$run/scratch/`, then prints their absolute paths. It needs `qpdf` and `openssl`.
+It writes `plain.pdf`, a second PDF `plain2.pdf`, a permissions-only `restricted.pdf`, a `legacy.doc` stub, two 1024×1024 images `sample.png` and `sample2.png`, `sample.heic` and `inputs.sha256` into `$run/scratch/`, then prints their absolute paths. It needs `qpdf`, `openssl` and macOS `sips`.
 
 Point the native Open panel at scratch before you open it:
 
@@ -65,9 +69,13 @@ Then drive with CUA in the background:
   2. `bring_to_front(pid, panel window id)`. Without it another app can sit on top and take the click.
   3. `get_desktop_state`, then `click({scope:"desktop", x, y})` on the file's icon. Pass x,y in that screenshot's frame; the tool scales them. Do not double them.
   4. Take a fresh `get_desktop_state` to confirm the selection and an enabled `Open` button, then desktop-click `Open`.
-  Multi-select in the panel has not worked. Drive multi-file batches one file per open, or record them as source-verified.
+  For a multi-file batch, desktop-click the first file, then add each other file with `click({scope:"desktop", x, y, modifier:["cmd"]})`. Use `scroll({scope:"desktop", x, y, direction:"down"})` over the file list to reach files below the fold.
 - Never send keystrokes into the Open panel, foreground or background. They do not land, and foreground keystrokes can reach another app.
 - For `type_text` inside `run_steps`, target the field with `element_token`. It can misreport delivery, so re-read the field before trusting it.
+- Pass `timeout_ms` of about 5000 to `get_window_state`. The full tree can take longer than the default.
+- Rail tools, Settings sections and favorite stars are `AXCheckBox` elements, not buttons. A star is named `Add <Tool> to favorites` or `Remove <Tool> from favorites`.
+- Buttons below the fold are still in the tree; press them by element token instead of scrolling. Do not scroll with keystrokes while a number field has focus, because the keys change its value.
+- If CUA reports the session expired, start a new session and re-read the window before any pixel action.
 - A webview `<select>` (an `AXPopUpButton`) rejects `set_value`. That failed call opens its menu; then `press_key` down or up and `return` picks the option. Re-read the value.
 
 Never browse the user's own folders in the panel. If it opens anywhere but scratch, cancel and reset the default above.

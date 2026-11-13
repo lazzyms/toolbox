@@ -13,7 +13,7 @@ The command center is Toolbox's home view. It lists every tool, groups them into
 
 ## How to get to it (user POV)
 
-- Start at the home view after Toolbox launches. A workspace returns there with `← All tools`.
+- Start at the home view after Toolbox launches. A workspace returns there with `← All tools`, which restores the sidebar filter you left, such as Favorites.
 - In the sidebar choose `All tools`, `Favorites`, or a View under VIEWS. `Settings` sits at the bottom (`super+,`).
 - Type in `Search tools`. Its placeholder reads "Find a tool, like merge, split or compress".
 - In Tool library choose `Open <View>` for a View (visible text "Open view"), `Open <tool title>` for a tool, or `N more tool(s)` to expand a card.
@@ -32,12 +32,13 @@ Preconditions:
 - **Open a View.** Choose `File Security` under VIEWS, or `Open File Security` in Tool library. The workspace heading `File Security` appears with the live status "File Security workspace open."
 - **Open a tool.** Choose `Open Lock & Unlock`. The workspace toolbar `File Security tools` shows the `Lock & Unlock` checkbox selected.
 - **Favorites.** In a workspace check `Add <tool title> to favorites`, choose `← All tools`, then `Favorites`. The tool appears. Choose `Remove <tool title> from favorites` afterwards and confirm Favorites shows "No favorite tools yet".
-- **More tools.** Choose `N more tool(s)` on a card. The card lists the extra `Open <tool title>` buttons. The PDF Editor card reads "5 more tools" and adds Redact PDF, Rotate PDFs, Repair PDF, Compare PDFs, and Extract PDF Pages.
-- **Unavailable tools.** OCR PDF, Blur Faces, and Remove Background carry an "Unavailable" marker. Opening one shows "Unavailable in this build." and no `Choose files to process`.
+- **More tools.** Choose `N more tool(s)` on a card. The card lists the extra `Open <tool title>` buttons. The PDF Editor card reads "8 more tools" and adds Redact PDF, Privacy Check, Edit Properties, Rotate PDFs, Repair PDF, Compare PDFs, Extract PDF Pages and Bates Numbering. The PDF Conversion card reads "1 more tool".
+- **Unavailable tools.** Blur Faces and Remove Background carry an "Unavailable" marker. OCR PDF is available. Opening one shows "Unavailable in this build." and no `Choose files to process`.
 
 ## Gotchas
 
 - There is no Recent filter, Quick access row, or Tool categories list any more. Older notes that name them are stale.
 - Each `Open <tool title>` button carries a help description. Lock & Unlock's still reads "Remove a password you know from PDF, Word, Excel and PowerPoint files." That copy is stale after the 2026-10-20 Unlock decision.
 - Favorites persist in the verification profile. Restore the starting state.
+- `super+k` keeps the last query in `Search tools`. Clear the field before you type a new search.
 - `type_text` into the search field can report fewer characters delivered than it sent while the text did land. Re-read the field value before trusting either report.
