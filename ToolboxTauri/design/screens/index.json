@@ -1715,6 +1715,111 @@
     "screen": "SecResults--retryOpen-true.jpg"
   },
   {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "default",
+    "query": "",
+    "screen": "ConvertToPdf--default.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ConvertToPdf--state-empty.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-paste-html",
+    "query": "state=Paste%20HTML",
+    "screen": "ConvertToPdf--state-paste-html.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-markdown-options",
+    "query": "state=Markdown%20options",
+    "screen": "ConvertToPdf--state-markdown-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-plain-text-options",
+    "query": "state=Plain%20text%20options",
+    "screen": "ConvertToPdf--state-plain-text-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-table-options",
+    "query": "state=Table%20options",
+    "screen": "ConvertToPdf--state-table-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-spreadsheet-and-slide-options",
+    "query": "state=Spreadsheet%20and%20slide%20options",
+    "screen": "ConvertToPdf--state-spreadsheet-and-slide-options.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-changed-save-location",
+    "query": "state=Changed%20save%20location",
+    "screen": "ConvertToPdf--state-changed-save-location.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-last-markdown-removed",
+    "query": "state=Last%20Markdown%20removed",
+    "screen": "ConvertToPdf--state-last-markdown-removed.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-save-dialog",
+    "query": "state=Save%20dialog",
+    "screen": "ConvertToPdf--state-save-dialog.jpg"
+  },
+  {
+    "board": "ConvertToPdf.dc.html",
+    "title": "Convert to PDF: mixed list, format options, paste HTML",
+    "state": "state-converting",
+    "query": "state=Converting",
+    "screen": "ConvertToPdf--state-converting.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "default",
+    "query": "",
+    "screen": "ConvertToPdfResults--default.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "state-needs-attention",
+    "query": "state=Needs%20attention",
+    "screen": "ConvertToPdfResults--state-needs-attention.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "state-warnings-and-notes",
+    "query": "state=Warnings%20and%20notes",
+    "screen": "ConvertToPdfResults--state-warnings-and-notes.jpg"
+  },
+  {
+    "board": "ConvertToPdfResults.dc.html",
+    "title": "Convert to PDF: results, fonts, script pack",
+    "state": "state-script-pack-installed",
+    "query": "state=Script%20pack%20installed",
+    "screen": "ConvertToPdfResults--state-script-pack-installed.jpg"
+  },
+  {
     "board": "CropResize.dc.html",
     "title": "Crop and Resize PDF: batch tool, ten states",
     "state": "default",
