@@ -241,6 +241,26 @@ test("an over-limit PDF fails alone without Retry and points to Split PDF", asyn
     await expect(page.getByRole("radiogroup", { name: "Split by" })).toBeVisible();
 });
 
+test("a PDF over 1 GB is compressed with no size refusal while a slow PDF fails alone and points to Split PDF", async ({ page }) => {
+    const paths = ["/local/Photo.pdf", "/local/scan-archive.pdf", "/local/report.pdf"];
+    await startRun(page, paths);
+    const [{ request }] = await invocations(page, "compress_files") as RunArgs[];
+    expect(request.paths).toEqual(paths);
+    const message = "Took longer than 25 minutes and was stopped. Nothing was saved. Split it, then compress the parts.";
+    await finish(page, [
+        compressed(paths[0], 1_570_000_000, 412_000_000),
+        outcome(paths[1], { state: "failed", failure: { kind: "limitExceeded", details: { limit: "time" }, message, pointer: { kind: "tool", toolId: "pdf-split" } } }),
+        compressed(paths[2], 2_000_000, 900_000),
+    ]);
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows.nth(0)).toContainText("1.6 GB → 412 MB, 74% smaller");
+    await expect(rows.nth(1)).toContainText(message);
+    await expect(rows.nth(1)).toContainText("Failed");
+    await expect(rows.nth(1).getByRole("button", { name: "Open Split PDF" })).toBeVisible();
+    await expect(rows.nth(2)).toContainText("2 MB → 900 KB, 55% smaller");
+    await expect(page.getByText(/Larger than/)).toHaveCount(0);
+});
+
 test("the whole Compress flow runs by keyboard: add files, strength, Strip EXIF, run and results", async ({ page }) => {
     const paths = ["/local/report.pdf", "/local/IMG_4012.jpg"];
     await openCompress(page);

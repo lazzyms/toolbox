@@ -22,6 +22,8 @@ pub struct ToolLimits {
     pub max_pages: Option<u32>,
     pub max_expanded_bytes: u64,
     pub max_duration: Duration,
+    /// Time added to `max_duration` for each started gigabyte of input, for a tool whose work grows with the file's size.
+    pub time_per_gb: Duration,
     pub page_remedy: PageRemedy,
     /// The longest side, in pixels, a decoded image may have. Only tools that hold the whole image in memory to edit it set one.
     pub max_side: Option<u32>,
@@ -49,8 +51,17 @@ pub enum PageRemedy {
 const SPLIT_PDF_TOOL_ID: &str = "pdf-split";
 
 // Expansion stays under the image crate's 512 MiB allocation default so this check, not a decoder error, reports it.
-const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
-pub const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
+const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::UseFewer };
+/// Compress is the tool for files that are too big, so their size alone never refuses one. The scan maps the file rather than
+/// reading it, and the real hazards keep their own guards: each stream's expansion, the page count, and a time limit that grows
+/// with the file.
+const COMPRESS: ToolLimits = ToolLimits { max_bytes: NO_SIZE_LIMIT, time_per_gb: COMPRESS_TIME_PER_GB, page_remedy: PageRemedy::SplitThen("compress"), ..PDF };
+/// A `max_bytes` that no file reaches.
+pub const NO_SIZE_LIMIT: u64 = u64::MAX;
+const COMPRESS_TIME_PER_GB: Duration = Duration::from_secs(10 * 60);
+/// Files larger than this many gigabytes get no more time; it keeps a deadline from overflowing.
+const MAX_TIMED_GB: u64 = 1_000;
+pub const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::UseFewer };
 pub const MAX_IMAGE_PAGES: u32 = 1_000;
 const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(MAX_IMAGE_PAGES), ..IMAGE };
 // The edit stack takes GIFs, so it counts their frames, and it caps each side at the largest size Resize can make.
@@ -58,7 +69,7 @@ const EDIT_IMAGE: ToolLimits = ToolLimits { max_side: Some(16_384), ..PAGED_IMAG
 pub const SIGNATURE_IMAGE: ToolLimits = ToolLimits { max_bytes: 20 * MB, max_expanded_bytes: 80 * MB, ..IMAGE };
 // Converted text is read whole and laid out in memory, so text formats stop well below the PDF size. Packaged formats are
 // compressed archives whose parts are held to the expansion limit instead. For both, max_pages caps the pages a file makes.
-const TEXT_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
+const TEXT_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::UseFewer };
 const PACKAGED_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 250 * MB, ..TEXT_DOCUMENT };
 /// A document typed in Toolbox, such as a Formatted PDF: its text is held to the text-format size, and its pages to the PDF page cap.
 pub const CREATED_DOCUMENT: ToolLimits = TEXT_DOCUMENT;
@@ -128,7 +139,7 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" | "edit_pdf_properties" | "bates_number_pdfs" => PDF,
-        "compress_files" => ToolLimits { page_remedy: PageRemedy::SplitThen("compress"), ..PDF },
+        "compress_files" => COMPRESS,
         "pdf_to_epub" => ToolLimits { page_remedy: PageRemedy::SplitEach("convert"), ..PDF },
         "export_image_edit_plan" | "blur_faces"
         | "remove_image_background" | "generate_icon_set" | "create_gif" => IMAGE,
@@ -144,7 +155,8 @@ impl ToolLimits {
     where
         F: FnOnce(PathBuf) -> JobOutcome + Send + 'static,
     {
-        run_timed(input.clone(), self.max_duration, cancel, move || match self.check(&input) {
+        let max_duration = self.duration_for(file_len(&input));
+        run_timed(input.clone(), max_duration, self.page_remedy, cancel, move || match self.check(&input) {
             Ok(()) => job(input),
             Err(error) => JobOutcome::failure(input, error),
         })
@@ -156,12 +168,19 @@ impl ToolLimits {
     {
         let inputs = inputs.to_vec();
         let first = inputs.first().cloned().unwrap_or_default();
-        run_timed(first, self.max_duration, &CancelFlag::default(), move || {
+        let max_duration = self.duration_for(inputs.iter().map(|input| file_len(input)).fold(0, u64::saturating_add));
+        run_timed(first, max_duration, self.page_remedy, &CancelFlag::default(), move || {
             match inputs.iter().find_map(|input| self.check(input).err().map(|error| (input, error))) {
                 Some((input, error)) => JobOutcome::failure(input.clone(), error),
                 None => job(),
             }
         })
+    }
+
+    /// The time a job on `bytes` of input may take: `max_duration`, plus `time_per_gb` for each started gigabyte.
+    pub fn duration_for(&self, bytes: u64) -> Duration {
+        let gigabytes = u32::try_from(bytes.div_ceil(GB).min(MAX_TIMED_GB)).unwrap_or(u32::MAX);
+        self.max_duration + self.time_per_gb * gigabytes
     }
 
     pub fn expansion_error(&self, path: &Path) -> ToolError {
@@ -194,7 +213,7 @@ impl ToolLimits {
                 format!("Larger than the {} limit for one {}. Reduce its size and try again.", bytes_label(self.max_bytes), format.noun()),
             ));
         }
-        let Ok(bytes) = std::fs::read(path) else { return Ok(()) };
+        let Ok(bytes) = map_file(path) else { return Ok(()) };
         let shape = Shape::read(&bytes, self.max_pages.unwrap_or(u32::MAX), self.max_expanded_bytes);
         if let Some(max_side) = self.max_side {
             let (width, height) = shape.largest_dimensions;
@@ -274,6 +293,27 @@ impl Format {
     }
 }
 
+fn file_len(path: &Path) -> u64 { std::fs::metadata(path).map_or(0, |metadata| metadata.len()) }
+
+/// A file's bytes, mapped into memory rather than read into it, so measuring or loading a file of several gigabytes does
+/// not copy it first. The system pages it in as it is read and can drop those pages again under memory pressure.
+pub struct MappedFile(Option<memmap2::Mmap>);
+
+impl std::ops::Deref for MappedFile {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] { self.0.as_deref().unwrap_or_default() }
+}
+
+pub fn map_file(path: &Path) -> io::Result<MappedFile> {
+    let file = std::fs::File::open(path)?;
+    // An empty file cannot be mapped on every platform, and has nothing to read.
+    if file.metadata()?.len() == 0 { return Ok(MappedFile(None)) }
+    // SAFETY: the map is read-only and Toolbox never writes its inputs. Like every memory-mapped reader, a read can still
+    // fault if another program truncates the file while it is mapped.
+    let map = unsafe { memmap2::Mmap::map(&file)? };
+    Ok(MappedFile(Some(map)))
+}
+
 struct Shape {
     pages: u64,
     largest_part: u64,
@@ -325,10 +365,8 @@ fn inflated_len(reader: impl Read, max_expanded: u64) -> u64 {
 
 fn pdf_largest_stream(bytes: &[u8], max_expanded: u64) -> u64 {
     let mut largest = 0;
-    let mut cursor = 0;
-    while let Some(found) = bytes[cursor..].windows(6).position(|window| window == b"stream") {
-        let keyword = cursor + found;
-        cursor = keyword + 6;
+    for keyword in memchr::memmem::find_iter(bytes, b"stream") {
+        let cursor = keyword + 6;
         if keyword >= 3 && &bytes[keyword - 3..keyword] == b"end" { continue; }
         let mut start = cursor;
         if bytes.get(start) == Some(&b'\r') { start += 1; }
@@ -503,7 +541,7 @@ pub fn publish_within_time(publish: impl FnOnce() -> io::Result<PathBuf>) -> io:
 }
 
 // A thread cannot be killed, so a stopped job runs on detached while its helpers are terminated and every later publish is refused.
-fn run_timed<F>(input: PathBuf, max_duration: Duration, cancel: &CancelFlag, job: F) -> JobOutcome
+fn run_timed<F>(input: PathBuf, max_duration: Duration, remedy: PageRemedy, cancel: &CancelFlag, job: F) -> JobOutcome
 where
     F: FnOnce() -> JobOutcome + Send + 'static,
 {
@@ -546,7 +584,16 @@ where
                 Some((done, total)) if total > 0 => file_time_limit_message(&input, done, total, saved.len()),
                 _ => format!("Took longer than {} and was stopped. {}", duration_label(max_duration), saved_label(saved.len())),
             };
-            JobOutcome::failure_with_outputs(input, saved, ToolError::limit_exceeded(LimitKind::Time, message))
+            let error = ToolError::limit_exceeded(LimitKind::Time, message);
+            // A tool that sends long PDFs to Split PDF does so for a PDF that ran out of time too.
+            let error = match remedy {
+                PageRemedy::SplitThen(verb) if pages.is_none() && matches!(Format::for_path(&input), Format::Pdf) => {
+                    let message = format!("{} Split it, then {verb} the parts.", error.message);
+                    ToolError { message, ..error }.with_pointer(OutcomePointer::Tool { tool_id: SPLIT_PDF_TOOL_ID.into() })
+                }
+                _ => error,
+            };
+            JobOutcome::failure_with_outputs(input, saved, error)
         }
         Err(Stopped::Vanished) => {
             let saved = saved();
@@ -714,7 +761,9 @@ mod tests {
     use super::*;
     use crate::kit::contracts::{native_capabilities, ErrorKind, OutcomeState};
     use crate::kit::common::batch_runner::{report_progress_to, FileEvent, Sink};
-    use std::io::Write;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use std::io::{Seek, Write};
     use std::time::Instant;
 
     fn sandbox(name: &str) -> PathBuf {
@@ -725,7 +774,7 @@ mod tests {
     }
 
     fn small() -> ToolLimits {
-        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5), max_side: None, page_remedy: PageRemedy::UseFewer }
+        ToolLimits { max_bytes: 10 * MB, max_pages: Some(3), max_expanded_bytes: 1_000, max_duration: Duration::from_secs(5), time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::UseFewer }
     }
 
     fn limit_of(result: Result<(), ToolError>) -> Option<LimitKind> {
@@ -746,11 +795,11 @@ mod tests {
             assert_eq!(limits.max_pages.is_some(), paged, "{}", capability.command);
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
-        assert_eq!(recorded("compress_files"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::SplitThen("compress") }));
-        assert_eq!(recorded("pdf_to_epub"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::SplitEach("convert") }));
+        assert_eq!(recorded("compress_files"), Some(ToolLimits { max_bytes: NO_SIZE_LIMIT, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::from_secs(10 * 60), max_side: None, page_remedy: PageRemedy::SplitThen("compress") }));
+        assert_eq!(recorded("pdf_to_epub"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::SplitEach("convert") }));
         assert_eq!(recorded("split_pdf").map(|limits| limits.page_remedy), Some(PageRemedy::UseFewer));
         assert_eq!(recorded("compress_images"), None, "Compress Images is retired into compress_files");
-        assert_eq!(recorded("export_image_edit_stack"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: Some(1_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: Some(16_384), page_remedy: PageRemedy::UseFewer }));
+        assert_eq!(recorded("export_image_edit_stack"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: Some(1_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: Some(16_384), page_remedy: PageRemedy::UseFewer }));
         for capability in native_capabilities() {
             let max_side = recorded(&capability.command).and_then(|limits| limits.max_side);
             assert_eq!(max_side.is_some(), capability.command == "export_image_edit_stack", "{} should not cap the side", capability.command);
@@ -759,13 +808,124 @@ mod tests {
         assert_eq!(recorded("images_to_pdf").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
         assert_eq!(recorded("convert_images").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
         assert_eq!(MAX_IMAGE_PAGES, 1_000);
-        assert_eq!(recorded("create_formatted_pdf"), Some(ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer }));
+        assert_eq!(recorded("create_formatted_pdf"), Some(ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::UseFewer }));
         assert_eq!(recorded("unknown"), None);
+        for capability in native_capabilities() {
+            let limits = recorded(&capability.command).unwrap();
+            // Only Compress, the tool for files that are too big, takes a file of any size and gives large files more time.
+            let compress = capability.command == "compress_files";
+            assert_eq!(limits.max_bytes == NO_SIZE_LIMIT, compress, "{}", capability.command);
+            assert_eq!(limits.time_per_gb > Duration::ZERO, compress, "{}", capability.command);
+        }
     }
 
     #[test]
+    fn compress_gives_each_started_gigabyte_more_time_and_other_tools_a_fixed_time() {
+        let compress = recorded("compress_files").unwrap();
+        assert_eq!(compress.duration_for(0), FIVE_MINUTES);
+        assert_eq!(compress.duration_for(GB / 2), Duration::from_secs(15 * 60));
+        assert_eq!(compress.duration_for(GB), Duration::from_secs(15 * 60));
+        assert_eq!(compress.duration_for(1_570_000_000), Duration::from_secs(25 * 60));
+        assert_eq!(duration_label(compress.duration_for(1_570_000_000)), "25 minutes");
+        assert_eq!(compress.duration_for(u64::MAX), FIVE_MINUTES + Duration::from_secs(10 * 60) * 1_000, "the extra time is capped, not overflowed");
+        assert_eq!(recorded("split_pdf").unwrap().duration_for(5 * GB), FIVE_MINUTES);
+    }
+
+    #[test]
+    fn a_job_gets_the_time_its_input_size_earns() {
+        let root = sandbox("timed-by-size");
+        let input = root.join("photo.pdf");
+        std::fs::write(&input, b"%PDF-1.7\n").unwrap();
+        let limits = ToolLimits { max_duration: Duration::from_millis(100), time_per_gb: Duration::from_millis(900), ..small() };
+        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), |input| {
+            std::thread::sleep(Duration::from_millis(300));
+            JobOutcome::succeeded(input, Vec::new(), "done")
+        });
+        assert!(outcome.error().is_none(), "one started gigabyte adds 900 ms: {:?}", outcome.error());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_pdf_past_its_time_limit_points_to_split_pdf_when_the_tool_sends_long_pdfs_there() {
+        let root = sandbox("timed-split");
+        let limits = ToolLimits { max_duration: Duration::from_millis(100), page_remedy: PageRemedy::SplitThen("compress"), ..small() };
+        let slow = |input| { std::thread::sleep(Duration::from_millis(400)); JobOutcome::succeeded(input, Vec::new(), "done") };
+        let pdf = root.join("scan.pdf");
+        std::fs::write(&pdf, b"%PDF-1.7\n").unwrap();
+        let error = limits.run_each(pdf, &CancelFlag::default(), slow).error().cloned().unwrap();
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::Time });
+        assert_eq!(error.message, "Took longer than 100 milliseconds and was stopped. Nothing was saved. Split it, then compress the parts.");
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: SPLIT_PDF_TOOL_ID.into() }));
+        let photo = root.join("photo.jpg");
+        std::fs::write(&photo, b"\xFF\xD8").unwrap();
+        let error = limits.run_each(photo, &CancelFlag::default(), slow).error().cloned().unwrap();
+        assert_eq!(error.message, "Took longer than 100 milliseconds and was stopped. Nothing was saved.", "an image cannot be split");
+        assert_eq!(error.pointer, None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_pdf_past_one_gigabyte_is_measured_without_reading_it_into_memory() {
+        let root = sandbox("mapped");
+        // A sparse gigabyte, then a stream that expands past the limit: the scan has to reach it, and the size alone refuses nothing.
+        let large = root.join("large.pdf");
+        let mut file = std::fs::File::create(&large).unwrap();
+        file.write_all(b"%PDF-1.7\n").unwrap();
+        file.set_len(GB + 1).unwrap();
+        file.seek(io::SeekFrom::End(0)).unwrap();
+        file.write_all(&pdf_with_stream(&zlib_of_zeros(500 * MB + 1))[9..]).unwrap();
+        drop(file);
+        let compress = recorded("compress_files").unwrap();
+        let before = allocated();
+        let result = compress.check(&large);
+        let allocated = allocated() - before;
+        assert_eq!(limit_of(result), Some(LimitKind::Decompression), "the expansion guard still fires past the old size cap");
+        assert!(allocated < 16 * MB, "the check allocated {allocated} bytes for a file of {} bytes", GB);
+        assert_eq!(limit_of(recorded("split_pdf").unwrap().check(&large)), Some(LimitKind::FileSize), "other PDF tools keep their 1 GB cap");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_empty_file_maps_to_no_bytes() {
+        let root = sandbox("mapped-empty");
+        let empty = root.join("empty.pdf");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(map_file(&empty).unwrap().is_empty());
+        assert!(map_file(&root.join("missing.pdf")).is_err());
+        assert_eq!(limit_of(recorded("compress_files").unwrap().check(&empty)), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bytes this thread has asked the allocator for, so a test can show a check holds no copy of the file.
+    fn allocated() -> u64 { ALLOCATED.with(Cell::get) }
+
+    thread_local! { static ALLOCATED: Cell<u64> = const { Cell::new(0) }; }
+
+    struct CountingAllocator;
+
+    // SAFETY: every call is passed straight to the system allocator; the count is a plain thread-local with no destructor.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = ALLOCATED.try_with(|count| count.set(count.get() + layout.size() as u64));
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let _ = ALLOCATED.try_with(|count| count.set(count.get() + layout.size() as u64));
+            unsafe { System.alloc_zeroed(layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let _ = ALLOCATED.try_with(|count| count.set(count.get() + new_size as u64));
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe { System.dealloc(ptr, layout) } }
+    }
+
+    #[global_allocator]
+    static COUNTING: CountingAllocator = CountingAllocator;
+
+    #[test]
     fn convert_to_pdf_records_limits_for_each_family() {
-        let text = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
+        let text = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::UseFewer };
         let packaged = ToolLimits { max_bytes: 250 * MB, ..text };
         for name in ["notes.txt", "notes.log", "README.MD", "notes.markdown", "page.html", "page.htm", "letter.rtf", "table.csv", "table.tsv"] {
             assert_eq!(convert_to_pdf(Path::new(name)), text, "{name}");
@@ -795,7 +955,7 @@ mod tests {
         for command in ["extract_gif_frames", "process_tiff_pages"] {
             assert_eq!(recorded(command), Some(PAGED_IMAGE), "{command}");
         }
-        assert_eq!(IMAGE, ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer });
+        assert_eq!(IMAGE, ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, time_per_gb: Duration::ZERO, max_side: None, page_remedy: PageRemedy::UseFewer });
         assert_eq!(PAGED_IMAGE, ToolLimits { max_pages: Some(1_000), ..IMAGE });
 
         let gif = Made { noun: "GIF", parts: "frames" };

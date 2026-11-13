@@ -9497,18 +9497,51 @@ mod command_tests {
         outcomes
     }
 
+    /// Writes a one-page PDF whose objects follow `gap` bytes of NUL padding (PDF whitespace) after the header, left as a
+    /// hole so a file over a gigabyte costs little disk.
+    fn write_pdf_after_gap(path: &PathBuf, gap: u64) {
+        use std::io::{Seek, Write};
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(b"%PDF-1.7\n").unwrap();
+        let mut position = 9 + gap;
+        file.set_len(position).unwrap();
+        file.seek(std::io::SeekFrom::Start(position)).unwrap();
+        let content = "BT /F1 24 Tf 72 720 Td (Toolbox large page) Tj ET ".repeat(40);
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Count 1 /Kids [3 0 R] >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(position);
+            let bytes = format!("{} 0 obj\n{object}\nendobj\n", index + 1);
+            file.write_all(bytes.as_bytes()).unwrap();
+            position += bytes.len() as u64;
+        }
+        let mut xref = format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
+        for offset in offsets { xref.push_str(&format!("{offset:010} 00000 n \n")); }
+        xref.push_str(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{position}\n%%EOF\n", objects.len() + 1));
+        file.write_all(xref.as_bytes()).unwrap();
+    }
+
     #[test]
-    fn compress_files_fails_a_pdf_over_the_recorded_size_alone() {
-        let root = sandbox("compress-limit-size");
-        let offender = root.join("oversized.pdf");
-        std::fs::write(&offender, b"%PDF-1.7\n").unwrap();
-        std::fs::OpenOptions::new().write(true).open(&offender).unwrap().set_len(1_000_000_001).unwrap();
+    fn compress_files_compresses_a_pdf_over_a_gigabyte_instead_of_refusing_its_size() {
+        let root = sandbox("compress-large");
+        let large = root.join("large.pdf");
+        write_pdf_after_gap(&large, 1_000_000_001);
         let good = root.join("good.pdf");
         make_compressible_pdf(&good);
-        let originals = [Original::of(&offender), Original::of(&good)];
-        let outcomes = compress(&[offender.clone(), good.clone()], CompressLevel::Medium, location(&root, "out"));
+        let originals = [Original::of(&large), Original::of(&good)];
+        let outcomes = compress(&[large.clone(), good.clone()], CompressLevel::Medium, location(&root, "out"));
         for original in &originals { original.assert_untouched(); }
-        assert_only_offender_limited(&outcomes, &offender, LimitKind::FileSize, "1 GB");
+        for outcome in &outcomes { assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error()); }
+        let copy = &outcomes[0].output_paths()[0];
+        assert_eq!(outcomes[0].original_bytes, Some(std::fs::metadata(&large).unwrap().len()));
+        assert!(outcomes[0].output_bytes.unwrap() < 1_000_000, "the padding is repacked away");
+        assert_eq!(lopdf::Document::load(copy).unwrap().get_pages().len(), 1);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -9558,7 +9591,7 @@ mod command_tests {
         let released = Arc::new(AtomicBool::new(false));
         let recorded = crate::kit::common::limits::recorded("compress_files").unwrap();
         assert_eq!(recorded.max_duration, std::time::Duration::from_secs(5 * 60), "Compress records five minutes per file");
-        let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(3), ..recorded };
+        let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(3), time_per_gb: std::time::Duration::ZERO, ..recorded };
         let job_released = Arc::clone(&released);
         let job_slow = slow.clone();
         let outcomes = BatchRunner::run_with_limits(&RunEvents::silent(), "compress_files", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
@@ -9568,6 +9601,9 @@ mod command_tests {
         released.store(true, Ordering::SeqCst);
         assert_eq!([std::fs::read(&slow).unwrap(), std::fs::read(&good).unwrap()], originals);
         assert_only_offender_limited(&outcomes, &slow, LimitKind::Time, "3 seconds");
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.message, "Took longer than 3 seconds and was stopped. Nothing was saved. Split it, then compress the parts.");
+        assert_eq!(error.pointer, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "pdf-split".into() }));
         let _ = std::fs::remove_dir_all(root);
     }
 
