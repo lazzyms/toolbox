@@ -760,7 +760,8 @@ fn encode_rendered_page(source: &Path, format: OutputFormat) -> Result<Vec<u8>, 
     images::encode(&page, format, images::DEFAULT_QUALITY)
 }
 
-pub const NO_SELECTABLE_TEXT: &str = "PDF contains no selectable text; scanned PDFs require OCR.";
+/// Text mode on a PDF without a text layer: the file is skipped and pointed at OCR, so nothing is written.
+pub const NEEDS_OCR_MESSAGE: &str = "This PDF has no text layer. Run OCR to read its text.";
 pub const NO_EMBEDDED_IMAGES: &str = "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.";
 pub const BOTH_WITHOUT_TEXT: &str = "No selectable text, so no text file was made. OCR can read scanned pages.";
 pub const BOTH_WITHOUT_IMAGES: &str = "No images in this PDF, so only the text file was saved.";
@@ -814,7 +815,7 @@ pub fn extract(request: &ExtractFromPdfRequest, input: PathBuf) -> JobOutcome {
     } else { Vec::new() };
     match (request.mode, text, images.is_empty()) {
         (ExtractMode::Text, Some(text), _) => JobOutcome::succeeded(input, vec![text], "PDF text extracted in page order"),
-        (ExtractMode::Text, None, _) => failure(input, NO_SELECTABLE_TEXT.to_string()),
+        (ExtractMode::Text, None, _) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NeedsOcr, NEEDS_OCR_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() })),
         (ExtractMode::Images, _, true) => failure(input, NO_EMBEDDED_IMAGES.to_string()),
         (ExtractMode::Images, _, false) => JobOutcome::succeeded(input, images, "Embedded JPEG images extracted without recompression"),
         (ExtractMode::Both, Some(text), false) => {

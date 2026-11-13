@@ -1807,6 +1807,47 @@ test.describe("Extract from PDF", () => {
         await expect(rows.nth(1)).toContainText("No selectable text, so no text file was made. OCR can read scanned pages.");
         expect(((await extractRequest(page)) as { mode: string }).mode).toBe("both");
     });
+
+    test("a Text run hands a scan that needs OCR to OCR with only that file queued", async ({ page }) => {
+        await openWithPdfs(page);
+        await page.evaluate((pdfs) => {
+            (window as TestWindow).__toolboxProcessingResults = [
+                {
+                    inputPath: pdfs[0],
+                    outputPaths: ["/local/report-text.txt"],
+                    detail: "PDF text extracted in page order",
+                    state: "succeeded",
+                    failure: null,
+                    reason: null,
+                    warnings: [],
+                },
+                {
+                    inputPath: pdfs[1],
+                    outputPaths: [],
+                    detail: "",
+                    state: "skipped",
+                    failure: null,
+                    reason: { code: "needsOcr", message: "This PDF has no text layer. Run OCR to read its text.", pointer: { kind: "tool", toolId: "pdf-ocr" } },
+                    warnings: [],
+                },
+            ];
+        }, pdfs);
+        await extractModes(page).getByRole("radio", { name: "Text", exact: true }).click();
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+
+        const rows = page.locator(".result-row");
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(1)).toHaveAttribute("data-state", "skipped");
+        await expect(rows.nth(1)).toContainText("This PDF has no text layer. Run OCR to read its text.");
+        await expect(rows.nth(0).getByRole("button", { name: "Open OCR PDF", exact: true })).toHaveCount(0);
+        await rows.nth(1).getByRole("button", { name: "Open OCR PDF", exact: true }).click();
+
+        await expect(page.getByRole("button", { name: "Export OCR PDF", exact: true })).toBeVisible();
+        await expect(page.getByText("site-survey-scan.pdf", { exact: true }).first()).toBeVisible();
+        await expect(page.getByText("report.pdf", { exact: true })).toHaveCount(0);
+        await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+        expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: [pdfs[1]], mode: "text" } });
+    });
 });
 
 test("rotate PDF sends the chosen direction and zero-based pages", async ({ page }) => {

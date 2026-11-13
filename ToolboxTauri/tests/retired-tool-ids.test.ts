@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { UtilityRegistry } from "../src/registry/index.ts";
 import { parseRetiredToolIds, registeredToolIds, RetiredToolIds } from "../src/registry/retiredToolIds.ts";
 import {
   favoritesStorageKey,
@@ -202,11 +203,14 @@ const declaredPointerTargets = () => {
   return sources.flatMap((source) => [...source.matchAll(/(?:tool_id: |"toolId": )"([^"]+)"/g)].map((match) => match[1]));
 };
 
-test("tool pointer targets declared by native tools are registered and never retired", () => {
+test("tool pointer targets declared by native tools are registered, available and never retired", () => {
   const targets = declaredPointerTargets();
   assert.ok(targets.includes("heic-convert"), "the scan finds the declared pointer targets");
+  assert.ok(targets.includes("pdf-ocr"), "PDF to Text hands scans that need OCR to OCR");
   for (const target of targets) {
     assert.ok(registeredToolIds.has(target), `${target} is a registered tool id`);
     assert.ok(!RetiredToolIds.replacements.has(target), `${target} is not a retired tool id`);
+    const tool = UtilityRegistry.find(({ id }) => id === target);
+    assert.equal(tool?.capability.nativeAvailability, "available", `${target} is available`);
   }
 });

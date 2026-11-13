@@ -67,6 +67,7 @@ export const MainPage = () => {
   const availability = useToolAvailability();
   const [selectedTool, setSelectedTool] = useState<ToolDefinition | null>(null);
   const [initialPaths, setInitialPaths] = useState<readonly string[]>([]);
+  const [handoffs, setHandoffs] = useState(0);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const focusWorkspaceHeadingOnNavigation = useRef(false);
   const [fileActivation, setFileActivation] = useState<Extract<ShellEvent, { kind: "files" }> | null>(null);
@@ -414,9 +415,13 @@ export const MainPage = () => {
   }, [settingsSection, selectedTool, findToolFromSettings, openFilesFromMenu]);
   useEffect(() => {
     const openFromCompatibilityNav = (event: Event) => {
-      const id = (event as CustomEvent<string>).detail;
+      const detail = (event as CustomEvent<string | { toolId: string; paths: readonly string[] }>).detail;
+      const id = typeof detail === "string" ? detail : detail.toolId;
       const tool = UtilityRegistry.find((item) => item.id === id);
-      if (tool) openTool(tool);
+      if (!tool) return;
+      if (typeof detail === "string") return openTool(tool);
+      setHandoffs((count) => count + 1);
+      openTool(tool, detail.paths);
     };
     window.addEventListener("toolbox:open", openFromCompatibilityNav);
     return () =>
@@ -592,6 +597,7 @@ export const MainPage = () => {
                   <CardContent className="tool-view">
                     <RunStateContext.Provider value={setRunning}>
                       <ViewFor
+                        key={handoffs}
                         utility={selectedTool}
                         initialPaths={initialPaths}
                         fileActivation={fileActivation?.workspace === selectedWorkspace.id ? fileActivation : undefined}

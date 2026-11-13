@@ -2205,6 +2205,35 @@ mod command_tests {
         assert_eq!(after, originals);
     }
 
+    #[test]
+    fn extract_from_pdf_hands_a_scan_to_ocr_while_a_text_pdf_in_the_same_batch_succeeds() {
+        use crate::kit::contracts::{OutcomePointer, SkipCode};
+        let root = sandbox("pdf-to-text-needs-ocr");
+        let scan = root.join("scan.pdf");
+        let text_pdf = root.join("text.pdf");
+        scanned_pdf(&scan, &[&["Only pixels here"]]);
+        make_pdf(&text_pdf, 2);
+        let paths = vec![scan.clone(), text_pdf.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(paths.clone(), ExtractMode::Text, None, location(&root, "text"))));
+        let written = std::fs::read_dir(root.join("text")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let text = outcomes.get(1).and_then(|outcome| outcome.output_paths().first()).and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        let OutcomeState::Skipped { reason } = &outcomes[0].state else { panic!("the scan needs OCR: {:?}", outcomes[0]) };
+        assert_eq!(reason.code, SkipCode::NeedsOcr);
+        assert_eq!(reason.message, remaining::NEEDS_OCR_MESSAGE);
+        assert_eq!(reason.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
+        assert!(outcomes[0].output_paths().is_empty());
+        assert!(outcomes[1].error().is_none(), "the text PDF still runs: {:?}", outcomes[1].error());
+        assert!(text.contains("Toolbox page 1") && text.contains("Toolbox page 2"), "{text:?}");
+        assert_eq!(written, vec!["text-text.txt".to_string()], "only the text PDF writes a file");
+        assert_eq!(after, originals);
+    }
+
     #[cfg(unix)]
     fn fake_ocr_helpers(root: &PathBuf) -> [PathBuf; 3] {
         use std::os::unix::fs::PermissionsExt;
@@ -4594,8 +4623,8 @@ mod command_tests {
 
     #[test]
     fn extract_from_pdf_runs_each_mode_with_one_outcome_per_pdf() {
-        use crate::kit::contracts::{OutcomeState, SkipCode};
-        use crate::kit::pdf::remaining::{BOTH_WITHOUT_IMAGES, BOTH_WITHOUT_TEXT, NOTHING_TO_EXTRACT, NO_EMBEDDED_IMAGES, NO_SELECTABLE_TEXT};
+        use crate::kit::contracts::{OutcomePointer, OutcomeState, SkipCode};
+        use crate::kit::pdf::remaining::{BOTH_WITHOUT_IMAGES, BOTH_WITHOUT_TEXT, NEEDS_OCR_MESSAGE, NOTHING_TO_EXTRACT, NO_EMBEDDED_IMAGES};
         let root = sandbox("extract-from-pdf");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
@@ -4614,7 +4643,7 @@ mod command_tests {
         };
         let read = |path: &PathBuf| std::fs::read_to_string(path).unwrap();
 
-        // Text: one text file per PDF in reading order; a PDF without a text layer fails alone.
+        // Text: one text file per PDF in reading order; a PDF without a text layer is skipped alone and pointed at OCR.
         let text = run(vec![mixed.clone(), plain.clone(), scanned.clone()], ExtractMode::Text, None, "text");
         assert_eq!(text.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![mixed.clone(), plain.clone(), scanned.clone()]);
         for outcome in &text[..2] {
@@ -4622,7 +4651,10 @@ mod command_tests {
             let body = read(&outcome.output_paths()[0]);
             assert!(body.contains("Toolbox page 1") && body.contains("Toolbox page 2"), "{body}");
         }
-        assert_eq!(text[2].error().map(|error| error.message.as_str()), Some(NO_SELECTABLE_TEXT));
+        let OutcomeState::Skipped { reason } = &text[2].state else { panic!("a PDF without a text layer is handed to OCR: {:?}", text[2]) };
+        assert_eq!(reason.code, SkipCode::NeedsOcr);
+        assert_eq!(reason.message, NEEDS_OCR_MESSAGE);
+        assert_eq!(reason.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
         assert!(text[2].output_paths().is_empty());
         assert_eq!(files_in(&root.join("text")), vec!["mixed-text.txt", "plain-text.txt"]);
 
