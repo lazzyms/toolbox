@@ -204,10 +204,44 @@ export function buildPack({ pack, target, files, sign, releaseTag }) {
 }
 
 /** Every pack the release publishes, with where each file comes from. OCR language packs carry
- *  the tessdata_fast model pinned in shared/ocr-language-packs.json. The script pack in
- *  shared/script-packs.json has no pinned font sources yet, so no release builds it and the tool
- *  matrix check refuses the catalog until it does. */
+ *  the tessdata_fast model pinned in shared/ocr-language-packs.json; the script pack carries the
+ *  fonts and license texts pinned in shared/script-packs.json. */
 export function packSources(appVersion) {
+  return [...ocrPackSources(appVersion), scriptPackSource(appVersion)];
+}
+
+function scriptPackSource(appVersion) {
+  const plan = readJson("shared/script-packs.json");
+  const pinned = ({ path, source, file, license, bytes, gitBlobSha1: blob }) => {
+    const { repository, commit } = plan.sources[source];
+    return { path, license, sourceUrl: `${repository}/blob/${commit}/${file}`, download: { url: `${repository}/raw/${commit}/${file}`, bytes, gitBlobSha1: blob } };
+  };
+  return {
+    pack: {
+      id: plan.pack.id,
+      name: plan.pack.name,
+      description: plan.description,
+      toolIds: ["pdf-edit", "convert-to-pdf", "formatted-pdf"],
+      scriptFonts: Object.fromEntries(plan.fonts.flatMap(({ path, scripts }) => scripts.map((script) => [script, path]))),
+      license: plan.license,
+      version: plan.packVersion,
+      minPackFormat: PACK_FORMAT,
+      appVersions: { from: appVersion },
+    },
+    target: ALL_TARGETS,
+    files: [...plan.fonts.map((font) => ({ ...pinned(font), font: true })), ...plan.licenses.map(pinned)],
+  };
+}
+
+/** Whether `bytes` is a single TrueType-outline font, the only kind Edit PDF can embed. */
+export function trueTypeOutlines(bytes) {
+  if (bytes.length < 12 || bytes.readUInt32BE(0) !== 0x00010000) return false;
+  const tags = new Set();
+  for (let index = 0; index < bytes.readUInt16BE(4); index += 1) tags.add(bytes.toString("latin1", 12 + index * 16, 16 + index * 16));
+  return ["glyf", "loca", "head", "hmtx", "cmap"].every((tag) => tags.has(tag)) && !tags.has("fvar");
+}
+
+function ocrPackSources(appVersion) {
   const plan = readJson("shared/ocr-language-packs.json");
   const { source, commit, license, packVersion } = plan.models;
   return plan.languages.filter(({ bundled }) => !bundled).map(({ code, name, packId, model }) => ({
@@ -248,7 +282,11 @@ export async function buildRelease({ outDir, version, sources = packSources(vers
   const packs = [];
   for (const source of sources) {
     const files = [];
-    for (const file of source.files) files.push({ ...file, data: file.data ?? await fetchFile(file.download) });
+    for (const { font, ...file } of source.files) {
+      const data = file.data ?? await fetchFile(file.download);
+      if (font && !trueTypeOutlines(data)) throw new Error(`${source.pack.id}: ${file.path} is not a static TrueType-outline font`);
+      files.push({ ...file, data });
+    }
     const built = buildPack({ pack: source.pack, target: source.target, files, sign, releaseTag: `tauri-v${version}` });
     writeFileSync(join(outDir, built.fileName), built.envelope);
     let entry = packs.find(({ id }) => id === source.pack.id);

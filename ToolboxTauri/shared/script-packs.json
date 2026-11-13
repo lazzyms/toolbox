@@ -1,11 +1,319 @@
 {
-  "baseScripts": ["Latin", "Cyrillic", "Greek"],
+  "baseScripts": [
+    "Latin",
+    "Cyrillic",
+    "Greek"
+  ],
   "baseFont": "DejaVu Sans, bundled with the app",
   "downloadBudgetBytes": 41943040,
   "budgetRule": "Each script pack's download is at most 40 MiB. The fonts are TrueType outlines, which Edit PDF subsets into each output. The board offers the pack as a 38 MB download.",
-  "pack": { "id": "unicode-scripts", "name": "Unicode scripts" },
-  "splitRule": "If the fonts for every script would put the pack over budget, the scripts of a family below move into that family's own pack, and text in them points at that pack. No family is split yet.",
+  "pack": {
+    "id": "unicode-scripts",
+    "name": "Unicode scripts"
+  },
+  "splitRule": "If the fonts for every script would put the pack over budget, the scripts of a family below move into that family's own pack, and text in them points at that pack. No family is split yet: every font fits the one pack.",
   "families": [
-    { "id": "unicode-scripts-cjk", "name": "Unicode scripts: Chinese, Japanese and Korean", "scripts": ["Han", "Hiragana", "Katakana", "Hangul", "Bopomofo"] }
+    {
+      "id": "unicode-scripts-cjk",
+      "name": "Unicode scripts: Chinese, Japanese and Korean",
+      "scripts": [
+        "Han",
+        "Hiragana",
+        "Katakana",
+        "Hangul",
+        "Bopomofo"
+      ]
+    }
+  ],
+  "packVersion": "1.0",
+  "license": "OFL-1.1 AND Apache-2.0",
+  "description": "Adds fonts for writing systems beyond Latin, Cyrillic and Greek so Edit PDF can show and add text in them, and Convert to PDF and Formatted PDF can write documents in them.",
+  "sources": {
+    "noto": {
+      "repository": "https://github.com/notofonts/notofonts.github.io",
+      "commit": "3460ae9d93e7ac7a90d38a247d5d4d0f6147d239"
+    },
+    "googleFonts": {
+      "repository": "https://github.com/google/fonts",
+      "commit": "29b4ec6df2522a8aee279414b78a07910b065874"
+    },
+    "aosp": {
+      "repository": "https://github.com/aosp-mirror/platform_frameworks_base",
+      "commit": "250714c67ba9d2029bc88284672949a87b243b9a"
+    }
+  },
+  "fontRule": "Every font is a static TrueType (glyf) Regular, because Edit PDF embeds subsets of TrueType outlines. Noto has no static TrueType CJK font, so Han, kana and Bopomofo use Droid Sans Fallback and Hangul uses Nanum Gothic.",
+  "fonts": [
+    {
+      "path": "fonts/NotoSansArabic-Regular.ttf",
+      "scripts": [
+        "Arabic"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansArabic/hinted/ttf/NotoSansArabic-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 234892,
+      "gitBlobSha1": "72c9228c330febcd1488b9d5ad7aac91e28a2380"
+    },
+    {
+      "path": "fonts/NotoSansHebrew-Regular.ttf",
+      "scripts": [
+        "Hebrew"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansHebrew/hinted/ttf/NotoSansHebrew-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 26860,
+      "gitBlobSha1": "ef33d06cc08ab08a3796de26aa3825fc2529e8c9"
+    },
+    {
+      "path": "fonts/NotoSansDevanagari-Regular.ttf",
+      "scripts": [
+        "Devanagari"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansDevanagari/hinted/ttf/NotoSansDevanagari-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 243520,
+      "gitBlobSha1": "0bf16ff63ae3d743243226baa8d01b851e6f8410"
+    },
+    {
+      "path": "fonts/NotoSansBengali-Regular.ttf",
+      "scripts": [
+        "Bengali"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansBengali/hinted/ttf/NotoSansBengali-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 143072,
+      "gitBlobSha1": "f558175a49b61f3b894d3df1b4286771f449476a"
+    },
+    {
+      "path": "fonts/NotoSansGurmukhi-Regular.ttf",
+      "scripts": [
+        "Gurmukhi"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansGurmukhi/hinted/ttf/NotoSansGurmukhi-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 55172,
+      "gitBlobSha1": "3b08955a23cbfea801efc963474e803569cebb1c"
+    },
+    {
+      "path": "fonts/NotoSansGujarati-Regular.ttf",
+      "scripts": [
+        "Gujarati"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansGujarati/hinted/ttf/NotoSansGujarati-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 200704,
+      "gitBlobSha1": "cf100cfab23ac0564a0aed3edca86ba2b94d2127"
+    },
+    {
+      "path": "fonts/NotoSansOriya-Regular.ttf",
+      "scripts": [
+        "Oriya"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansOriya/hinted/ttf/NotoSansOriya-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 131216,
+      "gitBlobSha1": "aab55a7f3f389a931cb29593208319f240718f4a"
+    },
+    {
+      "path": "fonts/NotoSansTamil-Regular.ttf",
+      "scripts": [
+        "Tamil"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansTamil/hinted/ttf/NotoSansTamil-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 73992,
+      "gitBlobSha1": "3999af8ea261a31d594adcb68a45b795fdcdc34e"
+    },
+    {
+      "path": "fonts/NotoSansTelugu-Regular.ttf",
+      "scripts": [
+        "Telugu"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansTelugu/hinted/ttf/NotoSansTelugu-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 235176,
+      "gitBlobSha1": "d72413a7ce3cabcde8f9c1be2a2015071fd01c87"
+    },
+    {
+      "path": "fonts/NotoSansKannada-Regular.ttf",
+      "scripts": [
+        "Kannada"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansKannada/hinted/ttf/NotoSansKannada-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 182416,
+      "gitBlobSha1": "68da17f1bf347f334834a0ab380e85a3650823aa"
+    },
+    {
+      "path": "fonts/NotoSansMalayalam-Regular.ttf",
+      "scripts": [
+        "Malayalam"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansMalayalam/hinted/ttf/NotoSansMalayalam-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 112936,
+      "gitBlobSha1": "32dc2c625e9355993fe3b5ade4ec53fca702706c"
+    },
+    {
+      "path": "fonts/NotoSansSinhala-Regular.ttf",
+      "scripts": [
+        "Sinhala"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansSinhala/hinted/ttf/NotoSansSinhala-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 154912,
+      "gitBlobSha1": "12c260eaf0dd70dbf2158246993a9a0bda6ac305"
+    },
+    {
+      "path": "fonts/NotoSansThai-Regular.ttf",
+      "scripts": [
+        "Thai"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansThai/hinted/ttf/NotoSansThai-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 37780,
+      "gitBlobSha1": "8e1e6381df6c295ff747a290c8bbb2be7120fc1b"
+    },
+    {
+      "path": "fonts/NotoSansLao-Regular.ttf",
+      "scripts": [
+        "Lao"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansLao/hinted/ttf/NotoSansLao-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 35884,
+      "gitBlobSha1": "72cb4240797ba1147eb6054fe8a28e2d0ffa53cc"
+    },
+    {
+      "path": "fonts/NotoSerifTibetan-Regular.ttf",
+      "scripts": [
+        "Tibetan"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 609688,
+      "gitBlobSha1": "e4015f1c3066bb11a80859237a1b74e3d943ef5a"
+    },
+    {
+      "path": "fonts/NotoSansMyanmar-Regular.ttf",
+      "scripts": [
+        "Myanmar"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansMyanmar/hinted/ttf/NotoSansMyanmar-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 195088,
+      "gitBlobSha1": "5c0da8c0a8700b5a196a07e03dfaa20e4e1d459a"
+    },
+    {
+      "path": "fonts/NotoSansGeorgian-Regular.ttf",
+      "scripts": [
+        "Georgian"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansGeorgian/hinted/ttf/NotoSansGeorgian-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 52888,
+      "gitBlobSha1": "6c5008d91a351be63c608224ba75664d8a47a088"
+    },
+    {
+      "path": "fonts/NotoSansArmenian-Regular.ttf",
+      "scripts": [
+        "Armenian"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansArmenian/hinted/ttf/NotoSansArmenian-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 30752,
+      "gitBlobSha1": "08069ed0aa72866c8bdc3706fefeee7ff6f8db80"
+    },
+    {
+      "path": "fonts/NotoSansEthiopic-Regular.ttf",
+      "scripts": [
+        "Ethiopic"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansEthiopic/hinted/ttf/NotoSansEthiopic-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 376804,
+      "gitBlobSha1": "8820031ea7e0853a628518c774172f44c672e6e1"
+    },
+    {
+      "path": "fonts/NotoSansKhmer-Regular.ttf",
+      "scripts": [
+        "Khmer"
+      ],
+      "source": "noto",
+      "file": "fonts/NotoSansKhmer/hinted/ttf/NotoSansKhmer-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 114576,
+      "gitBlobSha1": "5c22ec4e25c10952a9494ba56bc4f9c29d3dfe7a"
+    },
+    {
+      "path": "fonts/DroidSansFallbackFull.ttf",
+      "scripts": [
+        "Han",
+        "Hiragana",
+        "Katakana",
+        "Bopomofo"
+      ],
+      "source": "aosp",
+      "file": "data/fonts/DroidSansFallbackFull.ttf",
+      "license": "Apache-2.0",
+      "bytes": 4033420,
+      "gitBlobSha1": "89959f52fd0f487c2cb772fcfd30152546cd44b3"
+    },
+    {
+      "path": "fonts/NanumGothic-Regular.ttf",
+      "scripts": [
+        "Hangul"
+      ],
+      "source": "googleFonts",
+      "file": "ofl/nanumgothic/NanumGothic-Regular.ttf",
+      "license": "OFL-1.1",
+      "bytes": 2054744,
+      "gitBlobSha1": "2aa2b20905b4136808a0126d8e36e5c0f576715c"
+    }
+  ],
+  "licenses": [
+    {
+      "path": "licenses/Noto-OFL.txt",
+      "source": "googleFonts",
+      "file": "ofl/notosansarabic/OFL.txt",
+      "license": "OFL-1.1",
+      "bytes": 4382,
+      "gitBlobSha1": "14c589f6384505ede3f8e52627d397513af3662d"
+    },
+    {
+      "path": "licenses/NanumGothic-OFL.txt",
+      "source": "googleFonts",
+      "file": "ofl/nanumgothic/OFL.txt",
+      "license": "OFL-1.1",
+      "bytes": 4534,
+      "gitBlobSha1": "69ff40157d0bba4c65e4ecf77564e1f01d0b02a5"
+    },
+    {
+      "path": "licenses/DroidSansFallback-NOTICE.txt",
+      "source": "aosp",
+      "file": "data/fonts/NOTICE",
+      "license": "Apache-2.0",
+      "bytes": 10695,
+      "gitBlobSha1": "c5b1efa7aac764ae6d8da63476a2d5cec02a6a5d"
+    }
   ]
 }
