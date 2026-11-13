@@ -5,7 +5,11 @@ import {
   createEditHistory,
   createImageEditHistory,
   defaultImageCropStep,
+  defaultImageResizeStep,
+  imageEditStackPreviewPlan,
+  imageEditStackRequestSteps,
   imageEditStackSuffix,
+  imageResizeStepProblem,
   presentImageEditSteps,
   pushEdit,
   planWithDraft,
@@ -97,6 +101,30 @@ test("the stack lists its steps and names a crop-only run -cropped", () => {
   assert.deepEqual(presentImageEditSteps({ crop: defaultImageCropStep() }), ["crop"]);
   assert.equal(imageEditStackSuffix({ crop: defaultImageCropStep() }), "-cropped");
   assert.deepEqual(defaultImageCropStep(), { mode: "aspectRatio", aspectWidth: 4, aspectHeight: 5, anchor: "center", x: 0, y: 0, width: 0, height: 0 });
+});
+
+test("a stack keeps the fixed run order and names more than one step -edited", () => {
+  const crop = defaultImageCropStep();
+  const resize = defaultImageResizeStep();
+  assert.equal(imageEditStackSuffix({ resize }), "-resized");
+  assert.equal(imageEditStackSuffix({ resize, crop }), "-edited");
+  assert.deepEqual(presentImageEditSteps({ resize, crop }), ["crop", "resize"]);
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps({ resize, crop })), ["crop", "resize"], "resize added first is still sent after crop");
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps({ resize, crop: undefined })), ["resize"], "a removed step is not sent");
+  assert.deepEqual(imageEditStackPreviewPlan({ resize, crop }).edits.map(({ kind }) => kind), ["crop", "resize"]);
+});
+
+test("resize steps are checked against the native limits", () => {
+  const resize = defaultImageResizeStep();
+  assert.deepEqual(resize, { mode: "longestSide", longestSide: 2048, width: 1600, height: 1200, percentage: 50, resampling: "lanczos", keepAspectRatio: true });
+  assert.equal(imageResizeStepProblem(resize), null);
+  assert.equal(imageResizeStepProblem({ ...resize, longestSide: 16385 })?.field, "longest side");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "percentage", percentage: 1000 }), null);
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "percentage", percentage: 1001 })?.message, "Enter a percentage from 1 to 1000.");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "percentage", percentage: 0 })?.field, "percentage");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "exact", width: 0 })?.field, "size");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "exact", height: 16385 })?.field, "size");
+  assert.equal(imageResizeStepProblem({ ...resize, mode: "exact", width: 1.5 })?.field, "size");
 });
 
 test("aspect crops keep the start or end of the long side", () => {

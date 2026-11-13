@@ -2040,3 +2040,10 @@ kbd.shortcut-hint {
 .scene-script-pack-message strong { font-weight: 600; }
 .scene-script-pack-action { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .scene-script-pack-action > span { white-space: nowrap; }
+.image-edit-stack-separator { color: var(--muted-foreground); margin-right: 6px; }
+.image-resize-size {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+}

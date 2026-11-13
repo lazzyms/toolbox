@@ -29,15 +29,20 @@ test.beforeEach(async ({ page }) => {
                 if (command === "plugin:dialog|open") return win.__dialogResults.shift() ?? null;
                 if (command === "inspect_image_preview") return { width: 640, height: 480, dataUrl: blank };
                 if (command === "inspect_image_edit_preview") {
-                    const crop = (args as { request: { plan: { edits: Array<{ mode: string; width: number; height: number }> } } }).request.plan.edits[0];
-                    if (crop.mode === "rectangle") return { width: crop.width, height: crop.height, dataUrl: blank };
+                    const edits = (args as { request: { plan: { edits: Array<{ kind: string; mode: string; width: number; height: number; longestSide: number }> } } }).request.plan.edits;
+                    const resize = edits.find((edit) => edit.kind === "resize");
+                    if (resize?.mode === "longestSide") return { width: resize.longestSide, height: Math.round(resize.longestSide * 0.75), dataUrl: blank };
+                    const crop = edits.find((edit) => edit.kind === "crop");
+                    if (crop?.mode === "rectangle") return { width: crop.width, height: crop.height, dataUrl: blank };
                     return { width: 384, height: 480, dataUrl: blank };
                 }
                 if (command.startsWith("plugin:")) return null;
-                const request = (args as { request?: { paths?: string[] } }).request;
+                const request = (args as { request?: { paths?: string[]; steps?: Record<string, unknown> } }).request;
+                const stepNames = Object.keys(request?.steps ?? {});
+                const suffix = stepNames.length > 1 ? "-edited" : stepNames[0] === "resize" ? "-resized" : "-cropped";
                 return win.__processingResults ?? (request?.paths ?? []).map((inputPath) => ({
                     inputPath,
-                    outputPaths: [inputPath.replace(/(\.\w+)$/, "-cropped$1")],
+                    outputPaths: [inputPath.replace(/(\.\w+)$/, `${suffix}$1`)],
                     detail: "Image saved",
                     state: "succeeded",
                     failure: null,
@@ -55,13 +60,18 @@ test.beforeEach(async ({ page }) => {
 const invocations = (page: Page, command: string) => page.evaluate((command) =>
     (window as unknown as StackWindow).__invocations.filter((invocation) => invocation.command === command), command);
 
-const openCrop = async (page: Page, paths: string[]) => {
+const openTool = async (page: Page, tool: string, paths: string[]) => {
     await page.goto("/");
-    await openToolBySearch(page, "Crop Images");
+    await openToolBySearch(page, tool);
     await page.evaluate((paths) => { (window as unknown as StackWindow).__dialogResults = [paths]; }, paths);
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByText(`Previewing ${paths[0].split("/").pop()}`, { exact: true })).toBeVisible();
 };
+
+const openCrop = (page: Page, paths: string[]) => openTool(page, "Crop Images", paths);
+const openResize = (page: Page, paths: string[]) => openTool(page, "Resize Images", paths);
+const addedMessage = (label: string, position: number) =>
+    `${label} added as step ${position}. Steps always run Crop, Resize, Rotate and Flip, Colour and Tone, Watermark, then Remove Metadata.`;
 
 const steps = (page: Page) => page.getByRole("list", { name: "Steps, in the order they run" });
 
@@ -71,7 +81,7 @@ test("choosing Crop adds one step and runs the batch through one export", async 
 
     await expect(steps(page).getByRole("button", { name: "Step 1 of 1, Crop, showing its options" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("heading", { name: "Crop", exact: true })).toBeVisible();
-    await expect(page.getByRole("status").filter({ hasText: "Crop added as step 1. Steps always run in the same order." })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Crop", 1) })).toBeVisible();
 
     // Choosing Crop again focuses the existing step instead of adding a second one.
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
@@ -99,7 +109,7 @@ test("a pixel rectangle is sent exactly as typed", async ({ page }) => {
     await page.getByLabel("Top edge, pixels").fill("20");
     await page.getByLabel("Width, pixels").fill("300");
     await page.getByLabel("Height, pixels").fill("200");
-    await expect(page.getByRole("region", { name: "Crop result preview" }).getByText("300 × 200px")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Result preview" }).getByText("300 × 200px")).toBeVisible();
 
     await page.getByRole("button", { name: "Run on 1 image" }).click();
     const [run] = await invocations(page, "export_image_edit_stack");
@@ -186,3 +196,128 @@ test("Run waits for images before it can start", async ({ page }) => {
     await expect(page.locator(".workspace-primary-action")).toBeDisabled();
     await expect(page.locator(".workspace-primary-action")).toContainText("Run");
 });
+
+const runRequest = async (page: Page) => {
+    const [run] = await invocations(page, "export_image_edit_stack");
+    return (run.args as { request: { paths: string[]; steps: Record<string, unknown> } }).request;
+};
+
+test("choosing Resize adds a step whose longest side, resampling and aspect lock reach the request", async ({ page }) => {
+    await openResize(page, ["/photos/a.png", "/photos/b.jpg"]);
+    await expect(steps(page).getByRole("button", { name: "Step 1 of 1, Resize, showing its options" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Resize", 1) })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Longest side" })).toHaveAttribute("aria-checked", "true");
+
+    await page.getByLabel("Longest side, pixels").fill("1200");
+    await page.getByLabel("Resampling").selectOption({ label: "Sharp, keeps fine detail" });
+    await expect(page.getByRole("region", { name: "Result preview" }).getByText("1200 × 900px")).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-resized.png");
+
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    const request = await runRequest(page);
+    expect(request.steps).toEqual({
+        resize: { mode: "longestSide", longestSide: 1200, width: 1600, height: 1200, percentage: 50, resampling: "bicubic", keepAspectRatio: true },
+    });
+    await expect(page.getByRole("button", { name: "Open a-resized.png" })).toBeVisible();
+});
+
+test("an exact size keeps the aspect lock on until it is turned off", async ({ page }) => {
+    await openResize(page, ["/photos/a.png"]);
+    await page.getByRole("radio", { name: "Exact size" }).click();
+    const lock = page.getByRole("button", { name: "Keep aspect ratio" });
+    await expect(lock).toHaveAttribute("aria-pressed", "true");
+    await page.getByLabel("Width", { exact: true }).fill("800");
+    await page.getByLabel("Height", { exact: true }).fill("600");
+    await expect(page.getByText("Keep aspect ratio is on: each image fits inside 800 × 600 and keeps its shape.", { exact: false })).toBeVisible();
+    await lock.click();
+    await expect(lock).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByText("Keep aspect ratio is off: every image becomes exactly 800 × 600", { exact: false })).toBeVisible();
+
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    expect((await runRequest(page)).steps).toMatchObject({ resize: { mode: "exact", width: 800, height: 600, keepAspectRatio: false } });
+});
+
+test("a value outside the limits blocks Run and names the field", async ({ page }) => {
+    await openResize(page, ["/photos/a.png"]);
+    await page.getByRole("radio", { name: "Percentage" }).click();
+    const percentage = page.getByLabel("Percentage", { exact: true });
+    await percentage.fill("1500");
+    await expect(percentage).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText("Enter a percentage from 1 to 1000.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Fix the percentage to run", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeDisabled();
+
+    await page.getByRole("radio", { name: "Longest side" }).click();
+    await page.getByLabel("Longest side, pixels").fill("16385");
+    await expect(page.getByText("Enter a longest side from 1 to 16384 pixels.", { exact: true })).toBeVisible();
+    await page.getByLabel("Longest side, pixels").fill("16384");
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeEnabled();
+});
+
+test("a second tool adds a second step and steps run in a fixed order whatever order they were added", async ({ page }) => {
+    await openResize(page, ["/photos/a.png"]);
+    await page.getByLabel("Longest side, pixels").fill("640");
+    await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
+
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Crop", 1) })).toBeVisible();
+    const list = steps(page);
+    await expect(list.getByRole("button", { name: "Step 1 of 2, Crop, showing its options" })).toHaveAttribute("aria-pressed", "true");
+    await expect(list.getByRole("button", { name: "Step 2 of 2, Resize" })).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByText("Step 1 of 2. Runs first, before Resize.", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-edited.png");
+    await expect(page.getByRole("region", { name: "Result preview" }).getByText("After all 2 steps")).toBeVisible();
+
+    // Focusing a step shows its options without adding another.
+    await list.getByRole("button", { name: "Step 2 of 2, Resize" }).click();
+    await expect(page.getByLabel("Longest side, pixels")).toHaveValue("640");
+    await expect(page.getByText("Step 2 of 2. Runs after Crop.", { exact: true })).toBeVisible();
+    await expect(list.getByRole("button", { name: /^Step \d of 2/ })).toHaveCount(2);
+
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const request = await runRequest(page);
+    expect(Object.keys(request.steps)).toEqual(["crop", "resize"]);
+    expect(request.steps).toMatchObject({ crop: { mode: "aspectRatio" }, resize: { mode: "longestSide", longestSide: 640 } });
+    await expect(page.getByRole("button", { name: "Open a-edited.png" })).toBeVisible();
+});
+
+test("adding Crop from the Resize step list sends the same request as adding Resize to Crop", async ({ page }) => {
+    await openCrop(page, ["/photos/a.png"]);
+    await steps(page).getByRole("button", { name: "Add Resize step" }).click();
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Resize", 2) })).toBeVisible();
+    await expect(steps(page).getByRole("button", { name: "Step 2 of 2, Resize, showing its options" })).toBeVisible();
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const cropFirst = await runRequest(page);
+
+    await openResize(page, ["/photos/a.png"]);
+    await steps(page).getByRole("button", { name: "Add Crop step" }).click();
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const resizeFirst = await runRequest(page);
+
+    expect(JSON.stringify(resizeFirst.steps)).toBe(JSON.stringify(cropFirst.steps));
+    expect(Object.keys(resizeFirst.steps)).toEqual(["crop", "resize"]);
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`the resize step renders readable controls in the ${theme} theme`, async ({ page }, testInfo) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await openResize(page, ["/photos/a.png"]);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await page.getByRole("radio", { name: "Exact size" }).click();
+        const options = page.getByRole("region", { name: "Options" });
+        await expect(options.getByRole("button", { name: "Keep aspect ratio" })).toBeVisible();
+        const colors = await options.evaluate((node) => {
+            const heading = node.querySelector("h2");
+            const separator = document.querySelector(".image-edit-stack-separator");
+            return {
+                surface: getComputedStyle(node).backgroundColor,
+                heading: heading ? getComputedStyle(heading).color : "",
+                separatorHidden: separator?.getAttribute("aria-hidden"),
+            };
+        });
+        expect(colors.heading).not.toBe("");
+        expect(colors.heading).not.toBe(colors.surface);
+        await page.screenshot({ path: testInfo.outputPath(`resize-step-${theme}.png`), animations: "disabled" });
+        await steps(page).getByRole("button", { name: "Add Crop step" }).click();
+        await expect(page.locator(".image-edit-stack-separator")).toHaveAttribute("aria-hidden", "true");
+    });
+}

@@ -52,7 +52,7 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.manyToOne, false);
   assert.equal(UtilityRegistry.find(({ id }) => id === "lock-unlock")?.command, "remove_password");
   assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.inputCardinality, "multiple");
-  assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.outputSuffix, "-cropped");
+  assert.equal(capabilitiesByCommand.get("export_image_edit_stack")?.outputSuffix, "-edited");
   assert.equal(capabilitiesByCommand.get("crop_images")?.inputCardinality, "single");
   const crop = UtilityRegistry.find(({ id }) => id === "crop");
   assert.equal(crop?.command, "export_image_edit_stack");
