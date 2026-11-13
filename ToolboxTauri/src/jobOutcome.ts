@@ -16,7 +16,7 @@ import type {
   ToolResult,
   WarningCode,
 } from "./contracts";
-import { jpegColours } from "./contracts";
+import { jpegColours, reflowLayouts } from "./contracts";
 import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
@@ -70,6 +70,7 @@ const counts = (value: unknown, path: string): number[] =>
   Array.isArray(value) ? value.map((item, index) => count(item, `${path}[${index}]`)) : fail(path, "an array");
 
 const colour = (value: unknown, path: string) => member(value, jpegColours, path);
+const layout = (value: unknown, path: string) => member(value, reflowLayouts, path);
 
 const imagePlace = { page: count, image: count };
 
@@ -89,6 +90,8 @@ const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> =
   pagesWithoutText: { pages: counts },
   transparencyFlattened: null,
   upscaled: { from: count, to: count },
+  notReflowed: { layout, pages: counts },
+  unmappedText: { pages: counts },
 };
 
 const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {

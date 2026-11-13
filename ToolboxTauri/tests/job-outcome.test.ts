@@ -14,7 +14,7 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
 
   const [succeeded, pointedSkip, plainSkip, failed, limited, , , notCarried, converted, images, blankPages, flattened] = outcomes;
   for (const outcome of outcomes.slice(0, 5)) {
@@ -56,6 +56,22 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   assert.deepEqual(images.warnings.map(warningText), images.warnings.map((warning) => warning.message), "rows say what the native side says");
   assert.deepEqual(blankPages.warnings.map(warningText), blankPages.warnings.map((warning) => warning.message));
   assert.deepEqual(flattened.warnings.map((warning) => warning.code), ["transparencyFlattened"]);
+
+  const reflowed = outcomes[outcomes.length - 1];
+  assert.deepEqual(reflowed.warnings.map((warning) => warning.code), ["notReflowed", "notReflowed", "notReflowed", "unmappedText"]);
+  assert.deepEqual(reflowed.warnings.map(warningText), reflowed.warnings.map((warning) => warning.message), "rows say what the native side says");
+});
+
+test("PDF to EPUB layouts that may read out of order are warnings, and unmapped text alone is a note", () => {
+  const book = sample(nativeSamples.length - 1);
+  const reflow = parseJobOutcome(book);
+  const view = rowView(reflow, "Converted");
+  assert.equal(view.tone, "warn");
+  assert.deepEqual(view.detailLines.slice(0, 4).map((line) => line.tone), ["warn", "warn", "warn", null]);
+  const unmappedOnly = parseJobOutcome({ ...book, warnings: (book.warnings as unknown[]).slice(3) });
+  assert.equal(rowView(unmappedOnly, "Converted").tone, "note");
+  assert.equal(warningText({ code: "notReflowed", message: "", details: { layout: "table", pages: [3, 7] } }), "Pages 3, 7 — Tables were flowed as plain paragraphs.");
+  assert.throws(() => parseJobOutcome({ ...book, warnings: [{ code: "notReflowed", message: "", details: { layout: "sidebar", pages: [1] } }] }), /layout/);
 });
 
 test("an image PDF to EPUB left out says so, in the native side's words", () => {

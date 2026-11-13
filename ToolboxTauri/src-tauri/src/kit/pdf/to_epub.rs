@@ -10,7 +10,11 @@
 //! clamped to each PDF, limits the book to those pages; pages outside it add no text, images, links or
 //! bookmarks, and the first page in the range is the cover. Images
 //! drawn on the pages are kept as Extract from PDF saves them, each placed where it is drawn among the
-//! text and stored once however often it is drawn. The package is built in memory with fixed timestamps and an identifier derived from the PDF's bytes,
+//! text and stored once however often it is drawn. Text is kept exactly as its Unicode mapping
+//! gives it; text with no reliable mapping is left out and its pages are named. Pages laid out in
+//! columns, tables or formulas are joined into plain paragraphs and named as possibly reading out
+//! of order. The book's language is the PDF's /Lang, else the language of a script only one
+//! language writes, else "und". The package is built in memory with fixed timestamps and an identifier derived from the PDF's bytes,
 //! so the same PDF always makes the same EPUB, then reopened and checked before it is published.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -20,16 +24,17 @@ use std::path::{Path, PathBuf};
 
 use lopdf::{Dictionary, Document, Object, ObjectId};
 use sha2::{Digest, Sha256};
+use unicode_script::{Script, UnicodeScript};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, System, ZipArchive, ZipWriter};
 
 use crate::kit::common::{note_renamed, JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{OutcomeDetail, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
+use crate::kit::contracts::{OutcomeDetail, OutcomePointer, OutcomeWarning, ReflowLayout, SkipCode, SkipReason, ToolError, WarningKind};
 use super::document_info;
 use super::embedded_image::{self, Extracted, NotSaved};
 use super::page_text::{read_document_text, PageImageSource, PageText, PageTextRun};
 use super::page_ranges::{pages_label, PageRanges};
-use super::remaining::{not_saved_warning, page_runs, pages_without_text, PDF_DAMAGED};
+use super::remaining::{not_saved_warning, page_list, page_runs, pages_without_text, PDF_DAMAGED};
 use super::resolve;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -69,6 +74,8 @@ pub enum EpubCover {
 pub const NO_SELECTABLE_TEXT: &str = "PDF contains no selectable text; scanned PDFs require OCR. No EPUB was made.";
 pub const PASSWORD_PROTECTED: &str = "This PDF is password-protected. Remove the password, then convert again.";
 pub const COVER_NOT_RENDERED: &str = "Omitted content: the cover, because the first page couldn't be rendered.";
+/// Says what happened to text in a font without a reliable character mapping.
+pub const UNMAPPED_LEFT_OUT: &str = "Some text has no reliable character mapping, so it was left out.";
 /// Closes the warning for an image that couldn't be read.
 pub const IMAGE_LEFT_OUT: &str = "Left out; the rest of the book converted.";
 
@@ -83,8 +90,16 @@ const IMAGES: &str = "images";
 const COVER_QUALITY: u8 = 85;
 /// Every EPUB carries this modification time, so output never depends on when it was made.
 const MODIFIED: &str = "1980-01-01T00:00:00Z";
-/// The text's language isn't known, so the book says so rather than guessing.
-const LANGUAGE: &str = "und";
+/// The language a book declares when neither the PDF nor its script names one, rather than a guess.
+const UNDETERMINED_LANGUAGE: &str = "und";
+/// Scripts written in one language only, so text mostly in one of them is in that language. Latin,
+/// Cyrillic, Arabic, Devanagari and Han each write several languages, so they name none.
+const SCRIPT_LANGUAGES: [(Script, &str); 16] = [
+    (Script::Greek, "el"), (Script::Hangul, "ko"), (Script::Thai, "th"), (Script::Armenian, "hy"),
+    (Script::Georgian, "ka"), (Script::Hebrew, "he"), (Script::Tamil, "ta"), (Script::Telugu, "te"),
+    (Script::Kannada, "kn"), (Script::Malayalam, "ml"), (Script::Gujarati, "gu"), (Script::Gurmukhi, "pa"),
+    (Script::Oriya, "or"), (Script::Sinhala, "si"), (Script::Khmer, "km"), (Script::Lao, "lo"),
+];
 /// Lines at each page edge that can be part of a running header or footer band.
 const BAND_LINES: usize = 2;
 /// A heading is short: longer text in a heading style is a paragraph set large or bold.
@@ -131,6 +146,12 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
     if converted.is_empty() {
         return JobOutcome::skipped(input, SkipReason::new(SkipCode::NeedsOcr, NO_SELECTABLE_TEXT).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
     }
+    // Layouts and unmapped text are noted only on pages that made it into the book.
+    let mut layouts: BTreeMap<ReflowLayout, Vec<u32>> = BTreeMap::new();
+    for &number in &converted {
+        for layout in reflow_layouts(&pages[number as usize - 1]) { layouts.entry(layout).or_default().push(number); }
+    }
+    let unmapped = converted.iter().copied().filter(|&number| pages[number as usize - 1].runs.iter().any(|run| !run.reliable_unicode && !run.text.trim().is_empty())).collect::<Vec<_>>();
     if request.remove_headers_and_footers { remove_running_text(&mut lines); }
     let stem = input.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
     let details = BookDetails::new(document_info::from_document(&document).merged(), request, &stem);
@@ -156,6 +177,7 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         title: details.title.clone(),
         author: details.author.clone(),
         identifier: identifier(&bytes),
+        language: book_language(&document, &lines),
         chapters,
         contents,
         homes,
@@ -175,11 +197,18 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
     let entries = book.contents.len();
     let page_count = count(converted.len(), "page", "pages");
     let (kept, found) = (book.images.len(), book.images.len() + images.warnings.len());
-    let detail = match (kept, images.warnings.len()) {
+    // Each run of pages with one layout is a part that may read out of order.
+    let parts = layouts.values().map(|pages| page_runs(pages).len()).sum::<usize>();
+    let mut detail = match (kept, images.warnings.len()) {
         (0, 0) => format!("{page_count}. {}", source.sentence(entries)),
         (_, 0) => format!("{page_count}, {}. {}", count(kept, "image", "images"), source.sentence(entries)),
         (_, unreadable) => format!("{page_count}, {kept} of {}. {} couldn't be read.", count(found, "image", "images"), count(unreadable, "image", "images")),
     };
+    if parts > 0 {
+        // After the unreadable images the parts close the same sentence; otherwise they are a sentence of their own.
+        if images.warnings.is_empty() { detail.push(' '); } else { detail.pop(); detail.push_str("; "); }
+        detail.push_str(&format!("{} may read out of order.", count(parts, "part", "parts")));
+    }
     let cover_detail = match &cover {
         Some(Some(_)) => format!("Page {cover_page}"),
         Some(None) => format!("None; page {cover_page} couldn't be rendered"),
@@ -194,7 +223,23 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
     ]).collect());
     let outcome = if matches!(cover, Some(None)) { outcome.with_warning(OutcomeWarning { kind: WarningKind::OmittedContent, message: COVER_NOT_RENDERED.into() }) } else { outcome };
     let outcome = images.warnings.into_iter().fold(outcome, JobOutcome::with_warning);
+    let outcome = layouts.into_iter().map(|(layout, pages)| not_reflowed(layout, pages)).fold(outcome, JobOutcome::with_warning);
+    let outcome = if unmapped.is_empty() { outcome } else { outcome.with_warning(unmapped_text(unmapped)) };
     if blank.is_empty() { outcome } else { outcome.with_warning(pages_without_text(blank)) }
+}
+
+fn not_reflowed(layout: ReflowLayout, pages: Vec<u32>) -> OutcomeWarning {
+    let what = match (layout, pages.len()) {
+        (ReflowLayout::Columns, _) => "Two-column layout. Joined into one column, so captions may sit away from their pictures.",
+        (ReflowLayout::Table, 1) => "A table was flowed as plain paragraphs.",
+        (ReflowLayout::Table, _) => "Tables were flowed as plain paragraphs.",
+        (ReflowLayout::Formula, _) => "Formulas may read out of order.",
+    };
+    OutcomeWarning { message: format!("{} — {what}", page_list(&pages)), kind: WarningKind::NotReflowed { layout, pages } }
+}
+
+fn unmapped_text(pages: Vec<u32>) -> OutcomeWarning {
+    OutcomeWarning { message: format!("{} — {UNMAPPED_LEFT_OUT}", page_list(&pages)), kind: WarningKind::UnmappedText { pages } }
 }
 
 /// Which pages, by index, the book is made from: every page without a range, else the range clamped to
@@ -497,6 +542,128 @@ fn page_lines(page: &PageText, links: &[PageLink]) -> Vec<Line> {
         }
     }
     lines
+}
+
+/// A gap wider than this many times the text size between text on one row separates columns or cells.
+const CELL_GAP: f32 = 1.5;
+/// Rows of three or more cells that make a table, and segments on each side of a gutter that make columns.
+const LAYOUT_MIN_ROWS: usize = 3;
+/// Mathematical symbols on one row that make it a formula.
+const FORMULA_MIN_SYMBOLS: usize = 2;
+
+/// A stretch of text on one row of a page with no wide gap inside it: a column's line or a table's cell.
+#[derive(Debug, Clone)]
+struct Segment { left: f32, right: f32, top: f32, bottom: f32, size: f32, text: String }
+
+/// A page's mapped text as rows, top to bottom, each split left to right into segments at wide gaps.
+/// Rows go by position, not content order, so text side by side shares a row however it was drawn.
+fn page_rows(page: &PageText) -> Vec<Vec<Segment>> {
+    let middle = |run: &PageTextRun| run.y + run.height / 2.;
+    let mut runs = page.runs.iter().filter(|run| run.reliable_unicode && !run.text.trim().is_empty()).collect::<Vec<_>>();
+    runs.sort_by(|a, b| middle(a).total_cmp(&middle(b)).then(a.x.total_cmp(&b.x)));
+    let mut rows: Vec<(f32, f32, Vec<&PageTextRun>)> = Vec::new();
+    for run in runs {
+        match rows.last_mut() {
+            Some((top, bottom, members)) if middle(run) >= *top && middle(run) <= *bottom => {
+                *bottom = bottom.max(run.y + run.height);
+                members.push(run);
+            }
+            _ => rows.push((run.y, run.y + run.height, vec![run])),
+        }
+    }
+    rows.into_iter().map(|(_, _, mut members)| {
+        members.sort_by(|a, b| a.x.total_cmp(&b.x));
+        let mut segments: Vec<Segment> = Vec::new();
+        for run in members {
+            match segments.last_mut() {
+                Some(segment) if run.x - segment.right <= CELL_GAP * run.font_size.max(segment.size) => {
+                    segment.text.push(' ');
+                    segment.text.push_str(run.text.trim());
+                    segment.right = segment.right.max(run.x + run.width);
+                    segment.top = segment.top.min(run.y);
+                    segment.bottom = segment.bottom.max(run.y + run.height);
+                    segment.size = segment.size.max(run.font_size);
+                }
+                _ => segments.push(Segment { left: run.x, right: run.x + run.width, top: run.y, bottom: run.y + run.height, size: run.font_size, text: run.text.trim().into() }),
+            }
+        }
+        segments
+    }).collect()
+}
+
+/// The layouts on a page that reflowing joins into plain paragraphs, so they may read out of order:
+/// a table, where at least three rows hold three or more cells; otherwise columns; and formulas,
+/// where one row holds at least two mathematical symbols.
+fn reflow_layouts(page: &PageText) -> Vec<ReflowLayout> {
+    let rows = page_rows(page);
+    let mut layouts = Vec::new();
+    if rows.iter().filter(|row| row.len() >= 3).count() >= LAYOUT_MIN_ROWS {
+        layouts.push(ReflowLayout::Table);
+    } else if in_columns(&rows) {
+        layouts.push(ReflowLayout::Columns);
+    }
+    if rows.iter().any(|row| row.iter().flat_map(|segment| segment.text.chars()).filter(|&character| mathematical(character)).count() >= FORMULA_MIN_SYMBOLS) {
+        layouts.push(ReflowLayout::Formula);
+    }
+    layouts
+}
+
+/// Text is in columns when a gutter runs down the page with at least three segments wholly on each side,
+/// side by side rather than one above the other, and lines on each side are at least a quarter of the
+/// text's width, so a column of page numbers or labels isn't one. A heading across the columns may cross it.
+fn in_columns(rows: &[Vec<Segment>]) -> bool {
+    let segments = rows.iter().flatten().collect::<Vec<_>>();
+    let (Some(start), Some(end)) = (segments.iter().map(|segment| segment.left).min_by(f32::total_cmp), segments.iter().map(|segment| segment.right).max_by(f32::total_cmp)) else { return false };
+    let line = (end - start) / 4.;
+    segments.iter().any(|edge| {
+        let gutter = edge.right;
+        let (left, right): (Vec<&&Segment>, Vec<&&Segment>) = (segments.iter().filter(|segment| segment.right <= gutter).collect(), segments.iter().filter(|segment| segment.left > gutter).collect());
+        let crossing = segments.len() - left.len() - right.len();
+        let wide = |side: &[&&Segment]| side.iter().any(|segment| segment.right - segment.left >= line);
+        if left.len() < LAYOUT_MIN_ROWS || right.len() < LAYOUT_MIN_ROWS || crossing * 5 > segments.len() || !wide(&left) || !wide(&right) { return false; }
+        let top = left.iter().map(|segment| segment.top).fold(f32::INFINITY, f32::min);
+        let bottom = left.iter().map(|segment| segment.bottom).fold(f32::NEG_INFINITY, f32::max);
+        right.iter().filter(|segment| segment.top < bottom && segment.bottom > top).count() >= LAYOUT_MIN_ROWS
+    })
+}
+
+/// Mathematical operators, arrows-and-brackets blocks and alphanumerics. The minus sign is left out,
+/// since prose uses it for negative numbers.
+fn mathematical(character: char) -> bool {
+    character != '\u{2212}' && matches!(character, '\u{2200}'..='\u{22FF}' | '\u{27C0}'..='\u{27EF}' | '\u{2980}'..='\u{2AFF}' | '\u{1D400}'..='\u{1D7FF}')
+}
+
+/// The book's language: the PDF's own language when it is a well-formed tag; else, when most of the
+/// book's letters are in a script only one language writes, that language; else undetermined. Japanese is
+/// told from Chinese by its kana. Nothing is guessed from the words themselves.
+fn book_language(document: &Document, pages: &[Vec<Line>]) -> String {
+    let declared = document.catalog().ok().and_then(|catalog| catalog.get(b"Lang").ok())
+        .and_then(|lang| resolve(document, lang).ok()).and_then(document_info::decode_text)
+        .map(|tag| tag.trim().to_string()).filter(|tag| language_tag(tag));
+    declared
+        .or_else(|| script_language(pages.iter().flatten().flat_map(|line| line.text.chars())).map(String::from))
+        .unwrap_or_else(|| UNDETERMINED_LANGUAGE.into())
+}
+
+/// A BCP 47 shaped tag: a two or three letter language, then subtags of one to eight letters or digits.
+fn language_tag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    subtags.next().is_some_and(|language| (2..=3).contains(&language.len()) && language.bytes().all(|byte| byte.is_ascii_alphabetic()))
+        && subtags.all(|subtag| (1..=8).contains(&subtag.len()) && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+}
+
+fn script_language(text: impl Iterator<Item = char>) -> Option<&'static str> {
+    let mut letters = 0usize;
+    let mut scripts: HashMap<Script, usize> = HashMap::new();
+    for character in text.filter(|character| character.is_alphabetic()) {
+        letters += 1;
+        *scripts.entry(character.script()).or_default() += 1;
+    }
+    let of = |script: Script| scripts.get(&script).copied().unwrap_or(0);
+    let kana = of(Script::Hiragana) + of(Script::Katakana);
+    let japanese = kana + of(Script::Han);
+    if japanese * 2 > letters && kana * 10 >= japanese && kana > 0 { return Some("ja"); }
+    SCRIPT_LANGUAGES.iter().find(|(script, _)| of(*script) * 2 > letters).map(|(_, language)| *language)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -845,16 +1012,17 @@ fn identifier(bytes: &[u8]) -> String {
 
 fn chapter_name(number: usize) -> String { format!("chapter-{number}.xhtml") }
 
-fn xhtml(title: &str, body: &str) -> String {
+/// A content document in the book's language. The tag is checked to hold only letters, digits and hyphens.
+fn xhtml(language: &str, title: &str, body: &str) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head>\n<meta charset=\"UTF-8\"/>\n<title>{}</title>\n</head>\n<body>\n{body}</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" lang=\"{language}\" xml:lang=\"{language}\">\n<head>\n<meta charset=\"UTF-8\"/>\n<title>{}</title>\n</head>\n<body>\n{body}</body>\n</html>\n",
         escape(title),
     )
 }
 
 /// Everything that goes into one EPUB. `contents` holds each table of contents entry's level, link
 /// and label; `homes` the chapter each page starts in; `anchors` the pages something links to.
-struct Book { title: String, author: Option<String>, identifier: String, chapters: Vec<Chapter>, contents: Vec<(usize, String, String)>, homes: Vec<usize>, anchors: BTreeSet<usize>, cover: Option<Vec<u8>>, images: Vec<BookImage> }
+struct Book { title: String, author: Option<String>, identifier: String, language: String, chapters: Vec<Chapter>, contents: Vec<(usize, String, String)>, homes: Vec<usize>, anchors: BTreeSet<usize>, cover: Option<Vec<u8>>, images: Vec<BookImage> }
 
 /// A block's text as XHTML: links become `a` elements, to the page's anchor in the book or to the
 /// URI as written, and each page something links to gets an anchor where its text starts.
@@ -893,11 +1061,11 @@ fn chapter_document(book: &Book, chapter: &Chapter) -> String {
         // The PDF carries no description of the image, so it is marked as having none.
         Item::Image(image) => format!("<figure><img src=\"{IMAGES}/{}\" alt=\"\"/></figure>\n", book.images[*image].name),
     }).collect::<String>();
-    xhtml(chapter.title(&book.title), &format!("<section id=\"chapter-{}\">\n{items}</section>\n", chapter.number))
+    xhtml(&book.language, chapter.title(&book.title), &format!("<section id=\"chapter-{}\">\n{items}</section>\n", chapter.number))
 }
 
-fn cover_document(title: &str) -> String {
-    xhtml(title, &format!("<section epub:type=\"cover\" id=\"cover\">\n<img src=\"{COVER_IMAGE}\" alt=\"Cover\"/>\n</section>\n"))
+fn cover_document(book: &Book) -> String {
+    xhtml(&book.language, &book.title, &format!("<section epub:type=\"cover\" id=\"cover\">\n<img src=\"{COVER_IMAGE}\" alt=\"Cover\"/>\n</section>\n"))
 }
 
 /// The table of contents, nested by level, or the book's title when there are no entries.
@@ -921,7 +1089,7 @@ fn nav_document(book: &Book) -> String {
     }
     for _ in 0..depth { list.push_str("</li>\n</ol>\n"); }
     list.push_str("</li>\n</ol>\n");
-    xhtml(&book.title, &format!("<nav epub:type=\"toc\" id=\"toc\">\n<h1>Contents</h1>\n{list}</nav>\n"))
+    xhtml(&book.language, &book.title, &format!("<nav epub:type=\"toc\" id=\"toc\">\n<h1>Contents</h1>\n{list}</nav>\n"))
 }
 
 fn package_document(book: &Book) -> String {
@@ -940,9 +1108,10 @@ fn package_document(book: &Book) -> String {
     let items = images.chain(chapters).collect::<String>();
     let spine = book.chapters.iter().map(|chapter| format!("<itemref idref=\"chapter-{}\"/>\n", chapter.number)).collect::<String>();
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"book-id\">\n<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n<dc:identifier id=\"book-id\">{}</dc:identifier>\n<dc:title>{}</dc:title>\n{creator}<dc:language>{LANGUAGE}</dc:language>\n<meta property=\"dcterms:modified\">{MODIFIED}</meta>\n{cover_meta}</metadata>\n<manifest>\n<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n{cover_items}{items}</manifest>\n<spine>\n{cover_spine}{spine}</spine>\n</package>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"book-id\">\n<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n<dc:identifier id=\"book-id\">{}</dc:identifier>\n<dc:title>{}</dc:title>\n{creator}<dc:language>{}</dc:language>\n<meta property=\"dcterms:modified\">{MODIFIED}</meta>\n{cover_meta}</metadata>\n<manifest>\n<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n{cover_items}{items}</manifest>\n<spine>\n{cover_spine}{spine}</spine>\n</package>\n",
         book.identifier,
         escape(&book.title),
+        book.language,
     )
 }
 
@@ -966,7 +1135,7 @@ fn package(book: &Book) -> Result<Vec<u8>, String> {
     entry(NAV_PATH, deflated, nav_document(book).as_bytes())?;
     if let Some(cover) = &book.cover {
         entry(&format!("OEBPS/{COVER_IMAGE}"), stored, cover)?;
-        entry(&format!("OEBPS/{COVER_PAGE}"), deflated, cover_document(&book.title).as_bytes())?;
+        entry(&format!("OEBPS/{COVER_PAGE}"), deflated, cover_document(book).as_bytes())?;
     }
     for image in &book.images {
         entry(&format!("OEBPS/{IMAGES}/{}", image.name), stored, &image.data)?;
@@ -1033,7 +1202,7 @@ fn attribute_values(xml: &str, attribute: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::contracts::{OutcomeState, WarningKind};
+    use crate::kit::contracts::{OutcomeState, ReflowLayout, WarningKind};
 
     fn run(text: &str, x: f32, y: f32, size: f32) -> PageTextRun {
         PageTextRun { text: text.into(), x, y, width: text.chars().count() as f32 * size * 0.5, height: size, font_size: size, bold: false, italic: false, reliable_unicode: true }
@@ -1145,7 +1314,7 @@ mod tests {
     #[test]
     fn verification_refuses_a_package_without_a_leading_stored_mimetype() {
         let chapters = vec![Chapter { number: 1, items: vec![Item::Paragraph(Text::plain("Text"))] }];
-        let book = Book { title: "Book".into(), author: None, identifier: identifier(b"x"), chapters, contents: Vec::new(), homes: vec![1], anchors: BTreeSet::new(), cover: None, images: Vec::new() };
+        let book = Book { title: "Book".into(), author: None, identifier: identifier(b"x"), language: UNDETERMINED_LANGUAGE.into(), chapters, contents: Vec::new(), homes: vec![1], anchors: BTreeSet::new(), cover: None, images: Vec::new() };
         let good = package(&book).unwrap();
         assert_eq!(verify(&good), Ok(()));
         let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
@@ -1581,6 +1750,135 @@ mod tests {
         assert_eq!(warning.kind, WarningKind::ImageDamaged { page: 1, image: 2 });
         assert_eq!(warning.message, "Page 1, image 2 — The image data is damaged. Left out; the rest of the book converted.");
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn language_of(epub: &Path) -> (String, Vec<String>) {
+        let opf = entry(epub, PACKAGE_PATH);
+        let declared = opf.split("<dc:language>").nth(1).and_then(|rest| rest.split("</dc:language>").next()).unwrap().to_string();
+        let documents = names(epub).into_iter().filter(|name| name.ends_with(".xhtml")).map(|name| {
+            let document = entry(epub, &name);
+            let lang = attribute_values(&document, "lang");
+            assert_eq!(lang, attribute_values(&document, "xml:lang"), "{name} declares lang and xml:lang alike");
+            lang.join(" ")
+        }).collect();
+        (declared, documents)
+    }
+
+    #[test]
+    fn non_latin_text_is_kept_exactly_and_the_book_declares_its_language() {
+        use super::super::remaining::text_extraction_tests::{lines_pdf, multi_language_pdf, Line as At, Run};
+        let root = folder("languages");
+        let mixed = root.join("mixed.pdf");
+        multi_language_pdf(&mixed);
+        let outcome = convert(&request(&mixed, true), mixed);
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        for text in ["Café naïve façade Ångström", "Καλημέρα κόσμε", "Привет мир", "你好 世界 こんにちは 안녕하세요"] {
+            assert!(chapter.contains(text), "{text} in {chapter}");
+        }
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        assert_eq!(language_of(&output_paths[0]), ("und".into(), vec!["und".into(), "und".into()]), "no script holds most of the letters, so nothing is guessed");
+
+        // Greek is written in one language only, so a Greek book says so.
+        let greek = root.join("greek.pdf");
+        lines_pdf(&greek, &[vec![At { x: 72., y: 720., run: Run::Cid("Καλημέρα κόσμε, τι κάνεις;") }, At { x: 72., y: 700., run: Run::Latin("ISBN 978") }]]);
+        let outcome = convert(&request(&greek, true), greek);
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        assert!(chapter.contains("Καλημέρα κόσμε, τι κάνεις;") && chapter.contains("ISBN 978"), "{chapter}");
+        assert_eq!(language_of(&output_paths[0]), ("el".into(), vec!["el".into(), "el".into()]));
+
+        // Cyrillic writes many languages, so the language comes from the PDF when it names one, and is undetermined when it doesn't.
+        let russian = root.join("russian.pdf");
+        lines_pdf(&russian, &[vec![At { x: 72., y: 720., run: Run::Cid("Привет мир") }]]);
+        let outcome = convert(&request(&russian, true), russian.clone());
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        assert_eq!(language_of(&output_paths[0]).0, "und");
+        for (lang, declared) in [("ru-RU", "ru-RU"), ("<ru>", "und")] {
+            let mut document = Document::load(&russian).unwrap();
+            let catalog = document.trailer.get(b"Root").and_then(Object::as_reference).unwrap();
+            document.get_object_mut(catalog).and_then(Object::as_dict_mut).unwrap().set("Lang", Object::string_literal(lang));
+            let input = root.join(format!("russian-{declared}.pdf"));
+            document.save(&input).unwrap();
+            let outcome = convert(&request(&input, true), input);
+            let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+            assert_eq!(language_of(&output_paths[0]), (declared.into(), vec![declared.into(), declared.into()]), "/Lang {lang}");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_script_names_a_language_only_when_one_language_writes_it() {
+        assert_eq!(script_language("こんにちは世界、日本語の本です".chars()), Some("ja"));
+        assert_eq!(script_language("中华人民共和国".chars()), None, "Han alone could be Chinese or Japanese");
+        assert_eq!(script_language("안녕하세요 世界".chars()), Some("ko"));
+        assert_eq!(script_language("שלום עולם".chars()), Some("he"));
+        assert_eq!(script_language("Hello world".chars()), None);
+        assert_eq!(script_language("123 456".chars()), None);
+        assert!(language_tag("en") && language_tag("zh-Hant-TW") && language_tag("sr-Latn"));
+        assert!(!language_tag("") && !language_tag("english") && !language_tag("en_US") && !language_tag("en-") && !language_tag("e\"n"));
+    }
+
+    #[test]
+    fn text_in_a_font_without_a_character_mapping_is_named_and_left_out() {
+        let root = folder("unmapped");
+        let input = root.join("glyphs.pdf");
+        pdf_with(&input, &["BT /F1 12 Tf 72 720 Td (Readable words come first.) Tj ET BT /F3 12 Tf 72 700 Td <0102> Tj ET", "BT /F1 12 Tf 72 720 Td (The second page reads fine.) Tj ET"], |document, pages, _| {
+            use lopdf::dictionary;
+            let glyphs = document.add_object(dictionary! {
+                "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "ABCDEF+Glyphs",
+                "Encoding" => dictionary! { "Type" => "Encoding", "Differences" => vec![Object::Integer(1), Object::Name(b"g1".to_vec()), Object::Name(b"g2".to_vec())] },
+                "FirstChar" => 1, "LastChar" => 2, "Widths" => vec![Object::Integer(500), Object::Integer(500)],
+            });
+            let resources = document.get_object_mut(pages[0]).and_then(Object::as_dict_mut).unwrap().get_mut(b"Resources").and_then(Object::as_dict_mut).unwrap();
+            resources.get_mut(b"Font").and_then(Object::as_dict_mut).unwrap().set("F3", glyphs);
+        });
+        let outcome = convert(&request(&input, true), input);
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        assert_eq!(outcome.warnings, [OutcomeWarning { kind: WarningKind::UnmappedText { pages: vec![1] }, message: format!("Page 1 — {UNMAPPED_LEFT_OUT}") }]);
+        assert_eq!(outcome.detail, "2 pages. No bookmarks or headings, so the contents list the title only.", "the page still converts");
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        assert!(chapter.contains("Readable words come first.") && chapter.contains("The second page reads fine.") && !chapter.contains('\u{fffd}'), "{chapter}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Lines of text in Helvetica at 11 points, one text object each, at (x, y).
+    fn content(lines: &[(f32, f32, &str)]) -> String {
+        lines.iter().map(|(x, y, text)| format!("BT /F1 11 Tf {x} {y} Td ({text}) Tj ET ")).collect()
+    }
+
+    #[test]
+    fn two_columns_and_a_table_each_get_a_note_naming_their_page_and_the_book_still_converts() {
+        let root = folder("layouts");
+        let input = root.join("survey.pdf");
+        let prose = content(&[(72., 720., "A single column of prose opens the survey and reads"), (72., 706., "straight down the page from the first line to the last."), (72., 692., "Nothing here sits side by side.")]);
+        let left = ["Wading birds feed along the shallow margins", "of the marsh, where the water is warm and", "the mud is soft enough to probe for worms.", "They leave at dusk for roosts in the reeds", "and return before the sun is fully up."];
+        let right = ["Diving ducks prefer the deeper open water", "near the middle of the lake, where weeds", "grow thick below the surface in summer.", "They raft together in large flocks when", "the wind rises across the open water."];
+        let columns = content(&left.iter().enumerate().map(|(row, text)| (72., 720. - row as f32 * 14., *text)).chain(right.iter().enumerate().map(|(row, text)| (350., 720. - row as f32 * 14., *text))).collect::<Vec<_>>());
+        let cells = [["Species", "Count", "Habitat"], ["Heron", "12", "Margins"], ["Teal", "40", "Open water"], ["Rail", "3", "Reeds"]];
+        let table = content(&cells.iter().enumerate().flat_map(|(row, cells)| cells.iter().zip([72., 220., 370.]).map(move |(text, x)| (x, 720. - row as f32 * 14., *text))).collect::<Vec<_>>());
+        pdf_with_pages(&input, &[&prose, &columns, &table]);
+        let outcome = convert(&request(&input, true), input);
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        assert_eq!(outcome.warnings, [
+            OutcomeWarning { kind: WarningKind::NotReflowed { layout: ReflowLayout::Columns, pages: vec![2] }, message: "Page 2 — Two-column layout. Joined into one column, so captions may sit away from their pictures.".into() },
+            OutcomeWarning { kind: WarningKind::NotReflowed { layout: ReflowLayout::Table, pages: vec![3] }, message: "Page 3 — A table was flowed as plain paragraphs.".into() },
+        ]);
+        assert_eq!(outcome.detail, "3 pages. No bookmarks or headings, so the contents list the title only. 2 parts may read out of order.");
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        for text in ["Nothing here sits side by side.", "Wading birds", "Diving ducks", "Heron", "Open water"] { assert!(chapter.contains(text), "{text} in {chapter}"); }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn formulas_are_noted_but_a_contents_list_a_negative_number_and_plain_prose_are_not() {
+        let layouts = |runs: Vec<PageTextRun>| reflow_layouts(&page(runs));
+        assert_eq!(layouts(vec![run("The sum ∑ x ≤ ∫ f(x) dx holds.", 72., 100., 12.), run("for every bounded f.", 72., 114., 12.)]), [ReflowLayout::Formula]);
+        assert_eq!(layouts(vec![run("It fell to −5 then −10 degrees overnight.", 72., 100., 12.)]), []);
+        let contents = (0..6).flat_map(|row| [run("Chapter title goes here", 72., 100. + row as f32 * 14., 12.), run("12", 500., 100. + row as f32 * 14., 12.)]).collect();
+        assert_eq!(layouts(contents), [], "page numbers beside titles aren't a second column");
+        let prose = (0..6).map(|row| run("A full line of prose that runs across the page.", if row == 2 { 90. } else { 72. }, 100. + row as f32 * 14., 12.)).collect();
+        assert_eq!(layouts(prose), [], "an indent isn't a column");
     }
 
     fn request(input: &Path, remove_headers_and_footers: bool) -> PdfToEpubRequest {

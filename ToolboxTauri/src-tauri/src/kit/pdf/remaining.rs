@@ -1205,7 +1205,7 @@ fn colour_warning(colour: JpegColour, mut pages: Vec<u32>) -> OutcomeWarning {
 }
 
 /// "Page 4" or "Pages 1-3, 7", with runs of consecutive pages joined.
-fn page_list(pages: &[u32]) -> String {
+pub(crate) fn page_list(pages: &[u32]) -> String {
     let runs = page_runs(pages).into_iter().map(|(first, last)| if first == last { first.to_string() } else { format!("{first}-{last}") }).collect::<Vec<_>>();
     format!("{} {}", if pages.len() == 1 { "Page" } else { "Pages" }, runs.join(", "))
 }
@@ -3823,13 +3823,13 @@ pub(crate) mod tests {
 }
 
 #[cfg(test)]
-mod text_extraction_tests {
+pub(crate) mod text_extraction_tests {
     use super::*;
     use crate::kit::contracts::{ErrorKind, OutcomeState};
     use lopdf::StringFormat;
 
-    enum Run<'a> { Latin(&'a str), Cid(&'a str) }
-    struct Line<'a> { x: f32, y: f32, run: Run<'a> }
+    pub(crate) enum Run<'a> { Latin(&'a str), Cid(&'a str) }
+    pub(crate) struct Line<'a> { pub(crate) x: f32, pub(crate) y: f32, pub(crate) run: Run<'a> }
 
     fn sandbox(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("toolbox_pdftotext_{name}_{}_{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
@@ -3839,7 +3839,7 @@ mod text_extraction_tests {
 
     /// Writes a PDF whose pages hold the given lines. Latin runs use WinAnsi Helvetica; CID runs use an
     /// Identity-H font whose ToUnicode map covers every character, so Greek, Cyrillic and CJK read back exactly.
-    fn lines_pdf(path: &Path, pages: &[Vec<Line>]) {
+    pub(crate) fn lines_pdf(path: &Path, pages: &[Vec<Line>]) {
         let mut characters: Vec<char> = Vec::new();
         for line in pages.iter().flatten() {
             if let Run::Cid(text) = line.run { for character in text.chars() { if !characters.contains(&character) { characters.push(character); } } }
@@ -3889,7 +3889,7 @@ mod text_extraction_tests {
         document.save(path).unwrap();
     }
 
-    fn multi_language_pdf(path: &Path) {
+    pub(crate) fn multi_language_pdf(path: &Path) {
         lines_pdf(path, &[vec![
             Line { x: 72., y: 720., run: Run::Latin("Café naïve façade Ångström") },
             Line { x: 72., y: 690., run: Run::Cid("Καλημέρα κόσμε") },
