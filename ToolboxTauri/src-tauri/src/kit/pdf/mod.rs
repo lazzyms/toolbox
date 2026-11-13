@@ -24,6 +24,7 @@ pub mod odt;
 pub mod delimited;
 pub mod convert;
 pub mod properties;
+mod embedded_image;
 
 use std::collections::HashSet;
 use std::fs;
