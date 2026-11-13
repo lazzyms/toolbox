@@ -35,6 +35,8 @@ export type IntakeCopy = {
     animated?: (path: string) => string;
     willFail?: (path: string) => string | null;
     flagLabel?: (path: string) => string;
+    /** A tag for a file that will run but with a caveat the user should see before running, such as basic fidelity. */
+    mark?: (path: string) => string | null;
     flaggedNotice: (count: number, skipped: number) => string;
     countHint: (flagged: number, total: number) => string;
 };

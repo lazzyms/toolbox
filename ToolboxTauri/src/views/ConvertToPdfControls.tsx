@@ -58,9 +58,11 @@ export const isMarkdown = (path: string) => [".md", ".markdown"].includes(extens
 
 export const isTable = (path: string) => [".csv", ".tsv"].includes(extensionOf(path));
 
-export const isSpreadsheet = (path: string) => [".xlsx", ".ods"].includes(extensionOf(path));
+/** Excel 97-2003 workbooks take the same options, read in basic fidelity. */
+export const isSpreadsheet = (path: string) => [".xlsx", ".ods", ".xls"].includes(extensionOf(path));
 
-export const isPresentation = (path: string) => [".pptx", ".odp"].includes(extensionOf(path));
+/** PowerPoint 97-2003 presentations take the same options, read in basic fidelity. */
+export const isPresentation = (path: string) => [".pptx", ".odp", ".ppt"].includes(extensionOf(path));
 
 /** HTML files and pasted markup, which stands in the list as an .html item. */
 export const isWebPage = (path: string) => [".html", ".htm"].includes(extensionOf(path));
@@ -86,6 +88,9 @@ export const convertToPdfRequest = (paths: string[], outputLocation: unknown, op
 const unavailableFamily = (tool: ToolDefinition, path: string) =>
   tool.capability.formatFamilies?.find((family) => family.nativeAvailability === "unavailable" && family.extensions.includes(extensionOf(path)));
 
+const basicFidelity = (tool: ToolDefinition, path: string) =>
+  tool.capability.formatFamilies?.some((family) => family.basicFidelity && family.nativeAvailability === "available" && family.extensions.includes(extensionOf(path))) ?? false;
+
 const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
 
 export const convertToPdfIntakeCopy = (tool: ToolDefinition): IntakeCopy => ({
@@ -96,6 +101,7 @@ export const convertToPdfIntakeCopy = (tool: ToolDefinition): IntakeCopy => ({
     return unavailableFamily(tool, path) ? `${extensionOf(path).slice(1).toUpperCase()} comes in a later update` : null;
   },
   flagLabel: (path) => (extensionOf(path) === ".pdf" ? "Will be skipped" : "Not available yet"),
+  mark: (path) => (basicFidelity(tool, path) ? "Basic fidelity" : null),
   flaggedNotice: (count) => `${fileCount(count)} won't become ${count === 1 ? "a PDF" : "PDFs"}. Each one says why on its row.`,
   countHint: (flagged, total) => {
     const runnable = total - flagged;

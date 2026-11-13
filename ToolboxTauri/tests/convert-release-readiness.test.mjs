@@ -88,7 +88,7 @@ test("an artifact with a fallback font missing or changed fails", () => {
 
 test("the conversion sources are every family module convert.rs reaches, and none of them uses a helper", () => {
   const sources = conversionSources();
-  for (const module of ["convert", "layout", "font_resolver", "unicode_font", "delimited", "docx", "epub", "html", "markdown", "odp", "ods", "odt", "pptx", "rtf", "xlsx", "presentation", "spreadsheet", "wordprocessing"]) {
+  for (const module of ["convert", "layout", "font_resolver", "unicode_font", "compound", "delimited", "doc", "docx", "epub", "html", "markdown", "odp", "ods", "odt", "ppt", "pptx", "rtf", "xls", "xlsx", "presentation", "spreadsheet", "wordprocessing"]) {
     assert.ok(sources.includes(`kit/pdf/${module}.rs`), `${module}.rs is not checked`);
   }
   assert.ok(!sources.includes("kit/pdf/mod.rs"), "the shared PDF module belongs to other tools");

@@ -252,7 +252,7 @@ fn code_page(value: i32) -> &'static Encoding {
     }
 }
 
-fn hyperlink(instruction: &str) -> Option<String> {
+pub(super) fn hyperlink(instruction: &str) -> Option<String> {
     let rest = instruction.trim_start().strip_prefix("HYPERLINK")?;
     let mut parts = rest.split('"');
     let before = parts.next()?;

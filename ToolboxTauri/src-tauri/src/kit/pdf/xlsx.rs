@@ -124,14 +124,7 @@ fn read_sheet(package: &mut Package, path: &str, bytes: &[u8], reader: &Reader, 
     }
     if let Some(setup) = root.child("pageSetup") {
         sheet.landscape = setup.attr("orientation") == Some("landscape");
-        sheet.paper = match setup.attr("paperSize") {
-            Some("1") => Some(LETTER),
-            Some("5") => Some((612., 1008.)),
-            Some("8") => Some((841.89, 1190.55)),
-            Some("9") => Some((595.28, 841.89)),
-            Some("11") => Some((419.53, 595.28)),
-            _ => None,
-        };
+        sheet.paper = setup.attr("paperSize").and_then(|code| code.trim().parse().ok()).and_then(paper);
         sheet.fit = root.child("sheetPr").and_then(|properties| properties.child("pageSetUpPr")).is_some_and(|properties| flag(properties, "fitToPage"))
             && setup.attr("fitToWidth") != Some("0");
     }
@@ -208,33 +201,50 @@ impl Styles {
     fn font(&self, index: usize) -> Style { self.faces.get(index).copied().unwrap_or_default() }
 
     fn code(&self, id: u32) -> &str {
-        self.formats.get(&id).map(String::as_str).unwrap_or(match id {
-            1 => "0",
-            2 => "0.00",
-            3 => "#,##0",
-            4 => "#,##0.00",
-            9 => "0%",
-            10 => "0.00%",
-            11 => "0.00E+00",
-            14 => "m/d/yyyy",
-            15 => "d-mmm-yy",
-            16 => "d-mmm",
-            17 => "mmm-yy",
-            18 => "h:mm AM/PM",
-            19 => "h:mm:ss AM/PM",
-            20 => "h:mm",
-            21 => "h:mm:ss",
-            22 => "m/d/yyyy h:mm",
-            37 => "#,##0 ;(#,##0)",
-            38 => "#,##0 ;[Red](#,##0)",
-            39 => "#,##0.00;(#,##0.00)",
-            40 => "#,##0.00;[Red](#,##0.00)",
-            45 => "mm:ss",
-            46 => "[h]:mm:ss",
-            47 => "mm:ss.0",
-            48 => "##0.0E+0",
-            _ => "General",
-        })
+        self.formats.get(&id).map(String::as_str).unwrap_or_else(|| builtin_format(id))
+    }
+}
+
+/// The format code of a built-in number format.
+pub(super) fn builtin_format(id: u32) -> &'static str {
+    match id {
+        1 => "0",
+        2 => "0.00",
+        3 => "#,##0",
+        4 => "#,##0.00",
+        9 => "0%",
+        10 => "0.00%",
+        11 => "0.00E+00",
+        14 => "m/d/yyyy",
+        15 => "d-mmm-yy",
+        16 => "d-mmm",
+        17 => "mmm-yy",
+        18 => "h:mm AM/PM",
+        19 => "h:mm:ss AM/PM",
+        20 => "h:mm",
+        21 => "h:mm:ss",
+        22 => "m/d/yyyy h:mm",
+        37 => "#,##0 ;(#,##0)",
+        38 => "#,##0 ;[Red](#,##0)",
+        39 => "#,##0.00;(#,##0.00)",
+        40 => "#,##0.00;[Red](#,##0.00)",
+        45 => "mm:ss",
+        46 => "[h]:mm:ss",
+        47 => "mm:ss.0",
+        48 => "##0.0E+0",
+        _ => "General",
+    }
+}
+
+/// The page size of a spreadsheet paper-size code, for the common sizes.
+pub(super) fn paper(code: u16) -> Option<(f32, f32)> {
+    match code {
+        1 => Some(LETTER),
+        5 => Some((612., 1008.)),
+        8 => Some((841.89, 1190.55)),
+        9 => Some((595.28, 841.89)),
+        11 => Some((419.53, 595.28)),
+        _ => None,
     }
 }
 
@@ -351,7 +361,7 @@ fn sections(code: &str) -> Vec<&str> {
 }
 
 /// The text Excel shows for a stored number under a format code. Formulas are never recalculated; this only formats the stored value.
-fn format_number(value: f64, code: &str, date1904: bool) -> String {
+pub(super) fn format_number(value: f64, code: &str, date1904: bool) -> String {
     let sections = sections(code);
     let (section, magnitude, signed) = match sections.len() {
         _ if value < 0. && sections.len() >= 2 && !sections[1].is_empty() => (sections[1], -value, false),

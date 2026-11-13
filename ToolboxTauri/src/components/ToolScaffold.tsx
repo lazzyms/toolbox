@@ -744,9 +744,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             const copies = copiesByPath.get(entry.path) ?? 1;
                             const folder = shortenHomePath(parentFolder(entry.path), home);
                             const detail = facts?.modifiedMs != null ? `${folder} · Modified ${modifiedLabel(facts.modifiedMs)}` : folder;
+                            const mark = flag ? null : intakeCopy?.mark?.(entry.path) ?? null;
+                            const label = mark ? `${name}, ${mark.toLowerCase()}` : name;
                             const rowLabel = describesEntries
-                                ? [`${index + 1}. ${name}`, pages].filter(Boolean).join(', ')
-                                : ordered ? `${index + 1} of ${entries.length}, ${name}` : name;
+                                ? [`${index + 1}. ${label}`, pages].filter(Boolean).join(', ')
+                                : ordered ? `${index + 1} of ${entries.length}, ${label}` : label;
                             const warning = flag ? null : fileWarning?.(entry.path) ?? null;
                             return (
                                 <li
@@ -807,6 +809,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                     {pages && <span className="file-selection-fact">{pages}</span>}
                                     {facts?.sizeBytes != null && <span className="file-selection-fact">{fileSizeLabel(facts.sizeBytes)}</span>}
                                     {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? (flag.kind === 'willSkip' ? 'Will skip' : "Won't run")}</Badge>}
+                                    {mark && <Badge variant="outline" className="file-selection-badge">{mark}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && !describesEntries && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (

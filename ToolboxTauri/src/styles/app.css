@@ -1211,7 +1211,14 @@ body {
   min-width: 0;
   flex-direction: column;
 }
+.result-row-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
 .result-row-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

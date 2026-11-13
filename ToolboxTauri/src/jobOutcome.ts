@@ -183,6 +183,9 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
     warnings: Array.isArray(outcome.warnings)
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
+    ...(outcome.basicFidelity === undefined
+      ? {}
+      : { basicFidelity: typeof outcome.basicFidelity === "boolean" ? outcome.basicFidelity : fail(`${path}.basicFidelity`, "a boolean") }),
     ...(outcome.fonts === undefined
       ? {}
       : {
