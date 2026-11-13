@@ -10,7 +10,7 @@ use image::AnimationDecoder;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
-mod source;
+pub(crate) mod source;
 pub(crate) use source::decode;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
