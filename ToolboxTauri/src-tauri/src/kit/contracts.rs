@@ -1081,6 +1081,11 @@ mod tests {
         assert_eq!(privacy.input_cardinality, InputCardinality::Multiple);
         assert!(privacy.native_available && !privacy.many_to_one && !privacy.supports_page_selection && !privacy.supports_preview);
         assert_eq!(privacy.output_suffix, "", "privacy inspection only reads, so it names no output");
+        let properties = native_capability("edit_pdf_properties").unwrap();
+        assert_eq!(properties.accepted_extensions, [".pdf"]);
+        assert_eq!(properties.input_cardinality, InputCardinality::Multiple);
+        assert!(properties.native_available && !properties.many_to_one && !properties.supports_page_selection && !properties.supports_preview);
+        assert_eq!(properties.output_suffix, "-edited");
     }
 
     fn capability_samples() -> serde_json::Value {

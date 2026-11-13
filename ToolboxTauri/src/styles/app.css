@@ -1860,6 +1860,23 @@ kbd.shortcut-hint {
   gap: 7px;
   overflow-x: auto;
 }
+.pdf-properties-now {
+  display: grid;
+  flex: 0 1 52%;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 10.5ch;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+.pdf-properties-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdf-properties-cell[data-empty="true"] {
+  color: var(--muted-foreground);
+}
 .image-edit-stack,
 .image-edit-stack-preview {
   display: grid;

@@ -37,6 +37,7 @@ import { ShortcutHint } from '../components/ShortcutHint';
 import { isPdfSceneTool } from '../registry';
 import { pdfEditorBatchTools, type PdfEditorBatchTools } from '../features/pdf-editor/batchTools';
 import { PdfEditorBatchSurface } from '../features/pdf-editor/BatchSurface';
+import { PdfPropertiesSurface } from '../features/pdf-editor/PropertiesSurface';
 import { PDFConversionWorkspaceView } from './PDFConversionWorkspaceView';
 import { matchShortcut, pressShortcutTarget, shortcutLabel, shortcutTarget } from '../shortcuts';
 
@@ -98,7 +99,7 @@ const formChanges = (current: readonly PdfFormValue[], saved: readonly PdfFormVa
     + saved.filter((entry) => !current.some((item) => item.name === entry.name)).length;
 };
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
-export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'lock-unlock' | 'pdf-edit';
+export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'lock-unlock' | 'pdf-edit' | 'pdf-properties';
 export type PdfEditorNavigation = (navigation: {
   utilityId: ExistingPdfUtilityId;
   initialPaths: readonly string[];
@@ -156,6 +157,7 @@ type PDFEditorWorkspaceProps = {
 export const PDFEditorWorkspaceView = ({ batchTools = pdfEditorBatchTools, ...props }: PDFEditorWorkspaceProps & { batchTools?: PdfEditorBatchTools }) => {
   const { utility, initialPaths, onFilesChange, onNavigate, onSelectTool } = props;
   if (isPdfSceneTool(utility.id)) return <PDFSceneEditor {...props} />;
+  if (utility.id === 'pdf-properties') return <PdfPropertiesSurface utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   const batchTool = batchTools[utility.id];
   if (batchTool) return <PdfEditorBatchSurface utility={utility} tool={batchTool} initialPaths={initialPaths} onFilesChange={onFilesChange} onNavigate={onNavigate} />;
   return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;

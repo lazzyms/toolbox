@@ -19,6 +19,7 @@ pub mod layout;
 pub mod markdown;
 pub mod rtf;
 pub mod convert;
+pub mod properties;
 
 use std::collections::HashSet;
 use std::fs;

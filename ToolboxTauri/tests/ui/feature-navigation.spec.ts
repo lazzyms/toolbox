@@ -166,6 +166,10 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                     const report = { pageCount: 1, documentInformation: none, xmp: { summary: null, conflicts: [] }, encryption: null, identifiers: { documentId: null, producer: null }, incrementalUpdates: 0, embeddedFiles: [], actions: [], annotations: [], filledFormFields: [], optionalContent: { layers: [], hidden: [] }, links: [], signatures: [], leftovers: { thumbnailPages: [], pagePieces: [] }, unsupported: [] };
                     return (args as { request: { paths: string[] } }).request.paths.map((inputPath) => ({ inputPath, outputPaths: [], detail: JSON.stringify(report), state: "succeeded", failure: null, reason: null, warnings: [] }));
                 }
+                if (command === "read_pdf_properties") {
+                    const none = { title: null, author: null, subject: null, keywords: null, creator: null, producer: null, creationDate: null, modificationDate: null };
+                    return (args as { request: { paths: string[] } }).request.paths.map((inputPath) => ({ inputPath, outputPaths: [], detail: JSON.stringify(none), state: "succeeded", failure: null, reason: null, warnings: [] }));
+                }
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:")) return null;
 
@@ -422,7 +426,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(36);
+    expect(UtilityRegistry).toHaveLength(37);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -2653,6 +2657,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     }
     if (utility.id === "compress") await page.getByRole("switch", { name: "Preserve original pixels" }).click();
     if (utility.id === "pdf-redact") await drawRedactionBox(page);
+    if (utility.id === "pdf-properties") await page.getByRole("group", { name: "Title", exact: true }).getByRole("radio", { name: "Clear", exact: true }).click();
     if (utility.id === "pdf-split") await page.getByRole("textbox", { name: "Page ranges" }).fill("1-");
     if (utility.id === "pdf-merge" || utility.id === "pdf-compare") {
         await page.evaluate(() => { (window as TestWindow).__toolboxSecondPick = true; });
@@ -2695,7 +2700,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(36);
+    expect(UtilityRegistry).toHaveLength(37);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {
@@ -3251,7 +3256,7 @@ test("PDF Editor rail lists Details and More tools after their labels and keeps 
     await page.goto("/");
     await openFromHome(page, "Rotate PDFs");
     const rail = page.getByRole("toolbar", { name: "PDF Editor tools" });
-    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop and Resize PDF", "Add PDF Page Numbers", "Redact PDF", "Privacy Check", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages"].map((title) => new RegExp(`^${title}`)));
+    await expect(rail.getByRole("button")).toHaveText(["Edit PDF", "Organize PDF", "Merge PDF", "Split PDF", "Crop and Resize PDF", "Add PDF Page Numbers", "Redact PDF", "Privacy Check", "Edit Properties", "Rotate PDFs", "Repair PDF", "Compare PDFs", "Extract PDF Pages"].map((title) => new RegExp(`^${title}`)));
     await expect(rail.locator(".workspace-command-group")).toHaveText(["Details", "More"]);
     await expect(rail.locator(".workspace-command-group + button")).toHaveText([/^Privacy Check/, /^Rotate PDFs/]);
     await expect(rail.getByRole("button", { name: "Rotate PDFs" })).toHaveAttribute("aria-pressed", "true");

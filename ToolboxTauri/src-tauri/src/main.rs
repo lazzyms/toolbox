@@ -13,7 +13,7 @@ use crate::kit::common::{note_renamed, with_measured_sizes, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::compress::{compress_file, CompressFilesRequest};
-use crate::kit::pdf::{convert, editor, metadata, privacy, remaining, scene, PDFProcessor};
+use crate::kit::pdf::{convert, editor, metadata, privacy, properties, remaining, scene, PDFProcessor};
 use crate::kit::pdf::page_ranges::{require_page_ranges, validate_page_ranges};
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
@@ -236,6 +236,19 @@ async fn rotate_pdf(events: RunEvents, request: remaining::RotatePdfRequest) -> 
 async fn inspect_pdf_privacy(events: RunEvents, request: privacy::PrivacyRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::inspect(&events, "inspect_pdf_privacy", request.paths.clone(), &request, privacy::inspect_job)
+}
+
+#[tauri::command]
+async fn read_pdf_properties(events: RunEvents, request: properties::ReadPropertiesRequest) -> Vec<JobOutcome> {
+    let request = Arc::new(request);
+    BatchRunner::inspect(&events, "edit_pdf_properties", request.paths.clone(), &request, properties::read_job)
+}
+
+#[tauri::command]
+async fn edit_pdf_properties(events: RunEvents, request: properties::EditPropertiesRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = properties::validate(&request) { return outcomes; }
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "edit_pdf_properties", request.paths.clone(), &request.output_location, &request, properties::edit_job)
 }
 
 /// Saves the reports the view already holds, one "-details" file per PDF. It never opens a PDF.
@@ -595,6 +608,8 @@ fn main() {
             rotate_pdf,
             repair_pdf,
             inspect_pdf_privacy,
+            read_pdf_properties,
+            edit_pdf_properties,
             save_privacy_reports,
             redact_pdf,
             compare_pdfs,
@@ -2888,6 +2903,10 @@ mod command_tests {
         }
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), entries_before_inspection, "privacy check must create nothing");
         named(&mut naming, "inspect_pdf_privacy", pdf.clone(), Vec::new());
+        let current = tauri::async_runtime::block_on(read_pdf_properties(RunEvents::silent(), properties::ReadPropertiesRequest { paths: vec![pdf.clone()] }));
+        assert!(current[0].error().is_none() && current[0].output_paths().is_empty(), "reading properties saves nothing: {:?}", current[0]);
+        let edit_request = serde_json::from_value::<properties::EditPropertiesRequest>(serde_json::json!({ "paths": [pdf.clone()], "patch": { "title": { "action": "set", "value": "Sweep title" }, "author": { "action": "clear" } }, "outputLocation": location(&root, "edit pdf properties") })).expect("Edit Properties view payload");
+        outputs.extend(named(&mut naming, "edit_pdf_properties", pdf.clone(), assert_success("edit pdf properties", edit_pdf_properties(RunEvents::silent(), edit_request))));
         let pdf_bytes = std::fs::read(&pdf).unwrap();
         let reports = privacy_reports.iter().map(|outcome| serde_json::json!({ "inputPath": outcome.input_path, "report": serde_json::from_str::<serde_json::Value>(&outcome.detail).unwrap() })).collect::<Vec<_>>();
         let save_request = serde_json::from_value::<privacy::SaveReportsRequest>(serde_json::json!({ "reports": reports, "format": "json", "outputLocation": location(&root, "privacy reports") })).expect("Privacy Check save payload");
