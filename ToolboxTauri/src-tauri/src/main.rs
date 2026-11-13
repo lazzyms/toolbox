@@ -390,6 +390,12 @@ async fn preview_formatted_pdf(app: tauri::AppHandle, request: formatted::Format
     run_preview_formatted_pdf(request, run_packs(&app)).await
 }
 
+/// The families the Formatted PDF font picker offers: bundled first, then the ones installed on this computer.
+#[tauri::command]
+async fn list_formatted_pdf_fonts() -> Result<formatted::FontChoices, String> {
+    tauri::async_runtime::spawn_blocking(formatted::font_choices).await.map_err(|error| error.to_string())?
+}
+
 async fn run_preview_formatted_pdf(request: formatted::FormattedPreviewRequest, packs: RunPacks) -> Result<formatted::FormattedPreview, String> {
     if !command_supports_preview(formatted::COMMAND) { return Err("Formatted PDF preview is unavailable in this build.".to_string()); }
     tauri::async_runtime::spawn_blocking(move || formatted::preview(&request, &packs)).await.map_err(|error| error.to_string())?
@@ -655,6 +661,7 @@ fn main() {
             convert_pasted_html,
             create_formatted_pdf,
             preview_formatted_pdf,
+            list_formatted_pdf_fonts,
             images_to_pdf,
             ocr_pdf,
             blur_faces,
@@ -5580,6 +5587,9 @@ mod command_tests {
         assert_eq!((formatted_preview.page_count, formatted_preview.pages.len()), (1, 1), "the preview has the saved PDF's one page");
         assert!(formatted_preview.pages[0].data_url.starts_with("data:image/png;base64,"));
         assert_eq!(std::fs::read_dir(&formatted_folder).unwrap().count(), formatted_files, "the preview writes no files");
+        let font_choices = tauri::async_runtime::block_on(list_formatted_pdf_fonts()).unwrap();
+        assert_eq!(font_choices.bundled, ["Liberation Sans", "Liberation Serif", "Liberation Mono", "Carlito", "Caladea", "DejaVu Sans"], "the picker lists the shared bundled fonts first");
+        assert!(font_choices.system.iter().all(|family| !font_choices.bundled.contains(family)), "an installed font with a bundled name is listed once");
         outputs.extend(named(&mut naming, "create_formatted_pdf", formatted_path.clone(), formatted_pdf));
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
         assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
