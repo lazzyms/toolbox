@@ -2385,8 +2385,9 @@ mod command_tests {
 
     /// Writes a PDF whose pages are only pictures of text, the way a scanner makes them.
     /// There is no text layer, so the words can come back only through OCR. A page with
-    /// no lines is a blank white scan.
-    fn scanned_pdf(path: &PathBuf, pages: &[&[&str]]) {
+    /// no lines is a blank white scan. Returns where each page's words are inked, as
+    /// left, top, right and bottom in points from the page's top left.
+    fn scanned_pdf(path: &PathBuf, pages: &[&[&str]]) -> Vec<Vec<(String, [f32; 4])>> {
         use flate2::{write::ZlibEncoder, Compression};
         use lopdf::{dictionary, Document, Object, Stream};
         use std::io::Write;
@@ -2397,14 +2398,25 @@ mod command_tests {
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let mut kids = Vec::new();
+        let mut inked = Vec::new();
         for lines in pages {
             let mut pixels = vec![255u8; WIDTH * HEIGHT];
+            let mut words = Vec::new();
             for (row, line) in lines.iter().enumerate() {
                 let baseline = 200 + row * 120;
                 let mut pen = 120.0f32;
+                let mut word: Option<(String, [i32; 4])> = None;
                 for character in line.chars() {
                     let (metrics, coverage) = font.rasterize(character, SIZE);
                     let top = baseline as i32 - metrics.height as i32 - metrics.ymin;
+                    if character == ' ' {
+                        words.extend(word.take());
+                    } else {
+                        let (left, right) = (pen as i32 + metrics.xmin, pen as i32 + metrics.xmin + metrics.width as i32);
+                        let (text, bounds) = word.get_or_insert_with(|| (String::new(), [left, top, right, top + metrics.height as i32]));
+                        text.push(character);
+                        *bounds = [bounds[0].min(left), bounds[1].min(top), bounds[2].max(right), bounds[3].max(top + metrics.height as i32)];
+                    }
                     for y in 0..metrics.height {
                         for x in 0..metrics.width {
                             let (px, py) = (pen as i32 + metrics.xmin + x as i32, top + y as i32);
@@ -2415,7 +2427,10 @@ mod command_tests {
                     }
                     pen += metrics.advance_width;
                 }
+                words.extend(word);
             }
+            let points = 612.0 / WIDTH as f32;
+            inked.push(words.into_iter().map(|(text, bounds)| (text, bounds.map(|pixel| pixel as f32 * points))).collect::<Vec<_>>());
             let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
             encoder.write_all(&pixels).unwrap();
             let mut scan = Stream::new(dictionary! {
@@ -2436,6 +2451,7 @@ mod command_tests {
         let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
         document.trailer.set("Root", catalog_id);
         document.save(path).unwrap();
+        inked
     }
 
     /// Points OCR at a real engine. Staged bundle resources win; otherwise the engine and
@@ -2560,7 +2576,7 @@ mod command_tests {
         let renderer = root.join("fake-pdftoppm");
         let engine = root.join("fake-tesseract");
         let tessdata = root.join("eng.traineddata");
-        std::fs::write(&renderer, "#!/bin/sh\ntouch \"${10}.png\"\n").unwrap();
+        std::fs::write(&renderer, "#!/bin/sh\nfor prefix; do :; done\ntouch \"$prefix.png\"\n").unwrap();
         std::fs::write(&engine, "#!/bin/sh\nprintf 'recognized words\\n'\n").unwrap();
         std::fs::write(&tessdata, b"fake tessdata").unwrap();
         for helper in [&renderer, &engine] { std::fs::set_permissions(helper, std::fs::Permissions::from_mode(0o755)).unwrap(); }
@@ -2706,8 +2722,15 @@ mod command_tests {
     /// Fake helpers whose engine prints the same TSV word boxes for every page.
     #[cfg(unix)]
     fn word_box_ocr_helpers(root: &PathBuf, words: &[(&str, u32, u32)]) -> EnvGuard {
+        word_box_ocr_helpers_on(root, (1700, 2200), words)
+    }
+
+    /// Fake helpers whose engine reports a `width` by `height` pixel page with one line of
+    /// `words`, each a text, left and width, 300 pixels down and 80 tall.
+    #[cfg(unix)]
+    fn word_box_ocr_helpers_on(root: &PathBuf, (width, height): (u32, u32), words: &[(&str, u32, u32)]) -> EnvGuard {
         let [renderer, engine, tessdata] = fake_ocr_helpers(root);
-        let mut tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n1\t1\t0\t0\t0\t0\t0\t0\t1700\t2200\t-1\t\n4\t1\t1\t1\t1\t0\t200\t300\t1200\t80\t-1\t\n".to_string();
+        let mut tsv = format!("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n1\t1\t0\t0\t0\t0\t0\t0\t{width}\t{height}\t-1\t\n4\t1\t1\t1\t1\t0\t200\t300\t1200\t80\t-1\t\n");
         for (index, (word, left, width)) in words.iter().enumerate() {
             tsv.push_str(&format!("5\t1\t1\t1\t1\t{}\t{left}\t300\t{width}\t80\t95.0\t{word}\n", index + 1));
         }
@@ -2717,7 +2740,7 @@ mod command_tests {
 
     #[cfg(unix)]
     #[test]
-    fn searchable_pdf_fails_only_the_file_whose_output_fails_its_check_or_whose_page_is_rotated() {
+    fn searchable_pdf_fails_only_the_file_whose_output_fails_its_check_while_a_rotated_page_succeeds() {
         let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-searchable-batch");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
@@ -2738,22 +2761,20 @@ mod command_tests {
         *vision::BREAK_SEARCHABLE_OUTPUT_FOR.lock().unwrap() = None;
         let mut written = std::fs::read_dir(root.join("ocr")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
         written.sort();
-        let texts = [&outcomes[0], &outcomes[3]].map(|outcome| outcome.output_paths().first().map(|pdf| extracted_text(&root, pdf, "text").split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default());
+        let texts = [&outcomes[0], &outcomes[2], &outcomes[3]].map(|outcome| outcome.output_paths().first().map(|pdf| extracted_text(&root, pdf, "text").split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default());
         let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
         let _ = std::fs::remove_dir_all(&root);
 
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
-        for index in [0, 3] { assert!(outcomes[index].error().is_none(), "{} still runs: {:?}", paths[index].display(), outcomes[index].error()); }
+        for index in [0, 2, 3] { assert!(outcomes[index].error().is_none(), "{} still runs: {:?}", paths[index].display(), outcomes[index].error()); }
         let broken_error = outcomes[1].error().expect("an output that fails its check fails its row");
         assert_eq!(broken_error.kind, ErrorKind::Processing);
         assert!(broken_error.message.starts_with("The searchable PDF didn't pass its check, so it wasn't saved: it could not be reopened"), "{}", broken_error.message);
-        let rotated_error = outcomes[2].error().expect("a rotated page fails its row");
-        assert_eq!(rotated_error.kind, ErrorKind::Processing);
-        assert_eq!(rotated_error.message, "Page 1 is rotated or cropped. Searchable PDFs support upright, uncropped pages for now. Save a text file instead.");
-        assert!(outcomes[1].output_paths().is_empty() && outcomes[2].output_paths().is_empty());
-        assert_eq!(written, vec!["first-ocr.pdf".to_string(), "last-ocr.pdf".to_string()], "nothing is left behind for the failed files");
+        assert!(outcomes[1].output_paths().is_empty());
+        assert_eq!(written, vec!["first-ocr.pdf".to_string(), "last-ocr.pdf".to_string(), "rotated-ocr.pdf".to_string()], "nothing is left behind for the failed file");
         assert_eq!(texts[0], "Searchable words", "the drawn page gains only the new text layer");
-        assert_eq!(texts[1].matches("Searchable words").count(), 2, "both pages get a text layer: {:?}", texts[1]);
+        assert_eq!(texts[1], "Searchable words", "a rotated page gets its text layer too");
+        assert_eq!(texts[2].matches("Searchable words").count(), 2, "both pages get a text layer: {:?}", texts[2]);
         assert_eq!(after, originals);
     }
 
@@ -2771,6 +2792,139 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(text.split_whitespace().collect::<Vec<_>>().join(" ").contains("Привет κόσμε café"), "{text:?}");
+    }
+
+    /// Turns each page of a `scanned_pdf` so it is shown with /Rotate `rotation` yet still
+    /// reads upright, then crops it to the rectangle `[left, top, width, height]`, in
+    /// fractions of the displayed page. Returns the crop's displayed top left in points.
+    fn turn_and_crop_scan(path: &PathBuf, rotation: i64, [left, top, width, height]: [f32; 4]) -> (f32, f32) {
+        let mut document = lopdf::Document::load(path).unwrap();
+        // The media box, and the matrix that draws the scan upright once the page is turned.
+        let (media, placement) = match rotation {
+            0 => ([0., 0., 612., 792.], "612 0 0 792 0 0"),
+            90 => ([0., 0., 792., 612.], "0 612 -792 0 792 0"),
+            180 => ([0., 0., 612., 792.], "-612 0 0 -792 612 792"),
+            270 => ([0., 0., 792., 612.], "0 -612 792 0 0 612"),
+            rotation => panic!("no fixture for a rotation of {rotation}"),
+        };
+        let crop = crate::kit::pdf::editor::crop_box_within(media, rotation, 1., 0, &CropSpec::Rectangle { left, top, width, height }).unwrap();
+        for page in document.get_pages().into_values() {
+            let content = document.get_page_contents(page)[0];
+            document.get_object_mut(content).unwrap().as_stream_mut().unwrap().set_plain_content(format!("q {placement} cm /Scan Do Q").into_bytes());
+            let dictionary = document.get_dictionary_mut(page).unwrap();
+            dictionary.set("MediaBox", media.iter().map(|value| lopdf::Object::Real(*value)).collect::<Vec<_>>());
+            dictionary.set("CropBox", crop.iter().map(|value| lopdf::Object::Real(*value)).collect::<Vec<_>>());
+            dictionary.set("Rotate", rotation);
+        }
+        document.save(path).unwrap();
+        (left * 612., top * 792.)
+    }
+
+    /// Page 1's words and where a reader selects them on the page as shown, turned and
+    /// cropped: left, top, right and bottom in points from the displayed top left.
+    fn displayed_word_boxes(pdf: &PathBuf) -> Vec<(String, [f32; 4])> {
+        let reader = crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_TEXT_EXTRACTOR).expect("pdftotext");
+        let output = std::process::Command::new(reader).args(["-bbox", "-cropbox", "-f", "1", "-l", "1"]).arg(pdf).arg("-").output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap().split("<word ").skip(1).map(|word| {
+            let number = |name: &str| word.split(&format!("{name}=\"")).nth(1).and_then(|rest| rest.split('"').next()).unwrap().parse::<f32>().unwrap();
+            let text = word.split('>').nth(1).and_then(|rest| rest.split('<').next()).unwrap().to_string();
+            (text, [number("xMin"), number("yMin"), number("xMax"), number("yMax")])
+        }).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn searchable_pdf_places_each_word_where_it_shows_on_rotated_and_cropped_pages() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-searchable-turned");
+        // The crop shows 459 by 594 points; the engine reports a picture twice that size.
+        let crop = [0.125, 0.125, 0.75, 0.75];
+        let words = [("Northwind", 100, 300), ("ledger", 500, 200)];
+        let _env = word_box_ocr_helpers_on(&root, (918, 1188), &words);
+
+        for rotation in [0, 90, 180, 270] {
+            let input = root.join(format!("turned-{rotation}.pdf"));
+            scanned_pdf(&input, &[&[]]);
+            turn_and_crop_scan(&input, rotation, crop);
+            let original = std::fs::read(&input).unwrap();
+            let output = assert_success("searchable turned page", run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], location(&root, "ocr")), no_packs()));
+            let found = displayed_word_boxes(&output[0]);
+
+            assert_eq!(found.iter().map(|(text, _)| text.as_str()).collect::<Vec<_>>(), ["Northwind", "ledger"], "rotation {rotation}");
+            // Each word box is 300 to 380 pixels down the picture, so 150 to 190 points.
+            for ((_, left, width), (text, actual)) in words.iter().zip(&found) {
+                let drawn = [*left as f32 / 2., 150., (left + width) as f32 / 2., 190.];
+                assert!(actual.iter().zip(drawn).all(|(actual, drawn)| (actual - drawn).abs() < 1.5), "rotation {rotation}: {text} is selected at {actual:?} but drawn at {drawn:?}");
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), original, "rotation {rotation}: the original is never changed");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn searchable_pdf_puts_recognized_words_over_their_ink_on_rotated_and_cropped_scans() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-searchable-turned-scan");
+        let crop = [0.05, 0.05, 0.9, 0.5];
+
+        for rotation in [0, 90, 180, 270] {
+            let input = root.join(format!("scan-{rotation}.pdf"));
+            let inked = scanned_pdf(&input, &[&["Quarterly invoice summary", "Northwind shipping ledger"]]).remove(0);
+            let (offset_x, offset_y) = turn_and_crop_scan(&input, rotation, crop);
+            let original = std::fs::read(&input).unwrap();
+            let output = assert_success("searchable turned scan", run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], location(&root, "ocr")), no_packs()));
+            let found = displayed_word_boxes(&output[0]);
+
+            assert_eq!(std::fs::read(&input).unwrap(), original, "rotation {rotation}: the scan is never changed");
+            for (word, [left, top, right, bottom]) in &inked {
+                let ink = [left - offset_x - 1., top - offset_y - 1., right - offset_x + 1., bottom - offset_y + 1.];
+                let (_, actual) = found.iter().find(|(text, _)| text == word).unwrap_or_else(|| panic!("rotation {rotation}: {word} is missing from {found:?}"));
+                let (x, y) = ((actual[0] + actual[2]) / 2., (actual[1] + actual[3]) / 2.);
+                assert!(ink[0] < x && x < ink[2] && ink[1] < y && y < ink[3], "rotation {rotation}: {word} is selected at {actual:?} but inked at {ink:?}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_of_a_signed_pdf_removes_the_signature_and_warns_only_in_searchable_mode() {
+        use crate::kit::contracts::{OutcomeWarning, WarningKind};
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-signed");
+        let signed = root.join("signed-contract.pdf");
+        drawn_pdf(&signed, 1);
+        let mut document = lopdf::Document::load(&signed).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed).unwrap();
+        let original = std::fs::read(&signed).unwrap();
+
+        let searchable = {
+            let _env = word_box_ocr_helpers(&root, &[("Signed", 200, 400), ("contract", 700, 500)]);
+            tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![signed.clone()], location(&root, "searchable")), no_packs())).remove(0)
+        };
+        let text = {
+            let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
+            let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+            tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![signed.clone()], location(&root, "text")), no_packs())).remove(0)
+        };
+        let copy = searchable.output_paths().first().map(|path| lopdf::Document::load(path).unwrap());
+        let words = searchable.output_paths().first().map(|path| extracted_text(&root, path, "extracted").split_whitespace().collect::<Vec<_>>().join(" "));
+        let saved_text = text.output_paths().first().map(|path| std::fs::read_to_string(path).unwrap());
+        let after = std::fs::read(&signed).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(searchable.error().is_none(), "{:?}", searchable.error());
+        assert_eq!(searchable.warnings, [OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }]);
+        assert!(copy.is_some_and(|copy| !crate::kit::pdf::has_signed_signature_field(&copy)), "the searchable copy is not signed");
+        assert_eq!(words.as_deref(), Some("Signed contract"));
+        assert!(text.error().is_none(), "{:?}", text.error());
+        assert!(text.warnings.is_empty(), "a text file carries no warning: {:?}", text.warnings);
+        assert_eq!(saved_text.as_deref(), Some("recognized words\n"));
+        assert_eq!(after, original, "the signed original is never changed");
+        assert!(crate::kit::pdf::has_signed_signature_field(&lopdf::Document::load_mem(&after).unwrap()));
     }
 
     /// Four pages, one of each kind and a second scan: 1 and 4 have no text, 2 has

@@ -1905,7 +1905,7 @@ test("OCR Save as switches by keyboard and its searchable PDF rows open and reve
     await page.goto("/");
     await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
         succeeded(pdfFixturePath, [searchable], { detail: "1 page recognized. English." }),
-        failed("/local/rotated.pdf", "processing", "Page 1 is rotated or cropped. Searchable PDFs support upright, uncropped pages for now. Save a text file instead."),
+        failed("/local/broken.pdf", "processing", "The searchable PDF didn't pass its check, so it wasn't saved: it could not be reopened."),
     ]);
     await openFromHome(page, "Extract from PDF");
     await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
@@ -1936,7 +1936,7 @@ test("OCR Save as switches by keyboard and its searchable PDF rows open and reve
         { command: "open_output_path", args: { path: searchable } },
         { command: "reveal_output_path", args: { path: searchable } },
     ]);
-    await expect(rows.nth(1)).toContainText("Page 1 is rotated or cropped.");
+    await expect(rows.nth(1)).toContainText("The searchable PDF didn't pass its check");
     await expect(rows.nth(1).getByRole("button", { name: /^Show in Finder|^Open .*\.pdf$/ })).toHaveCount(0);
 });
 
@@ -1973,6 +1973,42 @@ test("OCR shows a missing engine, a locked scan and a blank scan beside a saved 
 
     await rows.nth(2).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+});
+
+test("OCR shows its own signature-removed wording on the signed scan's row while the other rows render as usual", async ({ page }) => {
+    const signedNote = "Signature removed. Adding text removes the digital signature, so the copy isn't signed. The original still is.";
+    const locked = "It's password-protected. Remove its password in File Security, then run OCR again.";
+    await page.goto("/");
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded(pdfFixturePath, ["/fake/shell/output/document-ocr.pdf"], { detail: "1 page recognized. English." }),
+        succeeded("/local/signed-contract.pdf", ["/fake/shell/output/signed-contract-ocr.pdf"], {
+            detail: "12 pages recognized. English.",
+            warnings: [{ code: "signatureRemoved", message: "native wording" }],
+        }),
+        failed("/local/locked.pdf", "invalidInput", locked, { failure: { kind: "invalidInput", message: locked, pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+    ]);
+    await openFromHome(page, "Extract from PDF");
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true }).click();
+    await chooseFixture(page, pdfFixturePath);
+    await page.getByRole("button", { name: "Export OCR PDF", exact: true }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toHaveAttribute("data-tone", "ok");
+    await expect(rows.nth(0)).toContainText("document-ocr.pdf");
+    await expect(rows.nth(0)).toContainText("1 page recognized. English.");
+    await expect(rows.nth(0)).not.toContainText("Signature removed");
+
+    await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
+    await expect(rows.nth(1)).toContainText(signedNote);
+    await expect(rows.nth(1)).toContainText("Recognised with a warning");
+    await expect(rows.nth(1)).not.toContainText("Saved. The digital signature was removed");
+    await expect(rows.nth(1)).not.toContainText("native wording");
+    await expect(rows.nth(1).getByRole("button", { name: "Open signed-contract-ocr.pdf", exact: true })).toBeVisible();
+
+    await expect(rows.nth(2)).toHaveAttribute("data-tone", "fail");
+    await expect(rows.nth(2)).toContainText(locked);
+    await expect(rows.nth(2)).not.toContainText("Signature removed");
 });
 
 test("OCR Force starts off and asks for earlier OCR text to be replaced once it is checked", async ({ page }) => {

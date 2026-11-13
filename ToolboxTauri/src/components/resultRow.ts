@@ -81,10 +81,11 @@ const spokenKinds: Record<ErrorKind, string> = {
 
 export const wrongPasswordDetail = "The password didn't open this file. Check it, or try the password this file was sent with.";
 
-export const warningText = (warning: OutcomeWarning): string => {
+/** A tool's `signatureRemovedNote` replaces the shared signature wording on its rows. */
+export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: string): string => {
     switch (warning.code) {
         case "signatureRemoved":
-            return "Saved. The digital signature was removed, because changing the file breaks it.";
+            return signatureRemovedNote ?? "Saved. The digital signature was removed, because changing the file breaks it.";
         case "fontSubstituted":
             return `The font ${warning.details.requestedFamily} wasn’t available, so ${warning.details.actualFamily} was used.`;
         case "renamedToAvoidReplacing":
@@ -152,7 +153,7 @@ const isNote = (warning: OutcomeWarning) => warning.code === "approximateLayout"
 /** Saved-as notes say how a finished file was saved. They show on its row after the detail but leave it done, not warned. */
 const isSavedAs = (warning: OutcomeWarning) => warning.code === "transparencyFlattened";
 
-export const warningDetail = (warning: OutcomeWarning): RowDetail => ({ text: warningText(warning), tone: warning.code === "omittedContent" ? "warn" : null });
+export const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): RowDetail => ({ text: warningText(warning, signatureRemovedNote), tone: warning.code === "omittedContent" ? "warn" : null });
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
@@ -195,17 +196,19 @@ export const neededPack = (outcome: JobOutcome): PackPointer | null =>
  * A file that failed for want of a pack stays in the list without Retry, since running it again
  * without the pack fails the same way. Once that pack is installed, the row says the file is ready
  * to run again. `installedPacks` holds the packs installed, repaired or updated since the run.
+ * A tool's `signatureRemovedNote` replaces the shared signature wording on its rows.
  */
-export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, outputNoun?: string, installedPacks: ReadonlySet<string> = new Set()): RowView => {
-    const warnings = outcome.warnings.map(warningDetail);
+export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, outputNoun?: string, installedPacks: ReadonlySet<string> = new Set(), signatureRemovedNote?: string): RowView => {
+    const detailOf = (warning: OutcomeWarning) => warningDetail(warning, signatureRemovedNote);
+    const warnings = outcome.warnings.map(detailOf);
     const sizes = sizeLine(outcome);
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
             const flaggedWarnings = outcome.warnings.filter((warning) => !isSavedAs(warning));
-            const cautions = flaggedWarnings.map(warningDetail);
-            const notes = outcome.warnings.filter(isSavedAs).map(warningText);
+            const cautions = flaggedWarnings.map(detailOf);
+            const notes = outcome.warnings.filter(isSavedAs).map((warning) => warningText(warning, signatureRemovedNote));
             const warned = cautions.length > 0;
             const noted = warned && flaggedWarnings.every(isNote);
             const flagged = noted ? (cautions.length === 1 ? "a note" : "notes") : cautions.length === 1 ? "a warning" : "warnings";
