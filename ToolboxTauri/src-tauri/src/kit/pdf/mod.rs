@@ -4,6 +4,7 @@ pub mod page_ranges;
 pub mod privacy;
 pub mod hidden_content;
 pub mod scene;
+pub mod bates;
 pub mod script_text;
 pub mod text_edit;
 pub mod editor;
