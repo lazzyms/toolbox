@@ -92,14 +92,30 @@ test("PDF to EPUB sends the paths and the output location, and a folder chosen f
     await openToolBySearch(page, "PDF to EPUB");
     await choose(page, paths);
     await expect(destination(page).getByTestId("run-destination-path")).toHaveText("Next to each original");
-    expect(await run(page)).toEqual({ paths, outputLocation: "alongsideInput" });
+    expect(await run(page)).toEqual({ paths, outputLocation: "alongsideInput", removeHeadersAndFooters: true });
 
     await queueDialog(page, runFolder);
     await destination(page).getByRole("button", { name: "Change for this run" }).click();
     await expect(destination(page).getByTestId("run-destination-path")).toHaveText("~/Books");
     await expect(destination(page)).toContainText("This run only");
-    expect(await run(page)).toEqual({ paths, outputLocation: { customFolder: runFolder } });
+    expect(await run(page)).toEqual({ paths, outputLocation: { customFolder: runFolder }, removeHeadersAndFooters: true });
     expect(await invocationsOf(page, "set_output_settings")).toEqual([]);
+});
+
+test("PDF to EPUB removes running headers, footers and page numbers by default and sends the choice", async ({ page }) => {
+    const paths = ["/Users/test/books/field notes.pdf"];
+    await openToolBySearch(page, "PDF to EPUB");
+    const cleanUp = page.getByRole("group", { name: "Clean up" });
+    const removal = cleanUp.getByRole("checkbox", { name: "Remove running headers, footers and page numbers" });
+    await expect(removal).toBeChecked();
+    await expect(removal).toHaveAccessibleDescription("Text repeated on most pages is left out of the book.");
+
+    await choose(page, paths);
+    expect((await run(page)).removeHeadersAndFooters).toBe(true);
+
+    await removal.click();
+    await expect(removal).not.toBeChecked();
+    expect(await run(page)).toEqual({ paths, outputLocation: "alongsideInput", removeHeadersAndFooters: false });
 });
 
 test("PDF to EPUB shows each PDF's own result with Open and Reveal on converted rows", async ({ page }) => {

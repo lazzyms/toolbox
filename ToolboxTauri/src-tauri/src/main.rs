@@ -2688,7 +2688,7 @@ mod command_tests {
     }
 
     fn epub_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> to_epub::PdfToEpubRequest {
-        to_epub::PdfToEpubRequest { paths, output_location }
+        to_epub::PdfToEpubRequest { paths, output_location, remove_headers_and_footers: true }
     }
 
     fn epub_entries(path: &PathBuf) -> Vec<(String, zip::CompressionMethod, Vec<u8>)> {
@@ -2719,7 +2719,7 @@ mod command_tests {
 
         let entries = epub_entries(&epub);
         let names = entries.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>();
-        assert_eq!(names, ["mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/page-1.xhtml", "OEBPS/page-2.xhtml", "OEBPS/page-3.xhtml"]);
+        assert_eq!(names, ["mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/chapter-1.xhtml"]);
         assert_eq!((entries[0].1, entries[0].2.as_slice()), (zip::CompressionMethod::Stored, b"application/epub+zip".as_slice()), "mimetype comes first, uncompressed");
         assert!(!names.iter().any(|name| [".ttf", ".otf", ".woff", ".woff2"].iter().any(|font| name.ends_with(font))), "no embedded fonts");
         let part = |name: &str| String::from_utf8(entries.iter().find(|(entry, _, _)| entry == name).unwrap().2.clone()).unwrap();
@@ -2727,11 +2727,10 @@ mod command_tests {
         assert!(opf.contains("version=\"3.0\"") && opf.contains("<dc:title>field notes</dc:title>") && opf.contains("properties=\"nav\""), "{opf}");
         assert!(opf.contains("<dc:identifier id=\"book-id\">urn:uuid:"), "{opf}");
         assert!(part("OEBPS/nav.xhtml").contains("<nav epub:type=\"toc\""));
-        for page in 1..=3 {
-            assert!(part(&format!("OEBPS/page-{page}.xhtml")).contains(&format!("<p>Toolbox page {page}</p>")), "page {page} keeps its text as a paragraph");
-        }
+        let chapter = part("OEBPS/chapter-1.xhtml");
+        assert!(chapter.contains("<p>Toolbox page 1</p>\n<p>Toolbox page 2</p>\n<p>Toolbox page 3</p>"), "each page's sentence stays its own paragraph, in page order: {chapter}");
         let book = crate::kit::pdf::epub::parse(&std::fs::read(&epub).unwrap(), u64::MAX, ToolError::processing("too big"), 1.).unwrap_or_else(|error| panic!("{error:?}"));
-        assert_eq!((book.chapters.len(), book.navigation.len(), book.title.as_deref()), (3, 3, Some("field notes")), "the EPUB reader opens the book in page order");
+        assert_eq!((book.chapters.len(), book.navigation.len(), book.title.as_deref()), (1, 1, Some("field notes")), "a book without headings is one chapter listed by its title");
 
         // A repeat run never replaces the first book, and the same PDF makes the same bytes.
         let again = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "books"))));
@@ -5298,7 +5297,7 @@ mod command_tests {
             outputs.extend(named(&mut naming, "extract_from_pdf", mixed_pdf.clone(), both));
         }
         // PDF to EPUB reads text in-process, so it needs no helper or pack.
-        let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub") }));
+        let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub"), remove_headers_and_footers: true }));
         assert_eq!(epub, [root.join("pdf to epub").join("document.epub")], "PDF to EPUB names its book after the PDF with no suffix");
         outputs.extend(named(&mut naming, "pdf_to_epub", pdf.clone(), epub));
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
