@@ -58,7 +58,7 @@ pub fn parse(text: &str, base: &Path) -> Parsed {
     parsed
 }
 
-fn slug(text: &str) -> String {
+pub(crate) fn slug(text: &str) -> String {
     let mut slug = String::new();
     for character in text.trim().to_lowercase().chars() {
         if character.is_alphanumeric() || character == '-' || character == '_' { slug.push(character); }
@@ -103,7 +103,7 @@ fn percent_decode(text: &str) -> Option<String> {
     String::from_utf8(decoded).ok()
 }
 
-fn local_image(destination: &str, base: &Path) -> Option<Vec<PathBuf>> {
+pub(crate) fn local_image(destination: &str, base: &Path) -> Option<Vec<PathBuf>> {
     let destination = destination.trim();
     if destination.starts_with("//") || destination.starts_with("\\\\") { return None; }
     let scheme = destination.split_once(':').map(|(scheme, _)| scheme).filter(|scheme| {
@@ -303,7 +303,7 @@ impl Builder<'_> {
     }
 }
 
-fn fs_key(path: &Path) -> Option<PathBuf> { std::fs::canonicalize(path).ok() }
+pub(crate) fn fs_key(path: &Path) -> Option<PathBuf> { std::fs::canonicalize(path).ok() }
 
 #[cfg(test)]
 mod tests {

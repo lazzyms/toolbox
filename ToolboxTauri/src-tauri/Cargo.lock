@@ -5992,6 +5992,7 @@ dependencies = [
  "cfb",
  "color_quant",
  "csv",
+ "dom_query",
  "encoding_rs",
  "fax",
  "flate2",
