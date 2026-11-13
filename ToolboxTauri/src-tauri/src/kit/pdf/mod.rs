@@ -28,6 +28,7 @@ pub mod ods;
 pub mod convert;
 pub mod properties;
 mod embedded_image;
+mod inline_image;
 
 use std::collections::HashSet;
 use std::fs;

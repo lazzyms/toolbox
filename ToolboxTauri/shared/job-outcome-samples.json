@@ -138,7 +138,7 @@
     "inputPath": "atlas.pdf",
     "state": "succeeded",
     "outputPaths": ["atlas-images"],
-    "detail": "Saved 9 images. 3 images weren't saved.",
+    "detail": "Saved 9 images · 3 couldn't be saved.",
     "failure": null,
     "reason": null,
     "warnings": [
