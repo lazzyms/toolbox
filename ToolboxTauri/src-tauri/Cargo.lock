@@ -5913,6 +5913,7 @@ dependencies = [
  "flate2",
  "fontdue",
  "getrandom 0.3.4",
+ "gif",
  "hayro-jbig2",
  "heif-rs",
  "hmac",
