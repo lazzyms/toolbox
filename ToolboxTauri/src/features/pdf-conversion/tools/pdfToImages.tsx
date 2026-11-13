@@ -1,14 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { exampleOutputName } from "../../../components/RunDestination";
 import type { ToolResult } from "../../../contracts";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { capabilityFor } from "../../../registry/capabilities";
-import { formatPageRange, inspectedPages, type ConversionTool } from "../tool";
+import { describeSpans, isShortened, pagesInSpans, parsePageRanges } from "../pageRanges";
+import type { BatchPagesProps, ConversionTool } from "../tool";
 
 type Resolution = "72" | "150" | "300" | "custom";
-type Options = { resolution: Resolution; customDpi: string; format: string };
+type PagesMode = "all" | "range";
+type Options = { resolution: Resolution; customDpi: string; format: string; pages: PagesMode };
 
 const MIN_DPI = 72;
 const MAX_DPI = 300;
@@ -42,19 +45,87 @@ const resolutionHint = (options: Options) => {
   return `At ${dpi} dpi a Letter page is ${letterPixels(dpi ?? 0)}. Use 300 for print.`;
 };
 
+const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+
+const rangeSpans = (options: Options, pageRange: string) => {
+  if (options.pages === "all") return { spans: null };
+  const parsed = parsePageRanges(pageRange);
+  return "error" in parsed ? { error: parsed.error } : { spans: parsed.spans };
+};
+
+const pagesFor = (options: Options, pageRange: string, pageCount: number) => {
+  const range = rangeSpans(options, pageRange);
+  if ("error" in range) return null;
+  return range.spans ? pagesInSpans(range.spans, pageCount) : Array.from({ length: pageCount }, (_, index) => index);
+};
+
+const batchEstimate = ({ options, files, pageRange, picks, pageCounts }: BatchPagesProps<Options>) => {
+  const estimate = { images: 0, made: 0, skipped: 0, shortened: 0, locked: 0, unreadable: 0, pending: 0 };
+  const range = rangeSpans(options, pageRange);
+  for (const path of files) {
+    const count = pageCounts[path] ?? "pending";
+    const picked = picks[path];
+    const images = picked ? picked.length : typeof count === "number" ? pagesFor(options, pageRange, count)?.length ?? 0 : null;
+    if (images === null) {
+      estimate[count === "locked" ? "locked" : count === "unreadable" ? "unreadable" : "pending"] += 1;
+      continue;
+    }
+    estimate.images += images;
+    if (images > 0) estimate.made += 1;
+    else estimate.skipped += 1;
+    if (!picked && images > 0 && typeof count === "number" && range.spans && isShortened(range.spans, count)) estimate.shortened += 1;
+  }
+  return estimate;
+};
+
+const RunSummary = (props: BatchPagesProps<Options>) => {
+  const range = rangeSpans(props.options, props.pageRange);
+  if ("error" in range) {
+    return (
+      <div className="grid gap-0.5" role="status" aria-label="Image estimate">
+        <p className="text-sm font-medium text-destructive">No image count yet</p>
+        <p className="workspace-note">{props.pageRange.trim() ? "Fix the page range to convert" : "Enter a page range to convert"}</p>
+      </div>
+    );
+  }
+  const estimate = batchEstimate(props);
+  const details = [
+    `from ${plural(estimate.made, "PDF")}`,
+    estimate.skipped && `${estimate.skipped} skipped`,
+    estimate.locked && `${estimate.locked} locked`,
+    estimate.unreadable && `${estimate.unreadable} unreadable`,
+  ].filter(Boolean).join(", ");
+  return (
+    <div className="grid gap-0.5" role="status" aria-label="Image estimate">
+      <p className="text-sm font-medium">{estimate.pending ? "Counting pages" : `This will make ${plural(estimate.images, "image")}`}</p>
+      <p className="workspace-note">{estimate.pending ? `${plural(estimate.pending, "PDF")} left to count` : details}</p>
+    </div>
+  );
+};
+
+const rangeStatus = (props: BatchPagesProps<Options>, describedRange: string) => {
+  const estimate = batchEstimate(props);
+  const notes = [estimate.shortened && `${estimate.shortened} shortened`, estimate.skipped && `${estimate.skipped} will be skipped`].filter(Boolean);
+  return `Range ${describedRange} applied to each PDF.${notes.length ? ` ${notes.join(", ")}.` : ""}`;
+};
+
 export const pdfToImages: ConversionTool<Options> = {
-  initialOptions: { resolution: "150", customDpi: "200", format: "png" },
+  initialOptions: { resolution: "150", customDpi: "200", format: "png", pages: "all" },
   inspectsPdf: true,
-  outputPreview: (options, selectedPages) => {
-    const pageSummary = selectedPages.length
-      ? `${selectedPages.length === 1 ? "page" : "pages"} ${formatPageRange(selectedPages)}`
-      : "the selected pages";
+  outputPreview: (options) => {
     const dpi = renderDpi(options);
-    return `Output preview unavailable. Export renders ${pageSummary} at ${dpi ?? options.customDpi} dpi as ${formatLabel(options.format)} image files.`;
+    return `Output preview unavailable. Export renders each PDF's pages at ${dpi ?? options.customDpi} dpi as ${formatLabel(options.format)} image files.`;
   },
-  exportBlocked: (options) => renderDpi(options) === null,
-  OptionsPanel: ({ options, setOptions, pageRange, choosePageRange }) => {
+  exportBlocked: (options, _files, pageRange) => renderDpi(options) === null || "error" in rangeSpans(options, pageRange),
+  pagesPerPdf: pagesFor,
+  RunSummary,
+  OptionsPanel: ({ options, setOptions, files, pageRange, choosePageRange, picks, pageCounts }) => {
     const dpiInvalid = renderDpi(options) === null;
+    const range = rangeSpans(options, pageRange);
+    const rangeError = "error" in range && pageRange.trim() ? range.error : null;
+    const pickedFiles = [...new Set(files)].filter((path) => picks[path]);
     return (
       <div className="workspace-field-grid">
         <fieldset className="workspace-field workspace-option-group workspace-field-wide">
@@ -108,32 +179,59 @@ export const pdfToImages: ConversionTool<Options> = {
           )}
           <p id="custom-dpi-hint" className="workspace-note" role={dpiInvalid ? "alert" : undefined}>{resolutionHint(options)}</p>
         </fieldset>
-        <div className="workspace-field workspace-field-wide">
-          <Label htmlFor="image-page-range">Pages</Label>
-          <Input
-            id="image-page-range"
-            aria-label="Page range"
-            value={pageRange}
-            onChange={(event) => choosePageRange(event.target.value)}
-            placeholder="All pages, or 1-3"
-          />
-        </div>
+        <fieldset className="workspace-field workspace-option-group workspace-field-wide">
+          <legend>Pages</legend>
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            aria-label="Pages"
+            value={options.pages}
+            onValueChange={(pages) => { if (pages) setOptions({ ...options, pages: pages as PagesMode }); }}
+          >
+            <ToggleGroupItem value="all">All pages</ToggleGroupItem>
+            <ToggleGroupItem value="range">Range</ToggleGroupItem>
+          </ToggleGroup>
+          {options.pages === "range" && (
+            <>
+              <Label htmlFor="image-page-range" className="sr-only">Page range for every PDF</Label>
+              <Input
+                id="image-page-range"
+                value={pageRange}
+                aria-invalid={rangeError ? true : undefined}
+                aria-describedby="image-page-range-hint"
+                onChange={(event) => choosePageRange(event.target.value)}
+                placeholder="1-3, 5, 8-"
+              />
+              {rangeError && <p className="text-sm text-destructive" role="alert">{rangeError}</p>}
+              <p id="image-page-range-hint" className="workspace-note">Commas and dashes, like 1-3, 5, 8-. 8- means page 8 to the end.</p>
+            </>
+          )}
+          <p className="workspace-note">
+            {options.pages === "range"
+              ? "One range applies to every PDF. Pages past a PDF's last page are left out, and a PDF with no pages left is skipped."
+              : "Every page of every PDF. Choose Range to limit them, or select a PDF to pick its pages."}
+          </p>
+          {range.spans && files.length > 0 && (
+            <p className="workspace-note" role="status">{rangeStatus({ options, files, pageRange, picks, pageCounts }, describeSpans(range.spans))}</p>
+          )}
+          {pickedFiles.map((path) => (
+            <Badge key={path} variant="outline" className="max-w-full whitespace-normal">{fileName(path)} uses its own picks</Badge>
+          ))}
+        </fieldset>
       </div>
     );
   },
   exampleHint: "Page numbers are padded so names sort in page order. An existing name gets -1, -2 and so on.",
   exampleName: (inputPath, utility, { format }) => exampleOutputName(inputPath, "pdf_to_images", `${utility.capability.outputSuffix}-01`, format),
-  request: (paths, outputLocation, { runId }, options, selection) => {
-    const pages = inspectedPages(selection);
-    return invoke<ToolResult>("pdf_to_images", { runId,
-      request: {
-        paths,
-        dpi: renderDpi(options),
-        format: options.format,
-        pageRange: pages?.length ? formatPageRange(pages) : selection.pageRange || null,
-        pages,
-        outputLocation,
-      },
-    });
-  },
+  request: (paths, outputLocation, { runId }, options, { pageRange, picks }) => invoke<ToolResult>("pdf_to_images", { runId,
+    request: {
+      paths,
+      dpi: renderDpi(options),
+      format: options.format,
+      pageRange: options.pages === "range" ? pageRange.trim() : null,
+      picks: [...new Set(paths)].filter((path) => picks[path]).map((path) => ({ path, pages: picks[path] })),
+      outputLocation,
+    },
+  }),
 };

@@ -98,7 +98,7 @@ impl QuickAction {
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::compress)
             }
             QuickAction::PdfToImages => {
-                let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, output_location: output_location.clone() });
+                let request = Arc::new(remaining::PdfToImagesRequest { paths: paths.clone(), pages: None, dpi: 150, format: "png".to_string(), page_range: None, picks: Vec::new(), output_location: output_location.clone() });
                 BatchRunner::run(&events, self.tool(), paths, &output_location, &request, remaining::to_images)
             }
             QuickAction::CompressImage => {

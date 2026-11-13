@@ -2257,7 +2257,7 @@ mod command_tests {
     }
 
     fn images_range_request(paths: Vec<PathBuf>, range: &str, output_location: OutputLocation) -> PdfToImagesRequest {
-        PdfToImagesRequest { paths, dpi: 72, format: "png".into(), page_range: Some(range.into()), pages: None, output_location }
+        PdfToImagesRequest { paths, dpi: 72, format: "png".into(), page_range: Some(range.into()), pages: None, picks: Vec::new(), output_location }
     }
 
     #[test]
@@ -2304,14 +2304,84 @@ mod command_tests {
         assert_eq!(names, ["document-page-01.png", "document-page-02.png", "document-page-03.png", "document-page-05.png", "document-page-08.png", "document-page-09.png"]);
 
         // Split checks its ranges against the page count before writing, so going past the end is invalid input there.
-        for (tool, kind, outcomes) in [
-            ("split", ErrorKind::InvalidInput, tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))))),
-            ("pdf to images", ErrorKind::Processing, tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(vec![input.clone()], "1, 10-", location(&root, "images-past-end"))))),
-        ] {
-            let error = outcomes[0].error().unwrap_or_else(|| panic!("{tool} accepted pages past the end"));
-            assert_eq!(error.kind, kind, "{tool}: {}", error.message);
-            assert!(outcomes[0].output_paths().is_empty(), "{tool}");
+        let outcomes = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))));
+        let error = outcomes[0].error().expect("split accepted pages past the end");
+        assert_eq!(error.kind, ErrorKind::InvalidInput, "{}", error.message);
+        assert!(outcomes[0].output_paths().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdf_to_images_clamps_one_range_to_each_pdf_and_skips_empty_ones() {
+        let _split = remaining::tests::SPLIT_TEST_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("pdf-to-images-clamp");
+        let (long, memo, letter) = (root.join("long.pdf"), root.join("memo.pdf"), root.join("letter.pdf"));
+        make_pdf(&long, 9);
+        make_pdf(&memo, 4);
+        make_pdf(&letter, 2);
+        let originals = [&long, &memo, &letter].map(|path| std::fs::read(path).unwrap());
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(vec![long.clone(), memo.clone(), letter.clone()], "3-5, 8-", location(&root, "images"))));
+
+        let names = |outcome: &crate::kit::contracts::JobOutcome| outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
+        assert_eq!(names(&outcomes[0]), ["long-page-03.png", "long-page-04.png", "long-page-05.png", "long-page-08.png", "long-page-09.png"]);
+        assert_eq!(outcomes[0].detail, "5 images, pages 3-5, 8 and 9");
+        assert!(outcomes[1].error().is_none(), "{:?}", outcomes[1]);
+        assert_eq!(names(&outcomes[1]), ["memo-page-03.png", "memo-page-04.png"]);
+        assert_eq!(outcomes[1].detail, "2 images. Range shortened to pages 3 and 4, because memo.pdf has 4 pages.");
+        match &outcomes[2].state {
+            crate::kit::contracts::OutcomeState::Skipped { reason } => {
+                assert_eq!(reason.code, crate::kit::contracts::SkipCode::RangeEmptyAfterClamping);
+                assert_eq!(reason.message, "No pages left in 3-5, 8-. It has 2 pages, so nothing was made.");
+            }
+            state => panic!("letter.pdf must be skipped, got {state:?}"),
         }
+        let made = std::fs::read_dir(root.join("images")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(made.iter().all(|name| !name.starts_with("letter")), "{made:?}");
+        assert_eq!(made.len(), 7, "{made:?}");
+        assert_eq!([&long, &memo, &letter].map(|path| std::fs::read(path).unwrap()), originals);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdf_to_images_uses_one_pdfs_picks_instead_of_the_shared_range() {
+        let _split = remaining::tests::SPLIT_TEST_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("pdf-to-images-picks");
+        let (picked, ranged) = (root.join("picked.pdf"), root.join("ranged.pdf"));
+        make_pdf(&picked, 2);
+        make_pdf(&ranged, 6);
+        let mut request = images_range_request(vec![picked.clone(), ranged.clone()], "5-", location(&root, "images"));
+        request.picks = vec![remaining::PagePicks { path: picked.clone(), pages: vec![0] }];
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), request));
+
+        let names = outcomes.iter().map(|outcome| outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>()).collect::<Vec<_>>();
+        assert_eq!(names, [vec!["picked-page-01.png"], vec!["ranged-page-05.png", "ranged-page-06.png"]]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pdf_to_images_rejects_a_malformed_range_for_every_pdf_before_rendering() {
+        let root = sandbox("pdf-to-images-malformed");
+        let (first, second) = (root.join("first.pdf"), root.join("second.pdf"));
+        make_pdf(&first, 3);
+        make_pdf(&second, 3);
+        let originals = [&first, &second].map(|path| std::fs::read(path).unwrap());
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(vec![first.clone(), second.clone()], "5-3", location(&root, "images"))));
+
+        assert_eq!(outcomes.len(), 2);
+        for outcome in &outcomes {
+            let error = outcome.error().expect("a backwards range must be rejected");
+            assert_eq!(error.kind, ErrorKind::InvalidInput, "{}", error.message);
+            assert!(error.message.contains("runs backwards"), "{}", error.message);
+            assert!(outcome.output_paths().is_empty());
+        }
+        assert!(std::fs::read_dir(root.join("images")).map_or(true, |mut entries| entries.next().is_none()));
+        assert_eq!([&first, &second].map(|path| std::fs::read(path).unwrap()), originals);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2684,8 +2754,8 @@ mod command_tests {
         }))));
         outputs.extend(named(&mut naming, "protect_files", pdf_two.clone(), assert_success("lock", protect_files(RunEvents::silent(), PasswordRequest { paths: vec![pdf_two.clone()], password: crate::kit::TEST_OVERRIDE_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "protect") }))));
         outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf"), output_path: None }))));
-        outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, output_location: location(&root, "pdf to images") }))));
-        let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), output_location: location(&root, "pdf selected pages to images") }));
+        outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, picks: Vec::new(), output_location: location(&root, "pdf to images") }))));
+        let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), picks: Vec::new(), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
         outputs.extend(named(&mut naming, "extract_from_pdf", pdf.clone(), assert_success("extract text from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, None, location(&root, "extract text"))))));
@@ -4244,6 +4314,7 @@ mod command_tests {
             format: "png".into(),
             page_range: None,
             pages: Some(Vec::new()),
+            picks: Vec::new(),
             output_location: location(&root, "images"),
         }));
 
@@ -4880,7 +4951,7 @@ mod command_tests {
         let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
         std::env::set_var("TOOLBOX_PDFTOPPM_PATH", renderer);
         let outcomes = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), PdfToImagesRequest {
-            paths, dpi: 72, format: "png".into(), page_range: None, pages: None, output_location,
+            paths, dpi: 72, format: "png".into(), page_range: None, pages: None, picks: Vec::new(), output_location,
         }));
         match previous {
             Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),

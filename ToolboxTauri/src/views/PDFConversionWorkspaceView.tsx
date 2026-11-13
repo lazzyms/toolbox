@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { ToolScaffold } from "../components/ToolScaffold";
 import { parseEntryFacts, type EntryFacts } from "../components/intake";
 import { ConversionPanel, conversionToolFor } from "../features/pdf-conversion";
+import type { PagePicks } from "../features/pdf-conversion/tool";
 import type { PdfDocument } from "../features/pdf-editor";
 import type { AtomicToolId, ToolDefinition } from "../contracts";
 
@@ -22,6 +23,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
   const [inspectError, setInspectError] = useState("");
+  const [picks, setPicks] = useState<PagePicks>({});
   const [listedPaths, setListedPaths] = useState<readonly string[]>(initialPaths);
   const [facts, setFacts] = useState<ReadonlyMap<string, EntryFacts>>(() => new Map());
   const describesFiles = activeUtility.id === "pdf-merge";
@@ -88,7 +90,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       listHint={describesFiles && listedPaths.length === 1 ? "Add at least one more PDF. You can add the same file again to repeat it." : undefined}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
       exampleHint={exampleHint}
-      onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
+      onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange, picks })}
     >
       {({ files, selectedFileIndex, run, loading, destination, runLabel }) => (
         <ConversionPanel
@@ -110,6 +112,8 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
           setSelectedPages={setSelectedPages}
           inspectError={inspectError}
           setInspectError={setInspectError}
+          picks={picks}
+          setPicks={setPicks}
           onSelectTool={onSelectTool}
         />
       )}

@@ -22,9 +22,11 @@ test.beforeEach(async ({ page }) => {
                 if (command === "check_output_folder") return "ready";
                 if (command === "plugin:dialog|open") return testWindow.__dialogResults.shift() ?? null;
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
-                if (command === "inspect_pdf") {
-                    const pageCount = (args as { request: { path: string } }).request.path.endsWith(".three.pdf") ? 3 : 1;
-                    return { pages: Array.from({ length: pageCount }, (_, index) => ({ index, x: 0, y: 0, width: 612, height: 792, preview })) };
+                if (command === "inspect_pdf" || command === "inspect_pdf_scene") {
+                    const path = (args as { request: { path: string } }).request.path;
+                    if (path.includes("locked")) throw "This PDF needs a password.";
+                    const pageCount = path.endsWith(".three.pdf") ? 3 : Number(/-(\d+)p\.pdf$/.exec(path)?.[1] ?? 1);
+                    return { pages: Array.from({ length: pageCount }, (_, index) => ({ index, x: 0, y: 0, width: 612, height: 792, preview: command === "inspect_pdf" ? preview : null })) };
                 }
                 if (command === "inspect_image_preview") {
                     const tall = (args as { request: { path: string } }).request.path.includes("tall");
@@ -160,12 +162,15 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         await chooseOption(page, "Format", "PNG");
         await page.getByRole("checkbox", { name: "Page 2" }).click();
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], dpi: 300, format: "png", pageRange: "1,3", pages: [0, 2], outputLocation,
+            paths: ["/local/report.three.pdf"], dpi: 300, format: "png", pageRange: null,
+            picks: [{ path: "/local/report.three.pdf", pages: [0, 2] }], outputLocation,
         }));
 
-        await page.getByRole("textbox", { name: "Page range" }).fill("2-3");
+        await page.getByRole("button", { name: "Use the range instead" }).click();
+        await chooseOption(page, "Pages", "Range");
+        await page.getByRole("textbox", { name: "Page range for every PDF" }).fill("2-3");
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], dpi: 300, format: "png", pageRange: "2-3", pages: [1, 2], outputLocation,
+            paths: ["/local/report.three.pdf"], dpi: 300, format: "png", pageRange: "2-3", picks: [], outputLocation,
         }));
     });
 
@@ -199,13 +204,13 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         await expect(page.getByRole("alert")).toHaveCount(0);
         await custom.fill("240");
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], dpi: 240, format: "webp", pageRange: "1-3", pages: [0, 1, 2], outputLocation,
+            paths: ["/local/report.three.pdf"], dpi: 240, format: "webp", pageRange: null, picks: [], outputLocation,
         }));
 
         await chooseOption(page, "Format", "JPEG");
         await chooseOption(page, "Resolution", "72 dpi");
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], dpi: 72, format: "jpg", pageRange: "1-3", pages: [0, 1, 2], outputLocation,
+            paths: ["/local/report.three.pdf"], dpi: 72, format: "jpg", pageRange: null, picks: [], outputLocation,
         }));
     });
 
@@ -282,6 +287,84 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         await expect.poll(() => requestsFor(page, "reveal_output_path")).toEqual([{ path: "/local/survey-page-03-1.webp" }]);
     });
 
+    test("PDF to Images sends one range for the batch and estimates the images per PDF", async ({ page }) => {
+        await selectFromRail(page, "PDF Conversion", "PDF to Images");
+        await chooseFiles(page, "/local/lease-14p.pdf", "/local/memo-4p.pdf", "/local/cover-2p.pdf", "/local/payslip-locked.pdf");
+        const estimate = page.getByRole("status", { name: "Image estimate" });
+        await expect(page.getByText("Every page of every PDF. Choose Range to limit them, or select a PDF to pick its pages.")).toBeVisible();
+        await expect(estimate).toHaveText(/This will make 20 images\s*from 3 PDFs, 1 locked/);
+
+        await chooseOption(page, "Pages", "Range");
+        const range = page.getByRole("textbox", { name: "Page range for every PDF" });
+        await expect(page.getByText("Commas and dashes, like 1-3, 5, 8-. 8- means page 8 to the end.")).toBeVisible();
+        await expect(page.getByText("One range applies to every PDF. Pages past a PDF's last page are left out, and a PDF with no pages left is skipped.")).toBeVisible();
+        await range.fill("3-5, 8-");
+        await expect(page.getByText("Range 3-5, 8- applied to each PDF. 1 shortened, 1 will be skipped.")).toBeVisible();
+        await expect(estimate).toHaveText(/This will make 12 images\s*from 2 PDFs, 1 skipped, 1 locked/);
+
+        expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
+            paths: ["/local/lease-14p.pdf", "/local/memo-4p.pdf", "/local/cover-2p.pdf", "/local/payslip-locked.pdf"],
+            dpi: 150, format: "png", pageRange: "3-5, 8-", picks: [], outputLocation,
+        }));
+    });
+
+    test("PDF to Images rejects a malformed range before sending anything", async ({ page }) => {
+        await selectFromRail(page, "PDF Conversion", "PDF to Images");
+        await chooseFiles(page, "/local/lease-14p.pdf", "/local/memo-4p.pdf");
+        await chooseOption(page, "Pages", "Range");
+        const range = page.getByRole("textbox", { name: "Page range for every PDF" });
+        await range.fill("5-3, 8-");
+        await expect(page.getByRole("alert")).toHaveText("5-3 runs backwards. Write it as 3-5.");
+        await expect(range).toHaveAttribute("aria-invalid", "true");
+        await expect(page.getByRole("status", { name: "Image estimate" })).toHaveText(/No image count yet\s*Fix the page range to convert/);
+        await expect(page.locator(".workspace-primary-action")).toBeDisabled();
+        await page.keyboard.press("ControlOrMeta+Enter");
+        expect(await requestsFor(page, "pdf_to_images")).toEqual([]);
+
+        await range.fill("3-5, 8-");
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+    });
+
+    test("PDF to Images picks replace the range for the selected PDF only", async ({ page }) => {
+        await selectFromRail(page, "PDF Conversion", "PDF to Images");
+        await chooseFiles(page, "/local/report.three.pdf", "/local/memo-4p.pdf");
+        await chooseOption(page, "Pages", "Range");
+        await page.getByRole("textbox", { name: "Page range for every PDF" }).fill("2-");
+        await expect(page.getByRole("checkbox", { name: "Page 1" })).not.toBeChecked();
+        await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
+        await page.getByRole("checkbox", { name: "Page 1" }).click();
+        await expect(page.getByText("3 of 3 pages picked: 1, 2 and 3. These picks replace the range for this PDF only.")).toBeVisible();
+        await expect(page.getByText("report.three.pdf uses its own picks")).toBeVisible();
+        await expect(page.getByRole("status", { name: "Image estimate" })).toHaveText(/This will make 6 images\s*from 2 PDFs/);
+
+        expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
+            paths: ["/local/report.three.pdf", "/local/memo-4p.pdf"], dpi: 150, format: "png", pageRange: "2-",
+            picks: [{ path: "/local/report.three.pdf", pages: [0, 1, 2] }], outputLocation,
+        }));
+    });
+
+    test("PDF to Images shows the shortened-range note and a Skipped row", async ({ page }) => {
+        await page.evaluate(() => {
+            (window as TestWindow).__outcome = (inputPath) => inputPath.endsWith("cover-2p.pdf")
+                ? { outputPaths: [], detail: "", state: "skipped", reason: { code: "rangeEmptyAfterClamping", message: "No pages left in 3-5, 8-. It has 2 pages, so nothing was made." } }
+                : { outputPaths: ["/local/memo-4p-page-03.png", "/local/memo-4p-page-04.png"], detail: "2 images. Range shortened to pages 3 and 4, because memo-4p.pdf has 4 pages." };
+        });
+        await selectFromRail(page, "PDF Conversion", "PDF to Images");
+        await chooseFiles(page, "/local/memo-4p.pdf", "/local/cover-2p.pdf");
+        await chooseOption(page, "Pages", "Range");
+        await page.getByRole("textbox", { name: "Page range for every PDF" }).fill("3-5, 8-");
+        await exportAndCapture(page, "pdf_to_images");
+
+        const results = page.getByRole("list", { name: "Results" });
+        await expect(results.getByRole("listitem").filter({ hasText: "memo-4p.pdf" }))
+            .toContainText("2 images. Range shortened to pages 3 and 4, because memo-4p.pdf has 4 pages.");
+        const cover = results.getByRole("listitem").filter({ hasText: "cover-2p.pdf" });
+        await expect(cover).toContainText("Skipped");
+        await expect(cover).toContainText("No pages left in 3-5, 8-. It has 2 pages, so nothing was made.");
+        await expect(cover.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    });
+
     test("options survive a switch to another tool and back", async ({ page }) => {
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await chooseFiles(page, "/local/report.three.pdf");
@@ -294,7 +377,7 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         await expect(page.getByRole("radiogroup", { name: "Format" }).getByRole("radio", { name: "WebP" })).toBeChecked();
         await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], dpi: 72, format: "webp", pageRange: "1-3", pages: [0, 1, 2], outputLocation,
+            paths: ["/local/report.three.pdf"], dpi: 72, format: "webp", pageRange: null, picks: [], outputLocation,
         }));
     });
 });

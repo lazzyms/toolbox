@@ -15,7 +15,7 @@ use crate::kit::contracts::{LimitKind, OutcomePointer, OutcomeWarning, SkipCode,
 use crate::kit::images::source::{self, ImageFamily};
 use crate::kit::images::{self, OutputFormat};
 use super::metadata::{page_bounds, page_rotation};
-use super::page_ranges::PageRanges;
+use super::page_ranges::{pages_label, PageRanges};
 use super::{has_signed_signature_field, mutation_preflight, note_signature_removed, remove_signatures, resolve, PdfMutationIntent};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -108,12 +108,24 @@ pub struct PdfToImagesRequest {
     pub format: String,
     #[serde(default)] pub page_range: Option<String>,
     #[serde(default)] pub pages: Option<Vec<usize>>,
+    #[serde(default)] pub picks: Vec<PagePicks>,
     pub output_location: OutputLocation,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PagePicks {
+    pub path: PathBuf,
+    pub pages: Vec<usize>,
 }
 
 impl PdfToImagesRequest {
     pub(crate) fn page_range(&self) -> Option<&str> {
         self.page_range.as_deref().filter(|value| !value.trim().is_empty())
+    }
+
+    fn picks_for(&self, input: &Path) -> Option<&Vec<usize>> {
+        self.picks.iter().find(|picks| picks.path == input).map(|picks| &picks.pages).or(self.pages.as_ref())
     }
 }
 
@@ -581,7 +593,7 @@ fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn
         Err(error) => return failure(input, format!("Could not create a private image workspace: {error}")),
     };
     let prefix = workspace.path().join("page");
-    if let Some(requested_pages) = request.pages.as_ref() {
+    if let Some(requested_pages) = request.picks_for(&input) {
         let pages = match selected_pdf_pages(&document, Some(requested_pages)) {
             Ok(pages) if !pages.is_empty() => pages,
             Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
@@ -595,16 +607,20 @@ fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn
         return materialize_rendered_images(&input, &request.output_location, &generated, format, page_digits);
     }
 
-    let spans = ranges.map_or_else(|| vec![None], |ranges| ranges.spans().iter().copied().map(Some).collect());
-    let rendered_pages = spans.iter().map(|span| span.map_or(page_count, |span| (span.last.unwrap_or(page_count).min(page_count) + 1).saturating_sub(span.first))).sum::<usize>();
+    let clamped = ranges.as_ref().map(|ranges| ranges.clamp(page_count));
+    if let (Some(ranges), Some(clamped)) = (&ranges, &clamped) {
+        if clamped.is_empty() {
+            let message = format!("No pages left in {}. It has {}, so nothing was made.", ranges.spans().iter().map(ToString::to_string).collect::<Vec<_>>().join(", "), pages_label(page_count));
+            return JobOutcome::skipped(input, SkipReason::new(SkipCode::RangeEmptyAfterClamping, message));
+        }
+    }
+    let spans = clamped.as_ref().map_or_else(|| vec![None], |clamped| clamped.spans.iter().copied().map(Some).collect());
+    let rendered_pages = spans.iter().map(|span| span.map_or(page_count, |(first, last)| (last + 1).saturating_sub(first))).sum::<usize>();
     let deadline = RenderDeadline::new(time_limit(rendered_pages));
     for span in spans {
         let mut command = Command::new(&renderer);
         command.arg("-png").arg("-r").arg(dpi.to_string());
-        if let Some(span) = span {
-            command.arg("-f").arg(span.first.to_string());
-            if let Some(last) = span.last { command.arg("-l").arg(last.to_string()); }
-        }
+        if let Some((first, last)) = span { command.arg("-f").arg(first.to_string()).arg("-l").arg(last.to_string()); }
         command.arg(&input).arg(&prefix);
         match deadline.run(command) {
             Ok(result) if result.status.success() => {}
@@ -615,7 +631,16 @@ fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn
     let mut outputs = fs::read_dir(workspace.path()).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|ext| ext == "png")).filter_map(|path| rendered_page_index(&path, &prefix).map(|page| (page, path))).collect::<Vec<_>>();
     outputs.sort();
     if outputs.is_empty() { return failure(input, "PDF renderer produced no images.".to_string()); }
-    materialize_rendered_images(&input, &request.output_location, &outputs, format, page_digits)
+    let outcome = materialize_rendered_images(&input, &request.output_location, &outputs, format, page_digits);
+    match clamped {
+        Some(clamped) if !clamped.notes.is_empty() && outcome.error().is_none() => {
+            let pages = outputs.iter().map(|(page, _)| *page).collect::<Vec<_>>();
+            let name = input.file_name().map(|value| value.to_string_lossy().into_owned()).unwrap_or_default();
+            let detail = format!("{} {}. Range shortened to {}, because {name} has {}.", pages.len(), if pages.len() == 1 { "image" } else { "images" }, describe_pages(&pages), pages_label(page_count));
+            JobOutcome { detail, ..outcome }
+        }
+        _ => outcome,
+    }
 }
 
 /// One deadline shared by every renderer call for a file. Passing it fails the file with a time limit.
@@ -1799,7 +1824,7 @@ pub(crate) mod tests {
         std::env::set_var("TOOLBOX_PDFTOPPM_PATH", &renderer);
 
         let outcome = to_images(&PdfToImagesRequest {
-            paths: vec![input.clone()], dpi: 72, format: "png".to_string(), page_range: None, pages: None,
+            paths: vec![input.clone()], dpi: 72, format: "png".to_string(), page_range: None, pages: None, picks: Vec::new(),
             output_location: OutputLocation::CustomFolder(output_folder.clone()),
         }, input.clone());
 
@@ -1818,7 +1843,7 @@ pub(crate) mod tests {
 
     fn render_with_bundled_pdftoppm(input: &Path, folder: &Path, format: &str, dpi: u16, pages: Option<Vec<usize>>, page_range: Option<&str>) -> JobOutcome {
         to_images(&PdfToImagesRequest {
-            paths: vec![input.to_path_buf()], dpi, format: format.to_string(), page_range: page_range.map(str::to_string), pages,
+            paths: vec![input.to_path_buf()], dpi, format: format.to_string(), page_range: page_range.map(str::to_string), pages, picks: Vec::new(),
             output_location: OutputLocation::CustomFolder(folder.to_path_buf()),
         }, input.to_path_buf())
     }
@@ -2962,7 +2987,7 @@ pub(crate) mod tests {
         let outcomes = [None, Some(vec![0, 2])].map(|pages| {
             let started = Instant::now();
             let outcome = to_images_within(&PdfToImagesRequest {
-                paths: vec![input.clone()], dpi: 72, format: "png".to_string(), page_range: None, pages,
+                paths: vec![input.clone()], dpi: 72, format: "png".to_string(), page_range: None, pages, picks: Vec::new(),
                 output_location: OutputLocation::CustomFolder(output_folder.clone()),
             }, input.clone(), |_| Duration::from_millis(200));
             (outcome, started.elapsed())

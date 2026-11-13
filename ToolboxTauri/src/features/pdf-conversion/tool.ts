@@ -4,7 +4,19 @@ import type { AtomicToolId, OutputLocation, ToolDefinition, ToolResult } from ".
 import type { EntrySortOption } from "../../components/intake";
 import type { PdfDocument } from "../pdf-editor";
 
-export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string };
+export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string; picks: PagePicks };
+
+export type PagePicks = Record<string, number[]>;
+
+export type PageCount = number | "pending" | "locked" | "unreadable";
+
+export type BatchPagesProps<Options> = {
+  options: Options;
+  files: string[];
+  pageRange: string;
+  picks: PagePicks;
+  pageCounts: Record<string, PageCount>;
+};
 
 export type OptionsPanelProps<Options> = {
   options: Options;
@@ -16,6 +28,8 @@ export type OptionsPanelProps<Options> = {
   selectedPages: number[];
   pageRange: string;
   choosePageRange: (value: string) => void;
+  picks: PagePicks;
+  pageCounts: Record<string, PageCount>;
   onSelectTool?: (id: AtomicToolId) => void;
 };
 
@@ -26,6 +40,8 @@ export interface ConversionTool<Options = unknown> {
   initialPages?(document: PdfDocument): number[];
   outputPreview(options: Options, selectedPages: number[]): string;
   exportBlocked?(options: Options, files: string[], pageRange: string): boolean;
+  pagesPerPdf?(options: Options, pageRange: string, pageCount: number): number[] | null;
+  RunSummary?(props: BatchPagesProps<Options>): ReactNode;
   /** A status shown above the export action while the list can't be exported yet. */
   exportNote?(files: string[]): string | null;
   OptionsPanel?(props: OptionsPanelProps<Options>): ReactNode;
