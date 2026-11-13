@@ -45,7 +45,7 @@ const EBOOK_SCALES: std::ops::RangeInclusive<u16> = 50..=200;
 pub enum PageSize { #[default] A4, Letter, Legal }
 
 impl PageSize {
-    fn points(self) -> (f32, f32) {
+    pub(crate) fn points(self) -> (f32, f32) {
         match self {
             Self::A4 => (595.28, 841.89),
             Self::Letter => (612., 792.),
@@ -59,7 +59,7 @@ impl PageSize {
 pub enum Margins { Narrow, #[default] Normal, Wide }
 
 impl Margins {
-    fn points(self) -> f32 {
+    pub(crate) fn points(self) -> f32 {
         match self {
             Self::Narrow => 36.,
             Self::Normal => 72.,
@@ -309,7 +309,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
     result.unwrap_or_else(|error| JobOutcome::failure(input, error))
 }
 
-fn page_count(count: usize) -> String {
+pub(crate) fn page_count(count: usize) -> String {
     if count == 1 { "1 page".to_string() } else { format!("{count} pages") }
 }
 

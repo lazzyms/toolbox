@@ -60,6 +60,8 @@ pub const SIGNATURE_IMAGE: ToolLimits = ToolLimits { max_bytes: 20 * MB, max_exp
 // compressed archives whose parts are held to the expansion limit instead. For both, max_pages caps the pages a file makes.
 const TEXT_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
 const PACKAGED_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 250 * MB, ..TEXT_DOCUMENT };
+/// A document typed in Toolbox, such as a Formatted PDF: its text is held to the text-format size, and its pages to the PDF page cap.
+pub const CREATED_DOCUMENT: ToolLimits = TEXT_DOCUMENT;
 
 /// Convert to PDF takes many formats, so its limits follow the input's family rather than the command.
 pub fn convert_to_pdf(input: &Path) -> ToolLimits {
@@ -132,6 +134,7 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         | "remove_image_background" | "generate_icon_set" | "create_gif" => IMAGE,
         "extract_gif_frames" | "process_tiff_pages" | "images_to_pdf" | "convert_images" => PAGED_IMAGE,
         "export_image_edit_stack" => EDIT_IMAGE,
+        "create_formatted_pdf" => CREATED_DOCUMENT,
         _ => return None,
     })
 }
@@ -737,7 +740,9 @@ mod tests {
     fn every_registered_command_records_limits_and_pages_only_where_files_have_pages() {
         for capability in native_capabilities() {
             let limits = recorded(&capability.command).unwrap_or_else(|| panic!("{} has no recorded limits", capability.command));
-            let paged = capability.accepted_extensions.iter().any(|extension| matches!(extension.as_str(), ".pdf" | ".gif" | ".tif" | ".tiff"));
+            // A creation tool takes no file but makes pages, so it caps the pages it makes.
+            let paged = capability.input_cardinality == crate::kit::contracts::InputCardinality::None
+                || capability.accepted_extensions.iter().any(|extension| matches!(extension.as_str(), ".pdf" | ".gif" | ".tif" | ".tiff"));
             assert_eq!(limits.max_pages.is_some(), paged, "{}", capability.command);
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
@@ -754,6 +759,7 @@ mod tests {
         assert_eq!(recorded("images_to_pdf").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
         assert_eq!(recorded("convert_images").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
         assert_eq!(MAX_IMAGE_PAGES, 1_000);
+        assert_eq!(recorded("create_formatted_pdf"), Some(ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer }));
         assert_eq!(recorded("unknown"), None);
     }
 

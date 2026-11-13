@@ -18,6 +18,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-extract", title: "Extract from PDF", shortTitle: "Extract from PDF", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Save the text, the images, or both from each PDF.", keywords: ["text", "txt", "images", "pictures", "photos", "extract", "pdf to text", "extract images"], symbol: "file-text", category: "PDF", command: "extract_from_pdf", verification: "pdf-extract", view: "pdf-extract" },
     { id: "pdf-to-epub", title: "PDF to EPUB", shortTitle: "PDF to EPUB", resultVerb: "Converted", runningVerb: "Converting", outputNoun: "EPUB", pointerLabels: { "lock-unlock": "Remove Password", "pdf-split": "Split PDF" }, blurb: "Turn each PDF into a reflowable eBook for phones and e-readers.", keywords: ["epub", "ebook", "e-book", "e-reader", "kindle", "kobo", "reflow", "pdf to epub", "book"], symbol: "book", category: "PDF", command: "pdf_to_epub", verification: "pdf-to-epub", view: "pdf-to-epub" },
     { id: "convert-to-pdf", title: "Convert to PDF", shortTitle: "Convert to PDF", resultVerb: "Saved", resultNoun: "PDF", runningVerb: "Converting", blurb: "Turn documents, spreadsheets, slides, eBooks and text into PDFs.", symbol: "file-text", category: "PDF", command: "convert_to_pdf", verification: "convert-to-pdf", view: "convert-to-pdf" },
+    { id: "formatted-pdf", title: "Formatted PDF", shortTitle: "Formatted PDF", resultVerb: "Saved", resultNoun: "PDF", runningVerb: "Saving", blurb: "Type or paste text, mark headings, and save it as a new PDF.", keywords: ["write", "type", "paste", "text", "headings", "document", "new pdf", "create pdf", "formatted"], symbol: "file-text", category: "PDF", command: "create_formatted_pdf", verification: "formatted-pdf", view: "formatted-pdf" },
     { id: "pdf-split", title: "Split PDF", shortTitle: "Split", resultVerb: "Split", runningVerb: "Splitting", blurb: "Break a PDF into separate page files.", symbol: "file-scissors", category: "PDF", command: "split_pdf", verification: "pdf-split", view: "pdf-split" },
     { id: "pdf-sign", title: "Sign PDF", shortTitle: "Sign", resultVerb: "Signed", runningVerb: "Signing", blurb: "Place a visible typed signature on a PDF page.", symbol: "signature", category: "PDF", command: "export_pdf_scene", verification: "pdf-sign", view: "pdf-sign" },
     { id: "pdf-ocr", title: "OCR PDF", shortTitle: "OCR", resultVerb: "Recognized", runningVerb: "Recognizing", progressByPage: true, signatureRemovedNote: "Signature removed. Adding text removes the digital signature, so the copy isn't signed. The original still is.", precisionReducedIsNote: true, blurb: "Read text out of scans through an offline OCR adapter.", symbol: "scan", category: "PDF", command: "ocr_pdf", verification: "pdf-ocr", view: "pdf-ocr" },
@@ -118,7 +119,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "arrows-exchange",
         category: "PDF",
         categories: ["PDF"],
-        toolIds: ["pdf-to-images", "pdf-extract", "pdf-to-epub", "images-to-pdf", "pdf-ocr", "convert-to-pdf"],
+        toolIds: ["pdf-to-images", "pdf-extract", "pdf-to-epub", "images-to-pdf", "pdf-ocr", "formatted-pdf", "convert-to-pdf"],
     },
     {
         id: "image-editor",
