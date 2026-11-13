@@ -119,6 +119,11 @@ const ImagesToPdfOptions = ({ options, setOptions, files, selectedFileIndex }: O
 export const imagesToPdf: ConversionTool<Options> = {
   initialOptions: { pageSize: "matchImage", margin: "small", fit: "fit", orientation: "automatic" },
   inspectsPdf: false,
+  sortOptions: [
+    { value: "added", label: "Order added" },
+    { value: "nameAsc", label: "Name" },
+    { value: "modifiedAsc", label: "Modified date" },
+  ],
   outputPreview: () => "Output preview unavailable. Export combines the selected images into one PDF in file order.",
   OptionsPanel: ImagesToPdfOptions,
   request: (paths, outputLocation, { outputPath, runId }, options) => invoke<ToolResult>("images_to_pdf", { runId,

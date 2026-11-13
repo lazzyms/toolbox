@@ -79,6 +79,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       utility={activeUtility}
       initialPaths={initialPaths}
       onFilesChange={listChanged}
+      sortOptions={tool.sortOptions}
       entryFacts={describesFiles ? (path) => facts.get(path) : undefined}
       renderFileExtra={combinesImages ? (path) => {
         const count = tiffPages.get(path) ?? 1;

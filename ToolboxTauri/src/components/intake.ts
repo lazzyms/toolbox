@@ -144,13 +144,18 @@ export type EntryFacts = { pageCount: number | null; modifiedMs: number | null; 
 
 export type EntrySort = 'added' | 'nameAsc' | 'nameDesc' | 'modifiedAsc' | 'modifiedDesc';
 
-export const entrySortOptions: ReadonlyArray<{ value: EntrySort; label: string }> = [
+export type EntrySortOption = { value: EntrySort; label: string };
+
+/** Every sort an ordered list can offer. A tool may offer a subset, with its own labels. */
+export const entrySortOptions: readonly EntrySortOption[] = [
     { value: 'added', label: 'Order added' },
     { value: 'nameAsc', label: 'Name, A to Z' },
     { value: 'nameDesc', label: 'Name, Z to A' },
     { value: 'modifiedAsc', label: 'Date modified, oldest first' },
     { value: 'modifiedDesc', label: 'Date modified, newest first' },
 ];
+
+export const sortNeedsFacts = (sort: EntrySort) => sort === 'modifiedAsc' || sort === 'modifiedDesc';
 
 const names = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 

@@ -34,11 +34,14 @@ import {
     intakePolicyFor,
     moveEntry,
     parentFolder,
+    parseEntryFacts,
     parseInspection,
     rangeKeys,
     sortEntries,
+    sortNeedsFacts,
     type EntryFacts,
     type EntrySort,
+    type EntrySortOption,
     type InspectedPath,
     type IntakeCopy,
     type IntakeEntry,
@@ -85,6 +88,8 @@ interface ToolScaffoldProps {
     onFilesChange?: (paths: readonly string[]) => void;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string | readonly string[];
+    /** Sorts an ordered list offers. The list keeps the order a sort leaves, so later drags start from it. */
+    sortOptions?: readonly EntrySortOption[];
     /** Shows a succeeded file's outputs as one row that expands into its parts. */
     outputGroup?: OutputGrouping;
     /** A line after the finished headline, such as a total across files. */
@@ -114,7 +119,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -128,7 +133,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const rowButtons = useRef(new Map<string, HTMLButtonElement>());
     const home = useHomeDir();
     const [results, setResults] = useState<JobOutcome[]>([]);
-    const [resultsNamedByOutput, setResultsNamedByOutput] = useState(false);
+    const [combinedInputs, setCombinedInputs] = useState<string[] | null>(null);
     const [loading, setLoading] = useState(false);
     const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
@@ -213,7 +218,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         const generation = ++runGeneration.current;
         setLoading(true);
         setResults([]);
-        setResultsNamedByOutput(false);
+        setCombinedInputs(null);
         setPerFileRun(null);
         try {
             if (location !== 'alongsideInput') {
@@ -260,7 +265,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 : files.map((path) => invalidPaths.get(path) ?? processedByPath.get(path)).filter((result): result is JobOutcome => result !== undefined);
             if (generation === runGeneration.current) {
                 setResults(nextResults);
-                setResultsNamedByOutput(outputPath !== null);
+                setCombinedInputs(outputPath === null ? null : validPaths);
             }
         } catch (error) {
             if (generation === runGeneration.current) {
@@ -460,11 +465,22 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
     const addedOrder = (entry: IntakeEntry) => Number(entry.key.slice('entry-'.length));
 
-    const sortBy = (next: EntrySort) => {
+    const sortBy = async (next: EntrySort) => {
         if (loading) return;
         setSort(next);
-        setEntries((current) => sortEntries(current, next, (path) => entryFacts?.(path), addedOrder));
         setMoveStatus('');
+        let facts = (path: string) => entryFacts?.(path);
+        if (entryFacts === undefined && sortNeedsFacts(next)) {
+            // A list without facts of its own reads the dates once, when a sort needs them.
+            let described = new Map<string, EntryFacts>();
+            try {
+                described = parseEntryFacts(await invoke('describe_intake_files', { paths: [...new Set(entries.map((entry) => entry.path))] }));
+            } catch {
+                // Files whose dates can't be read sort last, in their current order.
+            }
+            facts = (path) => described.get(path);
+        }
+        setEntries((current) => sortEntries(current, next, facts, addedOrder));
     };
 
     const selectFile = (index: number) => selectOnly(runnable[index]?.entry.key ?? null);
@@ -565,11 +581,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 <span className="file-selection-count">{entries.length} {entries.length === 1 ? 'file' : 'files'}</span>
                 {totalPages !== null && <span className="file-selection-selected">{totalPages === 1 ? '1 page in all' : `${totalPages} pages in all`}</span>}
                 {selectionNote && <span className="file-selection-selected">{selectionNote}</span>}
-                {describesEntries && (
+                {ordered && (sortOptions !== undefined || describesEntries) && (
                     <label className="file-selection-sort">
-                        <span>Sort</span>
-                        <NativeSelect size="sm" value={sort} disabled={loading} onChange={(event) => sortBy(event.target.value as EntrySort)}>
-                            {entrySortOptions.map((option) => <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>)}
+                        <span>{sortOptions ? 'Sort by' : 'Sort'}</span>
+                        <NativeSelect size="sm" value={sort} disabled={loading} onChange={(event) => void sortBy(event.target.value as EntrySort)}>
+                            {(sortOptions ?? entrySortOptions).map((option) => <NativeSelectOption key={option.value} value={option.value}>{option.label}</NativeSelectOption>)}
                         </NativeSelect>
                     </label>
                 )}
@@ -818,7 +834,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runningVerb={utility.runningVerb}
                 runningDetail={utility.runningDetail}
                 live={live}
-                namedByOutput={resultsNamedByOutput}
+                combinedInputs={combinedInputs}
+                combined={saveStep?.combined}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
                 outputGroup={outputGroup}

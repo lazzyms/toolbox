@@ -797,6 +797,48 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn images_to_pdf_writes_the_chosen_path_in_the_requested_order_and_numbers_around_existing_files() {
+        use crate::kit::contracts::WarningKind;
+        let root = sandbox("images-to-pdf-chosen-path");
+        let narrow = root.join("a-narrow.png"); write_png(&narrow, 16, 10);
+        let wide = root.join("b-wide.png"); write_png(&wide, 48, 20);
+        let middle = root.join("c-middle.png"); write_png(&middle, 32, 30);
+        let paths = vec![wide.clone(), narrow.clone(), middle.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let chosen_folder = root.join("elsewhere");
+        std::fs::create_dir_all(&chosen_folder).unwrap();
+        let run = |output_path: &PathBuf| tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest {
+            layout: Default::default(), paths: paths.clone(), output_location: OutputLocation::AlongsideInput, output_path: Some(output_path.clone()),
+        }));
+
+        let fresh = chosen_folder.join("b-wide-combined.pdf");
+        let outcomes = run(&fresh);
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert_eq!(outcomes[0].output_paths(), [fresh.clone()]);
+        assert!(outcomes[0].warnings.is_empty());
+        let widths = pdf_images(&fresh).iter().map(|image| image.media_width).collect::<Vec<_>>();
+        assert_eq!(widths.len(), 3);
+        assert!(widths[0] > widths[2] && widths[2] > widths[1], "pages follow the request order: {widths:?}");
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| entry.unwrap().path().extension().map_or(true, |extension| extension != "pdf")), "nothing is written next to the inputs");
+
+        let taken = chosen_folder.join("scans.pdf");
+        std::fs::write(&taken, b"existing scans.pdf").unwrap();
+        let taken_once = chosen_folder.join("scans-1.pdf");
+        std::fs::write(&taken_once, b"existing scans-1.pdf").unwrap();
+        let first_bytes = std::fs::read(&fresh).unwrap();
+        let outcomes = run(&taken);
+        assert_eq!(outcomes[0].output_paths(), [chosen_folder.join("scans-2.pdf")]);
+        assert_eq!(outcomes[0].warnings.iter().map(|warning| warning.kind.clone()).collect::<Vec<_>>(), [WarningKind::RenamedToAvoidReplacing { chosen_name: "scans.pdf".into(), final_name: "scans-2.pdf".into() }]);
+        assert_eq!(pdf_images(&chosen_folder.join("scans-2.pdf")).len(), 3);
+        assert_eq!(std::fs::read(&taken).unwrap(), b"existing scans.pdf");
+        assert_eq!(std::fs::read(&taken_once).unwrap(), b"existing scans-1.pdf");
+        assert_eq!(std::fs::read(&fresh).unwrap(), first_bytes);
+        for (path, bytes) in paths.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), bytes, "{} must not change", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     // The bundled x265 only encodes 8-bit HEVC, so a 10-bit HEIC is made by
     // rewriting the encoded parameter sets: the hvcC record and the SPS both
     // declare 10-bit samples. The SPS keeps its length by also shortening the
