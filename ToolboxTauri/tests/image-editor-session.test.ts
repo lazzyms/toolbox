@@ -7,6 +7,9 @@ import {
   defaultImageCropStep,
   defaultImageResizeStep,
   defaultImageRotateStep,
+  defaultImageToneStep,
+  imageToneStepProblem,
+  isNeutralImageToneStep,
   imageEditStackPreviewPlan,
   imageEditStackRequestSteps,
   imageEditStackSuffix,
@@ -125,6 +128,28 @@ test("Rotate and Flip is one step that runs last and is named -rotated on its ow
   assert.deepEqual(Object.keys(imageEditStackRequestSteps(stack)), ["crop", "resize", "rotate"], "rotate added first is still sent last");
   assert.deepEqual(imageEditStackRequestSteps({ rotate: { degrees: 180, flip: "vertical" } }), { rotate: { degrees: 180, flip: "vertical" } });
   assert.deepEqual(imageEditStackPreviewPlan(stack).edits.at(-1), { kind: "rotate", degrees: 270, flip: "horizontal" });
+});
+
+test("Colour and Tone is one step that runs after Rotate and Flip and is named -tone on its own", () => {
+  const tone = defaultImageToneStep();
+  assert.deepEqual(tone, { brightness: 0, contrast: 0, saturation: 0, exposure: 0 });
+  assert.equal(isNeutralImageToneStep(tone), true);
+  assert.equal(isNeutralImageToneStep({ ...tone, exposure: -1 }), false);
+  assert.equal(imageEditStackSuffix({ tone }), "-tone");
+  assert.equal(imageEditStackSuffix({ tone, rotate: defaultImageRotateStep() }), "-edited");
+  const adjusted = { brightness: 10, contrast: 5, saturation: -20, exposure: 0 };
+  const stack = { tone: adjusted, rotate: defaultImageRotateStep(), crop: defaultImageCropStep() };
+  assert.deepEqual(presentImageEditSteps(stack), ["crop", "rotate", "tone"]);
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps(stack)), ["crop", "rotate", "tone"], "tone added first is still sent after rotate");
+  assert.deepEqual(imageEditStackRequestSteps({ tone: adjusted }), { tone: adjusted });
+  assert.deepEqual(imageEditStackPreviewPlan(stack).edits.at(-1), { kind: "tone", ...adjusted });
+});
+
+test("tone values are checked against the native range of -100 to 100", () => {
+  assert.equal(imageToneStepProblem({ brightness: -100, contrast: 100, saturation: 0, exposure: 0 }), null);
+  assert.deepEqual(imageToneStepProblem({ brightness: 0, contrast: 101, saturation: 0, exposure: 0 }), { field: "contrast", message: "Enter a contrast from −100 to 100." });
+  assert.deepEqual(imageToneStepProblem({ brightness: 0, contrast: 0, saturation: -101, exposure: 0 }), { field: "saturation", message: "Enter a saturation from −100 to 100." });
+  assert.equal(imageToneStepProblem({ brightness: 0, contrast: 0, saturation: 0, exposure: Number.NaN })?.field, "exposure");
 });
 
 test("resize steps are checked against the native limits", () => {
