@@ -4,7 +4,7 @@ use crate::kit::contracts::ToolError;
 use crate::kit::pdf::font_resolver::{EmbeddedFont, FontStyle};
 use crate::kit::pdf::layout::{plain_text, Align, Block, Float, Frame, Omitted, PageSetup, Paragraph, Picture, Place, Position, Span, Style, PAGE_COUNT, PAGE_NUMBER};
 pub use crate::kit::pdf::wordprocessing::Parsed;
-use crate::kit::pdf::wordprocessing::{self as shared, css_points, DEFAULT_FLOAT_SIDE, SHAPE_FILL, SHAPE_LINE, hex_color, safe_uri, Collected, Families, Item, Node, Out, Package};
+use crate::kit::pdf::wordprocessing::{self as shared, css_points, DEFAULT_FLOAT_SIDE, SHAPE_FILL, SHAPE_LINE, hex_color, rels, safe_uri, Collected, Families, Item, Node, Out, Package, Rel};
 
 pub const DAMAGED: &str = "This Word document is damaged or incomplete, so no PDF was made.";
 const DOCUMENT: &str = "word/document.xml";
@@ -106,35 +106,6 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError) -> Result<Parsed, T
         page,
         omitted: converter.omitted,
     })
-}
-
-#[derive(Debug, Clone)]
-struct Rel { target: String, kind: String, external: bool }
-
-fn rels(package: &mut Package, part: &str) -> Result<HashMap<String, Rel>, ToolError> {
-    let (folder, file) = part.rsplit_once('/').unwrap_or(("", part));
-    let path = if folder.is_empty() { format!("_rels/{file}.rels") } else { format!("{folder}/_rels/{file}.rels") };
-    let Some(bytes) = package.part(&path)? else { return Ok(HashMap::new()) };
-    let root = tree(&bytes)?;
-    Ok(root.nodes().filter(|node| node.name == "Relationship").filter_map(|node| {
-        let id = node.attr("Id")?.to_string();
-        let target = node.attr("Target")?;
-        let external = node.attr("TargetMode").is_some_and(|mode| mode.eq_ignore_ascii_case("External"));
-        let target = if external { target.trim().to_string() } else { resolve(folder, target) };
-        Some((id, Rel { target, kind: node.attr("Type").unwrap_or_default().to_string(), external }))
-    }).collect())
-}
-
-fn resolve(folder: &str, target: &str) -> String {
-    let mut parts = if target.starts_with('/') { Vec::new() } else { folder.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>() };
-    for segment in target.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => { parts.pop(); }
-            segment => parts.push(segment),
-        }
-    }
-    parts.join("/")
 }
 
 #[derive(Debug, Default)]
@@ -935,9 +906,9 @@ mod tests {
 
     #[test]
     fn relationship_targets_resolve_inside_the_package_and_links_keep_safe_schemes() {
-        assert_eq!(resolve("word", "media/a.png"), "word/media/a.png");
-        assert_eq!(resolve("word", "../customXml/item.xml"), "customXml/item.xml");
-        assert_eq!(resolve("word", "/word/media/b.png"), "word/media/b.png");
+        assert_eq!(shared::resolve("word", "media/a.png"), "word/media/a.png");
+        assert_eq!(shared::resolve("word", "../customXml/item.xml"), "customXml/item.xml");
+        assert_eq!(shared::resolve("word", "/word/media/b.png"), "word/media/b.png");
         assert_eq!(safe_uri("https://example.com"), Some("https://example.com".into()));
         assert_eq!(safe_uri("file:///etc/passwd"), None);
         assert_eq!(field_kind(r#" HYPERLINK "https://example.com/x" "#), FieldKind::Link(Some("https://example.com/x".into())));

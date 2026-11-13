@@ -90,14 +90,14 @@ test("Convert to PDF sits in the PDF Conversion rail and shows text options only
 
 test("unsupported drops are refused with a reason, and later formats and PDFs are flagged on their own rows", async ({ page }) => {
     await openConvert(page);
-    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/sheet.xlsx", "/local/signed.pdf"]);
+    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/deck.pptx", "/local/signed.pdf"]);
 
     await expect(page.getByText(/archive\.zip/).first()).toBeVisible();
     await expect(fileRow(page, "archive.zip")).toHaveCount(0);
     await expect(fileRow(page, "photo.png")).toContainText("This file type can't become a PDF here.");
     await expect(fileRow(page, "photo.png")).toContainText("Won't run");
-    await expect(fileRow(page, "sheet.xlsx")).toContainText("Not available yet");
-    await expect(fileRow(page, "sheet.xlsx")).toContainText("XLSX comes in a later update");
+    await expect(fileRow(page, "deck.pptx")).toContainText("Not available yet");
+    await expect(fileRow(page, "deck.pptx")).toContainText("PPTX comes in a later update");
     await expect(fileRow(page, "signed.pdf")).toContainText("Will be skipped");
     await expect(fileRow(page, "signed.pdf")).toContainText("Already a PDF");
     await expect(fileRow(page, "notes.txt")).not.toContainText("Will be skipped");
@@ -434,5 +434,65 @@ test("a TSV run with default table options sends the by-file-type delimiter", as
         outputLocation: "alongsideInput",
         plainText: { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true },
         tables: { delimiter: "auto", headerRow: true, encoding: "detect", orientation: "landscape", fit: "width" },
+    });
+});
+
+test("the Spreadsheets section appears only while an XLSX or ODS is listed, with the board's defaults", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/notes.txt"]);
+    await expect(page.getByRole("region", { name: "Spreadsheets options" })).toHaveCount(0);
+    await drop(page, ["/local/budget-2027.xlsx"]);
+    await expect(fileRow(page, "budget-2027.xlsx")).not.toContainText("Not available yet");
+    const sheets = page.getByRole("region", { name: "Spreadsheets options" });
+    await expect(sheets).toBeVisible();
+    await expect(sheets).toContainText("Applies to budget-2027.xlsx");
+    await expect(sheets.getByRole("radiogroup", { name: "Sheets" }).getByRole("radio", { name: "All sheets" })).toBeChecked();
+    await expect(sheets.getByRole("radio", { name: "Visible only" })).not.toBeChecked();
+    await expect(sheets.getByRole("checkbox", { name: "Respect print areas" })).toBeChecked();
+    await expect(sheets.getByRole("checkbox", { name: "Fit each sheet to the page width" })).toBeChecked();
+
+    await drop(page, ["/local/forecast.ODS"]);
+    await expect(sheets).toContainText("Applies to 2 spreadsheets");
+    await fileRow(page, "budget-2027.xlsx").getByRole("button", { name: /Remove/ }).click();
+    await expect(sheets).toContainText("Applies to forecast.ODS");
+    await fileRow(page, "forecast.ODS").getByRole("button", { name: /Remove/ }).click();
+    await expect(page.getByRole("region", { name: "Spreadsheets options" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Plain text options" })).toBeVisible();
+});
+
+test("a spreadsheet run carries the sheet, print area and fit choices, and its row shows the hidden sheet note", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/budget.xlsx", "/local/forecast.ods"]);
+    const sheets = page.getByRole("region", { name: "Spreadsheets options" });
+    await sheets.getByRole("radio", { name: "Visible only" }).click();
+    await sheets.getByRole("checkbox", { name: "Respect print areas" }).click();
+    await sheets.getByRole("checkbox", { name: "Fit each sheet to the page width" }).click();
+    await page.locator(".workspace-primary-action").click();
+
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/budget.xlsx", "/local/forecast.ods"],
+        outputLocation: "alongsideInput",
+        spreadsheets: { sheets: "visible", printAreas: false, fitToWidth: false },
+    });
+
+    const note = "3 pages. 2 sheets. 1 hidden sheet left out.";
+    await page.evaluate((note) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/budget.xlsx", outputPaths: ["/local/budget.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+        { inputPath: "/local/forecast.ods", outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "It's password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.", pointer: { kind: "tool", toolId: "lock-unlock" } }, reason: null, warnings: [] },
+    ]), note);
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    await expect(rows.filter({ hasText: "budget.xlsx" })).toContainText(note);
+    await expect(rows.filter({ hasText: "forecast.ods" })).toContainText("It's password-protected.");
+});
+
+test("a spreadsheet run with default options sends all sheets, print areas and fit to width", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/budget.xlsx", "/local/notes.txt"]);
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/budget.xlsx", "/local/notes.txt"],
+        outputLocation: "alongsideInput",
+        plainText: { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true },
+        spreadsheets: { sheets: "all", printAreas: true, fitToWidth: true },
     });
 });

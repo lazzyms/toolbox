@@ -1,5 +1,6 @@
-//! The zipped-XML package reader and block model shared by the Word (DOCX) and OpenDocument text (ODT) readers.
+//! The zipped-XML package reader and block model shared by the Word (DOCX), OpenDocument (ODT, ODS) and Excel (XLSX) readers.
 
+use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
 use quick_xml::escape::resolve_predefined_entity;
@@ -55,6 +56,36 @@ impl<'a> Package<'a> {
         self.budget -= data.len() as u64;
         Ok(Some(data))
     }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct Rel { pub(super) target: String, pub(super) kind: String, pub(super) external: bool }
+
+/// The relationships of a package part by id, with internal targets resolved to package paths.
+pub(super) fn rels(package: &mut Package, part: &str) -> Result<HashMap<String, Rel>, ToolError> {
+    let (folder, file) = part.rsplit_once('/').unwrap_or(("", part));
+    let path = if folder.is_empty() { format!("_rels/{file}.rels") } else { format!("{folder}/_rels/{file}.rels") };
+    let Some(bytes) = package.part(&path)? else { return Ok(HashMap::new()) };
+    let root = tree(&bytes, package.damaged)?;
+    Ok(root.nodes().filter(|node| node.name == "Relationship").filter_map(|node| {
+        let id = node.attr("Id")?.to_string();
+        let target = node.attr("Target")?;
+        let external = node.attr("TargetMode").is_some_and(|mode| mode.eq_ignore_ascii_case("External"));
+        let target = if external { target.trim().to_string() } else { resolve(folder, target) };
+        Some((id, Rel { target, kind: node.attr("Type").unwrap_or_default().to_string(), external }))
+    }).collect())
+}
+
+pub(super) fn resolve(folder: &str, target: &str) -> String {
+    let mut parts = if target.starts_with('/') { Vec::new() } else { folder.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>() };
+    for segment in target.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => { parts.pop(); }
+            segment => parts.push(segment),
+        }
+    }
+    parts.join("/")
 }
 
 #[derive(Debug, Clone, Default)]
