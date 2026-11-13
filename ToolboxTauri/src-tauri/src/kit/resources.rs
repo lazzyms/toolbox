@@ -99,18 +99,22 @@ fn locate_helper(helper: &Helper, locations: &HelperLocations) -> Result<PathBuf
         if path.is_file() { return Ok(path.clone()); }
         return Err(format!("{} does not point to a file.", helper.override_var));
     }
-    let executable = if cfg!(windows) { format!("{}.exe", helper.name) } else { helper.name.to_string() };
-    let beside_executable = locations.executable_dir.iter().map(|dir| dir.join(&executable));
-    let bundled = locations.resource_root.iter()
-        .flat_map(|root| [root.join(helper.bundled_dir).join(&executable), root.join("resources").join(&executable), root.join(&executable)]);
-    let on_path = locations.system_path.iter().flat_map(std::env::split_paths).map(|dir| dir.join(&executable));
-    beside_executable.chain(bundled).chain(on_path)
+    helper_candidates(helper, locations, std::env::consts::OS).into_iter()
         .find(|path| path.is_file() && {
             let mut command = Command::new(path);
             command.arg(helper.probe);
             crate::kit::pdf::helper_available(command)
         })
         .ok_or_else(|| helper.unavailable.to_string())
+}
+
+fn helper_candidates(helper: &Helper, locations: &HelperLocations, target_os: &str) -> Vec<PathBuf> {
+    let executable = if target_os == "windows" { format!("{}.exe", helper.name) } else { helper.name.to_string() };
+    let beside_executable = locations.executable_dir.iter().map(|dir| dir.join(&executable));
+    let bundled = locations.resource_root.iter()
+        .flat_map(|root| [root.join(helper.bundled_dir).join(&executable), root.join("resources").join(&executable), root.join(&executable)]);
+    let on_path = locations.system_path.iter().flat_map(std::env::split_paths).map(|dir| dir.join(&executable));
+    beside_executable.chain(bundled).chain(on_path).collect()
 }
 
 pub fn resolve(name: &str, bundled_root: &Path, override_var: &str, path_name: &str) -> Result<ResolvedResource, String> {
@@ -372,6 +376,25 @@ mod tests {
         let locations = HelperLocations { development_override: None, executable_dir: Some(root.join("app")), resource_root: Some(root.join("Resources")), system_path: None };
         assert_eq!(locate_helper(&QPDF, &locations), Ok(resources_subdir));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn qpdf_candidates_use_the_platform_executable_name_for_each_target() {
+        let locations = HelperLocations {
+            development_override: None,
+            executable_dir: Some(PathBuf::from("app")),
+            resource_root: Some(PathBuf::from("Resources")),
+            system_path: Some(std::env::join_paths([PathBuf::from("system")]).unwrap()),
+        };
+        for (target_os, executable) in [("macos", "qpdf"), ("windows", "qpdf.exe"), ("linux", "qpdf")] {
+            assert_eq!(helper_candidates(&QPDF, &locations, target_os), [
+                PathBuf::from("app").join(executable),
+                PathBuf::from("Resources/qpdf-bin").join(executable),
+                PathBuf::from("Resources/resources").join(executable),
+                PathBuf::from("Resources").join(executable),
+                PathBuf::from("system").join(executable),
+            ], "{target_os}");
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { openToolBySearch } from "./open-tool";
 
 type PathKind = "file" | "folder" | "unreadable";
@@ -889,6 +890,39 @@ test("Lock without its PDF helper shows the PDFs as Unavailable and the Word and
         await expect(failed).toContainText(missing.message);
     }
 });
+
+const qpdfUnavailableMessage = (() => {
+    const resources = readFileSync(new URL("../../src-tauri/src/kit/resources.rs", import.meta.url), "utf8");
+    const message = /const QPDF: Helper = Helper \{[^}]*unavailable: "([^"]+)"/.exec(resources)?.[1];
+    if (!message) throw new Error("Could not read the native qpdf Unavailable message");
+    return message;
+})();
+
+for (const tool of [
+    { title: "Merge PDF", command: "merge_pdfs", paths: ["/local/a.pdf", "/local/b.pdf"] },
+    { title: "Split PDF", command: "split_pdf", paths: ["/local/a.pdf"] },
+]) {
+    test(`${tool.title} without qpdf shows the native Unavailable message in plain language`, async ({ page }) => {
+        await open(page, "Merge PDF");
+        await drop(page, tool.paths);
+        if (tool.title === "Split PDF") await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+        await page.evaluate(({ paths, message }) => {
+            (window as unknown as IntakeWindow).__failures = Object.fromEntries(paths.map((path) => [path, { kind: "unavailable", message }]));
+        }, { paths: tool.paths, message: qpdfUnavailableMessage });
+        await run(page).click();
+        if (tool.title === "Merge PDF") await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+
+        await expect(results(page)).toHaveCount(tool.paths.length);
+        expect((await requestFor(page, tool.command)).map((request) => request.paths)).toEqual([tool.paths]);
+        for (const row of await results(page).all()) {
+            await expect(row).toHaveAttribute("data-state", "failed");
+            await expect(row.locator(".result-row-state")).toContainText("Unavailable");
+            await expect(row).toContainText(qpdfUnavailableMessage);
+            await expect(row).not.toContainText(/environment variable/i);
+            await expect(row).not.toContainText(/TOOLBOX_|\bPATH\b/);
+        }
+    });
+}
 
 test("Lock shows already-protected files as Skipped rows with their reason, apart from Unavailable failures in the summary", async ({ page }) => {
     const already = { code: "alreadyProtected", message: "Already password-protected. Unlock it first, then lock it again." };
