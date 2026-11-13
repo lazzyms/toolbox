@@ -82,6 +82,10 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
 pub(crate) struct UprightImage {
     pub image: image::DynamicImage,
     pub high_bit_depth: Option<u8>,
+    /// The family the source was decoded as, which picks the format an edit writes back in.
+    pub family: source::ImageFamily,
+    /// Whether a non-neutral orientation was baked into the pixels.
+    pub oriented: bool,
 }
 
 /// Decodes a source upright, applying its orientation exactly once. libheif
@@ -94,11 +98,12 @@ pub(crate) fn load_upright_image(path: &std::path::Path) -> Result<UprightImage,
     let decoded = decode(path)?;
     let high_bit_depth = (decoded.family == source::ImageFamily::Heif && decoded.bits_per_channel > 8).then_some(decoded.bits_per_channel);
     let orientation = decoded.orientation;
+    let family = decoded.family;
     let mut image = decoded.into_first_page();
     if let Some(orientation) = orientation {
         image.apply_orientation(orientation);
     }
-    Ok(UprightImage { image, high_bit_depth })
+    Ok(UprightImage { image, high_bit_depth, family, oriented: orientation.is_some() })
 }
 
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders

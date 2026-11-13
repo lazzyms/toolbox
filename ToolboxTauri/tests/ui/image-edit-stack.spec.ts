@@ -327,6 +327,7 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 const reEncoded = "Re-encoded at quality 90 after rotating.";
+const orientationApplied = "Camera orientation was applied first.";
 
 test("choosing Rotate and Flip sets the turn and the mirror in one step and the row shows the re-encode", async ({ page }) => {
     await openRotate(page, ["/photos/a.jpg", "/photos/b.png"]);
@@ -336,6 +337,7 @@ test("choosing Rotate and Flip sets the turn and the mirror in one step and the 
     await expect(page.getByRole("radio", { name: "None" })).toHaveAttribute("aria-checked", "true");
     await expect(page.getByText("Clockwise, as you see the image in the preview.", { exact: true })).toBeVisible();
     await expect(page.getByText("Rotated images are always re-encoded at quality 90, even with no other changes.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Each photo's camera orientation is applied to the pixels once, so the result shows upright everywhere.", { exact: true })).toBeVisible();
 
     await page.getByRole("radio", { name: "270 degrees" }).click();
     await page.getByRole("radio", { name: "Horizontal" }).click();
@@ -349,7 +351,7 @@ test("choosing Rotate and Flip sets the turn and the mirror in one step and the 
             { inputPath: "/photos/a.jpg", outputPaths: ["/photos/a-rotated.jpg"], detail, state: "succeeded", failure: null, reason: null, warnings: [] },
             { inputPath: "/photos/b.png", outputPaths: ["/photos/b-rotated.png"], detail: "Image saved", state: "succeeded", failure: null, reason: null, warnings: [] },
         ] as JobOutcome[];
-    }, reEncoded);
+    }, `${orientationApplied} ${reEncoded}`);
     await page.getByRole("button", { name: "Run on 2 images" }).click();
     const request = await runRequest(page);
     expect(request.steps).toEqual({ rotate: { degrees: 270, flip: "horizontal" } });
@@ -357,9 +359,11 @@ test("choosing Rotate and Flip sets the turn and the mirror in one step and the 
 
     const rows = page.locator(".result-row");
     await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText(orientationApplied);
     await expect(rows.nth(0)).toContainText(reEncoded);
     await expect(rows.nth(0)).not.toContainText(/warning/i);
     await expect(rows.nth(1)).not.toContainText(reEncoded);
+    await expect(rows.nth(1)).not.toContainText(orientationApplied);
     await expect(page.getByRole("button", { name: "Open a-rotated.jpg" })).toBeVisible();
 });
 

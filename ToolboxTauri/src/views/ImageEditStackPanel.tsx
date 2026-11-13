@@ -551,6 +551,7 @@ export const ImageEditStackPanel = ({
                   </ToggleGroup>
                 </fieldset>
                 <p className="workspace-panel-copy flex gap-2"><Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />Rotated images are always re-encoded at quality 90, even with no other changes.</p>
+                <p className="workspace-panel-copy flex gap-2"><Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />Each photo&apos;s camera orientation is applied to the pixels once, so the result shows upright everywhere.</p>
               </>
             ) : focus === "tone" && tone ? (
               <>
