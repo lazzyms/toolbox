@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use lopdf::content::{Content, Operation};
-use lopdf::{dictionary, Dictionary, Document, Encoding, Object, ObjectId};
+use lopdf::{dictionary, Dictionary, Document, Encoding, Object, ObjectId, Stream};
 use serde::Serialize;
 
 /// Decompressed bytes one page may read across its content and form XObject streams.
@@ -52,6 +52,27 @@ pub struct PageText {
     pub runs: Vec<PageTextRun>,
     /// True when at least one run has non-blank text with a reliable Unicode mapping.
     pub has_extractable_text: bool,
+    /// Every image the page draws, in content order, including images drawn by form XObjects.
+    #[serde(skip)]
+    pub images: Vec<PageImage>,
+}
+
+/// Where a page draws one image, measured like a run: from the crop box's top-left corner, y down.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageImage {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub source: PageImageSource,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PageImageSource {
+    /// An image XObject, drawn with `Do`.
+    Object(ObjectId),
+    /// An inline image (BI … ID … EI) with its abbreviated keys and named colour space written out.
+    Inline(Stream),
 }
 
 /// Reads every page in page order.
@@ -74,11 +95,15 @@ fn read_page(document: &Document, page_id: ObjectId, fonts: &mut FontCache) -> R
         Some(Object::Dictionary(resources)) => Some(Rc::new(resources)),
         _ => None,
     };
-    let mut reader = PageReader { document, fonts, runs: Vec::new(), budget: MAX_PAGE_CONTENT_BYTES.saturating_sub(content.len()), forms: Vec::new() };
-    reader.run(&operations, resources, Matrix::IDENTITY, 0)?;
+    let mut reader = PageReader { document, fonts, runs: Vec::new(), images: Vec::new(), budget: MAX_PAGE_CONTENT_BYTES.saturating_sub(content.len()), forms: Vec::new() };
+    reader.run(&content, &operations, resources, Matrix::IDENTITY, 0)?;
     let runs: Vec<PageTextRun> = reader.runs.into_iter().map(|run| run.into_page_run(crop)).collect();
     let has_extractable_text = runs.iter().any(|run| run.reliable_unicode && !run.text.trim().is_empty());
-    Ok(PageText { runs, has_extractable_text })
+    let images = reader.images.into_iter().map(|(corners, source)| {
+        let [x, y, width, height] = crop_frame(corners, crop);
+        PageImage { x, y, width, height, source }
+    }).collect();
+    Ok(PageText { runs, has_extractable_text, images })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -160,20 +185,31 @@ struct RawRun {
     reliable_unicode: bool,
 }
 
+/// The box around four user-space corners as `[x, y, width, height]` from the crop box's top-left corner, y down.
+fn crop_frame(corners: [(f32, f32); 4], crop: [f32; 4]) -> [f32; 4] {
+    let xs = corners.map(|corner| corner.0);
+    let ys = corners.map(|corner| corner.1);
+    let min_x = xs.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_x = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let min_y = ys.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_y = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    [min_x - crop[0], crop[3] - max_y, max_x - min_x, max_y - min_y]
+}
+
+/// The corners of the unit square an image fills, in user space.
+fn image_corners(ctm: Matrix) -> [(f32, f32); 4] {
+    [ctm.apply(0., 0.), ctm.apply(1., 0.), ctm.apply(0., 1.), ctm.apply(1., 1.)]
+}
+
 impl RawRun {
     fn into_page_run(self, crop: [f32; 4]) -> PageTextRun {
-        let xs = self.corners.map(|corner| corner.0);
-        let ys = self.corners.map(|corner| corner.1);
-        let min_x = xs.iter().copied().fold(f32::INFINITY, f32::min);
-        let max_x = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let min_y = ys.iter().copied().fold(f32::INFINITY, f32::min);
-        let max_y = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let [x, y, width, height] = crop_frame(self.corners, crop);
         PageTextRun {
             text: self.text,
-            x: min_x - crop[0],
-            y: crop[3] - max_y,
-            width: max_x - min_x,
-            height: max_y - min_y,
+            x,
+            y,
+            width,
+            height,
             font_size: self.font_size,
             bold: self.bold,
             italic: self.italic,
@@ -186,12 +222,15 @@ struct PageReader<'a, 'f> {
     document: &'a Document,
     fonts: &'f mut FontCache,
     runs: Vec<RawRun>,
+    images: Vec<([(f32, f32); 4], PageImageSource)>,
     budget: usize,
     forms: Vec<ObjectId>,
 }
 
 impl PageReader<'_, '_> {
-    fn run(&mut self, operations: &[Operation], resources: Option<Rc<Dictionary>>, ctm: Matrix, depth: usize) -> Result<(), String> {
+    /// Reads one decoded content stream; `content` is its raw bytes, where its inline images are read from.
+    fn run(&mut self, content: &[u8], operations: &[Operation], resources: Option<Rc<Dictionary>>, ctm: Matrix, depth: usize) -> Result<(), String> {
+        let mut inline_images: Option<std::vec::IntoIter<Stream>> = None;
         let mut state = GraphicsState { ctm, text: TextState::default() };
         let mut stack: Vec<GraphicsState> = Vec::new();
         let mut text_matrix = Matrix::IDENTITY;
@@ -240,7 +279,12 @@ impl PageReader<'_, '_> {
                         self.show(&state, &mut text_matrix, std::slice::from_ref(string))?;
                     }
                 }
-                "Do" => if let Some(Object::Name(name)) = operands.first() { self.form(resources.clone(), name, state.ctm, depth)? },
+                "Do" => if let Some(Object::Name(name)) = operands.first() { self.xobject(resources.clone(), name, state.ctm, depth)? },
+                // Each BI operation pairs, in order, with the next inline image read from the raw content.
+                "BI" => {
+                    let images = inline_images.get_or_insert_with(|| super::inline_image::inline_images(content, |name| self.named_space(resources.as_deref(), name)).into_iter());
+                    if let Some(image) = images.next() { self.images.push((image_corners(state.ctm), PageImageSource::Inline(image))) }
+                }
                 _ => {}
             }
         }
@@ -261,12 +305,23 @@ impl PageReader<'_, '_> {
         Some(info)
     }
 
-    fn form(&mut self, resources: Option<Rc<Dictionary>>, name: &[u8], ctm: Matrix, depth: usize) -> Result<(), String> {
+    fn named_space(&self, resources: Option<&Dictionary>, name: &[u8]) -> Option<Object> {
+        let (_, spaces) = self.document.dereference(resources?.get(b"ColorSpace").ok()?).ok()?;
+        spaces.as_dict().ok()?.get(name).ok().cloned()
+    }
+
+    /// Records where an image XObject is drawn, or reads a form XObject's content in place.
+    fn xobject(&mut self, resources: Option<Rc<Dictionary>>, name: &[u8], ctm: Matrix, depth: usize) -> Result<(), String> {
         let Some(xobjects) = resources.as_deref().and_then(|resources| resources.get(b"XObject").ok()).and_then(|value| self.document.dereference(value).ok()).and_then(|(_, value)| value.as_dict().ok()) else { return Ok(()) };
         let Some(Object::Reference(id)) = xobjects.get(name).ok() else { return Ok(()) };
         let Ok(stream) = self.document.get_object(*id).and_then(Object::as_stream) else { return Ok(()) };
-        if stream.dict.get(b"Subtype").and_then(Object::as_name).ok() != Some(b"Form".as_slice()) || depth >= MAX_FORM_DEPTH || self.forms.contains(id) {
-            return Ok(());
+        match stream.dict.get(b"Subtype").and_then(Object::as_name).ok() {
+            Some(b"Image") => {
+                self.images.push((image_corners(ctm), PageImageSource::Object(*id)));
+                return Ok(());
+            }
+            Some(b"Form") if depth < MAX_FORM_DEPTH && !self.forms.contains(id) => {}
+            _ => return Ok(()),
         }
         let content = match stream.get_plain_content_with_limit(self.budget) {
             Ok(content) => content,
@@ -275,14 +330,14 @@ impl PageReader<'_, '_> {
             Err(_) => return Ok(()),
         };
         self.budget = self.budget.saturating_sub(content.len());
-        let Ok(content) = Content::decode(&content) else { return Ok(()) };
+        let Ok(operations) = Content::decode(&content) else { return Ok(()) };
         let matrix = stream.dict.get(b"Matrix").ok().and_then(|value| value.as_array().ok()).and_then(|values| Matrix::from_operands(values)).unwrap_or(Matrix::IDENTITY);
         let form_resources = match stream.dict.get(b"Resources").ok().and_then(|value| self.document.dereference(value).ok()).and_then(|(_, value)| value.as_dict().ok()) {
             Some(own) => Some(Rc::new(own.clone())),
             None => resources.clone(),
         };
         self.forms.push(*id);
-        let result = self.run(&content.operations, form_resources, matrix.then(ctm), depth + 1);
+        let result = self.run(&content, &operations.operations, form_resources, matrix.then(ctm), depth + 1);
         self.forms.pop();
         result
     }
@@ -621,7 +676,6 @@ fn composite_widths(document: &Document, descendant: Option<&Dictionary>) -> Wid
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lopdf::Stream;
 
     struct Fixture {
         document: Document,
@@ -839,7 +893,38 @@ mod tests {
         ));
         fixture.page(dictionary! { "XObject" => dictionary! { "Im1" => image } }, "q 612 0 0 792 0 0 cm /Im1 Do Q");
         let page = read_page_text(&fixture.finish(), 1).unwrap();
-        assert_eq!(page, PageText { runs: Vec::new(), has_extractable_text: false });
+        let full_page = PageImage { x: 0., y: 0., width: 612., height: 792., source: PageImageSource::Object(image) };
+        assert_eq!(page, PageText { runs: Vec::new(), has_extractable_text: false, images: vec![full_page] });
+    }
+
+    #[test]
+    fn reports_where_each_image_is_drawn_in_content_order_including_inline_images_and_images_in_forms() {
+        let mut fixture = Fixture::new();
+        let font = simple_font(&mut fixture, "Helvetica", None);
+        let image = fixture.add(Stream::new(
+            dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 1, "Height" => 1, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8 },
+            vec![0x80],
+        ));
+        let form = fixture.add(Stream::new(
+            dictionary! { "Type" => "XObject", "Subtype" => "Form", "BBox" => vec![0.into(), 0.into(), 1.into(), 1.into()], "Resources" => dictionary! { "XObject" => dictionary! { "Inner" => image } } },
+            b"q 50 0 0 25 0 0 cm /Inner Do Q".to_vec(),
+        ));
+        let mut resources = fonts(&[("F1", font)]);
+        resources.set("XObject", dictionary! { "Im1" => image, "Fm1" => form });
+        resources.set("ColorSpace", dictionary! { "Shade" => "DeviceGray" });
+        fixture.page(
+            resources,
+            "BT /F1 10 Tf 72 700 Td (above) Tj ET q 200 0 0 100 72 500 cm /Im1 Do Q q 1 0 0 1 300 100 cm /Fm1 Do Q q 40 0 0 20 72 300 cm BI /W 1 /H 1 /CS /Shade /BPC 8 ID \x7f EI Q",
+        );
+        let page = read_page_text(&fixture.finish(), 1).unwrap();
+
+        let places = page.images.iter().map(|image| (image.x, image.y, image.width, image.height)).collect::<Vec<_>>();
+        assert_eq!(places, [(72., 192., 200., 100.), (300., 667., 50., 25.), (72., 472., 40., 20.)]);
+        assert_eq!(page.images[0].source, PageImageSource::Object(image));
+        assert_eq!(page.images[1].source, PageImageSource::Object(image));
+        let PageImageSource::Inline(inline) = &page.images[2].source else { panic!("{:?}", page.images[2]) };
+        assert_eq!(inline.dict.get(b"ColorSpace").unwrap(), &Object::Name(b"DeviceGray".to_vec()), "abbreviations and named spaces are written out");
+        assert_eq!(inline.content, [0x7f]);
     }
 
     #[test]
