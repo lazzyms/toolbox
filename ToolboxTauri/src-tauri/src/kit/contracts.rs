@@ -889,6 +889,12 @@ mod tests {
     }
 
     #[test]
+    fn convert_images_accepts_a_batch() {
+        let paths = vec![PathBuf::from("one.png"), PathBuf::from("two.heic"), PathBuf::from("three.jpeg")];
+        assert!(validate_command_inputs("convert_images", &paths).is_ok());
+    }
+
+    #[test]
     fn capability_registry_rejects_unsupported_extensions_at_the_boundary() {
         let outcomes = validate_command_inputs("convert_images", &[PathBuf::from("source.pdf")]).unwrap_err();
 
@@ -1029,6 +1035,7 @@ mod tests {
         assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-cropped", false), "the edit stack runs every image as its own job");
         assert_eq!(native_capability("crop_images").unwrap().input_cardinality, InputCardinality::Single);
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
+        assert_eq!(native_capability("convert_images").unwrap().input_cardinality, InputCardinality::Multiple);
         let rendered = native_capability("pdf_to_images").unwrap();
         assert_eq!(rendered.output_formats.as_deref(), Some([".jpg", ".png", ".webp"].map(String::from).as_slice()));
         assert_eq!(rendered.output_suffix, "-page");

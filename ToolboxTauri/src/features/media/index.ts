@@ -1,4 +1,5 @@
 import type { AtomicToolId } from "../../contracts";
+import { convertImagesTool, type ConvertImagesOptions } from "./convertImages";
 import { gifCreateTool, type GifCreateOptions } from "./gifCreate";
 import { gifExtractTool } from "./gifExtract";
 import { iconSetTool, type IconSetOptions } from "./iconSet";
@@ -16,6 +17,7 @@ export type MediaOptions = {
   "gif-extract": Record<string, never>;
   "tiff-pages": TiffPagesState;
   "image-metadata": ImageMetadataOptions;
+  "heic-convert": ConvertImagesOptions;
 };
 
 export type MediaToolId = keyof MediaOptions;
@@ -26,6 +28,7 @@ export const mediaTools: { [Id in MediaToolId]: MediaTool<MediaOptions[Id]> } = 
   "gif-extract": gifExtractTool,
   "tiff-pages": tiffPagesTool,
   "image-metadata": imageMetadataTool,
+  "heic-convert": convertImagesTool,
 };
 
 export const isMediaToolId = (id: AtomicToolId): id is MediaToolId => id in mediaTools;
@@ -36,4 +39,5 @@ export const initialMediaOptions = (): MediaOptions => ({
   "gif-extract": mediaTools["gif-extract"].initialOptions,
   "tiff-pages": mediaTools["tiff-pages"].initialOptions,
   "image-metadata": mediaTools["image-metadata"].initialOptions,
+  "heic-convert": mediaTools["heic-convert"].initialOptions,
 });

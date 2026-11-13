@@ -252,7 +252,7 @@ fn encode_preview(image: DynamicImage) -> Result<ImagePreview, String> {
 }
 
 fn apply_edit_plan(plan: &ImageEditPlan, mut image: DynamicImage, mut format: crate::kit::images::OutputFormat) -> Result<(DynamicImage, crate::kit::images::OutputFormat, u8), String> {
-    let mut quality = 90;
+    let mut quality = crate::kit::images::DEFAULT_QUALITY;
     let source_width = image.width();
     let source_height = image.height();
     let mut geometry = Vec::new();

@@ -46,6 +46,7 @@ test("UI capabilities are the shared native contract facts", () => {
   ]);
   assert.equal(capabilitiesByCommand.get("remove_password")?.outputSuffix, "-unlocked");
   assert.equal(capabilitiesByCommand.get("remove_password")?.inputCardinality, "multiple");
+  assert.equal(capabilitiesByCommand.get("convert_images")?.inputCardinality, "multiple");
   assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.inputCardinality, "multiple");
   assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.manyToOne, false);
   assert.equal(UtilityRegistry.find(({ id }) => id === "lock-unlock")?.command, "remove_password");

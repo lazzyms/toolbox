@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import type { OutputLocation, ToolDefinition, ToolResult } from "../contracts";
+import type { ShellEvent } from "../hooks/useShellBridge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ShortcutHint } from "../components/ShortcutHint";
@@ -10,7 +11,13 @@ import { initialMediaOptions, isMediaToolId, mediaTools, type MediaOptions, type
 
 type OptionSetters = { [Id in MediaToolId]: (update: (current: MediaOptions[Id]) => MediaOptions[Id]) => void };
 
-export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFilesChange }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void }) => {
+export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileActivation, onActivationAccepted, onFilesChange }: {
+  utility: ToolDefinition;
+  initialPaths?: readonly string[];
+  fileActivation?: Extract<ShellEvent, { kind: "files" }>;
+  onActivationAccepted?: (activationId: string) => void;
+  onFilesChange?: (paths: readonly string[]) => void;
+}) => {
   // Every tool's options live here, so they survive switching tools on the rail.
   const [options, setOptions] = useState(initialMediaOptions);
   const setters = useMemo<OptionSetters>(() => {
@@ -22,6 +29,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
       "gif-extract": setterFor("gif-extract"),
       "tiff-pages": setterFor("tiff-pages"),
       "image-metadata": setterFor("image-metadata"),
+      "heic-convert": setterFor("heic-convert"),
     };
   }, []);
 
@@ -62,6 +70,8 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, onFil
       utility={utility}
       exampleName={exampleNameFor(toolId)}
       initialPaths={initialPaths}
+      fileActivation={fileActivation}
+      onActivationAccepted={onActivationAccepted}
       onFilesChange={onFilesChange}
       showFileOrdering={tool.showFileOrdering ?? true}
       outputGroup={tool.outputGroup}
