@@ -8,6 +8,7 @@ type HarnessWindow = Window & { calls: Array<{ command: string; args: any }>; di
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(({ svg, pdfPath }) => {
+    Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
     const w = window as unknown as HarnessWindow;
     w.calls = [];
     w.dialogNext = null;
