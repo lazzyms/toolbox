@@ -936,6 +936,13 @@ body {
   align-items: baseline;
   gap: 10px;
 }
+.result-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .result-summary-saved {
   font-weight: 600;
 }

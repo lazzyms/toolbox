@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, ChevronDown, ChevronRight, CircleMinus, CircleX, Clock, FileText, Info, KeyRound, Layers, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleMinus, CircleX, Clock, FileText, FolderOpen, Info, KeyRound, Layers, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { shortenHomePath, useHomeDir } from "../homePath";
 import type { CombinedResult } from "../registry/saveSteps";
 import { formatBytes, PACK_CHANGED_EVENT, PROGRESS_EVENT, type PackProgress } from "../views/PacksSection";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { batchTotal, fileName, neededPack, resultSummary, resultTally, rowView, warningDetail, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
+import { batchTotal, fileName, neededPack, resultSummary, resultTally, rowView, savedSoFar, warningDetail, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry" | "install";
@@ -80,6 +80,13 @@ export const revealButtonLabels = () => {
     return { full: "Show in file manager", short: "Show in file manager" };
 };
 
+const fileManager = () => {
+    const platform = navigator.platform.toLowerCase();
+    if (platform.includes("mac")) return "Finder";
+    if (platform.includes("win")) return "File Explorer";
+    return "file manager";
+};
+
 const followPointer = (pointer: Exclude<OutcomePointer, PackPointer>, inputPath: string) => {
     if (pointer.kind === "tool") {
         window.dispatchEvent(new CustomEvent("toolbox:open", { detail: { toolId: pointer.toolId, paths: [inputPath] } }));
@@ -118,6 +125,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
     const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [revealAll, setRevealAll] = useState<RowActionState>(idleActionState);
     const [packJobs, setPackJobs] = useState<Record<string, PackJob>>({});
     const [installedPacks, setInstalledPacks] = useState<ReadonlySet<string>>(new Set());
     const [fontRows, setFontRows] = useState<ReadonlySet<number>>(new Set());
@@ -151,6 +159,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
         setActionStates({});
         setExpanded(new Set());
         setPasswordRow(null);
+        setRevealAll(idleActionState);
         setInstalledPacks(new Set());
         setFontRows(new Set());
         setExpandedRows(new Set());
@@ -241,6 +250,18 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
             if (!next.delete(row)) next.add(row);
             return next;
         });
+
+    const showAll = async (paths: string[]) => {
+        const generation = resultSetGeneration.current;
+        setRevealAll({ pending: "reveal", error: null });
+        let error: string | null = null;
+        try {
+            await invoke("reveal_output_paths", { paths });
+        } catch (reason) {
+            error = reason instanceof Error ? reason.message : String(reason);
+        }
+        if (resultSetGeneration.current === generation) setRevealAll({ pending: null, error });
+    };
 
     const finishedRow = (result: JobOutcome, index: number) => {
         const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
@@ -409,14 +430,15 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
         const done = files.flatMap((file) => file.status === "finished" ? [file.outcome] : []);
         const total = files.length;
         const proportional = total > PROPORTIONAL_BAR_ABOVE;
-        const soFar = done.length > 0 ? `${resultTally(done, resultVerb)} so far.` : null;
+        const saved = savedSoFar(done);
+        const soFar = saved ?? (done.length > 0 ? `${resultTally(done, resultVerb)} so far.` : null);
         const segments = files.map(segmentTone);
         return (
             <div className="result-list" data-live="true">
                 <div className="live-run-header">
                     <div className="result-summary" role="status" aria-live="polite">
                         <strong>{runningVerb} {done.length} of {total}</strong>
-                        {soFar && <span className="result-summary-hint">{proportional ? soFar : `${soFar} Finished files can be opened now.`}</span>}
+                        {soFar && <span className="result-summary-hint">{proportional || saved ? soFar : `${soFar} Finished files can be opened now.`}</span>}
                     </div>
                     {proportional ? (
                         <div className="live-run-bar" data-mode="proportional" aria-hidden="true">
@@ -429,6 +451,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                             {segments.map((tone, index) => <span key={index} data-tone={tone} />)}
                         </div>
                     )}
+                    {saved && !proportional && <p className="result-summary-hint live-run-note">Finished copies can be opened now. The batch total appears when every file is done.</p>}
                     {proportional && <p className="result-summary-hint live-run-note">Over {PROPORTIONAL_BAR_ABOVE} files, the bar shows proportions. Rows for finished files can be opened now.</p>}
                 </div>
                 <Card className="result-card gap-0 py-0">
@@ -533,6 +556,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
     const hints = [...packHints(results, packJobs, installedPacks), ...summary.hints];
     const total = batchTotal(results, resultVerb);
     const extraHint = resultsHint?.(results) ?? null;
+    const outputs = results.flatMap((result) => result.state === "succeeded" ? result.outputPaths : []);
     return (
         <div className="result-list">
             {customSummary ?? (
@@ -547,6 +571,15 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                             <span className="result-summary-hint">{total.note}</span>
                         </span>
                     )}
+                </div>
+            )}
+            {outputs.length > 0 && (
+                <div className="result-list-actions">
+                    <Button variant="outline" size="sm" disabled={revealAll.pending !== null} onClick={() => void showAll(outputs)}>
+                        <FolderOpen aria-hidden="true" />
+                        {revealAll.pending ? "Showing..." : `Show all in ${fileManager()}`}
+                    </Button>
+                    {revealAll.error && <p className="result-action-error" role="alert">{revealAll.error}</p>}
                 </div>
             )}
             <Card className="result-card gap-0 py-0">
