@@ -17,6 +17,7 @@ import {
   workspaceForTool,
 } from "../src/registry/index.ts";
 import { isMediaToolId, mediaTools, type MediaOptions, type MediaToolId } from "../src/features/media/index.ts";
+import { estimateGifBytes, isLargeGif, LARGE_GIF_BYTES, playedDelayMs } from "../src/features/media/gifTiming.ts";
 
 test("UI capabilities are the shared native contract facts", () => {
   const capabilitiesByCommand = new Map(
@@ -420,4 +421,22 @@ test("format families reject shared extensions, empty families and mixed extensi
     assert.throws(() => parseCapabilityRegistry([{ ...base, ...(shape as object) }]), Error, `${name} must be rejected`);
   }
   assert.throws(() => parseCapabilityRegistry([base]), /either accepted extensions or format families/);
+});
+
+test("Create GIF preview plays each delay as the GIF stores it, in hundredths of a second", () => {
+  assert.equal(playedDelayMs(44), 40);
+  assert.equal(playedDelayMs(45), 50);
+  assert.equal(playedDelayMs(100), 100);
+  assert.equal(playedDelayMs(1), 10);
+  assert.equal(playedDelayMs(4), 10);
+  assert.equal(playedDelayMs(60_000), 60_000);
+});
+
+test("Create GIF warns above 10 MB, estimated as one byte per canvas pixel per frame", () => {
+  assert.equal(LARGE_GIF_BYTES, 10_000_000);
+  assert.equal(estimateGifBytes({ width: 480, height: 360 }, 12), 2_073_600);
+  assert.equal(isLargeGif(10_000_000), false);
+  assert.equal(isLargeGif(10_000_001), true);
+  assert.equal(isLargeGif(estimateGifBytes({ width: 2000, height: 1000 }, 5)), false);
+  assert.equal(isLargeGif(estimateGifBytes({ width: 2000, height: 1000 }, 6)), true);
 });
