@@ -94,6 +94,8 @@ interface ToolScaffoldProps {
     onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
     showFileOrdering?: boolean;
     renderFileExtra?: (path: string, selected: boolean, locked: boolean) => React.ReactNode;
+    /** A warning shown in place of a runnable file's folder, like a signature that saving removes. */
+    fileWarning?: (path: string) => string | null;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     intakeCopy?: IntakeCopy;
     initialPaths?: readonly string[];
@@ -147,7 +149,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -701,6 +703,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             const rowLabel = describesEntries
                                 ? [`${index + 1}. ${name}`, pages].filter(Boolean).join(', ')
                                 : ordered ? `${index + 1} of ${entries.length}, ${name}` : name;
+                            const warning = flag ? null : fileWarning?.(entry.path) ?? null;
                             return (
                                 <li
                                     key={entry.key}
@@ -754,7 +757,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         }}
                                     >
                                         <span className="file-selection-name">{name}</span>
-                                        <span className="file-selection-detail">{flag?.message ?? detail}</span>
+                                        <span className="file-selection-detail" data-tone={warning ? 'warning' : undefined}>{flag?.message ?? warning ?? detail}</span>
                                     </Button>
                                     {describesEntries && copies > 1 && <Badge variant="secondary" className="file-selection-badge">Copy {occurrence} of {copies}</Badge>}
                                     {pages && <span className="file-selection-fact">{pages}</span>}

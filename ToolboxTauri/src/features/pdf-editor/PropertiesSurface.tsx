@@ -16,10 +16,11 @@ type Field = "title" | "author" | "subject" | "creationDate" | "modificationDate
 type Action = "keep" | "set" | "clear";
 type Choice = { action: Action; value: string };
 type Current = Record<Field, string | null>;
-type Read = { state: "read"; values: Current } | { state: "locked" } | { state: "unreadable" };
+type Read = { state: "read"; values: Current; signed: boolean } | { state: "locked" } | { state: "unreadable" };
 type FieldSpec = { id: Field; label: string; noun: string; article: string; summaryNoun: string; date?: true };
 
 const LOCKED_NOTE = "Needs an open password. The one for all files is tried.";
+const SIGNED_NOTE = "Signed. Saving removes the signature.";
 const RETYPE_DELAY_MS = 400;
 const NONE = "(none)";
 const DATE_PLACEHOLDER = "YYYY-MM-DD HH:MM, your local time";
@@ -110,6 +111,11 @@ const patchFor = (choices: Record<Field, Choice>) => Object.fromEntries(fields.m
   return [field.id, choice.action === "set" ? { action: "set", value: setValue(field, choice.value) } : { action: choice.action }];
 }));
 
+const readValues = (detail: string): Read => {
+  const { signed, ...values } = JSON.parse(detail) as Current & { signed?: boolean };
+  return { state: "read", values, signed: signed === true };
+};
+
 const passwordFor = (path: string, passwords: PasswordSet) => passwords.overrides[path] ?? passwords.batch;
 
 /** Reads each added PDF's current title, author, subject and dates once, and again for a locked one when the password it would be opened with changes. */
@@ -134,7 +140,7 @@ const useCurrentValues = (files: readonly string[], passwords: PasswordSet) => {
           const next = new Map(previous);
           for (const outcome of current) {
             next.set(outcome.inputPath, outcome.state === "succeeded"
-              ? { state: "read", values: JSON.parse(outcome.detail) as Current }
+              ? readValues(outcome.detail)
               : outcome.failure?.kind === "wrongPassword" ? { state: "locked" } : { state: "unreadable" });
           }
           return next;
@@ -193,6 +199,10 @@ export const PdfPropertiesSurface = ({ utility, initialPaths, onFilesChange }: {
       onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>(utility.command, { runId, request: { paths, ...passwordsFor(paths, passwords.set), patch: patchFor(choices), outputLocation } })}
       retryWithPassword={(inputPath, password) => (paths, outputLocation, { runId }) =>
         invoke<ToolResult>(utility.command, { runId, request: { paths, ...passwordsFor(paths, { batch: "", overrides: { [inputPath]: password } }), patch: patchFor(choices), outputLocation } })}
+      fileWarning={(path) => {
+        const read = reads.get(path);
+        return read?.state === "read" && read.signed ? SIGNED_NOTE : null;
+      }}
       renderFileExtra={(path, selected, locked) => (
         <>
           <CurrentValues read={reads.get(path)} />

@@ -9,7 +9,7 @@ use quick_xml::escape::escape;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::{NsReader, Writer};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::document_info::{self, DocumentProperty, PdfDate, PdfProperties, DC, RDF, XMP, XMP_MAX_BYTES};
 use super::qpdf;
@@ -146,6 +146,13 @@ fn open<'a>(input: &Path, password: Option<&'a str>) -> Result<(Document, &'a st
     }
 }
 
+#[derive(Serialize)]
+struct CurrentProperties {
+    #[serde(flatten)]
+    properties: PdfProperties,
+    signed: bool,
+}
+
 /// Each field's current value: the document information value, or the XMP one when the dictionary has none.
 pub fn read_job(request: &ReadPropertiesRequest, input: PathBuf) -> JobOutcome {
     let document = match open(&input, request.passwords.password_for(&input)) {
@@ -165,7 +172,8 @@ pub fn read_job(request: &ReadPropertiesRequest, input: PathBuf) -> JobOutcome {
         creation_date: info.creation_date.or(xmp.creation_date),
         modification_date: info.modification_date.or(xmp.modification_date),
     };
-    match serde_json::to_string(&merged) {
+    let signed = super::has_signed_signature_field(&document);
+    match serde_json::to_string(&CurrentProperties { properties: merged, signed }) {
         Ok(detail) => JobOutcome::succeeded(input, Vec::new(), detail),
         Err(error) => JobOutcome::failure(input, ToolError::processing(format!("Could not read the properties: {error}"))),
     }
@@ -173,14 +181,14 @@ pub fn read_job(request: &ReadPropertiesRequest, input: PathBuf) -> JobOutcome {
 
 pub fn edit_job(request: &EditPropertiesRequest, input: PathBuf) -> JobOutcome {
     match edit(request, &input) {
-        Ok(Edited::Saved(path, detail)) => JobOutcome::succeeded(input, vec![path], detail),
+        Ok(Edited::Saved(path, detail, signed)) => super::note_signature_removed(JobOutcome::succeeded(input, vec![path], detail), signed),
         Ok(Edited::Unchanged(message)) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, message)),
         Err(error) => JobOutcome::failure(input, error),
     }
 }
 
 enum Edited {
-    Saved(PathBuf, String),
+    Saved(PathBuf, String, bool),
     Unchanged(String),
 }
 
@@ -221,6 +229,7 @@ fn edit(request: &EditPropertiesRequest, input: &Path) -> Result<Edited, ToolErr
         return Ok(Edited::Unchanged(format!("No effective change: {}. No copy was made.", sentence_list(&unchanged))));
     }
 
+    let signed = super::remove_signature_values(&mut document).map_err(ToolError::processing)?;
     apply_info(&mut document, &effective).map_err(ToolError::processing)?;
     match packet {
         Some((id, bytes)) => {
@@ -251,7 +260,7 @@ fn edit(request: &EditPropertiesRequest, input: &Path) -> Result<Edited, ToolErr
         }
     }
     let path = output.publish().map_err(|error| ToolError::processing(format!("Could not publish the edited PDF: {error}")))?;
-    Ok(Edited::Saved(path, detail))
+    Ok(Edited::Saved(path, detail, signed))
 }
 
 /// What decides who can open a PDF and what they may do with it: the same values mean the same
@@ -902,6 +911,70 @@ mod tests {
         let other_file = run_with(&[locked], patch(FieldEdit::Keep, FieldEdit::Keep, set("Budget")), passwords(secret, &[(&plain, crate::kit::TEST_PASSWORD)]));
         assert_eq!(other_file[0].error().unwrap().kind, ErrorKind::WrongPassword, "an override for another file is never tried on this one");
         assert_eq!(sandbox.names(), ["broken.pdf", "locked.pdf", "plain-edited.pdf", "plain.pdf"]);
+    }
+
+    fn signed_pdf(encryption: Option<(&str, &str)>) -> Vec<u8> {
+        let mut document = Document::load_mem(&pdf(Some(dictionary! { "Title" => literal("NDA draft") }), None, None)).unwrap();
+        super::super::tests::sign(&mut document);
+        if let Some((owner_password, user_password)) = encryption {
+            let state = EncryptionState::try_from(EncryptionVersion::V2 { document: &document, owner_password, user_password, key_length: 128, permissions: Permissions::PRINTABLE }).unwrap();
+            document.encrypt(&state).unwrap();
+        }
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn signed_pdfs_are_saved_without_their_signature_and_only_their_rows_warn() {
+        use crate::kit::contracts::{OutcomeWarning, WarningKind};
+        let qpdf = real_qpdf();
+        let sandbox = Sandbox::new("signed");
+        let signed = sandbox.file("vendor-nda.pdf", &signed_pdf(None));
+        let plain = sandbox.file("lease.pdf", &pdf(Some(dictionary! { "Title" => literal("Lease") }), None, None));
+        let mut inputs = vec![signed.clone(), plain.clone()];
+        if qpdf.is_some() {
+            inputs.push(sandbox.file("signed-restricted.pdf", &signed_pdf(Some(("owner-secret", "")))));
+        }
+        let originals = inputs.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        for input in [&signed, &inputs[inputs.len() - 1]] {
+            assert!(super::super::tests::holds_a_signature(&opened(input, "").unwrap()), "{input:?} is signed");
+        }
+
+        let outcomes = run(&inputs, patch(set("Final"), FieldEdit::Keep, FieldEdit::Keep));
+
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: super::super::SIGNATURE_REMOVED.to_string() }];
+        assert_eq!(outcomes[0].warnings, removed);
+        assert!(outcomes[1].warnings.is_empty(), "{:?}", outcomes[1].warnings);
+        assert_eq!(outcomes[0].output_paths(), [sandbox.0.join("vendor-nda-edited.pdf")]);
+        if qpdf.is_some() {
+            assert_eq!(outcomes[2].warnings, removed);
+            assert_eq!(outcomes[2].detail, "Title set. It keeps its restrictions.");
+            assert_eq!(outcomes[2].output_paths(), [sandbox.0.join("signed-restricted-edited.pdf")]);
+        }
+        for outcome in &outcomes {
+            let output = opened(&outcome.output_paths()[0], "").unwrap();
+            assert!(!super::super::tests::holds_a_signature(&output), "{:?} still holds a signature", outcome.output_paths());
+            assert_eq!(document_info::from_document(&output).info.title.as_deref(), Some("Final"));
+            assert!(output.get_page_content(*output.get_pages().values().next().unwrap()).starts_with(CONTENT), "the page is kept");
+        }
+        for (input, original) in inputs.iter().zip(&originals) {
+            assert_eq!(&std::fs::read(input).unwrap(), original, "the original is never modified");
+        }
+        assert!(super::super::tests::holds_a_signature(&opened(&signed, "").unwrap()), "the original keeps its signature");
+    }
+
+    #[test]
+    fn reading_current_values_reports_whether_each_pdf_is_signed() {
+        let sandbox = Sandbox::new("read-signed");
+        let signed = sandbox.file("vendor-nda.pdf", &signed_pdf(None));
+        let plain = sandbox.file("lease.pdf", &pdf(None, None, None));
+        let request = Arc::new(ReadPropertiesRequest { paths: vec![signed.clone(), plain.clone()], passwords: OpenPasswords::default() });
+        let outcomes = BatchRunner::inspect(&RunEvents::silent(), "edit_pdf_properties", vec![signed, plain], &request, read_job);
+        let values = outcomes.iter().map(|outcome| serde_json::from_str::<serde_json::Value>(&outcome.detail).unwrap()).collect::<Vec<_>>();
+        assert_eq!((values[0]["signed"].clone(), values[0]["title"].clone()), (serde_json::json!(true), serde_json::json!("NDA draft")));
+        assert_eq!(values[1]["signed"], serde_json::json!(false));
+        assert_eq!(sandbox.names(), ["lease.pdf", "vendor-nda.pdf"]);
     }
 
     #[cfg(unix)]
