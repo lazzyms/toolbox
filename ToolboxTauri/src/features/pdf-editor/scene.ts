@@ -311,6 +311,10 @@ export const textOverflowWords = (original: string, replacement: string): number
     return part.trim() !== '' && end > original.length;
   }).length;
 };
+export const substituteFamily = (run: Pick<PdfEditRun, 'substitute'>, replacement: string): string | null => {
+  const substitute = run.substitute;
+  return substitute && [...replacement].some((c) => !substitute.characters.includes(c)) ? substitute.family : null;
+};
 export const notEditableReasons: Record<PdfEditRunReason, { short: string; detail: string }> = {
   picture: { short: 'This text is part of a picture, so it can\'t be edited.',
     detail: 'It is part of a scanned picture, not real text. Text drawn in a font with no character map is treated the same way.' },

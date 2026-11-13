@@ -31,7 +31,7 @@ test.beforeEach(async ({ page }) => {
           w.sceneTextResponses[key] = response;
           return { index: pageIndex, width: 612, height: 792, preview: svg, textRuns: [{ text: `${args.request.path} page ${pageIndex} response ${response}`, x: 60, y: 55, width: 250, height: 25 }],
             editRuns: [
-              { index: 0, text: 'Rent £1,450', x: 60, y: 120, width: 120, height: 14, fontName: 'Helvetica', fontSize: 12, reason: null },
+              { index: 0, text: 'Rent £1,450', x: 60, y: 120, width: 120, height: 14, fontName: 'Helvetica', fontSize: 12, reason: null, substitute: { family: 'Noto Serif', characters: ' ,01457Rent£' } },
               { index: 1, text: 'Stamped by the Landlord', x: 60, y: 400, width: 200, height: 14, fontName: 'Helvetica', fontSize: 12, reason: 'picture' },
             ] };
         }
@@ -45,6 +45,7 @@ test.beforeEach(async ({ page }) => {
           return { width: 400, height: 200 };
         }
         if (command === 'export_pdf_scene') {
+          if (w.exportOutcomes) return w.exportOutcomes;
           // Mirror the native naming: Export As numbers a taken chosen name and says so.
           const chosen: string | undefined = args.request.outputPath;
           const numbered = chosen?.replace(/\.pdf$/, '-1.pdf');
@@ -1317,6 +1318,30 @@ test('a text edit is sent as textEdits to the preview and the export, and can be
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toBeVisible();
+});
+
+test('a replacement the embedded font cannot draw notes the substitute font and the export row shows font substituted', async ({ page }) => {
+  await openEditText(page);
+  await replaceRun(page, 'Rent £1,475');
+  const selected = page.getByRole('region', { name: 'Properties' }).getByRole('group', { name: 'Selected text' });
+  await expect(selected).toContainText('Edited text keeps this font, size and colour.');
+  await expect(selected.getByRole('note')).toHaveCount(0);
+
+  await page.locator('[data-edit-run="0"]').click();
+  await page.getByRole('textbox', { name: 'Replacement text' }).fill('Rent €1,475');
+  await page.getByRole('textbox', { name: 'Replacement text' }).press('Enter');
+  await expect(selected.getByRole('note')).toHaveText("Helvetica isn't embedded in this PDF. Edited lines use Noto Serif, which looks close. Untouched text keeps its original font.");
+  await expect(selected).not.toContainText('Edited text keeps this font');
+
+  await page.evaluate(() => {
+    (window as any).exportOutcomes = [{ inputPath: '/local/scene-fixture.pdf', outputPaths: ['/local/scene-fixture-edited-1.pdf'], state: 'succeeded', detail: 'PDF scene exported', failure: null, reason: null,
+      warnings: [{ code: 'fontSubstituted', message: 'Font substituted on page 1.', details: { requestedFamily: 'Helvetica', actualFamily: 'Noto Serif' } }] }];
+  });
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  const row = page.locator('[data-tone]').filter({ hasText: 'scene-fixture.pdf' });
+  await expect(row).toHaveAttribute('data-tone', 'warn');
+  await expect(row).toContainText('The font Helvetica wasn’t available, so Noto Serif was used.');
+  await expect(row).not.toContainText('Font substituted on page 1.');
 });
 
 test('a replacement longer than the original line warns that it will be cut off', async ({ page }) => {

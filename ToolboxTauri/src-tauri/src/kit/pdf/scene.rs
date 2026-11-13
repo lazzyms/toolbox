@@ -5,7 +5,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{batch_runner::report_progress, limits, note_renamed, watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition}, JobOutcome, OutputLocation, OutputNaming}, contracts::{LimitKind, OutcomePointer, ToolError}};
+use crate::kit::{common::{batch_runner::report_progress, limits, note_renamed, watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition}, JobOutcome, OutputLocation, OutputNaming}, contracts::{LimitKind, OutcomePointer, OutcomeWarning, ToolError}};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, text_edit, PdfMutationIntent};
 
@@ -195,29 +195,32 @@ const NOTO_SANS_MONO_REGULAR: &[u8] = include_bytes!("../../../resources/fonts/N
 const NOTO_SANS_MONO_BOLD: &[u8] = include_bytes!("../../../resources/fonts/NotoSansMono-Bold.ttf");
 
 #[derive(Clone, Copy)]
-struct TextFont { family: &'static str, name: &'static str, bytes: &'static [u8], oblique: bool }
+pub(super) struct TextFont { pub(super) family: &'static str, pub(super) name: &'static str, pub(super) bytes: &'static [u8], oblique: bool }
+
+pub(super) fn bundled_font(family: &str, bold: bool, italic: bool) -> Option<TextFont> {
+    let (family, name, bytes) = match (family, bold, italic) {
+        ("Noto Sans", false, false) => ("Noto Sans", "NotoSans-Regular", NOTO_SANS_REGULAR),
+        ("Noto Sans", true, false) => ("Noto Sans", "NotoSans-Bold", NOTO_SANS_BOLD),
+        ("Noto Sans", false, true) => ("Noto Sans", "NotoSans-Italic", NOTO_SANS_ITALIC),
+        ("Noto Sans", true, true) => ("Noto Sans", "NotoSans-BoldItalic", NOTO_SANS_BOLD_ITALIC),
+        ("Noto Serif", false, false) => ("Noto Serif", "NotoSerif-Regular", NOTO_SERIF_REGULAR),
+        ("Noto Serif", true, false) => ("Noto Serif", "NotoSerif-Bold", NOTO_SERIF_BOLD),
+        ("Noto Serif", false, true) => ("Noto Serif", "NotoSerif-Italic", NOTO_SERIF_ITALIC),
+        ("Noto Serif", true, true) => ("Noto Serif", "NotoSerif-BoldItalic", NOTO_SERIF_BOLD_ITALIC),
+        // Noto Sans Mono has no italic; italic is drawn with a slanted text matrix.
+        ("Noto Sans Mono", false, _) => ("Noto Sans Mono", "NotoSansMono-Regular", NOTO_SANS_MONO_REGULAR),
+        ("Noto Sans Mono", true, _) => ("Noto Sans Mono", "NotoSansMono-Bold", NOTO_SANS_MONO_BOLD),
+        _ => return None,
+    };
+    Some(TextFont { family, name, bytes, oblique: italic && family == "Noto Sans Mono" })
+}
 
 fn text_font(o: &SceneObject) -> Result<TextFont, ToolError> {
     let family = o.font_family.as_deref().unwrap_or("Noto Sans");
-    let (name, bytes) = match (family, o.bold, o.italic) {
-        ("Noto Sans", false, false) => ("NotoSans-Regular", NOTO_SANS_REGULAR),
-        ("Noto Sans", true, false) => ("NotoSans-Bold", NOTO_SANS_BOLD),
-        ("Noto Sans", false, true) => ("NotoSans-Italic", NOTO_SANS_ITALIC),
-        ("Noto Sans", true, true) => ("NotoSans-BoldItalic", NOTO_SANS_BOLD_ITALIC),
-        ("Noto Serif", false, false) => ("NotoSerif-Regular", NOTO_SERIF_REGULAR),
-        ("Noto Serif", true, false) => ("NotoSerif-Bold", NOTO_SERIF_BOLD),
-        ("Noto Serif", false, true) => ("NotoSerif-Italic", NOTO_SERIF_ITALIC),
-        ("Noto Serif", true, true) => ("NotoSerif-BoldItalic", NOTO_SERIF_BOLD_ITALIC),
-        // Noto Sans Mono has no italic; italic is drawn with a slanted text matrix.
-        ("Noto Sans Mono", false, _) => ("NotoSansMono-Regular", NOTO_SANS_MONO_REGULAR),
-        ("Noto Sans Mono", true, _) => ("NotoSansMono-Bold", NOTO_SANS_MONO_BOLD),
-        _ => return Err(ToolError::invalid_input(format!("{family} is not a bundled text font. Choose Noto Sans, Noto Serif or Noto Sans Mono."))),
-    };
-    let family = match family { "Noto Serif" => "Noto Serif", "Noto Sans Mono" => "Noto Sans Mono", _ => "Noto Sans" };
-    Ok(TextFont { family, name, bytes, oblique: o.italic && family == "Noto Sans Mono" })
+    bundled_font(family, o.bold, o.italic).ok_or_else(|| ToolError::invalid_input(format!("{family} is not a bundled text font. Choose Noto Sans, Noto Serif or Noto Sans Mono.")))
 }
 
-fn parse_face(bytes: &[u8]) -> Result<ttf_parser::Face<'_>, ToolError> {
+pub(super) fn parse_face(bytes: &[u8]) -> Result<ttf_parser::Face<'_>, ToolError> {
     ttf_parser::Face::parse(bytes, 0).map_err(|error| ToolError::processing(format!("Could not read a bundled text font: {error}")))
 }
 
@@ -229,7 +232,7 @@ fn glyph_width(face: &ttf_parser::Face<'_>, gid: u16) -> i64 {
 struct TextLine { glyphs: Vec<(u16, char)>, width: f32 }
 struct TextLayout { font: TextFont, lines: Vec<TextLine>, first_baseline: f32 }
 
-fn unrenderable_message(family: &str, missing: &[char], subject: &str) -> String {
+pub(super) fn unrenderable_message(family: &str, missing: &[char], subject: &str) -> String {
     let named = missing.iter().take(10).map(|c| format!("“{c}” (U+{:04X})", *c as u32)).collect::<Vec<_>>().join(", ");
     let more = if missing.len() > 10 { format!(" and {} more", missing.len() - 10) } else { String::new() };
     let noun = if missing.len() == 1 { "this character" } else { "these characters" };
@@ -494,46 +497,48 @@ fn embed_text_fonts<K: Copy + Ord + std::hash::Hash>(doc: &mut Document, layouts
         let entry = used.entry(layout.font.name).or_insert_with(|| (layout.font, Default::default()));
         for (gid, c) in layout.lines.iter().flat_map(|line| &line.glyphs) { entry.1.entry(*gid).or_insert(*c); }
     }
-    let mut fonts = HashMap::new();
-    for (name, (font, glyphs)) in used {
-        let face = parse_face(font.bytes).map_err(|error| error.message)?;
-        let gids: Vec<u16> = glyphs.keys().copied().collect();
-        let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&gids);
-        let subset = subsetter::subset(font.bytes, 0, &remapper).map_err(|error| format!("Could not subset {name}: {error}"))?;
-        let base_font = format!("{}+{name}", subset_tag(&gids));
-        let em = face.units_per_em() as f32;
-        let units = |value: i16| (value as f32 * 1000. / em).round() as i64;
-        let bbox = face.global_bounding_box();
-        let length = subset.len() as i64;
-        let file = doc.add_object(Stream::new(dictionary! { "Length1" => length, "Filter" => "FlateDecode" }, compress_bytes(&subset)?));
-        let italic = name.contains("Italic");
-        let flags = 32 | if face.is_monospaced() { 1 } else { 0 } | if italic { 64 } else { 0 };
-        let descriptor = doc.add_object(dictionary! {
-            "Type" => "FontDescriptor", "FontName" => base_font.as_str(), "Flags" => flags,
-            "FontBBox" => vec![units(bbox.x_min).into(), units(bbox.y_min).into(), units(bbox.x_max).into(), units(bbox.y_max).into()],
-            "ItalicAngle" => face.italic_angle(), "Ascent" => units(face.ascender()), "Descent" => units(face.descender()),
-            "CapHeight" => units(face.capital_height().unwrap_or(face.ascender())), "StemV" => if name.contains("Bold") { 120 } else { 80 },
-            "FontFile2" => file,
-        });
-        let widths: Vec<Object> = gids.iter().map(|gid| Object::Integer(glyph_width(&face, *gid))).collect();
-        let cid_font = doc.add_object(dictionary! {
-            "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => base_font.as_str(),
-            "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
-            "FontDescriptor" => descriptor, "CIDToGIDMap" => "Identity",
-            "W" => vec![Object::Integer(1), Object::Array(widths)],
-        });
-        let mut cmap = String::from("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
-        let entries: Vec<_> = glyphs.iter().map(|(gid, c)| format!("<{:04X}> <{}>\n", remapper.get(*gid).unwrap_or(0), hex_utf16(*c))).collect();
-        for chunk in entries.chunks(100) { cmap.push_str(&format!("{} beginbfchar\n{}endbfchar\n", chunk.len(), chunk.concat())); }
-        cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-        let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
-        let font_id = doc.add_object(dictionary! {
-            "Type" => "Font", "Subtype" => "Type0", "BaseFont" => base_font.as_str(), "Encoding" => "Identity-H",
-            "DescendantFonts" => vec![Object::Reference(cid_font)], "ToUnicode" => to_unicode,
-        });
-        fonts.insert(name, (font_id, remapper));
-    }
-    Ok(fonts)
+    used.into_iter().map(|(name, (font, glyphs))| Ok((name, embed_font(doc, font, &glyphs)?))).collect()
+}
+
+/// Embeds a subset Type0 font of one bundled face and returns the new glyph id of each source glyph.
+pub(super) fn embed_font(doc: &mut Document, font: TextFont, glyphs: &std::collections::BTreeMap<u16, char>) -> Result<(ObjectId, subsetter::GlyphRemapper), String> {
+    let name = font.name;
+    let face = parse_face(font.bytes).map_err(|error| error.message)?;
+    let gids: Vec<u16> = glyphs.keys().copied().collect();
+    let remapper = subsetter::GlyphRemapper::new_from_glyphs_sorted(&gids);
+    let subset = subsetter::subset(font.bytes, 0, &remapper).map_err(|error| format!("Could not subset {name}: {error}"))?;
+    let base_font = format!("{}+{name}", subset_tag(&gids));
+    let em = face.units_per_em() as f32;
+    let units = |value: i16| (value as f32 * 1000. / em).round() as i64;
+    let bbox = face.global_bounding_box();
+    let length = subset.len() as i64;
+    let file = doc.add_object(Stream::new(dictionary! { "Length1" => length, "Filter" => "FlateDecode" }, compress_bytes(&subset)?));
+    let italic = name.contains("Italic");
+    let flags = 32 | if face.is_monospaced() { 1 } else { 0 } | if italic { 64 } else { 0 };
+    let descriptor = doc.add_object(dictionary! {
+        "Type" => "FontDescriptor", "FontName" => base_font.as_str(), "Flags" => flags,
+        "FontBBox" => vec![units(bbox.x_min).into(), units(bbox.y_min).into(), units(bbox.x_max).into(), units(bbox.y_max).into()],
+        "ItalicAngle" => face.italic_angle(), "Ascent" => units(face.ascender()), "Descent" => units(face.descender()),
+        "CapHeight" => units(face.capital_height().unwrap_or(face.ascender())), "StemV" => if name.contains("Bold") { 120 } else { 80 },
+        "FontFile2" => file,
+    });
+    let widths: Vec<Object> = gids.iter().map(|gid| Object::Integer(glyph_width(&face, *gid))).collect();
+    let cid_font = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => base_font.as_str(),
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "FontDescriptor" => descriptor, "CIDToGIDMap" => "Identity",
+        "W" => vec![Object::Integer(1), Object::Array(widths)],
+    });
+    let mut cmap = String::from("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
+    let entries: Vec<_> = glyphs.iter().map(|(gid, c)| format!("<{:04X}> <{}>\n", remapper.get(*gid).unwrap_or(0), hex_utf16(*c))).collect();
+    for chunk in entries.chunks(100) { cmap.push_str(&format!("{} beginbfchar\n{}endbfchar\n", chunk.len(), chunk.concat())); }
+    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+    let font_id = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => base_font.as_str(), "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(cid_font)], "ToUnicode" => to_unicode,
+    });
+    Ok((font_id, remapper))
 }
 
 fn text_content(r: &Rect, align: TextAlign, font_size: f32, layout: &TextLayout, resource: &str, remapper: &subsetter::GlyphRemapper) -> String {
@@ -962,14 +967,14 @@ fn is_pure_page_reorder(document: &Document, scene: &PdfScene, source_pages: &[O
     Ok(true)
 }
 
-fn effective_resource_entries(document: &Document, page_id: ObjectId, category: &[u8]) -> Result<lopdf::Dictionary, String> {
+pub(super) fn effective_resource_entries(document: &Document, page_id: ObjectId, category: &[u8]) -> Result<lopdf::Dictionary, String> {
     let Some(value) = inherited(document, page_id, b"Resources")? else { return Ok(lopdf::Dictionary::new()); };
     let resources = value.as_dict().map_err(err)?;
     let Some(entries) = resources.get(category).ok() else { return Ok(lopdf::Dictionary::new()); };
     Ok(resolve(document, entries)?.as_dict().map_err(err)?.clone())
 }
 
-fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -> Result<String, String> {
+pub(super) fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -> Result<String, String> {
     if !entries.has(base.as_bytes()) { return Ok(base.to_string()); }
     for suffix in 1..=10000 {
         let candidate = format!("{base}{suffix}");
@@ -978,7 +983,7 @@ fn next_resource_name(entries: &lopdf::Dictionary, category: &str, base: &str) -
     Err(format!("Could not allocate a unique {category} resource name"))
 }
 
-fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: lopdf::Dictionary, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
+pub(super) fn scene_resources(document: &Document, page_id: ObjectId, xobjects: lopdf::Dictionary, fonts: lopdf::Dictionary, states: lopdf::Dictionary) -> Result<lopdf::Dictionary, String> {
     let mut resources = match inherited(document, page_id, b"Resources")? {
         Some(value) => value.as_dict().map_err(err)?.clone(),
         None => lopdf::Dictionary::new(),
@@ -1081,20 +1086,21 @@ fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene) -> Result<
 }
 
 /// Runs every stage in order and reports which stages actually changed the document.
-fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document, Vec<Stage>),ToolError> { run_stages_counted(path,scene,sections).map(|(doc,contributors,_,_)|(doc,contributors)) }
+fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document, Vec<Stage>),ToolError> { run_stages_counted(path,scene,sections).map(|(doc,contributors,_,_,_)|(doc,contributors)) }
 
 /// Runs the stages and also returns how many pages the source had, so the export detail can count removed pages,
 /// and whether the source was signed. A signed source runs the stages like any other, then loses its signature,
 /// because the copy can't keep a valid one; the export reports that with the shared warning.
-fn run_stages_counted(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document, Vec<Stage>, usize, bool),ToolError> {
+fn run_stages_counted(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document, Vec<Stage>, usize, bool, Vec<OutcomeWarning>),ToolError> {
     let mut doc=load(path).map_err(|e| if e==LOCKED_PDF_MESSAGE { locked_pdf() } else { ToolError::processing(e) })?;
     let source_pages=doc.get_pages().len();
     let signed=super::has_signed_signature_field(&doc);
     let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,_>>()?;
     let contributors=STAGES.iter().zip(&plans).filter(|(_, plan)| plan.changes_document()).map(|(&stage, _)| stage).collect();
+    let warnings=plans.iter().flat_map(|plan| match plan { StagePlan::EditText(plan) => plan.warnings().to_vec(), _ => Vec::new() }).collect();
     for plan in plans { stage_apply(plan, &mut doc, scene).map_err(ToolError::processing)?; }
     if signed { super::remove_signatures(&mut doc).map_err(ToolError::processing)?; }
-    Ok((doc, contributors, source_pages, signed))
+    Ok((doc, contributors, source_pages, signed, warnings))
 }
 fn compose_with(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<Document,String> { run_stages(path, scene, sections).map(|(doc, _)| doc).map_err(|error| error.message) }
 
@@ -1647,7 +1653,7 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let result=(|| {
         if chosen.is_some() && request.paths.len()!=1 { return Err(ToolError::invalid_input("Export As saves one document at a time")); }
         text_plan(&request.scene)?;
-        let (mut doc, contributors, source_pages, signed)=run_stages_counted(&input,&request.scene,&request.sections)?;
+        let (mut doc, contributors, source_pages, signed, warnings)=run_stages_counted(&input,&request.scene,&request.sections)?;
         let suffix=export_suffix(&contributors).ok_or_else(|| ToolError::invalid_input(NOTHING_TO_EXPORT))?;
         let mut bytes=Vec::new();
         doc.save_to(&mut bytes).map_err(|e| ToolError::processing(err(e)))?;
@@ -1657,10 +1663,10 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
         file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|e| ToolError::processing(err(e)))?;
         drop(file);
         let path=reservation.publish().map_err(|e| ToolError::processing(err(e)))?;
-        Ok::<_,ToolError>((path,page_summary(&request.scene,source_pages),signed))
+        Ok::<_,ToolError>((path,page_summary(&request.scene,source_pages),signed,warnings))
     })();
     match result {
-        Ok((path,summary,signed))=>{
+        Ok((path,summary,signed,warnings))=>{
             // Redaction adds what was rasterised and stripped after the page summary every export reports.
             let detail=match &request.sections.redactions {
                 Some(marks) if !marks.is_empty()=>{
@@ -1670,7 +1676,7 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
                 }
                 _=>summary,
             };
-            super::note_signature_removed(note_renamed(JobOutcome::succeeded(input, vec![path], detail), chosen), signed)
+            super::note_signature_removed(note_renamed(warnings.into_iter().fold(JobOutcome::succeeded(input, vec![path], detail), JobOutcome::with_warning), chosen), signed)
         }
         Err(error)=>JobOutcome::failure(input,error),
     }
@@ -3629,7 +3635,7 @@ mod tests {
             (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Two\nlines" }]), "Line breaks"),
             (&input, serde_json::json!([{ "pageIndex": 1, "run": 0, "original": "Original content", "replacement": "Original content" }]), "A text edit on page 2 doesn't change"),
             (&input, serde_json::json!([{ "pageIndex": 9, "run": 0, "original": "Original content", "replacement": "x" }]), "A text edit points to a page"),
-            (&embedded, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "Original contents!" }]), "This text's font only includes the characters already used on page 1, so “!”"),
+            (&embedded, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "Original 😀" }]), "Neither Helvetica nor Noto Sans can show “😀” on page 1"),
         ];
         for (path,edits,message) in cases {
             let original=fs::read(path).unwrap();
@@ -3642,7 +3648,69 @@ mod tests {
         }
         let outcome=export(&edit_request(&embedded, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "content origin" }])),embedded.clone());
         assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert!(outcome.warnings.is_empty(),"{:?}",outcome.warnings);
         assert_eq!(page_runs(&outcome.output_paths()[0],0)[0].text,"content origin");
+        let doc=load(&outcome.output_paths()[0]).unwrap();
+        let id=doc.get_pages().values().copied().next().unwrap();
+        assert!(!String::from_utf8_lossy(&doc.get_page_content(id)).contains("EditText"));
+    }
+
+    fn subset_font_fixture(path: &Path) {
+        text_edit_fixture(path, true);
+        let mut doc = load(path).unwrap();
+        let used: std::collections::BTreeSet<u16> = "Original content Tagged words".chars().filter_map(|c| parse_face(NOTO_SERIF_BOLD).unwrap().glyph_index(c)).map(|id| id.0).collect();
+        let subset = subsetter::subset(NOTO_SERIF_BOLD, 0, &subsetter::GlyphRemapper::new_from_glyphs_sorted(&used.into_iter().collect::<Vec<_>>())).unwrap();
+        let ids: Vec<ObjectId> = doc.objects.keys().copied().collect();
+        for id in ids {
+            let Ok(dict) = doc.get_dictionary_mut(id) else { continue };
+            if dict.get(b"BaseFont").ok() == Some(&Object::Name(b"ABCDEF+Helvetica".to_vec())) { dict.set("BaseFont", "ABCDEF+TimesNewRomanPS-BoldMT"); }
+            if dict.has(b"FontFile2") { dict.set("FontName", "ABCDEF+TimesNewRomanPS-BoldMT"); dict.set("Flags", 34); dict.set("FontWeight", 700); }
+            if let Ok(stream) = doc.get_object_mut(id).and_then(Object::as_stream_mut) { if stream.content == b"glyphs" { stream.set_content(subset.clone()); } }
+        }
+        doc.save(path).unwrap();
+    }
+
+    #[test]
+    fn edits_missing_from_an_embedded_subset_use_the_closest_bundled_font_and_warn() {
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("subset.pdf"); subset_font_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let run=&page_runs(&input,0)[0];
+        assert_eq!(run.font_name,"TimesNewRomanPS-BoldMT");
+        let substitute=run.substitute.as_ref().unwrap();
+        assert_eq!((substitute.family.as_str(),substitute.characters.as_str()),("Noto Serif"," OTacdegilnorstw"));
+        assert!(page_runs(&input,0)[3].substitute.is_none());
+
+        let request=edit_request(&input, serde_json::json!([{ "pageIndex": 0, "run": 0, "original": "Original content", "replacement": "Rent £1,475!" }]));
+        let outcome=export(&request,input.clone());
+        assert!(outcome.error().is_none(),"{:?}",outcome.error());
+        assert_eq!(fs::read(&input).unwrap(),original);
+        assert_eq!(outcome.warnings.len(),1);
+        let warning=&outcome.warnings[0];
+        assert_eq!(warning.kind,crate::kit::contracts::WarningKind::FontSubstituted { requested_family: "TimesNewRomanPS-BoldMT".into(), actual_family: "Noto Serif".into() });
+        assert!(warning.message.contains("page 1") && warning.message.contains("“Rent £1,475!”"),"{}",warning.message);
+        assert_eq!(serde_json::to_value(warning).unwrap()["code"],"fontSubstituted");
+
+        let output=&outcome.output_paths()[0];
+        let doc=load(output).unwrap();
+        let pages: Vec<ObjectId>=doc.get_pages().values().copied().collect();
+        let content=String::from_utf8_lossy(&doc.get_page_content(pages[0])).to_string();
+        assert!(content.contains("/EditTextNotoSerifBold 18 Tf") && content.contains("Tj\n/OriginalFont 18 Tf"),"{content}");
+        let fonts=effective_resource_entries(&doc,pages[0],b"Font").unwrap();
+        let font=doc.get_dictionary(fonts.get(b"EditTextNotoSerifBold").unwrap().as_reference().unwrap()).unwrap();
+        assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(),b"Type0");
+        assert!(String::from_utf8_lossy(font.get(b"BaseFont").unwrap().as_name().unwrap()).ends_with("+NotoSerif-Bold"));
+        assert!(fonts.has(b"OriginalFont"));
+        assert!(!effective_resource_entries(&doc,pages[1],b"Font").unwrap().has(b"EditTextNotoSerifBold"));
+        assert_eq!(page_runs(output,1)[0].text,"Original content");
+
+        let again=export(&request,input.clone());
+        assert_eq!(fs::read(&again.output_paths()[0]).unwrap(),fs::read(output).unwrap());
+        if text_extractor().is_some() {
+            let text=|page| extract_text_runs(output,page,612.,792.,Instant::now() + super::super::PDF_TEXT_TIMEOUT).unwrap().iter().map(|run| run.text.clone()).collect::<Vec<_>>().join(" ");
+            let first=text(1);
+            assert!(first.contains("Rent £1,475!") && !first.contains("Original content") && first.contains("Tagged words"),"{first}");
+            assert!(text(2).contains("Original content"));
+        }
     }
 
     #[test]

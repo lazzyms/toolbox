@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sceneFromDocument, type PdfScene, type SceneObject } from "../src/features/pdf-editor/scene";
-import { textOverflowWords } from "../src/features/pdf-editor/scene";
+import { substituteFamily, textOverflowWords } from "../src/features/pdf-editor/scene";
 import { exportSuffix, planSceneExport, sceneSections, subTools } from "../src/features/pdf-editor/subtools";
 
 const baseline = sceneFromDocument({
@@ -150,4 +150,12 @@ test("overflow counts the words that end past the original text length", () => {
   assert.equal(textOverflowWords("Rent £1,450", "Rent £1,475 per calendar month"), 3);
   assert.equal(textOverflowWords("Total", "Totals"), 1);
   assert.equal(textOverflowWords("Long original line", "Short"), 0);
+});
+
+test("a replacement needs the substitute font only when the embedded subset lacks one of its characters", () => {
+  const run = { substitute: { family: "Noto Serif", characters: " ,0145Rent£" } };
+  assert.equal(substituteFamily(run, "Rent £1,415"), null);
+  assert.equal(substituteFamily(run, "Rent £1,475"), "Noto Serif");
+  assert.equal(substituteFamily({ substitute: null }, "Anything →"), null);
+  assert.equal(substituteFamily({}, "Anything"), null);
 });
