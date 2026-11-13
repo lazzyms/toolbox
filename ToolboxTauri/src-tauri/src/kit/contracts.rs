@@ -238,6 +238,9 @@ pub struct FormatFamily {
 pub struct NativeCapability {
     pub command: String,
     pub accepted_extensions: Vec<String>,
+    /// Extensions the command takes only to report each file Skipped, such as HEIC in Compress.
+    /// They are never offered in the open dialog.
+    pub skipped_extensions: Vec<String>,
     pub format_families: Vec<FormatFamily>,
     pub input_cardinality: InputCardinality,
     pub supports_page_selection: bool,
@@ -253,6 +256,8 @@ pub struct NativeCapability {
 struct SharedCapabilityRow {
     command: String,
     accepted_extensions: Option<Vec<String>>,
+    #[serde(default)]
+    skipped_extensions: Vec<String>,
     format_families: Option<Vec<FormatFamily>>,
     input_cardinality: InputCardinality,
     supports_page_selection: bool,
@@ -319,6 +324,7 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
         capabilities.push(NativeCapability {
             command: row.command,
             accepted_extensions,
+            skipped_extensions: row.skipped_extensions,
             format_families: row.format_families.unwrap_or_default(),
             input_cardinality: row.input_cardinality,
             supports_page_selection: row.supports_page_selection,
@@ -341,7 +347,7 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
         } else if capability.accepted_extensions.is_empty() {
             return Err(format!("{} has no accepted extensions.", capability.command));
         }
-        if let Some(extension) = first_invalid_extension(&capability.accepted_extensions) {
+        if let Some(extension) = first_invalid_extension(&capability.accepted_extensions.iter().chain(&capability.skipped_extensions).cloned().collect::<Vec<_>>()) {
             return Err(format!(
                 "{} has an invalid accepted extension {extension}.",
                 capability.command
@@ -485,7 +491,7 @@ fn partition_capability_inputs(capability: &NativeCapability, paths: &[PathBuf])
     for (index, path) in paths.iter().cloned().enumerate() {
         let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default();
         let matches = |accepted: &String| !extension.is_empty() && accepted.trim_start_matches('.').eq_ignore_ascii_case(extension);
-        let extension_accepted = capability.accepted_extensions.iter().any(matches);
+        let extension_accepted = capability.accepted_extensions.iter().chain(&capability.skipped_extensions).any(matches);
         let unavailable_family = capability.format_families.iter().any(|family| !family.native_available && family.extensions.iter().any(matches));
         let error = if path.is_dir() {
             Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
@@ -1090,6 +1096,10 @@ mod tests {
                     .collect(),
             };
             assert_eq!(capability.accepted_extensions, accepted_extensions);
+            let skipped_extensions = row.get("skippedExtensions").map_or_else(Vec::new, |extensions| {
+                extensions.as_array().unwrap().iter().map(|extension| extension.as_str().unwrap()).collect::<Vec<_>>()
+            });
+            assert_eq!(capability.skipped_extensions, skipped_extensions);
             assert_eq!(
                 capability.input_cardinality,
                 match row["inputCardinality"].as_str().unwrap() {
@@ -1160,6 +1170,10 @@ mod tests {
         assert_eq!((ocr.input_cardinality, ocr.output_suffix.as_str()), (InputCardinality::Multiple, "-ocr"));
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);
+        let compress = native_capability("compress_files").unwrap();
+        assert_eq!(compress.accepted_extensions, [".pdf", ".jpg", ".jpeg", ".png", ".webp"]);
+        assert_eq!(compress.skipped_extensions, [".heic", ".heif"]);
+        assert!(native_capabilities().iter().filter(|capability| capability.command != "compress_files").all(|capability| capability.skipped_extensions.is_empty()));
         let privacy = native_capability("inspect_pdf_privacy").unwrap();
         assert_eq!(privacy.accepted_extensions, [".pdf"]);
         assert_eq!(privacy.input_cardinality, InputCardinality::Multiple);
@@ -1241,6 +1255,19 @@ mod tests {
             let outcomes = validate_command_inputs(command, &[]).unwrap_err();
             assert_eq!(outcomes.len(), 1, "{command}");
             assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one input file")), "{command}");
+        }
+    }
+
+    #[test]
+    fn skipped_extensions_pass_the_command_boundary_and_are_validated_like_accepted_ones() {
+        let validation = partition_command_inputs("compress_files", &[PathBuf::from("photo.HEIC"), PathBuf::from("notes.docx")]).unwrap();
+        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0]);
+        assert_eq!(validation.rejected.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [1]);
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"skippedExtensions":[".heic"],"inputCardinality":"single","supportsPageSelection":false,"supportsPreview":false,"nativeAvailability":"available","outputSuffix":"-tested","manyToOne":false}"#;
+        assert_eq!(parse_capability_registry(&format!("[{row}]")).unwrap()[0].skipped_extensions, [".heic"]);
+        for invalid in ["\".HEIC\"", "\"heic\"", "\".pdf\""] {
+            let raw = format!("[{}]", row.replace("\".heic\"", invalid));
+            assert!(parse_capability_registry(&raw).unwrap_err().contains("invalid accepted extension"), "{invalid}");
         }
     }
 

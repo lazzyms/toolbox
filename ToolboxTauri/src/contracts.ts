@@ -65,6 +65,8 @@ export interface FormatFamily {
 export interface ToolCapability {
   acceptedExtensions: readonly string[];
   formatFamilies?: readonly FormatFamily[];
+  /** Extensions the command takes only to report each file Skipped. The open dialog never offers them. */
+  skippedExtensions: readonly string[];
   inputCardinality: ToolInputCardinality;
   supportsPageSelection: boolean;
   supportsPreview: boolean;

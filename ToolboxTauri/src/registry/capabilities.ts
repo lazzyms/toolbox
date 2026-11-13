@@ -17,7 +17,7 @@ const requiredCapabilityKeys = [
 const capabilityKeys = new Set([...requiredCapabilityKeys, "acceptedExtensions", "formatFamilies"]);
 const familyKeys = new Set(["id", "extensions", "nativeAvailability", "basicFidelity"]);
 
-const optionalCapabilityKeys = new Set(["outputFormats"]);
+const optionalCapabilityKeys = new Set(["outputFormats", "skippedExtensions"]);
 
 const isExtensionList = (value: unknown): value is string[] =>
   Array.isArray(value) &&
@@ -70,6 +70,7 @@ const parseCapability = (value: unknown): SharedCapability => {
   }
   const {
     command,
+    skippedExtensions = [],
     inputCardinality,
     supportsPageSelection,
     supportsPreview,
@@ -97,12 +98,13 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (
     !Array.isArray(acceptedExtensions) ||
     (inputCardinality !== "none" && acceptedExtensions.length === 0) ||
-    !acceptedExtensions.every(
+    !Array.isArray(skippedExtensions) ||
+    ![...acceptedExtensions, ...skippedExtensions].every(
       (extension) =>
         typeof extension === "string" &&
         /^\.[a-z0-9]+$/.test(extension),
     ) ||
-    new Set(acceptedExtensions).size !== acceptedExtensions.length
+    new Set([...acceptedExtensions, ...skippedExtensions]).size !== acceptedExtensions.length + skippedExtensions.length
   ) {
     throw new Error(`${command} has invalid accepted extensions.`);
   }
@@ -124,6 +126,7 @@ const parseCapability = (value: unknown): SharedCapability => {
   return {
     command,
     acceptedExtensions,
+    skippedExtensions,
     ...(formatFamilies && { formatFamilies }),
     inputCardinality,
     supportsPageSelection,
@@ -156,6 +159,7 @@ const capabilitiesByCommand = new Map<string, ToolCapability>();
 for (const capability of SharedCapabilityRegistry) {
   capabilitiesByCommand.set(capability.command, {
     acceptedExtensions: capability.acceptedExtensions,
+    skippedExtensions: capability.skippedExtensions,
     ...(capability.formatFamilies && { formatFamilies: capability.formatFamilies }),
     inputCardinality: capability.inputCardinality,
     supportsPageSelection: capability.supportsPageSelection,

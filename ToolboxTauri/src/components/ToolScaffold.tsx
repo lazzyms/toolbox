@@ -153,7 +153,9 @@ interface ToolScaffoldProps {
 
 export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
-    const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
+    const newEntries = (items: readonly (string | InspectedPath)[]): IntakeEntry[] => items.map((item) => typeof item === 'string'
+        ? { key: `entry-${++nextEntryKey.current}`, path: item }
+        : { key: `entry-${++nextEntryKey.current}`, path: item.path, animated: item.animated });
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
     const [selection, setSelection] = useState<ReadonlySet<string>>(() => new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
@@ -189,7 +191,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const statuses = useMemo(() => entryStatuses(entries, utility, intakeCopy), [entries, utility, intakeCopy]);
     const runnable = useMemo(() => statuses.filter((status) => status.flag?.kind !== 'wontRun'), [statuses]);
     const files = useMemo(() => runnable.map((status) => status.entry.path), [runnable]);
-    const failingFiles = useMemo(() => runnable.filter((status) => status.flag !== null).map((status) => status.entry.path), [runnable]);
+    const failingFiles = useMemo(() => runnable.filter((status) => status.flag?.kind === 'willFail').map((status) => status.entry.path), [runnable]);
     const flagged = statuses.filter((status) => status.flag !== null);
     const selectedFileIndex = Math.max(runnable.findIndex((status) => status.entry.key === anchor), 0);
     const saveStep = saveStepFor(utility);
@@ -406,13 +408,13 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
 
     const intake = (incoming: InspectedPath[], replaceSingle = false) => {
-        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted };
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted, keepsUnsupported: intakeCopy?.keepsUnsupported };
         if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
             // A picked file still goes through intake rules, so a file the tool can't open never replaces the open one.
             const classified = classifyIntake([], incoming.slice(0, 1), policy);
             setNotAdded(classified.notAdded);
             const next = classified.added[0];
-            if (!next || (entries.length === 1 && entries[0].path === next)) return;
+            if (!next || (entries.length === 1 && entries[0].path === next.path)) return;
             discard(() => {
                 const [entry] = newEntries([next]);
                 setEntries([entry]);
@@ -425,15 +427,15 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         if (classified.added.length) setEntries((current) => [...current, ...newEntries(classified.added)]);
     };
 
-    const dropPaths = async (paths: string[]) => {
-        let inspected: InspectedPath[];
+    const inspect = async (paths: string[]) => {
         try {
-            inspected = parseInspection(await invoke('inspect_intake_paths', { paths }), paths);
+            return parseInspection(await invoke('inspect_intake_paths', { paths }), paths);
         } catch {
-            inspected = parseInspection(null, paths);
+            return parseInspection(null, paths);
         }
-        intake(inspected);
     };
+
+    const dropPaths = async (paths: string[]) => intake(await inspect(paths));
 
     const dropRef = useRef<(paths: string[]) => void>(() => undefined);
     dropRef.current = (paths) => {
@@ -488,7 +490,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 filters: [{ name: 'Supported files', extensions: inputPolicy.acceptedExtensions.map((extension) => extension.replace(/^\./, '')) }],
             });
             const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
-            if (paths.length) intake(parseInspection(null, paths), true);
+            if (paths.length) intake(await inspect(paths), true);
         } catch (e) {
             setResults([failedOutcome('Dialog error', 'processing', String(e))]);
         }
@@ -676,7 +678,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 <div className="file-selection-flagged">
                     <p className="workspace-note">
                         {intakeCopy
-                            ? intakeCopy.flaggedNotice(flagged.length)
+                            ? intakeCopy.flaggedNotice(flagged.length, flagged.filter((status) => status.flag?.kind === 'willSkip').length)
                             : `${flagged.length} ${flagged.length === 1 ? "file won't" : "files won't"} run with ${utility.title}. ${flagged.length === 1 ? 'It stays' : 'They stay'} in the list for other actions.`}
                     </p>
                     <Button variant="outline" size="sm" disabled={loading} onClick={() => removeEntries(new Set(flagged.map((status) => status.entry.key)))}>
@@ -764,7 +766,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                     {describesEntries && copies > 1 && <Badge variant="secondary" className="file-selection-badge">Copy {occurrence} of {copies}</Badge>}
                                     {pages && <span className="file-selection-fact">{pages}</span>}
                                     {facts?.sizeBytes != null && <span className="file-selection-fact">{fileSizeLabel(facts.sizeBytes)}</span>}
-                                    {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? "Won't run"}</Badge>}
+                                    {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? (flag.kind === 'willSkip' ? 'Will skip' : "Won't run")}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && !describesEntries && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (

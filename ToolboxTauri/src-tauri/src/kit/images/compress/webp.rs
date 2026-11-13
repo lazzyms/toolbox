@@ -51,6 +51,11 @@ struct Parts<'a> {
     xmp: Option<&'a [u8]>,
 }
 
+/// Whether `bytes` is an animated WebP, found the same way Compress refuses one.
+pub fn is_animated(bytes: &[u8]) -> bool {
+    read_parts(bytes).is_err_and(|error| error.message == ANIMATED)
+}
+
 /// Splits a WebP into its chunks. A file cut short, or one with no image data, is refused before
 /// it is decoded; an animated file is refused as invalid input.
 fn read_parts(bytes: &[u8]) -> Result<Parts<'_>, ToolError> {

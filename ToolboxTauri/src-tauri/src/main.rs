@@ -6462,6 +6462,48 @@ mod command_tests {
     }
 
     #[test]
+    fn compress_files_skips_a_heic_with_a_pointer_to_convert_and_compresses_the_rest_in_input_order() {
+        use crate::kit::contracts::{OutcomePointer, SkipCode};
+        let root = sandbox("compress-files-heic-skip");
+        let inputs = vec![
+            root.join("report.pdf"),
+            root.join("IMG_4012.jpg"),
+            root.join("IMG_4020.HEIC"),
+            root.join("diagram.png"),
+            root.join("appendix.pdf"),
+            root.join("hero-banner.webp"),
+        ];
+        make_compressible_pdf(&inputs[0]);
+        write_jpeg(&inputs[1], &photo_rgb(320, 240, 81), 100, Some(exif_block(1)), true);
+        // An ISO base media header is enough: a HEIC is skipped by its type, never decoded.
+        std::fs::write(&inputs[2], [&[0, 0, 0, 24][..], b"ftypheic", &[0, 0, 0, 0], b"mif1heic"].concat()).unwrap();
+        write_compress_png(&inputs[3], &photo_rgba(200, 150, 83), true);
+        make_compressible_pdf(&inputs[4]);
+        write_webp(&inputs[5], &photo_rgba(240, 180, 85).to_rgba8(), true, 0, false);
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = compress(&inputs, CompressLevel::Medium, location(&root, "out"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+        let OutcomeState::Skipped { reason } = &outcomes[2].state else { panic!("the HEIC is skipped, got {:?}", outcomes[2].state) };
+        assert_eq!(reason.code, SkipCode::UnsupportedFormat);
+        assert_eq!(reason.message, "HEIC isn't compressed. Convert it to JPEG, then compress the copy. No file was written.");
+        assert_eq!(reason.pointer, Some(OutcomePointer::Tool { tool_id: "heic-convert".into() }));
+        assert!(outcomes[2].output_paths().is_empty() && outcomes[2].error().is_none());
+        for (index, outcome) in outcomes.iter().enumerate().filter(|(index, _)| *index != 2) {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{index}: {:?}", outcome.state);
+            assert_eq!(outcome.output_paths().len(), 1);
+        }
+        let mut written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, ["IMG_4012-compressed.jpg", "appendix-compressed.pdf", "diagram-compressed.png", "hero-banner-compressed.webp", "report-compressed.pdf"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn edit_stack_command_keeps_batch_failures_isolated() {
         let valid = temp_path("cmd_mixed_valid.png");
         let missing = temp_path("cmd_mixed_missing.png");

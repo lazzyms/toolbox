@@ -47,6 +47,11 @@ impl Chunk<'_> {
     fn is_descriptive(&self) -> bool { DESCRIPTIVE.contains(&&self.name) }
 }
 
+/// Whether `bytes` is an animated PNG, found the same way Compress refuses one.
+pub fn is_animated(bytes: &[u8]) -> bool {
+    read_chunks(bytes).is_err_and(|error| error.message == ANIMATED)
+}
+
 /// Splits a PNG into its chunks. The header must come first and the end chunk last, so a file that
 /// was cut short is refused before it is decoded; an animation control chunk refuses the file.
 fn read_chunks(bytes: &[u8]) -> Result<Vec<Chunk<'_>>, ToolError> {
