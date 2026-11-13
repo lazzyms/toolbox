@@ -20,11 +20,12 @@ export const sameLocation = (a: OutputLocation, b: OutputLocation) =>
     a === 'alongsideInput' || b === 'alongsideInput' ? a === b : a.customFolder === b.customFolder;
 
 // Commands that always write a different file type than they read, as named by the native output code.
+// An empty extension means the output is a folder.
 const FIXED_OUTPUT_EXTENSIONS: Partial<Record<ToolCommand, string>> = {
     extract_from_pdf: 'txt',
     remove_image_background: 'png',
     blur_faces: 'png',
-    generate_icon_set: 'png',
+    generate_icon_set: '',
     extract_gif_frames: 'png',
 };
 

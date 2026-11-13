@@ -4214,11 +4214,11 @@ mod command_tests {
         outputs
     }
 
-    // Icon presets and TIFF Split mode predate declared suffixes and keep their
-    // shipped names. Extract from PDF declares its text suffix and names its images folder -images.
+    // TIFF Split mode predates declared suffixes and keeps its shipped names.
+    // Extract from PDF declares its text suffix and names its images folder -images.
     // Extract GIF Frames writes one timings file beside its frames. These are the only
     // outputs allowed a different suffix family.
-    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page"), ("extract_from_pdf", "-images"), ("extract_gif_frames", "-timings")];
+    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("process_tiff_pages", "-page"), ("extract_from_pdf", "-images"), ("extract_gif_frames", "-timings")];
 
     fn assert_outputs_use_declared_suffixes(naming: &[(&'static str, PathBuf, Vec<PathBuf>)]) {
         let covered = naming.iter().map(|(command, _, _)| *command).collect::<std::collections::BTreeSet<_>>();
@@ -4302,7 +4302,7 @@ mod command_tests {
             }));
             assert!(outcomes[0].error().is_none(), "{}: {:?}", input.display(), outcomes[0].error());
             assert_eq!(outcomes[0].warnings.len(), usize::from(warned), "{}", input.display());
-            let first = image::open(&outcomes[0].output_paths()[0]).unwrap();
+            let first = image::open(outcomes[0].output_paths()[0].join("web/favicon-16.png")).unwrap();
             assert!(matches!(first.color(), image::ColorType::Rgb8 | image::ColorType::Rgba8));
             assert_eq!(fixtures::red_edge(&first), if input == &oriented { "top" } else { "left" });
         }
@@ -5050,7 +5050,24 @@ mod command_tests {
         assert_eq!(std::fs::read(&pdf).unwrap(), pdf_bytes, "saving a report must not touch its PDF");
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), tiff_compression: None, output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }), rotate: Some(RotateStep { degrees: 90, flip: "horizontal".into() }), tone: Some(ToneStep { brightness: 10, contrast: 0.0, saturation: -20.0, exposure: 0.0 }), watermark: Some(WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: Some(0.3), opacity: 70, color: Some("#FFFFFF".into()), position: Some(WatermarkPosition::Anchor { anchor_x: 1.0, anchor_y: 1.0 }), rotation: -8.0 }), metadata: Some(RemoveMetadataStep {}) }, format: None, output_location: location(&root, "edit stack") }))));
-        outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
+        let icon_outputs = named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") })));
+        assert_eq!(icon_outputs.len(), 1, "an icon set is one folder per master");
+        assert_eq!(std::fs::read_dir(&icon_outputs[0]).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>(), ["web"]);
+        assert_eq!(std::fs::read_dir(icon_outputs[0].join("web")).unwrap().count(), 6, "the Website preset saves its six sizes");
+        outputs.extend(icon_outputs);
+        // Several masters run as one batch: each gets its own folder, and a damaged one fails alone.
+        let damaged_master = root.join("damaged-master.png"); std::fs::write(&damaged_master, b"\x89PNG\r\n\x1a\nnot an image").unwrap();
+        let icon_batch = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone(), damaged_master.clone(), image_two.clone()], preset: "macos".into(), sizes: vec![], output_location: location(&root, "icon batch") }));
+        let icon_batch_folder = root.join("icon batch");
+        assert_eq!(icon_batch.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [image.clone(), damaged_master.clone(), image_two.clone()]);
+        assert_eq!(icon_batch[0].output_paths(), [icon_batch_folder.join("image-icons")]);
+        assert_eq!(icon_batch[2].output_paths(), [icon_batch_folder.join("image-two-icons")]);
+        assert_eq!(icon_batch[1].error().map(|error| error.message.as_str()), Some("Not a readable PNG image. The file may be damaged. Nothing was saved."));
+        let mut batch_entries = std::fs::read_dir(&icon_batch_folder).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        batch_entries.sort();
+        assert_eq!(batch_entries, ["image-icons", "image-two-icons"], "a failed master leaves nothing behind");
+        for set in ["image-icons", "image-two-icons"] { assert_eq!(std::fs::read_dir(icon_batch_folder.join(set).join("macos")).unwrap().count(), 7, "six macOS sizes and the ICNS"); }
+        assert_eq!(std::fs::read(&damaged_master).unwrap(), b"\x89PNG\r\n\x1a\nnot an image");
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
         let image_plan = ImageEditPlan {
