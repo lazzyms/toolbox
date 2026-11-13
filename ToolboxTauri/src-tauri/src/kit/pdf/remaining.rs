@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
-use crate::kit::contracts::{LimitKind, ToolError};
+use crate::kit::contracts::{LimitKind, SkipCode, SkipReason, ToolError};
 use super::metadata::{page_bounds, page_rotation};
 use super::page_ranges::PageRanges;
 use super::{mutation_preflight, PdfMutationIntent};
@@ -98,9 +98,8 @@ pub struct ImagesToPdfRequest {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PdfToTextRequest {
+pub struct RepairPdfRequest {
     pub paths: Vec<PathBuf>,
-    #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
 }
 
@@ -451,32 +450,89 @@ fn materialize_rendered_images(input: &Path, location: &OutputLocation, generate
     JobOutcome::succeeded(input.to_path_buf(), outputs, "PDF rendered to images")
 }
 
-pub fn to_text(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-text", "txt") {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve PDF text output: {error}")),
-    };
+pub const NO_SELECTABLE_TEXT: &str = "PDF contains no selectable text; scanned PDFs require OCR.";
+pub const NO_EMBEDDED_IMAGES: &str = "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.";
+pub const BOTH_WITHOUT_TEXT: &str = "No selectable text, so no text file was made. OCR can read scanned pages.";
+pub const BOTH_WITHOUT_IMAGES: &str = "No images in this PDF, so only the text file was saved.";
+pub const NOTHING_TO_EXTRACT: &str = "Nothing to extract: no selectable text and no images. Nothing was saved.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExtractMode { Text, Images, Both }
+
+impl ExtractMode {
+    fn wants_text(self) -> bool { matches!(self, Self::Text | Self::Both) }
+    fn wants_images(self) -> bool { matches!(self, Self::Images | Self::Both) }
+}
+
+/// One request for Extract from PDF. `pageRange` uses the shared syntax ("1-3, 5, 8-") and applies to every PDF.
+/// `preserveLayout` is accepted for the Text part; today's text routine always follows reading order (#625 reads it).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractFromPdfRequest {
+    pub paths: Vec<PathBuf>,
+    pub mode: ExtractMode,
+    #[serde(default)] pub page_range: Option<String>,
+    pub output_location: OutputLocation,
+    #[allow(dead_code)]
+    #[serde(default)] pub preserve_layout: bool,
+    #[serde(default)] pub min_image_size: Option<u32>,
+}
+
+/// Saves the text, the images, or both from one PDF and reports them as one outcome.
+pub fn extract(request: &ExtractFromPdfRequest, input: PathBuf) -> JobOutcome {
     let document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    let pages = selected_pdf_pages(&document, request.pages.as_ref());
-    let pages = match pages {
+    let pages = match pages_in_range(&document, request.page_range.as_deref()) {
         Ok(pages) if !pages.is_empty() => pages,
         Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
         Err(error) => return failure(input, error),
     };
-    match document.extract_text(&pages) {
-        Ok(text) => {
-            let text = normalize_pdf_text(&text);
-            if text.is_empty() { return failure(input, "PDF contains no selectable text; scanned PDFs require OCR.".to_string()); }
-            match fs::write(output.path(), text) {
-                Ok(_) => match output.publish() {
-                    Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF text extracted in page order"),
-                    Err(error) => failure(input, format!("Could not publish text output: {error}")),
-                },
-                Err(error) => failure(input, format!("Could not write text output: {error}")),
+    let text = if request.mode.wants_text() {
+        match write_text(&input, &document, &pages, &request.output_location) {
+            Ok(text) => text,
+            Err(error) => return failure(input, error),
+        }
+    } else { None };
+    let images = if request.mode.wants_images() {
+        match write_images(&input, &document, &pages, &request.output_location, request.min_image_size) {
+            Ok(images) => images,
+            Err((published, error)) => {
+                let outputs = text.into_iter().chain(published).collect();
+                return JobOutcome::failure_with_outputs(input, outputs, ToolError::processing(error));
             }
-        },
-        Err(error) => failure(input, format!("Could not extract selectable PDF text: {error}")),
+        }
+    } else { Vec::new() };
+    match (request.mode, text, images.is_empty()) {
+        (ExtractMode::Text, Some(text), _) => JobOutcome::succeeded(input, vec![text], "PDF text extracted in page order"),
+        (ExtractMode::Text, None, _) => failure(input, NO_SELECTABLE_TEXT.to_string()),
+        (ExtractMode::Images, _, true) => failure(input, NO_EMBEDDED_IMAGES.to_string()),
+        (ExtractMode::Images, _, false) => JobOutcome::succeeded(input, images, "Embedded JPEG images extracted without recompression"),
+        (ExtractMode::Both, Some(text), false) => {
+            let detail = format!("Saved the text and {} {}.", images.len(), if images.len() == 1 { "image" } else { "images" });
+            JobOutcome::succeeded(input, std::iter::once(text).chain(images).collect(), detail)
+        }
+        (ExtractMode::Both, Some(text), true) => JobOutcome::succeeded(input, vec![text], BOTH_WITHOUT_IMAGES),
+        (ExtractMode::Both, None, false) => JobOutcome::succeeded(input, images, BOTH_WITHOUT_TEXT),
+        (ExtractMode::Both, None, true) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NOTHING_TO_EXTRACT)),
     }
+}
+
+/// Resolves the shared range syntax against one PDF into 1-based page numbers in document order.
+fn pages_in_range(document: &Document, range: Option<&str>) -> Result<Vec<u32>, String> {
+    let count = document.get_pages().len();
+    let Some(raw) = range.filter(|value| !value.trim().is_empty()) else { return Ok((1..=count as u32).collect()); };
+    let spans = PageRanges::parse(raw)?.within(count)?;
+    Ok(spans.into_iter().flat_map(|(first, last)| first as u32..=last as u32).collect::<std::collections::BTreeSet<_>>().into_iter().collect())
+}
+
+/// Writes the selected pages' text. `None` means the pages hold no selectable text, and nothing is written.
+fn write_text(input: &Path, document: &Document, pages: &[u32], location: &OutputLocation) -> Result<Option<PathBuf>, String> {
+    let text = document.extract_text(pages).map_err(|error| format!("Could not extract selectable PDF text: {error}"))?;
+    let text = normalize_pdf_text(&text);
+    if text.is_empty() { return Ok(None); }
+    let output = OutputNaming::reserve_destination(input, location, "-text", "txt").map_err(|error| format!("Could not reserve PDF text output: {error}"))?;
+    fs::write(output.path(), text).map_err(|error| format!("Could not write text output: {error}"))?;
+    output.publish().map(Some).map_err(|error| format!("Could not publish text output: {error}"))
 }
 
 fn normalize_pdf_text(text: &str) -> String {
@@ -484,7 +540,7 @@ fn normalize_pdf_text(text: &str) -> String {
 }
 
 /// One embedded image found in the selected pages, in discovery order.
-/// The JPEG-only writer reads only page, index, filters and data; the rest is for the
+/// The JPEG-only writer reads only page, index, filters, size and data; the rest is for the
 /// decoding and deduplication work in #426.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -501,19 +557,6 @@ struct ImageCandidate<'a> {
     soft_mask: Option<ObjectId>,
     mask: Option<ObjectId>,
     data: &'a [u8],
-}
-
-pub fn extract_images(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
-    let document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    let pages = match selected_pdf_pages(&document, request.pages.as_ref()) {
-        Ok(pages) => pages,
-        Err(error) => return failure(input, error),
-    };
-    let candidates = match discover_images(&document, &pages) {
-        Ok(candidates) => candidates,
-        Err(error) => return failure(input, error),
-    };
-    write_images(&input, &request.output_location, &candidates)
 }
 
 /// Lists the embedded images of the selected one-based pages, in page order and then
@@ -542,46 +585,37 @@ fn discover_images<'a>(document: &'a Document, pages: &[u32]) -> Result<Vec<Imag
     Ok(candidates)
 }
 
-/// Writes each candidate through OutputNaming and publishes them only when every
-/// candidate was written.
-fn write_images(input: &Path, location: &OutputLocation, candidates: &[ImageCandidate]) -> JobOutcome {
+/// Copies the selected pages' embedded JPEG images as they are, skipping those smaller than
+/// `min_size` on either side. An empty list means there were none to save.
+/// On failure nothing new is published, except images already published when publishing itself fails.
+fn write_images(input: &Path, document: &Document, pages: &[u32], location: &OutputLocation, min_size: Option<u32>) -> Result<Vec<PathBuf>, (Vec<PathBuf>, String)> {
+    let candidates = discover_images(document, pages).map_err(|error| (Vec::new(), error))?;
     let mut reservations = Vec::new();
-    for candidate in candidates {
+    for candidate in &candidates {
+        if min_size.is_some_and(|min| candidate.width < i64::from(min) || candidate.height < i64::from(min)) { continue; }
         let Some(filters) = &candidate.filters else {
-            return extraction_failure(input, reservations, "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.");
+            return Err((Vec::new(), "PDF contains an embedded image with no supported filter; extraction stopped without a complete result.".to_string()));
         };
         if filters.iter().any(|filter| filter != "DCTDecode") {
-            return extraction_failure(input, reservations, format!("PDF image on page {} uses an unsupported filter; only original JPEG images can be extracted without recompression.", candidate.page));
+            return Err((Vec::new(), format!("PDF image on page {} uses an unsupported filter; only original JPEG images can be extracted without recompression.", candidate.page)));
         }
-        let reservation = match OutputNaming::reserve_destination(input, location, &format!("-image-{}-{}", candidate.page, candidate.index), "jpg") {
-            Ok(reservation) => reservation,
-            Err(error) => return extraction_failure(input, reservations, format!("Could not reserve extracted image output: {error}")),
-        };
-        if let Err(error) = fs::write(reservation.path(), candidate.data) {
-            return extraction_failure(input, reservations, format!("Could not write extracted image: {error}"));
-        }
+        let reservation = OutputNaming::reserve_destination(input, location, &format!("-image-{}-{}", candidate.page, candidate.index), "jpg")
+            .map_err(|error| (Vec::new(), format!("Could not reserve extracted image output: {error}")))?;
+        fs::write(reservation.path(), candidate.data).map_err(|error| (Vec::new(), format!("Could not write extracted image: {error}")))?;
         reservations.push(reservation);
     }
-    if reservations.is_empty() {
-        return failure(input.to_path_buf(), "No embedded JPEG images were found. Non-JPEG PDF image filters are not extractable without recompression.".to_string());
-    }
-    publish_extracted_images(input.to_path_buf(), reservations)
+    publish_extracted_images(reservations)
 }
 
-fn publish_extracted_images(input: PathBuf, reservations: Vec<OutputReservation>) -> JobOutcome {
+fn publish_extracted_images(reservations: Vec<OutputReservation>) -> Result<Vec<PathBuf>, (Vec<PathBuf>, String)> {
     let mut outputs = Vec::with_capacity(reservations.len());
     for reservation in reservations {
         match reservation.publish() {
             Ok(path) => outputs.push(path),
-            Err(error) => return JobOutcome::failure_with_outputs(input, outputs, ToolError::processing(format!("Could not publish extracted image: {error}"))),
+            Err(error) => return Err((outputs, format!("Could not publish extracted image: {error}"))),
         }
     }
-    JobOutcome::succeeded(input, outputs, "Embedded JPEG images extracted without recompression")
-}
-
-fn extraction_failure(input: &Path, reservations: Vec<OutputReservation>, message: impl Into<String>) -> JobOutcome {
-    drop(reservations);
-    failure(input.to_path_buf(), message.into())
+    Ok(outputs)
 }
 
 fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Result<Vec<u32>, String> {
@@ -713,7 +747,7 @@ pub fn rotate(request: &RotatePdfRequest, input: PathBuf) -> JobOutcome {
     save(document, input, output, &format!("{rotated} {noun} rotated {degrees}°"))
 }
 
-pub fn repair(request: &PdfToTextRequest, input: PathBuf) -> JobOutcome {
+pub fn repair(request: &RepairPdfRequest, input: PathBuf) -> JobOutcome {
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-repaired", "pdf") {
         Ok(output) => output,
@@ -1466,7 +1500,7 @@ pub(crate) mod tests {
         fs::create_dir_all(&temp).unwrap();
         let input=temp.join("source.pdf");
         image_extraction_fixture(&input);
-        let outcome=extract_images(&PdfToTextRequest { paths:vec![input.clone()], pages:None, output_location:OutputLocation::AlongsideInput },input.clone());
+        let outcome=extract(&ExtractFromPdfRequest { paths:vec![input.clone()], mode:ExtractMode::Images, page_range:None, output_location:OutputLocation::AlongsideInput, preserve_layout:false, min_image_size:None },input.clone());
 
         assert!(outcome.error().is_some(),"expected unsupported image filter to fail");
         assert!(outcome.output_paths().is_empty());
@@ -1476,7 +1510,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn extraction_failure_preserves_a_competing_replacement() {
+    fn an_abandoned_image_reservation_preserves_a_competing_replacement() {
         let temp=std::env::temp_dir().join(format!("toolbox_extract_failure_{}_{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(&temp).unwrap();
         let input=temp.join("source.pdf");
@@ -1486,9 +1520,8 @@ pub(crate) mod tests {
         let destination=reservation.destination_path().to_path_buf();
         fs::write(&destination,b"competing replacement").unwrap();
 
-        let outcome=extraction_failure(&input,vec![reservation],"extraction stopped");
+        drop(reservation);
 
-        assert!(outcome.error().is_some());
         assert_eq!(fs::read(destination).unwrap(),b"competing replacement");
         fs::remove_dir_all(temp).unwrap();
     }
@@ -1512,10 +1545,9 @@ pub(crate) mod tests {
         fs::write(second.path(), b"second extracted image").unwrap();
         fs::write(&second_destination, b"competing replacement").unwrap();
 
-        let outcome = publish_extracted_images(input.clone(), vec![first, second]);
+        let (published, _) = publish_extracted_images(vec![first, second]).unwrap_err();
 
-        assert!(outcome.error().is_some());
-        assert_eq!(outcome.output_paths(), vec![first_destination.clone()]);
+        assert_eq!(published, vec![first_destination.clone()]);
         assert_eq!(fs::read(&first_destination).unwrap(), b"first extracted image");
         assert_eq!(fs::read(&second_destination).unwrap(), b"competing replacement");
         fs::remove_dir_all(temp).unwrap();
@@ -1870,7 +1902,7 @@ pub(crate) mod tests {
         bytes.extend_from_slice(b"xref\ngarbage\n%%EOF\n");
         fs::write(&input, &bytes).unwrap();
 
-        let outcome = repair(&PdfToTextRequest { pages: None, paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
+        let outcome = repair(&RepairPdfRequest { paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
         assert!(outcome.error().is_none(), "{:?}", outcome.error());
         assert_eq!(outcome.detail, "PDF repaired");
         assert_eq!(fs::read(&input).unwrap(), bytes, "repair must not modify the original");
@@ -1879,7 +1911,7 @@ pub(crate) mod tests {
         let _ = fs::remove_file(&outcome.output_paths()[0]);
 
         fs::write(&input, b"not a pdf at all").unwrap();
-        let broken = repair(&PdfToTextRequest { pages: None, paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
+        let broken = repair(&RepairPdfRequest { paths: vec![input.clone()], output_location: OutputLocation::AlongsideInput }, input.clone());
         assert!(broken.error().is_some());
         assert!(broken.output_paths().is_empty());
         let _ = fs::remove_file(input);

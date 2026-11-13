@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn page_capability_rejects_an_explicit_empty_selection() {
-        let outcomes = validate_page_selection("pdf_to_text", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
+        let outcomes = validate_page_selection("pdf_to_images", &[PathBuf::from("source.pdf")], Some(&[])).unwrap_err();
 
         assert_eq!(outcomes.len(), 1);
         assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
@@ -985,8 +985,10 @@ mod tests {
         assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-cropped", false), "the edit stack runs every image as its own job");
         assert_eq!(native_capability("crop_images").unwrap().input_cardinality, InputCardinality::Single);
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
-        let pdf = native_capability("pdf_to_text").unwrap();
-        assert!(pdf.supports_page_selection && !pdf.supports_preview);
+        let extract = native_capability("extract_from_pdf").unwrap();
+        assert!(extract.supports_page_selection && !extract.supports_preview);
+        assert_eq!(extract.input_cardinality, InputCardinality::Multiple);
+        assert!(native_capability("pdf_to_text").is_none() && native_capability("extract_pdf_images").is_none());
         assert!(!native_capability("ocr_pdf").unwrap().native_available);
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);

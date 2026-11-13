@@ -412,7 +412,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(34);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -768,7 +768,7 @@ for (const layout of [
         await expect(commands.first()).toHaveAttribute("tabindex", "-1");
 
         await page.keyboard.press("Enter");
-        await expect(page.getByTestId("active-tool")).toHaveText(UtilityRegistry[11].id);
+        await expect(page.getByTestId("active-tool")).toHaveText(UtilityRegistry.filter((tool) => tool.status !== "unavailable")[11].id);
         await expect(commands.nth(11)).toHaveAttribute("aria-pressed", "true");
         await page.screenshot({ path: testInfo.outputPath(`rail-harness-${layout.name.replace(" ", "-")}.png`) });
     });
@@ -1430,11 +1430,11 @@ test("TIFF workspace expands internal pages and sends the displayed order", asyn
 
 test("non-previewable PDF conversions identify source selection and show deterministic output limits", async ({ page }) => {
     await page.goto("/");
-    await openFromHome(page, "PDF to Text");
+    await openFromHome(page, "PDF to Images");
     await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
-    await expect(page.getByText("Output preview unavailable. Export creates a text file from the selected pages.", { exact: true })).toBeVisible();
+    await expect(page.getByText(/^Output preview unavailable\. Export renders pages? [\d,-]+ at 150 DPI as JPEG image files\.$/)).toBeVisible();
     await expect(page.getByRole("img", { name: "Source page preview 1" })).toBeVisible();
 
     const conversionRail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
@@ -1462,10 +1462,10 @@ test("PDF conversion visibly rejects retained files when an action changes forma
     await chooseFixture(page, fixturePath);
 
     const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
-    await rail.getByRole("button", { name: "PDF to Text", exact: true }).click();
-    await expect(page.getByText("1 file won't run with PDF to Text. It stays in the list for other actions.", { exact: true })).toBeVisible();
+    await rail.getByRole("button", { name: "Extract from PDF", exact: true }).click();
+    await expect(page.getByText("1 file won't run with Extract from PDF. It stays in the list for other actions.", { exact: true })).toBeVisible();
     await expect(page.getByRole("option", { name: fixtureName })).toContainText("Won't run");
-    await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Extract", exact: true })).toBeDisabled();
     const inspections = await page.evaluate(() =>
         (window as TestWindow).__toolboxInvocations?.filter(({ command }) => command === "inspect_pdf") ?? [],
     );
@@ -1474,7 +1474,7 @@ test("PDF conversion visibly rejects retained files when an action changes forma
 
 test("PDF page-scoped conversions send the selected pages and keep OCR gated", async ({ page }) => {
     await page.goto("/");
-    await openFromHome(page, "PDF to Text");
+    await openFromHome(page, "PDF to Images");
     await chooseFixture(page, "/local/document.scoped.pdf");
     const pageOne = page.getByRole("checkbox", { name: "Page 1" });
     const pageThree = page.getByRole("checkbox", { name: "Page 3" });
@@ -1484,16 +1484,147 @@ test("PDF page-scoped conversions send the selected pages and keep OCR gated", a
     await pageThree.focus();
     await page.keyboard.press("Space");
     await expect(pageThree).not.toBeChecked();
-    await page.getByRole("button", { name: "Export PDF to Text", exact: true }).click();
+    await page.getByRole("button", { name: "Export PDF to Images", exact: true }).click();
 
-    const textInvocation = await page.evaluate(() =>
-        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "pdf_to_text"),
+    const imagesInvocation = await page.evaluate(() =>
+        (window as TestWindow).__toolboxInvocations?.find(({ command }) => command === "pdf_to_images"),
     );
-    expect(textInvocation?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pages: [1] } });
+    expect(imagesInvocation?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf"], pages: [1] } });
 
     const ocrButton = page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "OCR PDF", exact: true });
     await expect(ocrButton).toBeDisabled();
     await expect(ocrButton).toHaveAttribute("title", "OCR PDF is unavailable in this build");
+});
+
+test.describe("Extract from PDF", () => {
+    const pdfs = ["/local/report.pdf", "/local/site-survey-scan.pdf"];
+    const extractRequest = async (page: Page) => {
+        const runs = await page.evaluate(() =>
+            ((window as TestWindow).__toolboxInvocations ?? []).filter(({ command }) => command === "extract_from_pdf"),
+        );
+        expect(runs).toHaveLength(1);
+        return (runs[0].args as { request: unknown }).request;
+    };
+    const openWithPdfs = async (page: Page) => {
+        await page.goto("/");
+        await openFromHome(page, "Extract from PDF");
+        await page.evaluate((pdfs) => { (window as TestWindow).__toolboxDialogResults = [pdfs]; }, pdfs);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await expect(page.getByText("site-survey-scan.pdf", { exact: true }).first()).toBeVisible();
+    };
+    const extractModes = (page: Page) => page.getByRole("radiogroup", { name: "Extract", exact: true });
+    const textOptions = (page: Page) => page.getByRole("checkbox", { name: "Preserve layout" });
+    const imageOptions = (page: Page) => page.getByRole("checkbox", { name: "Skip small images" });
+
+    test("Both is the default and sends one request for every PDF with both option groups", async ({ page }) => {
+        await openWithPdfs(page);
+        await expect(extractModes(page).getByRole("radio", { name: "Both", exact: true })).toHaveAttribute("aria-checked", "true");
+        await expect(page.getByText("A text file and the embedded images of each PDF.", { exact: true })).toBeVisible();
+        await expect(textOptions(page)).toBeVisible();
+        await expect(imageOptions(page)).toBeVisible();
+        await expect(page.getByRole("textbox", { name: "Page range for every PDF" })).toHaveCount(0);
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+
+        expect(await extractRequest(page)).toEqual({
+            paths: pdfs,
+            mode: "both",
+            pageRange: null,
+            outputLocation: "alongsideInput",
+            preserveLayout: false,
+            minImageSize: null,
+        });
+    });
+
+    test("Text shows only the text options and sends the layout choice and page range", async ({ page }) => {
+        await openWithPdfs(page);
+        await extractModes(page).getByRole("radio", { name: "Text", exact: true }).click();
+        await expect(page.getByText("One text file for each PDF, in reading order.", { exact: true })).toBeVisible();
+        await expect(textOptions(page)).toBeVisible();
+        await expect(imageOptions(page)).toHaveCount(0);
+        await expect(page.getByRole("spinbutton", { name: "Smaller than" })).toHaveCount(0);
+        await textOptions(page).click();
+        await page.getByRole("radio", { name: "Range", exact: true }).click();
+        const range = page.getByRole("textbox", { name: "Page range for every PDF" });
+        const run = page.getByRole("button", { name: "Extract from 2 PDFs", exact: true });
+        await range.fill("1-3, 9-8");
+        await expect(page.getByRole("alert")).toHaveText("9-8 runs backwards. Write it as 8-9.");
+        await expect(range).toHaveAttribute("aria-invalid", "true");
+        await expect(run).toBeDisabled();
+        await range.fill("1-3, 5, 8-");
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        await run.click();
+
+        expect(await extractRequest(page)).toEqual({
+            paths: pdfs,
+            mode: "text",
+            pageRange: "1-3, 5, 8-",
+            outputLocation: "alongsideInput",
+            preserveLayout: true,
+            minImageSize: null,
+        });
+    });
+
+    test("Images shows only the image options and sends the minimum image size", async ({ page }) => {
+        await openWithPdfs(page);
+        await textOptions(page).click();
+        await extractModes(page).getByRole("radio", { name: "Images", exact: true }).click();
+        await expect(page.getByText("The embedded images of each PDF, saved next to it.", { exact: true })).toBeVisible();
+        await expect(textOptions(page)).toHaveCount(0);
+        await expect(imageOptions(page)).toBeVisible();
+        await expect(page.getByRole("spinbutton", { name: "Smaller than" })).toHaveCount(0);
+        await imageOptions(page).click();
+        const minSize = page.getByRole("spinbutton", { name: "Smaller than" });
+        await expect(minSize).toHaveValue("64");
+        await minSize.fill("120");
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+
+        expect(await extractRequest(page)).toEqual({
+            paths: pdfs,
+            mode: "images",
+            pageRange: null,
+            outputLocation: "alongsideInput",
+            preserveLayout: false,
+            minImageSize: 120,
+        });
+    });
+
+    test("a Both run shows one row per PDF with the text and images together and the missing part named", async ({ page }) => {
+        await openWithPdfs(page);
+        await page.evaluate(() => {
+            (window as TestWindow).__toolboxProcessingResults = [
+                {
+                    inputPath: "/local/report.pdf",
+                    outputPaths: ["/local/report-text.txt", "/local/report-image-1-0.jpg", "/local/report-image-3-0.jpg"],
+                    detail: "Saved the text and 2 images.",
+                    state: "succeeded",
+                    failure: null,
+                    reason: null,
+                    warnings: [],
+                },
+                {
+                    inputPath: "/local/site-survey-scan.pdf",
+                    outputPaths: ["/local/site-survey-scan-image-1-0.jpg"],
+                    detail: "No selectable text, so no text file was made. OCR can read scanned pages.",
+                    state: "succeeded",
+                    failure: null,
+                    reason: null,
+                    warnings: [],
+                },
+            ];
+        });
+        await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
+
+        const rows = page.locator(".result-row");
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
+        await expect(rows.nth(0)).toContainText("3 files, report-text.txt to report-image-3-0.jpg");
+        await expect(rows.nth(0)).toContainText("Saved the text and 2 images.");
+        await expect(rows.nth(0).getByRole("button", { name: "Open report-text.txt", exact: true })).toBeVisible();
+        await expect(rows.nth(1)).toHaveAttribute("data-state", "succeeded");
+        await expect(rows.nth(1)).toContainText("site-survey-scan-image-1-0.jpg");
+        await expect(rows.nth(1)).toContainText("No selectable text, so no text file was made. OCR can read scanned pages.");
+        expect(((await extractRequest(page)) as { mode: string }).mode).toBe("both");
+    });
 });
 
 test("rotate PDF sends the chosen direction and zero-based pages", async ({ page }) => {
@@ -2070,12 +2201,12 @@ test("single-input replacement keeps the source and edit state after cancellatio
 
 test("page-scoped actions disable export when the explicit selection is empty", async ({ page }) => {
     await page.goto("/");
-    await openFromHome(page, "PDF to Text");
+    await openFromHome(page, "PDF to Images");
     await chooseFixture(page, pdfFixturePath);
     const pageCheckbox = page.getByRole("checkbox", { name: "Page 1" });
     await expect(pageCheckbox).toBeChecked();
     await pageCheckbox.click();
-    await expect(page.getByRole("button", { name: "Export PDF to Text", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Export PDF to Images", exact: true })).toBeDisabled();
 });
 
 test("PDF replacement clears stale inspection state while inspection is pending or rejected", async ({ page }) => {
@@ -2109,8 +2240,8 @@ test("PDF conversion resets the displayed scope when switching actions", async (
     await page.getByRole("textbox", { name: "Page range" }).fill("1");
     await expect(page.getByRole("checkbox", { name: "Page 2" })).not.toBeChecked();
 
-    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Text", exact: true }).click();
-    await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
+    await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "Extract from PDF", exact: true }).click();
+    await expect(page.getByRole("checkbox", { name: "Page 3" })).toHaveCount(0);
     await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
     await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeVisible();
 
@@ -2230,7 +2361,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(34);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {
@@ -2399,9 +2530,11 @@ test.describe("per-run destination", () => {
         await expect(example).toHaveText("icon-edited.webp");
 
         await page.goto("/");
-        await openFromHome(page, "PDF to Text");
+        await openFromHome(page, "Extract from PDF");
         await chooseFixture(page, pdfFixturePath);
         await expect(example).toHaveText("document-text.txt");
+        await page.getByRole("radio", { name: "Images", exact: true }).click();
+        await expect(example).toHaveText("document-image-1-0.jpg");
 
         await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
         await expect(example).toHaveText("document-images.jpg");
