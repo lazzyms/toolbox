@@ -178,6 +178,7 @@ jobs:
         run: |
           npm run tauri build -- --target ${{ matrix.target }} --config release-config.json
           ./scripts/bundle-qpdf.sh "$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app"
+          node scripts/check-release-readiness.mjs --fonts "$(pwd)/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Toolbox.app/Contents/Resources/resources/fonts"
           mkdir -p release-assets
           archive="$(find src-tauri/target/${{ matrix.target }}/release/bundle/macos -name '*.app.tar.gz' -print -quit)"
           cp "$archive" "release-assets/Toolbox-${{ matrix.artifact }}.app.tar.gz"
