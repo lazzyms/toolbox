@@ -599,6 +599,7 @@ async function center(page: Page, position: number, side: 'left' | 'right' | 'mi
 }
 
 test('dragging selected pages moves them together, shows the count and the drop position, and exports that order', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
   await openReport(page);
   await option(page, 1).click();
   await option(page, 3).click({ modifiers: ['Meta'] });

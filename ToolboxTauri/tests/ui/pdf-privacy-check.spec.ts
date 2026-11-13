@@ -92,6 +92,7 @@ type HarnessWindow = Window & {
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(({ cleanPath, leakyPath, ndaPath, brokenPath, lockedPath, lockedPassword, cleanReport, leakyReport, ndaReport }) => {
+    Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
     const w = window as unknown as HarnessWindow;
     w.calls = [];
     w.clipboard = [];
