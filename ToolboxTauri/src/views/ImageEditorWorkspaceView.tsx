@@ -19,6 +19,7 @@ import {
   defaultImageCropStep,
   defaultImageResizeStep,
   defaultImageRotateStep,
+  defaultImageToneStep,
   editedImageExtension,
   emptyImageEditPlan,
   imageEditRequestPlan,
@@ -40,6 +41,7 @@ import {
   type ImageEditStackStep,
   type ImageResizeStep,
   type ImageRotateStep,
+  type ImageToneStep,
 } from "../features/image-editor/session";
 import { ImageEditStackPanel, type StackMessage } from "./ImageEditStackPanel";
 import { Button } from "../components/ui/button";
@@ -53,10 +55,6 @@ import { UtilityRegistry, workspaceById } from "../registry";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 
 type ImageEditorDraftValues = {
-  brightness: number;
-  contrast: number;
-  saturation: number;
-  exposure: number;
   watermarkText: string;
   watermarkOpacity: number;
   watermarkX: number;
@@ -64,9 +62,9 @@ type ImageEditorDraftValues = {
 };
 
 // Tools that are steps in the shared edit stack, not drafts of the edit plan.
-const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate" };
-const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate" };
-const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep };
+const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate", "image-tone": "tone" };
+const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate", tone: "image-tone" };
+const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep, tone: defaultImageToneStep };
 
 const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation | null => {
   if (stackStepForTool[id]) return null;
@@ -76,13 +74,7 @@ const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageE
     opacity: values.watermarkOpacity,
     position: { x: values.watermarkX, y: values.watermarkY },
   };
-  return {
-    kind: "tone",
-    brightness: values.brightness,
-    contrast: values.contrast,
-    saturation: values.saturation,
-    exposure: values.exposure,
-  };
+  return null;
 };
 
 const imageEditLabel = (edit: ImageEditOperation) => {
@@ -149,10 +141,6 @@ export const ImageEditorWorkspaceView = ({
   onFilesChange?: (paths: readonly string[]) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
-  const [brightness, setBrightness] = useState(0);
-  const [contrast, setContrast] = useState(0);
-  const [saturation, setSaturation] = useState(0);
-  const [exposure, setExposure] = useState(0);
   const [watermarkText, setWatermarkText] = useState("Toolbox");
   const [watermarkOpacity, setWatermarkOpacity] = useState(20);
   const [watermarkX, setWatermarkX] = useState(0);
@@ -160,7 +148,6 @@ export const ImageEditorWorkspaceView = ({
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
   const draft = buildImageEditDraft(activeUtility.id, {
-    brightness, contrast, saturation, exposure,
     watermarkText, watermarkOpacity, watermarkX, watermarkY,
   });
   const draftKey = JSON.stringify(draft);
@@ -236,13 +223,8 @@ export const ImageEditorWorkspaceView = ({
         if (stackStep) {
           return invoke<ToolResult>("export_image_edit_stack", { runId, request: { paths, steps: imageEditStackRequestSteps(stack.present), outputLocation } });
         }
-        if (activeUtility.id === "image-watermark") {
-          return invoke<ToolResult>("watermark_images", { runId,
-            request: { paths, opacity: watermarkOpacity, text: watermarkText, position: { x: watermarkX, y: watermarkY }, outputLocation } satisfies WatermarkImagesRequest,
-          });
-        }
-        return invoke<ToolResult>("adjust_image_tone", { runId,
-          request: { paths, brightness, contrast, saturation, exposure, outputLocation },
+        return invoke<ToolResult>("watermark_images", { runId,
+          request: { paths, opacity: watermarkOpacity, text: watermarkText, position: { x: watermarkX, y: watermarkY }, outputLocation } satisfies WatermarkImagesRequest,
         });
       }}
       onRunCombined={(paths, outputLocation, { runId }) => invoke<ToolResult>("export_image_edit_plan", { runId,
@@ -264,6 +246,7 @@ export const ImageEditorWorkspaceView = ({
           onEditCrop={(crop: ImageCropStep, coalesceKey?: string) => changeStack((current) => ({ ...current, crop }), null, coalesceKey)}
           onEditResize={(resize: ImageResizeStep, coalesceKey?: string) => changeStack((current) => ({ ...current, resize }), null, coalesceKey)}
           onEditRotate={(rotate: ImageRotateStep) => changeStack((current) => ({ ...current, rotate }), null)}
+          onEditTone={(tone: ImageToneStep, coalesceKey?: string) => changeStack((current) => ({ ...current, tone }), null, coalesceKey)}
           onRemove={(step) => changeStack(
             (current) => current[step] ? { ...current, [step]: undefined } : null,
             { text: `${imageEditStepLabels[step]} removed. The other steps keep their settings.`, undo: true },
@@ -279,14 +262,6 @@ export const ImageEditorWorkspaceView = ({
           }}
         />
       ) : <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
-        brightness,
-        setBrightness,
-        contrast,
-        setContrast,
-        saturation,
-        setSaturation,
-        exposure,
-        setExposure,
         watermarkText,
         setWatermarkText,
         watermarkOpacity,
@@ -329,14 +304,6 @@ type ImageEditorControlsProps = {
   loading: boolean;
   utility: ToolDefinition;
   onSelectTool?: (id: AtomicToolId) => void;
-  brightness: number;
-  setBrightness: (value: number) => void;
-  contrast: number;
-  setContrast: (value: number) => void;
-  saturation: number;
-  setSaturation: (value: number) => void;
-  exposure: number;
-  setExposure: (value: number) => void;
   watermarkText: string;
   setWatermarkText: (value: string) => void;
   watermarkOpacity: number;
@@ -368,14 +335,6 @@ const ImageEditorControls = ({
   loading,
   utility,
   onSelectTool,
-  brightness,
-  setBrightness,
-  contrast,
-  setContrast,
-  saturation,
-  setSaturation,
-  exposure,
-  setExposure,
   watermarkText,
   setWatermarkText,
   watermarkOpacity,
@@ -576,9 +535,6 @@ const ImageEditorControls = ({
             </div>
           </>
         )}
-        {utility.id === "image-tone" && <>
-          {([["Brightness", brightness, setBrightness], ["Contrast", contrast, setContrast], ["Saturation", saturation, setSaturation], ["Exposure", exposure, setExposure]] as const).map(([label, value, onChange]) => <div className="workspace-field" key={label}><div className="workspace-field-heading"><Label id={`image-tone-${label.toLowerCase()}-label`}>{label}</Label><output>{value}</output></div><Slider aria-labelledby={`image-tone-${label.toLowerCase()}-label`} min={-100} max={100} value={[value]} onValueChange={([next]) => next !== undefined && onChange(next)} /></div>)}
-        </>}
         <Card role="region" className="image-editor-history py-0" aria-label="Image edit history">
           <CardContent className="image-editor-history-content py-4">
           <div className="workspace-panel-intro">
