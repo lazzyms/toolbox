@@ -10,6 +10,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ShortcutHint } from "../../components/ShortcutHint";
+import { workspaceForTool } from "../../registry";
 import { shortcutTarget } from "../../shortcuts";
 import { listPages } from "./pageRanges";
 import { formatPageRange, type ConversionTool, type PageCount, type PagePicks } from "./tool";
@@ -276,16 +277,16 @@ export const ConversionPanel = ({
       {outputPreviewLimitation && <Badge variant="outline" className="max-w-full whitespace-normal" role="status">{outputPreviewLimitation}</Badge>}
       {activeUtility.capability.nativeAvailability === "unavailable" && <Badge variant="outline" className="max-w-full whitespace-normal" role="alert">{activeUtility.title} is unavailable in this build.</Badge>}
 
-      <div className="workspace-panel-intro">
+      {workspaceForTool(activeUtility.id)?.id === "pdf-convert" && <div className="workspace-panel-intro">
         <div className="flex items-center justify-between gap-3">
           <p className="workspace-panel-label">Choose an output</p>
           <Badge variant="outline">On this device</Badge>
         </div>
         <p className="workspace-panel-copy">
           Keep one source surface and switch between page conversion, extraction,
-          document assembly, and splitting outcomes.
+          and document conversion outcomes.
         </p>
-      </div>
+      </div>}
       {OptionsPanel && (
         <OptionsPanel
           options={options}

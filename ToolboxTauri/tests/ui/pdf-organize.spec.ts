@@ -214,7 +214,10 @@ test('several dropped PDFs ask which one to open and point to Merge', async ({ p
   await drop(page, ['/local/a.pdf', '/local/c.pdf']);
   await expect(dialog).toContainText('You dropped 2 PDFs.');
   await dialog.getByRole('button', { name: 'Open Merge', exact: true }).click();
+  await expect(page.locator('.workspace-title')).toHaveText('PDF Editor');
   await expect(page.getByRole('toolbar', { name: 'PDF Editor tools' }).getByRole('button', { name: 'Merge PDF', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('toolbar', { name: 'PDF Conversion tools' })).toHaveCount(0);
+  await expect(page.getByText('Choose an output')).toHaveCount(0);
   await expect(page.getByText('a.pdf').first()).toBeVisible();
   await expect(page.getByText('c.pdf').first()).toBeVisible();
 });
@@ -254,7 +257,11 @@ test('a PDF over the page limit points to Split, shows no grid and renders nothi
   await expect(page.getByRole('button', { name: 'Open File Security' })).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).calls.filter((call: any) => /^(render_pdf_source_thumbnails|preview_pdf_scene_pages|export_pdf_scene)$/.test(call.command)).length)).toBe(0);
   await page.getByRole('button', { name: 'Open Split', exact: true }).click();
+  await expect(page.locator('.workspace-title')).toHaveText('PDF Editor');
   await expect(page.getByRole('toolbar', { name: 'PDF Editor tools' }).getByRole('button', { name: 'Split PDF', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('toolbar', { name: 'PDF Conversion tools' })).toHaveCount(0);
+  await expect(page.getByText('Choose an output')).toHaveCount(0);
+  await expect(page.getByText('archive.pdf').first()).toBeVisible();
 });
 
 const thumbnailRequests = (page: Page): Promise<number[][]> => page.evaluate(() => (window as any).calls
