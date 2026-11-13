@@ -586,6 +586,85 @@ mod tests {
     }
 
     #[test]
+    fn a_heic_that_holds_a_property_list_is_refused_with_a_plain_reason() {
+        let src = temp_path("HEIF Image-plist.heic");
+        let bytes = b"bplist00\xd4\x01\x02\x03\x04\x05\x06\x07\x0aX$versionY$archiverT$topX$objects".to_vec();
+        std::fs::write(&src, &bytes).unwrap();
+        let message = "This file isn't a HEIC image. It looks like an Apple property list, not a photo. Export the original from Photos and try again.";
+
+        assert_eq!(decode(&src).err().as_deref(), Some(message));
+        let preview = tools::inspect_preview(&tools::ImagePreviewRequest { path: src.clone() }).unwrap_err();
+        assert!(preview.ends_with(message), "{preview}");
+        let out = ImageProcessor::convert(src.clone(), OutputFormat::Png, OutputLocation::AlongsideInput);
+        assert_eq!(out.error().map(|error| error.message.as_str()), Some(message));
+        assert!(out.output_paths().is_empty());
+        assert_eq!(std::fs::read(&src).unwrap(), bytes, "the original is never modified");
+        let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn a_file_without_the_format_its_extension_claims_is_refused_by_that_name() {
+        for (name, format) in [("empty.heic", "HEIC"), ("notes.HEIF", "HEIF"), ("scan.jpg", "JPEG"), ("logo.png", "PNG"), ("photo.webp", "WebP"), ("fax.tif", "TIFF")] {
+            let src = temp_path(&format!("claims-{name}"));
+            std::fs::write(&src, b"plain text, not an image").unwrap();
+            assert_eq!(decode(&src).err(), Some(format!("This file isn't a valid {format} image.")), "{name}");
+            let _ = std::fs::remove_file(&src);
+        }
+    }
+
+    #[test]
+    fn an_image_saved_under_another_extension_decodes_by_its_content() {
+        let source = fixtures::red_left_blue_right(64, 32);
+        let cases: [(&str, Vec<u8>, source::ImageFamily); 3] = [
+            ("jpeg-named.heic", fixtures::jpeg_with_orientation(&source, 6), source::ImageFamily::Jpeg),
+            ("heic-named.jpg", fixtures::heic(&source), source::ImageFamily::Heif),
+            ("png-named.heic", { let mut png = Vec::new(); source.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap(); png }, source::ImageFamily::Png),
+        ];
+        for (name, bytes, family) in cases {
+            let src = temp_path(name);
+            std::fs::write(&src, &bytes).unwrap();
+            let decoded = decode(&src).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(decoded.family, family, "{name}");
+            let upright = load_upright_image(&src).unwrap();
+            let expected = if family == source::ImageFamily::Jpeg { (32, 64) } else { (64, 32) };
+            assert_eq!((upright.image.width(), upright.image.height()), expected, "{name} keeps its own orientation handling");
+            let out = ImageProcessor::convert(src.clone(), OutputFormat::Png, OutputLocation::AlongsideInput);
+            assert!(out.error().is_none(), "{name}: {:?}", out.error());
+            assert_eq!(out.output_paths()[0].extension().and_then(|e| e.to_str()), Some("png"), "{name}");
+            assert_eq!(std::fs::read(&src).unwrap(), bytes, "{name} original must stay byte-identical");
+            cleanup(&out.output_paths());
+            let _ = std::fs::remove_file(&src);
+        }
+    }
+
+    #[test]
+    fn a_heic_photo_previews_and_converts_to_png() {
+        let source = fixtures::red_left_blue_right(64, 32);
+        let cases: [(&str, Vec<u8>, (u32, u32)); 3] = [
+            ("IMG_8bit.HEIC", fixtures::heic(&source), (64, 32)),
+            ("IMG_10bit.heic", fixtures::heic_10bit(&source), (64, 32)),
+            ("IMG_rotated.heic", fixtures::heic_rotated(&source, 1), (32, 64)),
+        ];
+        for (name, bytes, size) in cases {
+            let src = temp_path(name);
+            std::fs::write(&src, &bytes).unwrap();
+            let preview = tools::inspect_preview(&tools::ImagePreviewRequest { path: src.clone() }).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!((preview.width, preview.height), size, "{name}");
+            assert!(preview.data_url.starts_with("data:image/png;base64,"), "{name}");
+            let out = ImageProcessor::convert(src.clone(), OutputFormat::Png, OutputLocation::AlongsideInput);
+            assert!(out.error().is_none(), "{name}: {:?}", out.error());
+            let png = &out.output_paths()[0];
+            assert!(png.file_name().unwrap().to_string_lossy().ends_with("-converted.png"), "{}", png.display());
+            let written = image::open(png).unwrap();
+            assert_eq!((written.width(), written.height()), size, "{name}");
+            assert_eq!(fixtures::red_edge(&written), fixtures::red_edge(&load_upright_image(&src).unwrap().image), "{name}");
+            assert_eq!(std::fs::read(&src).unwrap(), bytes, "{name} original must stay byte-identical");
+            cleanup(&out.output_paths());
+            let _ = std::fs::remove_file(&src);
+        }
+    }
+
+    #[test]
     fn upright_loader_reports_high_bit_depth_heic() {
         let path = temp_path("upright-10bit.heic");
         std::fs::write(&path, fixtures::heic_10bit(&fixtures::red_left_blue_right(64, 32))).unwrap();

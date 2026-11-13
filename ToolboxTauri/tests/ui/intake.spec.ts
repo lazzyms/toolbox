@@ -1322,6 +1322,20 @@ test("Convert Image Format sends the batch with one target and shows Skipped, co
     await expect(failed.getByRole("button", { name: "Open broken.webp.out", exact: true })).toHaveCount(0);
 });
 
+test("Convert Image Format names the example output with the target extension for HEIC inputs", async ({ page }) => {
+    await open(page, "Convert Image Format");
+    await drop(page, ["/local/wardrobe/IMG_1921.HEIC", "/local/wardrobe/IMG_1922.heic"]);
+    const example = page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-example");
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "PNG", exact: true }).click();
+
+    await expect(example).toHaveText("IMG_1921-converted.png");
+    await expect(page.getByText(/-edited\.heic/)).toHaveCount(0);
+    await run(page).click();
+    const [request] = await requestFor(page, "convert_images");
+    expect(request).toMatchObject({ paths: ["/local/wardrobe/IMG_1921.HEIC", "/local/wardrobe/IMG_1922.heic"], format: "png" });
+    expect(await requestFor(page, "export_image_edit_plan")).toHaveLength(0);
+});
+
 test("Convert Image Format reports flattened transparency and reduced bit depth on the converted rows", async ({ page }) => {
     await open(page, "Convert Image Format");
     await drop(page, ["/local/logo.png", "/local/floorplan.heic", "/local/plain.png"]);
@@ -1498,29 +1512,61 @@ test("Images to PDF takes HEIC and HEIF, refuses GIF, sends no quality setting a
     await expect(reduced).toContainText("Reduced to 8-bit sRGB to fit in the PDF: page 1 (10-bit).");
 });
 
-test("Images to PDF names the unreadable image when the combine fails", async ({ page }) => {
+test("Images to PDF leaves out a first file that isn't an image and names the PDF after the first included image", async ({ page }) => {
     await open(page, "Images to PDF");
-    await drop(page, ["/local/cover.png", "/local/broken.heic", "/local/back.jpg"]);
-    const reason = "Could not process /local/broken.heic: HEIC decode failed: Invalid input";
-    await page.evaluate((reason) => {
-        const stopped = { kind: "processing", message: `Aggregate operation stopped because /local/broken.heic failed: ${reason}` };
-        (window as unknown as IntakeWindow).__failures = {
-            "/local/cover.png": stopped,
-            "/local/broken.heic": { kind: "processing", message: reason },
-            "/local/back.jpg": stopped,
+    await drop(page, ["/local/HEIF Image-44FF.heic", "/local/cover.png", "/local/back.jpg"]);
+    const notHeic = "This file isn't a HEIC image. It looks like an Apple property list, not a photo. Export the original from Photos and try again.";
+    const leftOut = "1 image left out because it couldn't be read: HEIF Image-44FF.heic.";
+    await page.evaluate(({ notHeic, leftOut }) => {
+        const win = window as unknown as IntakeWindow;
+        const pdf = "/local/cover-combined.pdf";
+        win.__outputs = {
+            "/local/cover.png": { outputPaths: [pdf], detail: "Page 1 of cover-combined.pdf." },
+            "/local/back.jpg": { outputPaths: [pdf], detail: "Page 2 of cover-combined.pdf." },
         };
-    }, reason);
+        win.__warnings = { "/local/cover.png": [{ code: "omittedContent", message: leftOut }] };
+        win.__failures = { "/local/HEIF Image-44FF.heic": { kind: "invalidInput", message: `Left out of cover-combined.pdf. ${notHeic}` } };
+    }, { notHeic, leftOut });
 
     await runAndSave(page);
 
     await expect(results(page)).toHaveCount(3);
-    for (const [index, name] of ["cover.png", "broken.heic", "back.jpg"].entries()) {
+    await expect(page.locator(".result-summary strong")).toContainText("1 failed");
+    const skipped = results(page).nth(0);
+    await expect(skipped).toContainText("HEIF Image-44FF.heic");
+    await expect(skipped).toHaveAttribute("data-state", "failed");
+    await expect(skipped).toContainText(notHeic);
+    await expect(skipped).not.toContainText("Stopped because");
+    await expect(skipped.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+    for (const [index, page_] of [[1, "Page 1"], [2, "Page 2"]] as const) {
         const row = results(page).nth(index);
-        await expect(row).toContainText(name);
-        await expect(row).toHaveAttribute("data-state", "failed");
-        await expect(row).toContainText("/local/broken.heic");
-        await expect(row.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+        await expect(row).toHaveAttribute("data-state", "succeeded");
+        await expect(row).toContainText(`${page_} of cover-combined.pdf.`);
+        await expect(row.getByRole("button", { name: "Open cover-combined.pdf", exact: true })).toBeVisible();
     }
+    await expect(results(page).nth(1)).toHaveAttribute("data-tone", "warn");
+    await expect(results(page).nth(1)).toContainText(leftOut);
+    await expect(page.getByText(/HEIF Image-44FF-combined/)).toHaveCount(0);
+});
+
+test("Images to PDF names every unreadable image when none can be read", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await drop(page, ["/local/HEIF Image-1.heic", "/local/notes.heic"]);
+    const notHeic = "This file isn't a HEIC image. It looks like an Apple property list, not a photo. Export the original from Photos and try again.";
+    await page.evaluate((notHeic) => {
+        (window as unknown as IntakeWindow).__failures = {
+            "/local/HEIF Image-1.heic": { kind: "invalidInput", message: notHeic },
+            "/local/notes.heic": { kind: "invalidInput", message: "This file isn't a valid HEIC image." },
+        };
+    }, notHeic);
+
+    await runAndSave(page);
+
+    await expect(results(page)).toHaveCount(2);
+    await expect(results(page).nth(0)).toHaveAttribute("data-state", "failed");
+    await expect(results(page).nth(0)).toContainText(notHeic);
+    await expect(results(page).nth(1)).toHaveAttribute("data-state", "failed");
+    await expect(results(page).nth(1)).toContainText("This file isn't a valid HEIC image.");
 });
 
 test("Images to PDF takes TIFF and shows how many pages each multi-page TIFF adds", async ({ page }) => {
