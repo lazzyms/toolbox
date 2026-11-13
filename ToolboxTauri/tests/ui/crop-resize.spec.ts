@@ -11,9 +11,13 @@ type CropWindow = Window & {
     __finish: (outcomes: Outcome[]) => void;
     /** Displayed page sizes, in points, for each PDF the preview can read. */
     __scenes: Record<string, Array<{ width: number; height: number }>>;
+    /** The app-wide output setting the shell reads at start. */
+    __outputSettings?: { mode: string; folder: string };
 };
 
 type CropArgs = { runId: string; request: unknown };
+
+const LOCKED = "Unlock the PDF before editing. It is password-protected. Nothing was saved.";
 
 const outcome = (inputPath: string, fields: Partial<Outcome>): Outcome => ({
     inputPath, outputPaths: [], detail: "", state: "succeeded", failure: null, reason: null, warnings: [], ...fields,
@@ -52,7 +56,7 @@ test.beforeEach(async ({ page }) => {
                 }
                 if (command === "plugin:dialog|open") return win.__dialog.shift() ?? null;
                 if (command === "inspect_intake_paths") return (args as { paths: string[] }).paths.map((path) => ({ path, kind: "file" }));
-                if (command === "get_output_settings") return { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
+                if (command === "get_output_settings") return win.__outputSettings ?? { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
                 if (command === "check_output_folder") return "ready";
                 if (command === "cancel_run") return true;
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
@@ -539,7 +543,7 @@ test("a ranged crop reports a cropped PDF, a Skipped PDF with its reason, a remo
         outcome(paths[0], { outputPaths: ["/local/lease-cropped.pdf"], detail: "PDF saved" }),
         outcome(paths[1], { state: "skipped", reason: { code: "rangeEmptyAfterClamping", message: "No pages in 3- are in this PDF, which has 2 pages.", pointer: null } }),
         outcome(paths[2], { outputPaths: ["/local/vendor-nda-cropped.pdf"], detail: "PDF saved", warnings: [{ code: "signatureRemoved", message: "native wording" }] }),
-        outcome(paths[3], { state: "failed", failure: { kind: "invalidInput", message: "Unlock the PDF before editing", pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+        outcome(paths[3], { state: "failed", failure: { kind: "invalidInput", message: LOCKED, pointer: { kind: "tool", toolId: "lock-unlock" } } }),
     ]);
 
     const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
@@ -554,7 +558,8 @@ test("a ranged crop reports a cropped PDF, a Skipped PDF with its reason, a remo
     await expect(results.nth(2)).toContainText("The digital signature was removed, because changing the file breaks it.");
     await expect(results.nth(2)).not.toContainText("native wording");
     await expect(results.nth(3)).toHaveAttribute("data-tone", "fail");
-    await expect(results.nth(3)).toContainText("Unlock the PDF before editing");
+    await expect(results.nth(3)).toContainText(LOCKED);
+    await expect(results.nth(3).getByRole("button", { name: "Open Lock & Unlock", exact: true })).toBeVisible();
 });
 
 const presets = [
@@ -654,7 +659,7 @@ test("a ranged resize reports a resized PDF, a Skipped PDF already at the size, 
         outcome(paths[0], { outputPaths: ["/local/lease-resized.pdf"], detail: "Pages 3–22 changed to A4." }),
         outcome(paths[1], { state: "skipped", reason: { code: "noEffectiveChange", message: "Pages 3–14 are already A4. Nothing was saved.", pointer: null } }),
         outcome(paths[2], { outputPaths: ["/local/vendor-nda-resized.pdf"], detail: "Pages 3–4 changed to A4.", warnings: [{ code: "signatureRemoved", message: "native wording" }] }),
-        outcome(paths[3], { state: "failed", failure: { kind: "invalidInput", message: "Unlock the PDF before editing", pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+        outcome(paths[3], { state: "failed", failure: { kind: "invalidInput", message: LOCKED, pointer: { kind: "tool", toolId: "lock-unlock" } } }),
     ]);
 
     const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
@@ -669,8 +674,92 @@ test("a ranged resize reports a resized PDF, a Skipped PDF already at the size, 
     await expect(results.nth(2)).toHaveAttribute("data-tone", "warn");
     await expect(results.nth(2)).toContainText("The digital signature was removed, because changing the file breaks it.");
     await expect(results.nth(3)).toHaveAttribute("data-tone", "fail");
-    await expect(results.nth(3)).toContainText("Unlock the PDF before editing");
+    await expect(results.nth(3)).toContainText(LOCKED);
+    await expect(results.nth(3).getByRole("button", { name: "Open Lock & Unlock", exact: true })).toBeVisible();
 });
+
+const settingsWrites = (page: Page) => page.evaluate(() =>
+    (window as unknown as CropWindow).__invocations.filter((call) => call.command === "set_output_settings").length);
+
+test("both modes send the app-wide default, then a folder changed for this run only, and never change Settings", async ({ page }) => {
+    await page.addInitScript(() => { (window as unknown as CropWindow).__outputSettings = { mode: "customFolder", folder: "/Users/test/Exports" }; });
+    await openCrop(page);
+    const paths = ["/local/lease.pdf", "/local/scan.pdf"];
+    await addPdfs(page, paths);
+    const destination = page.getByRole("region", { name: "Destination" });
+    const defaultFolder = { customFolder: "/Users/test/Exports" };
+    const cropRun = page.getByRole("button", { name: "Crop 2 PDFs", exact: true });
+    const resizeRun = page.getByRole("button", { name: "Resize 2 PDFs", exact: true });
+    const useCrop = () => page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Crop pages" }).click();
+    const sent = async (requests: typeof cropRequests, run: typeof cropRun, count: number) => {
+        await run.click();
+        await expect.poll(async () => (await requests(page)).length).toBe(count);
+        await finish(page, paths.map((path) => outcome(path, { outputPaths: [path.replace(".pdf", "-out.pdf")] })));
+        await expect(run).toBeEnabled();
+        return ((await requests(page))[count - 1].request as { outputLocation: unknown }).outputLocation;
+    };
+
+    await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Exports");
+    await expect(destination.getByText("This run only")).toHaveCount(0);
+    expect(await sent(cropRequests, cropRun, 1)).toEqual(defaultFolder);
+    await useResize(page);
+    expect(await sent(resizeRequests, resizeRun, 1)).toEqual(defaultFolder);
+
+    await queueDialog(page, "/local/this-run");
+    await destination.getByRole("button", { name: "Change for this run" }).click();
+    await expect(destination.getByText("This run only")).toBeVisible();
+    await expect(destination).toContainText("Your default is ~/Exports. This change ends when you leave Crop and Resize PDF.");
+    expect(await sent(resizeRequests, resizeRun, 2)).toEqual({ customFolder: "/local/this-run" });
+    await useCrop();
+    expect(await sent(cropRequests, cropRun, 2)).toEqual({ customFolder: "/local/this-run" });
+
+    await destination.getByRole("button", { name: "Reset to default" }).click();
+    await expect(destination.getByText("This run only")).toHaveCount(0);
+    expect(await sent(cropRequests, cropRun, 3)).toEqual(defaultFolder);
+    await useResize(page);
+    expect(await sent(resizeRequests, resizeRun, 3)).toEqual(defaultFolder);
+    expect(await settingsWrites(page)).toBe(0);
+});
+
+for (const mode of ["crop", "resize"] as const) {
+    test(`${mode}: a locked PDF points to Lock & Unlock, and damaged and over-limit PDFs fail alone with the recorded limit and no Retry`, async ({ page }) => {
+        await openCrop(page);
+        const paths = ["/local/lease.pdf", "/local/payroll.pdf", "/local/no-media-box.pdf", "/local/archive.pdf", "/local/huge.pdf"];
+        await addPdfs(page, paths);
+        if (mode === "resize") await useResize(page);
+        const verb = mode === "crop" ? "Crop" : "Resize";
+        await page.getByRole("button", { name: `${verb} 5 PDFs`, exact: true }).click();
+        const requests = mode === "crop" ? cropRequests : resizeRequests;
+        await expect.poll(async () => (await requests(page)).length).toBe(1);
+
+        const pages = "More than 5,000 pages, over the limit for one PDF. Use fewer pages and try again.";
+        const size = "Larger than the 1 GB limit for one PDF. Reduce its size and try again.";
+        const damaged = "Page 2 can't be read: PDF page has no media box.";
+        await finish(page, [
+            outcome(paths[0], { outputPaths: [`/local/lease-${mode === "crop" ? "cropped" : "resized"}.pdf`], detail: "PDF saved" }),
+            outcome(paths[1], { state: "failed", failure: { kind: "invalidInput", message: LOCKED, pointer: { kind: "tool", toolId: "lock-unlock" } } }),
+            outcome(paths[2], { state: "failed", failure: { kind: "processing", message: damaged, pointer: null } }),
+            outcome(paths[3], { state: "failed", failure: { kind: "limitExceeded", details: { limit: "pageCount" }, message: pages, pointer: null } }),
+            outcome(paths[4], { state: "failed", failure: { kind: "limitExceeded", details: { limit: "fileSize" }, message: size, pointer: null } }),
+        ]);
+
+        const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(results).toHaveCount(5);
+        await expect(results.nth(0)).toHaveAttribute("data-tone", "ok");
+        for (const [index, message] of [[1, LOCKED], [2, damaged], [3, pages], [4, size]] as const) {
+            await expect(results.nth(index)).toHaveAttribute("data-tone", "fail");
+            await expect(results.nth(index)).toContainText(message);
+        }
+        // Only a damaged file may pass on another try; a locked or over-limit file needs another tool or a smaller file.
+        await expect(results.nth(2).getByRole("button", { name: "Retry no-media-box.pdf" })).toBeVisible();
+        for (const index of [1, 3, 4]) await expect(results.nth(index).getByRole("button", { name: /^Retry/ })).toHaveCount(0);
+        await expect(page.getByRole("list", { name: "Results" }).getByRole("button", { name: "Open Lock & Unlock", exact: true })).toHaveCount(1);
+        await expect(results.nth(3).getByRole("button")).toHaveCount(0);
+
+        await results.nth(1).getByRole("button", { name: "Open Lock & Unlock", exact: true }).click();
+        await expect(page.getByRole("heading", { name: "Lock & Unlock", exact: true })).toBeVisible();
+    });
+}
 
 const sizeField = (page: Page, name: "Width" | "Height") => panel(page).getByRole("textbox", { name, exact: true });
 const useCustomSize = (page: Page) => panel(page).getByLabel("Page size").selectOption({ label: "Custom size" });

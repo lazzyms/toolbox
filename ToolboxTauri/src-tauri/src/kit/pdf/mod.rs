@@ -881,10 +881,12 @@ fn preflight(document: &Document, intent: PdfMutationIntent, allow_signed: bool)
     for (index, kid) in kids.iter().enumerate() {
         let page_id = kid.as_reference().map_err(|_| unsupported())?;
         let page = document.get_dictionary(page_id).map_err(|_| unsupported())?;
-        if page.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Page"
-            || page_id != pages[index]
-            || page.get(b"Parent").map_err(|_| unsupported())?.as_reference().map_err(|_| unsupported())? != pages_root {
+        if page.get(b"Type").map_err(|_| unsupported())?.as_name().map_err(|_| unsupported())? != b"Page" || page_id != pages[index] {
             return Err(unsupported());
+        }
+        // A page that doesn't point back to the tree that lists it is damaged, not nested: name it.
+        if page.get(b"Parent").ok().and_then(|parent| parent.as_reference().ok()) != Some(pages_root) {
+            return Err(format!("Page {} has a missing or wrong /Parent, so the PDF page-tree is malformed; mutation was rejected before output", index + 1));
         }
     }
     if document_has_signature(document, catalog, &pages)? && !(allow_signed && has_signed_signature_field(document)) {

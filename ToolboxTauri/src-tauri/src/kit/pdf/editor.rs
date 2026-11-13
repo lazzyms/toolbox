@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{OutcomePointer, SkipCode, SkipReason, ToolError};
 use super::metadata::{effective_crop_bounds, page_rotation};
 use super::page_ranges::PageRanges;
 use super::{mutation_preflight, note_signature_removed, remove_signatures, PdfMutationIntent, PdfMutationPreflight, SignedPdf};
@@ -229,8 +229,8 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 /// Insets the page's visible area from its displayed top, right, bottom and left edges: by fixed lengths for
 /// margins, or by the parts of the displayed page outside a fractional rectangle.
 fn displayed_crop_box(document: &Document, page_id: ObjectId, page_index: usize, spec: &CropSpec) -> Result<[f32; 4], ToolError> {
-    let bounds = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
-    crop_box_within(bounds, page_rotation(document, page_id), page_user_unit(document, page_id)?, page_index, spec)
+    let bounds = effective_crop_bounds(document, page_id).map_err(on_page(page_index))?;
+    crop_box_within(bounds, page_rotation(document, page_id), page_user_unit(document, page_id, page_index)?, page_index, spec)
 }
 
 /// The crop box for a page whose visible area is `bounds` in user space, shown turned clockwise by `rotation`
@@ -272,13 +272,18 @@ fn ranged_pages(scope: &RangedPageScope, page_count: usize) -> Result<Result<(Ve
     })
 }
 
+/// Names the 0-based page a damaged page dictionary belongs to, so the row says which page to fix.
+fn on_page(page_index: usize) -> impl Fn(String) -> ToolError {
+    move |error| ToolError::processing(format!("Page {} can't be read: {error}", page_index + 1))
+}
+
 /// The page's /UserUnit: how many points one user-space unit spans.
-fn page_user_unit(document: &Document, page_id: ObjectId) -> Result<f32, ToolError> {
+fn page_user_unit(document: &Document, page_id: ObjectId, page_index: usize) -> Result<f32, ToolError> {
     let user_unit = match document.get_dictionary(page_id).ok().and_then(|page| page.get(b"UserUnit").ok()) {
-        Some(value) => super::resolve(document, value).and_then(super::metadata::number).map_err(ToolError::processing)?,
+        Some(value) => super::resolve(document, value).and_then(super::metadata::number).map_err(on_page(page_index))?,
         None => 1.0,
     };
-    if !user_unit.is_finite() || user_unit <= 0.0 { return Err(ToolError::processing("PDF page has an invalid UserUnit.")); }
+    if !user_unit.is_finite() || user_unit <= 0.0 { return Err(on_page(page_index)("PDF page has an invalid UserUnit.".to_string())); }
     Ok(user_unit)
 }
 
@@ -334,8 +339,8 @@ struct PagePlacement {
 
 /// The new page for one page, or None when the page is already that paper as displayed.
 fn resize_placement(document: &Document, page_id: ObjectId, page_index: usize, paper: &PaperSize, orientation: ResizeOrientation, placement: ResizePlacement) -> Result<Option<PagePlacement>, ToolError> {
-    let visible @ [x0, y0, x1, y1] = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
-    let user_unit = page_user_unit(document, page_id)?;
+    let visible @ [x0, y0, x1, y1] = effective_crop_bounds(document, page_id).map_err(on_page(page_index))?;
+    let user_unit = page_user_unit(document, page_id, page_index)?;
     let rotation = page_rotation(document, page_id);
     if rotation % 90 != 0 { return Err(ToolError::processing(format!("Page {} has an unsupported rotation of {rotation} degrees.", page_index + 1))); }
     let quarter_turn = rotation % 180 == 90;
@@ -551,7 +556,7 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
 fn transform_or_skip_pdf_checked<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, signed: SignedPdf, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<Edited, ToolError> {
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
-    if document.is_encrypted() { return failure(input, "Unlock the PDF before editing".to_string()); }
+    if document.is_encrypted() { return locked(input); }
     let pages: Vec<_> = document.get_pages().values().copied().collect();
     if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
     let signature_removed = match signed {
@@ -587,6 +592,14 @@ fn validate_rect_for_page(document: &Document, page_id: lopdf::ObjectId, rect: &
     Ok(())
 }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
+
+pub(crate) const LOCKED_PDF: &str = "Unlock the PDF before editing. It is password-protected. Nothing was saved.";
+
+/// A password-protected PDF can't be edited until it is unlocked, so another try can't pass: the row points
+/// to Lock & Unlock instead of offering Retry.
+fn locked(input_path: PathBuf) -> JobOutcome {
+    JobOutcome::failure(input_path, ToolError::invalid_input(LOCKED_PDF).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }))
+}
 
 #[allow(dead_code)]
 fn _path(_: &Path) {}
