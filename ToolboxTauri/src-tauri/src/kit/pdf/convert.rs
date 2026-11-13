@@ -15,7 +15,7 @@ use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontReport, FontResolver, FontSource, FontStyle, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, expand_tabs, Align, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Paragraph, Span, Style, Theme};
 use crate::kit::pdf::presentation::Include;
-use crate::kit::pdf::{delimited, doc, docx, epub, html, markdown, odp, ods, odt, ppt, pptx, rtf, xls, xlsx};
+use crate::kit::pdf::{delimited, doc, docx, epub, html, markdown, mobi, odp, ods, odt, ppt, pptx, rtf, xls, xlsx};
 use crate::packs::uninstall::RunPacks;
 
 pub const COMMAND: &str = "convert_to_pdf";
@@ -301,7 +301,8 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "docx" | "odt" | "doc" => word_file(job, &input, &extension),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
         "xlsx" | "ods" | "xls" => spreadsheet_file(job, &job.request.spreadsheets.unwrap_or_default(), &input, &extension),
-        "epub" => ebook_file(job, &job.request.ebooks.unwrap_or_default(), &input),
+        "epub" => ebook_file(job, &job.request.ebooks.unwrap_or_default(), &input, epub::parse),
+        "mobi" => ebook_file(job, &job.request.ebooks.unwrap_or_default(), &input, mobi::parse),
         "pptx" | "odp" | "ppt" => presentation_file(job, &job.request.presentations.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
@@ -509,15 +510,17 @@ fn left_out(remote: &html::LeftOut, unreadable_images: usize, unreadable_stylesh
     detail
 }
 
-/// An EPUB: chapters in spine order, a new page for each, with the book's table of contents as bookmarks.
-fn ebook_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &EbookOptions, input: &Path) -> Result<JobOutcome, ToolError> {
+type EbookParser = fn(&[u8], u64, ToolError, f32) -> Result<epub::Book, ToolError>;
+
+/// An EPUB or MOBI book: chapters in reading order, a new page for each, with the book's table of contents as bookmarks.
+fn ebook_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &EbookOptions, input: &Path, parse: EbookParser) -> Result<JobOutcome, ToolError> {
     if !EBOOK_SCALES.contains(&options.font_scale) {
         return Err(ToolError::invalid_input(format!("Text size must be between {}% and {}%.", EBOOK_SCALES.start(), EBOOK_SCALES.end())));
     }
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let limits = (job.limits)(input);
     let scale = f32::from(options.font_scale) / 100.;
-    let parsed = epub::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), scale)?;
+    let parsed = parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), scale)?;
     let size = options.page_size.unwrap_or(job.request.page_defaults.page_size).points();
     let geometry = Geometry::uniform(size.0, size.1, job.request.page_defaults.margins.points());
     let mut theme = Theme::new(RTF_FAMILY, CODE_FAMILY, html::BODY_SIZE * scale, false);
@@ -959,7 +962,7 @@ impl<S: SystemFontLookup> Measure<'_, '_, S> {
 /// One small document for each family that converts, shared by the conversion, determinism and release snapshot tests.
 #[cfg(test)]
 pub mod fixtures {
-    use crate::kit::pdf::{doc, docx, odp, ods, odt, ppt, pptx, xls, xlsx};
+    use crate::kit::pdf::{doc, docx, mobi, odp, ods, odt, ppt, pptx, xls, xlsx};
 
     pub fn epub_package(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -1005,6 +1008,7 @@ pub mod fixtures {
             ("note.doc", doc::fixtures::document(&[doc::fixtures::Run::plain(&paragraph)], false)),
             ("note.xls", xls::fixtures::workbook(&[("Sheet", false, vec![(0, 0, xls::fixtures::Value::Text(line))])])),
             ("note.ppt", ppt::fixtures::deck(&[ppt::fixtures::Page { title: line, body: line, hidden: false, notes: None, picture: false }])),
+            ("note.mobi", mobi::fixtures::book("Base", format!("<html><body><p>{line}</p></body></html>"), &[], &mobi::fixtures::Options::default())),
         ]
     }
 }
@@ -1276,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_options_are_invalid_and_unshipped_families_are_unavailable() {
+    fn unknown_options_are_invalid_and_a_damaged_book_fails_alone() {
         let root = sandbox("options");
         let input = root.join("notes.txt");
         fs::write(&input, "text").unwrap();
@@ -1293,8 +1297,7 @@ mod tests {
         let outcomes = convert_paths(&[&input], json!({ "markdown": { "bodyFont": "sans", "codeStyle": "shaded", "tableOfContents": false, "toc": true } }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
         let outcomes = convert_paths(&[&input], json!({ "mobi": {} }));
-        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
-        assert_eq!(outcomes[0].error().unwrap().message, "Mobi options come in a later update.");
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput, "MOBI books take the eBook options");
         let outcomes = convert_paths(&[&input], json!({ "ebooks": { "fontScale": 100, "margins": "wide" } }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput, "eBooks take only a page size and a text size");
         let outcomes = convert_paths(&[&input], json!({ "webPages": { "backgroundGraphics": true, "runScripts": true } }));
@@ -1302,7 +1305,8 @@ mod tests {
         let mobi = root.join("book.mobi");
         fs::write(&mobi, "mobi").unwrap();
         let outcomes = convert_paths(&[&mobi, &input], plain(true));
-        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
+        assert_eq!(outcomes[0].error().unwrap().message, "This eBook is damaged or isn't a valid MOBI.");
         assert!(succeeded(&outcomes[1]));
         assert_eq!(names(&root), ["book.mobi", "notes.pdf", "notes.txt"]);
     }
@@ -2857,6 +2861,72 @@ mod tests {
         let error = convert_paths(&[&input], json!({}))[0].error().cloned().unwrap();
         assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::PageCount });
         assert!(error.message.contains("5000 chapters"), "{}", error.message);
+    }
+
+    /// A two-chapter MOBI with a guide table of contents, a link from the first chapter to the second and an image.
+    fn mobi_book(options: &mobi::fixtures::Options) -> Vec<u8> {
+        let head = r#"<html><head><guide><reference type="toc" title="Contents" filepos=TOC0000000 /></guide></head><body>"#;
+        let toc = r#"<p><a filepos=ONE0000000>Harbour</a></p><p><a filepos=TWO0000000>Open sea</a></p>"#;
+        let one = r#"<mbp:pagebreak/><h1>Harbour</h1><p>Mooring Caf&eacute; ropes <img recindex="1"> <a filepos=TWO0000000>Sail on</a></p>"#;
+        let two = r#"<mbp:pagebreak/><h1>Open sea</h1><p>Waves and gulls</p></body></html>"#;
+        let (one_at, two_at) = (head.len() + toc.len(), head.len() + toc.len() + one.len());
+        let markup = [head, toc, one, two].concat().replace("TOC0000000", &format!("{:010}", head.len())).replace("ONE0000000", &format!("{one_at:010}")).replace("TWO0000000", &format!("{two_at:010}"));
+        let mut image = Vec::new();
+        image::DynamicImage::new_rgb8(12, 6).write_to(&mut std::io::Cursor::new(&mut image), image::ImageFormat::Png).unwrap();
+        mobi::fixtures::book("The Harbour", markup, &[image], options)
+    }
+
+    #[test]
+    fn mobi_books_convert_in_basic_fidelity_with_chapters_images_links_and_bookmarks() {
+        let root = sandbox("mobi");
+        let input = root.join("harbour.mobi");
+        let source = mobi_book(&mobi::fixtures::Options::default());
+        fs::write(&input, &source).unwrap();
+
+        let outcomes = convert_paths(&[&input], ebook_options("letter", 100));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        assert!(outcomes[0].basic_fidelity, "MOBI books carry the basic fidelity label");
+        assert_eq!(outcomes[0].detail, "3 pages.");
+        let document = Document::load(root.join("harbour.pdf")).unwrap();
+        let text = |page: u32| document.extract_text(&[page]).unwrap();
+        assert!(in_order(&text(1), &["Harbour", "Open sea"]), "{}", text(1));
+        assert!(in_order(&text(2), &["Harbour", "Mooring", "Caf\u{e9}", "ropes", "Sail on"]), "{}", text(2));
+        assert!(in_order(&text(3), &["Open sea", "Waves and gulls"]), "{}", text(3));
+        assert_eq!(page_images(&document, 2), 1, "the recindex image comes from the image records");
+        assert_eq!(media_box(&document, 1), [0., 0., 612., 792.]);
+        assert_eq!(outline_titles(&document), ["Harbour", "Open sea"], "the guide's table of contents becomes the bookmarks");
+        assert_eq!(bookmark_pages(&document), [2, 3]);
+        assert!(links(&document).iter().any(|link| link.get(b"Dest").ok().is_some_and(|dest| page_of(&document, dest) == 3)), "the filepos link jumps to the second chapter");
+        assert_eq!(info(&document, b"Title"), b"The Harbour");
+        assert_eq!(fs::read(&input).unwrap(), source, "the original is never changed");
+
+        let outcomes = convert_paths(&[&input], ebook_options("letter", 100));
+        assert_eq!(outcomes[0].output_paths(), [root.join("harbour-1.pdf")], "an existing PDF is never replaced");
+        assert_eq!(fs::read(root.join("harbour-1.pdf")).unwrap(), fs::read(root.join("harbour.pdf")).unwrap(), "conversion is deterministic");
+    }
+
+    #[test]
+    fn copy_protected_damaged_and_kf8_mobis_fail_alone_while_the_rest_convert() {
+        let root = sandbox("mobi_batch");
+        let books = [
+            ("locked.mobi", mobi_book(&mobi::fixtures::Options { encryption: 2, ..Default::default() })),
+            ("damaged.mobi", b"BOOKMOBI but not a PalmDB".to_vec()),
+            ("modern.mobi", mobi_book(&mobi::fixtures::Options { version: 8, ..Default::default() })),
+            ("plain.mobi", mobi_book(&mobi::fixtures::Options { compression: 1, utf8: false, multibyte: false, ..Default::default() })),
+            ("good.epub", epub_book(true, &[])),
+        ];
+        let paths = books.iter().map(|(name, bytes)| { let path = root.join(name); fs::write(&path, bytes).unwrap(); path }).collect::<Vec<_>>();
+        let outcomes = convert_paths(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(), json!({}));
+        let error = outcomes[0].error().unwrap_or_else(|| panic!("{:?}", outcomes[0]));
+        assert_eq!((error.kind.clone(), error.message.as_str()), (ErrorKind::InvalidInput, epub::PROTECTED));
+        assert!(outcomes[0].basic_fidelity, "a failed MOBI still carries the label");
+        assert_eq!(outcomes[1].error().unwrap().message, "This eBook is damaged or isn't a valid MOBI.");
+        assert!(outcomes[2].error().unwrap().message.contains("Kindle Format 8"), "{:?}", outcomes[2]);
+        assert!(succeeded(&outcomes[3]), "uncompressed Windows-1252 books convert: {:?}", outcomes[3]);
+        assert!(succeeded(&outcomes[4]), "{:?}", outcomes[4]);
+        assert!(!outcomes[4].basic_fidelity);
+        assert_eq!(names(&root), ["damaged.mobi", "good.epub", "good.pdf", "locked.mobi", "modern.mobi", "plain.mobi", "plain.pdf"]);
+        for ((_, bytes), path) in books.iter().zip(&paths) { assert_eq!(&fs::read(path).unwrap(), bytes); }
     }
 
     #[test]

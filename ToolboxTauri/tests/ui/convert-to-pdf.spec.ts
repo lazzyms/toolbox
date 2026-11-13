@@ -90,21 +90,19 @@ test("Convert to PDF sits in the PDF Conversion rail and shows text options only
     await expect(page.getByRole("region", { name: "Plain text options" })).toHaveCount(0);
 });
 
-test("unsupported drops are refused with a reason, and later formats and PDFs are flagged on their own rows", async ({ page }) => {
+test("unsupported drops are refused with a reason, and PDFs are flagged on their own rows", async ({ page }) => {
     await openConvert(page);
-    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/novel.mobi", "/local/signed.pdf"]);
+    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/signed.pdf"]);
 
     await expect(page.getByText(/archive\.zip/).first()).toBeVisible();
     await expect(fileRow(page, "archive.zip")).toHaveCount(0);
     await expect(fileRow(page, "photo.png")).toContainText("This file type can't become a PDF here.");
     await expect(fileRow(page, "photo.png")).toContainText("Won't run");
-    await expect(fileRow(page, "novel.mobi")).toContainText("Not available yet");
-    await expect(fileRow(page, "novel.mobi")).toContainText("MOBI comes in a later update");
     await expect(fileRow(page, "signed.pdf")).toContainText("Will be skipped");
     await expect(fileRow(page, "signed.pdf")).toContainText("Already a PDF");
     await expect(fileRow(page, "notes.txt")).not.toContainText("Will be skipped");
-    await expect(page.getByText("3 files won't become PDFs. Each one says why on its row.", { exact: true })).toBeVisible();
-    await expect(page.getByText("This will make 1 PDF, 3 skipped", { exact: true })).toBeVisible();
+    await expect(page.getByText("2 files won't become PDFs. Each one says why on its row.", { exact: true })).toBeVisible();
+    await expect(page.getByText("This will make 1 PDF, 2 skipped", { exact: true })).toBeVisible();
 });
 
 test("a run sends only paths, output location and plain text options, and rows show fonts and skips", async ({ page }) => {
@@ -776,4 +774,44 @@ test("older Office files are marked basic fidelity in the list and on every resu
     await expect(rows.filter({ hasText: "budget.XLS" })).toContainText("1 hidden sheet left out.");
     await expect(rows.filter({ hasText: "pitch.ppt" }).getByRole("button", { name: "Open Lock & Unlock" })).toBeVisible();
     await expect(rows.filter({ hasText: "report.docx" })).not.toContainText("Basic fidelity");
+});
+
+test("MOBI books are marked basic fidelity in the list and on every result row, and take the eBook options", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/novel.mobi", "/local/locked.MOBI", "/local/story.epub"]);
+    for (const name of ["novel.mobi", "locked.MOBI"]) {
+        const row = fileRow(page, name);
+        await expect(row).toHaveAccessibleName(`${name}, basic fidelity`);
+        await expect(row.locator(".file-selection-badge")).toHaveText("Basic fidelity");
+        await expect(row).not.toContainText("Not available yet");
+        await expect(row).not.toContainText("Won't run");
+    }
+    await expect(fileRow(page, "story.epub")).toHaveAccessibleName("story.epub");
+    await expect(fileRow(page, "story.epub").locator(".file-selection-badge")).toHaveCount(0);
+    const ebooks = page.getByRole("region", { name: "eBooks options" });
+    await expect(ebooks).toContainText("Applies to 3 eBooks");
+    await expect(page.getByText("This will make 3 PDFs", { exact: true })).toBeVisible();
+
+    await ebooks.getByLabel("Page size").selectOption("letter");
+    await ebooks.getByLabel("Text size").selectOption("125");
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/novel.mobi", "/local/locked.MOBI", "/local/story.epub"],
+        outputLocation: "alongsideInput",
+        ebooks: { pageSize: "letter", fontScale: 125 },
+    });
+
+    const protectedBook = "This eBook is copy-protected (DRM), so it can't be converted. Only eBooks without copy protection can become PDFs.";
+    await page.evaluate((protectedBook) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/novel.mobi", outputPaths: ["/local/novel.pdf"], detail: "9 pages.", state: "succeeded", failure: null, reason: null, warnings: [], basicFidelity: true },
+        { inputPath: "/local/locked.MOBI", outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: protectedBook, pointer: null }, reason: null, warnings: [], basicFidelity: true },
+        { inputPath: "/local/story.epub", outputPaths: ["/local/story.pdf"], detail: "4 pages.", state: "succeeded", failure: null, reason: null, warnings: [] },
+    ]), protectedBook);
+    const rows = resultRows(page);
+    for (const name of ["novel.mobi", "locked.MOBI"]) {
+        await expect(rows.filter({ hasText: name }).locator(".result-row-heading")).toHaveText(`${name}Basic fidelity`);
+    }
+    await expect(rows.filter({ hasText: "novel.mobi" })).toContainText("9 pages.");
+    await expect(rows.filter({ hasText: "locked.MOBI" })).toContainText(protectedBook);
+    await expect(rows.filter({ hasText: "story.epub" })).not.toContainText("Basic fidelity");
 });

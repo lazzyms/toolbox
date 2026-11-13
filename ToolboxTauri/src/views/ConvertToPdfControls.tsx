@@ -67,7 +67,8 @@ export const isPresentation = (path: string) => [".pptx", ".odp", ".ppt"].includ
 /** HTML files and pasted markup, which stands in the list as an .html item. */
 export const isWebPage = (path: string) => [".html", ".htm"].includes(extensionOf(path));
 
-export const isEbook = (path: string) => extensionOf(path) === ".epub";
+/** MOBI books take the same options, read in basic fidelity. */
+export const isEbook = (path: string) => [".epub", ".mobi"].includes(extensionOf(path));
 
 export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions; presentations: PresentationOptions; webPages: WebPageOptions; ebooks: EbookOptions };
 
