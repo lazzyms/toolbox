@@ -1,6 +1,7 @@
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { exampleOutputName } from "../../components/RunDestination";
+import { extensionOf, type IntakeRedirect } from "../../components/intake";
 import type { ConvertImagesRequest } from "../../contracts";
 import type { MediaPanelProps, MediaTool } from "./types";
 
@@ -11,9 +12,14 @@ export interface ConvertImagesOptions {
 const convertTargets: { format: ConvertImagesRequest["format"]; name: string; hint: string }[] = [
   { format: "jpg", name: "JPEG", hint: "Transparent areas become white, because JPEG has no transparency." },
   { format: "png", name: "PNG", hint: "Lossless. Transparency is kept." },
-  { format: "webp", name: "WebP", hint: "Lossy. Transparency is kept." },
+  { format: "webp", name: "WebP", hint: "Follows each source. PNG and TIFF stay lossless. JPEG and HEIC are lossy." },
   { format: "heic", name: "HEIC", hint: "Saved as 8-bit. Transparency is kept." },
 ];
+
+// Converting keeps one frame of a GIF, so Convert points GIFs at Extract GIF Frames instead.
+const convertGifRedirect = (path: string): IntakeRedirect | null => extensionOf(path) === ".gif"
+  ? { message: "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.", toolId: "gif-extract" }
+  : null;
 
 const ConvertImagesPanel = ({ options, setOptions }: MediaPanelProps<ConvertImagesOptions>) => (
   <>
@@ -48,4 +54,5 @@ export const convertImagesTool: MediaTool<ConvertImagesOptions> = {
   }),
   showFileOrdering: false,
   exampleName: ({ format }, path) => exampleOutputName(path, "convert_images", "-converted", format),
+  intakeRedirect: convertGifRedirect,
 };

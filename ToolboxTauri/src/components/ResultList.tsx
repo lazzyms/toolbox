@@ -87,7 +87,7 @@ const fileManager = () => {
     return "file manager";
 };
 
-const followPointer = (pointer: Exclude<OutcomePointer, PackPointer>, inputPath: string) => {
+export const followPointer = (pointer: Exclude<OutcomePointer, PackPointer>, inputPath: string) => {
     if (pointer.kind === "tool") {
         window.dispatchEvent(new CustomEvent("toolbox:open", { detail: { toolId: pointer.toolId, paths: [inputPath] } }));
     } else {

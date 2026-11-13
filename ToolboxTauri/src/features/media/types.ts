@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { JobOutcome, OutputLocation, ToolCapability, ToolCommand, ToolDefinition } from "../../contracts";
 import type { OutputGrouping } from "../../components/resultRow";
+import type { IntakeRedirect } from "../../components/intake";
 
 /** What the shared run hands every Media tool when it builds its request. */
 export interface MediaRunInput {
@@ -47,4 +48,6 @@ export interface MediaTool<Options> {
   outputGroup?: OutputGrouping;
   /** A line after the finished headline, such as a total across files. */
   resultsHint?: (results: JobOutcome[]) => string | null;
+  /** Points a file the tool refuses at the tool that takes it, such as a GIF at Extract GIF Frames. */
+  intakeRedirect?: (path: string) => IntakeRedirect | null;
 }

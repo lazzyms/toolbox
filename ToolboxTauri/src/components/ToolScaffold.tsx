@@ -10,12 +10,12 @@ import type { ToolDefinition, JobOutcome, OutputLocation, Progress } from '../co
 import { TOOL_DROP_EVENT, type ShellEvent } from '../hooks/useShellBridge';
 import { useOutputLocation } from '../outputLocation';
 import { failedOutcome, parseToolResult } from '../jobOutcome';
-import { toolsForWorkspace, workspaceForTool } from '../registry';
+import { UtilityRegistry, toolsForWorkspace, workspaceForTool } from '../registry';
 import { shortenHomePath, useHomeDir } from '../homePath';
 import { CancelRun } from './CancelRun';
 import { ShortcutHint } from './ShortcutHint';
 import { isWindows, matchShortcut, shortcutTarget } from '../shortcuts';
-import { ResultList } from './ResultList';
+import { ResultList, followPointer } from './ResultList';
 import { rowView, type OutputGrouping } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
@@ -45,6 +45,7 @@ import {
     type InspectedPath,
     type IntakeCopy,
     type IntakeEntry,
+    type IntakeRedirect,
     type NotAdded,
 } from './intake';
 
@@ -98,6 +99,7 @@ interface ToolScaffoldProps {
     fileWarning?: (path: string) => string | null;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     intakeCopy?: IntakeCopy;
+    intakeRedirect?: (path: string) => IntakeRedirect | null;
     /** What the workspace source bar says before any file is open, such as the formats it takes. */
     emptyHint?: string;
     initialPaths?: readonly string[];
@@ -151,7 +153,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, intakeRedirect, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (items: readonly (string | InspectedPath)[]): IntakeEntry[] => items.map((item) => typeof item === 'string'
         ? { key: `entry-${++nextEntryKey.current}`, path: item }
@@ -408,7 +410,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
 
     const intake = (incoming: InspectedPath[], replaceSingle = false) => {
-        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted, keepsUnsupported: intakeCopy?.keepsUnsupported };
+        const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted, keepsUnsupported: intakeCopy?.keepsUnsupported, redirect: intakeRedirect };
         if (inputPolicy.inputCardinality === 'single' && replaceSingle) {
             // A picked file still goes through intake rules, so a file the tool can't open never replaces the open one.
             const classified = classifyIntake([], incoming.slice(0, 1), policy);
@@ -805,6 +807,11 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             {item.reason === 'folder' ? <FolderIcon aria-hidden="true" /> : <FileIcon aria-hidden="true" />}
                             <span className="intake-not-added-name">{fileName(item.path)}</span>
                             <span className="intake-not-added-message">{item.message}</span>
+                            {item.redirectTo && (
+                                <Button variant="outline" size="sm" onClick={() => item.redirectTo && followPointer({ kind: 'tool', toolId: item.redirectTo }, item.path)}>
+                                    {UtilityRegistry.find((tool) => tool.id === item.redirectTo)?.title}
+                                </Button>
+                            )}
                         </li>
                     ))}
                 </ul>
