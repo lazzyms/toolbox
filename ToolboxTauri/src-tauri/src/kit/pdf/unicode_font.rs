@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -17,6 +15,8 @@ const HINTING_TABLES: [&[u8; 4]; 3] = [b"cvt ", b"fpgm", b"prep"];
 pub struct UnicodeFont {
     data: Vec<u8>,
     units_per_em: f32,
+    ascent: f32,
+    descent: f32,
     slots: Vec<(u16, Option<String>)>,
     slot_ids: BTreeMap<(u16, Option<String>), u16>,
 }
@@ -159,7 +159,8 @@ impl UnicodeFont {
         Tables::read(&face)?;
         if rustybuzz::Face::from_slice(&data, 0).is_none() { return Err(font_error("it cannot be shaped.")); }
         let units_per_em = face.units_per_em() as f32;
-        Ok(Self { data, units_per_em, slots: vec![(0, None)], slot_ids: BTreeMap::from([((0, None), 0)]) })
+        let (ascent, descent) = (face.ascender() as f32 / units_per_em, face.descender() as f32 / units_per_em);
+        Ok(Self { data, units_per_em, ascent, descent, slots: vec![(0, None)], slot_ids: BTreeMap::from([((0, None), 0)]) })
     }
 
     fn slot(&mut self, gid: u16, text: Option<String>) -> Result<u16, ToolError> {
@@ -170,6 +171,7 @@ impl UnicodeFont {
         Ok(id)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn show(&mut self, text: &str, font_size: f32) -> Result<GlyphRun, ToolError> {
         let shaped = {
             let face = rustybuzz::Face::from_slice(&self.data, 0).ok_or_else(|| font_error("it cannot be shaped."))?;
@@ -224,6 +226,31 @@ impl UnicodeFont {
         }
         if segments.len() > 1 || segments.first().is_some_and(|(rise, _)| *rise != 0) { operators.push_str("0 Ts "); }
         Ok(GlyphRun { operators: operators.trim_end().to_string(), width: width as f32 * scale })
+    }
+
+    /// The font's ascent and descent as fractions of the font size; descent is negative.
+    pub fn vertical_metrics(&self) -> (f32, f32) { (self.ascent, self.descent) }
+
+    /// Shows text one character per glyph, without shaping or kerning, for a text layer
+    /// that is read rather than seen. Every character keeps its own ToUnicode entry, so
+    /// extraction gives back exactly this text; a character the font lacks is drawn
+    /// with the empty .notdef glyph but still maps back to itself.
+    pub fn show_unshaped(&mut self, text: &str, font_size: f32) -> Result<GlyphRun, ToolError> {
+        let glyphs = {
+            let face = ttf_parser::Face::parse(&self.data, 0).map_err(font_error)?;
+            text.chars().map(|character| {
+                let gid = face.glyph_index(character).map_or(0, |gid| gid.0);
+                (gid, character.to_string(), face.glyph_hor_advance(ttf_parser::GlyphId(gid)).unwrap_or(0) as f32)
+            }).collect::<Vec<_>>()
+        };
+        let mut codes = String::new();
+        let mut width = 0.;
+        for (gid, character, advance) in glyphs {
+            let id = self.slot(gid, Some(character))?;
+            let _ = write!(codes, "{id:04X}");
+            width += advance;
+        }
+        Ok(GlyphRun { operators: format!("<{codes}> Tj"), width: width * font_size / self.units_per_em })
     }
 
     fn subset(&self) -> Result<(Vec<u8>, Vec<f32>), ToolError> {

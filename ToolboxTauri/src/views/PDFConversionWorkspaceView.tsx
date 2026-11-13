@@ -11,9 +11,10 @@ import type { AtomicToolId, ToolDefinition } from "../contracts";
 const unknownFacts: EntryFacts = { pageCount: null, modifiedMs: null, sizeBytes: null };
 const isTiff = (path: string) => /\.tiff?$/i.test(path);
 
-export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], onFilesChange, onSelectTool }: { utility: ToolDefinition; initialPaths?: readonly string[]; onFilesChange?: (paths: readonly string[]) => void; onSelectTool?: (id: AtomicToolId) => void }) => {
+export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPaths = [], handoff = false, onFilesChange, onSelectTool }: { utility: ToolDefinition; initialPaths?: readonly string[]; handoff?: boolean; onFilesChange?: (paths: readonly string[]) => void; onSelectTool?: (id: AtomicToolId) => void }) => {
   const tool = conversionToolFor(activeUtility.id);
-  const [optionsByTool, setOptionsByTool] = useState<Partial<Record<AtomicToolId, unknown>>>({});
+  const [optionsByTool, setOptionsByTool] = useState<Partial<Record<AtomicToolId, unknown>>>(() =>
+    handoff && tool.handoffOptions !== undefined ? { [activeUtility.id]: tool.handoffOptions } : {});
   const options = optionsByTool[activeUtility.id] ?? tool.initialOptions;
   const setOptions = useCallback(
     (next: unknown) => setOptionsByTool((current) => ({ ...current, [activeUtility.id]: next })),
