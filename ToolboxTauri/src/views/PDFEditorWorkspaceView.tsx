@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { TriangleAlert } from 'lucide-react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
@@ -150,6 +151,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
 }) {
   const availability = useToolAvailability();
   const [document, setDocument] = useState<PdfDocument | null>(null);
+  const [signatureNoticeDismissedFor, setSignatureNoticeDismissedFor] = useState<string | null>(null);
   const [history, setHistory] = useState<History>({ past: [], present: { pages: [] }, future: [] });
   const [tool, setTool] = useState<SceneTool | null>(initialTool);
   useEffect(() => setTool(initialTool), [initialTool]);
@@ -444,6 +446,11 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     </div>
     {error && <p role="alert" className="scene-error">{error}</p>}
     {renderError && <p role="alert" className="scene-error">{renderError} Export is disabled until the preview can be verified.</p>}
+    {document?.signed && signatureNoticeDismissedFor !== document.path && <Card role="status" className="scene-signature-notice flex-row items-start gap-2.5 px-3 py-2.5 shadow-none">
+      <TriangleAlert aria-hidden="true" className="scene-signature-notice-icon size-4 shrink-0" />
+      <p className="flex-1 text-sm text-muted-foreground"><strong className="font-semibold text-foreground">This PDF is digitally signed.</strong> Any copy you export won't be signed any more. The original keeps its signature.</p>
+      <Button variant="ghost" size="sm" aria-label="Dismiss signature notice" onClick={() => setSignatureNoticeDismissedFor(document.path)}>Got it</Button>
+    </Card>}
     {!page ? <Card className="scene-empty"><CardHeader className="my-auto items-center text-center"><CardTitle role="heading" aria-level={2}>{loading ? 'Opening PDF…' : 'Open a PDF to edit'}</CardTitle><CardDescription>Text, markup, signatures and page edits in one document.<br />Files stay on your device. Export creates a new copy.</CardDescription></CardHeader></Card> : <>
       <div className="scene-document">
         <Card className="scene-thumbnails py-0" role="complementary" aria-label="PDF page thumbnails">

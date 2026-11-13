@@ -732,6 +732,16 @@ fn page_has_internal_navigation(document: &Document, page: ObjectId) -> Result<b
 }
 
 pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, false)
+}
+
+/// The scene export accepts a signed source, because it removes the signature and reports it with the shared warning.
+/// Other signature evidence without a signed field still fails closed, as it does for every other mutation.
+pub(crate) fn signed_mutation_preflight(document: &Document, intent: PdfMutationIntent) -> Result<PdfMutationPreflight, String> {
+    preflight(document, intent, true)
+}
+
+fn preflight(document: &Document, intent: PdfMutationIntent, allow_signed: bool) -> Result<PdfMutationPreflight, String> {
     if document.is_encrypted() {
         return Err("Unlock the PDF before editing".to_string());
     }
@@ -769,7 +779,7 @@ pub(crate) fn mutation_preflight(document: &Document, intent: PdfMutationIntent)
             return Err(unsupported());
         }
     }
-    if document_has_signature(document, catalog, &pages)? {
+    if document_has_signature(document, catalog, &pages)? && !(allow_signed && has_signed_signature_field(document)) {
         return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
     }
     let annotated_pages = validate_page_annotations(document, &pages)?;

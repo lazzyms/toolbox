@@ -31,6 +31,8 @@ export interface PdfTextRun {
 export interface PdfDocument {
     path: string;
     pages: PdfPage[];
+    /** True when a signature field holds a signature value. An exported copy is no longer signed. */
+    signed?: boolean;
 }
 
 export interface PdfEditorState {

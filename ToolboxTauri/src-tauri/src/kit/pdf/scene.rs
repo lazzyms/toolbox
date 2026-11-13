@@ -344,7 +344,7 @@ fn page_has_widget(document: &Document, page: ObjectId) -> Result<bool, String> 
 }
 
 fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[ObjectId], identity: bool, pure_reorder: bool) -> Result<ScenePreflight, String> {
-    let common = super::mutation_preflight(document, PdfMutationIntent::ValidateOnly)?;
+    let common = super::signed_mutation_preflight(document, PdfMutationIntent::ValidateOnly)?;
     if common.pages != source_pages { return Err("PDF uses a nested or unsupported page tree; scene export was rejected before output".into()); }
     let pages_root = common.pages_root;
 
@@ -563,15 +563,19 @@ fn stage_apply(plan: StagePlan, doc: &mut Document, scene: &PdfScene) -> Result<
     }
 }
 
-fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<Document,String> { run_stages_counted(path,scene,sections).map(|(doc,_)|doc) }
+fn run_stages(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<Document,String> { run_stages_counted(path,scene,sections).map(|(doc,_,_)|doc) }
 
-/// Runs the stages and also returns how many pages the source had, so the export detail can count removed pages.
-fn run_stages_counted(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document,usize),String> {
+/// Runs the stages and also returns how many pages the source had, so the export detail can count removed pages,
+/// and whether the source was signed. A signed source runs the stages like any other, then loses its signature,
+/// because the copy can't keep a valid one; the export reports that with the shared warning.
+fn run_stages_counted(path:&Path, scene:&PdfScene, sections:&StageSections)->Result<(Document,usize,bool),String> {
     let mut doc=load(path)?;
     let source_pages=doc.get_pages().len();
+    let signed=super::has_signed_signature_field(&doc);
     let plans=STAGES.iter().map(|&stage| stage_preflight(stage, &doc, scene, sections)).collect::<Result<Vec<_>,String>>()?;
     for plan in plans { stage_apply(plan, &mut doc, scene)?; }
-    Ok((doc,source_pages))
+    if signed { super::remove_signatures(&mut doc)?; }
+    Ok((doc,source_pages,signed))
 }
 
 pub fn compose(path:&Path, scene:&PdfScene)->Result<Document,String> { run_stages(path, scene, &StageSections::default()) }
@@ -880,7 +884,7 @@ pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,String> {
         pages.push(PdfPageMetadata{index,x:g.bbox[0],y:g.bbox[1],width:g.width,height:g.height,rotation:source_rotation,page_box:g.bbox,preview:None,text_runs:None});
     }
     if pages.is_empty() { return Err("PDF contains no pages".into()); }
-    Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages})
+    Ok(PdfDocumentMetadata{path:path.to_path_buf(),pages,signed:super::has_signed_signature_field(&doc)})
 }
 pub fn inspect_page(path:&Path,page_index:usize)->Result<PdfPageMetadata,String> {
     let doc=load(path)?;
@@ -910,7 +914,7 @@ fn page_summary(scene:&PdfScene, source_pages:usize)->String {
 /// and a write that fails part way is dropped with its reservation instead of being published.
 pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let result=(|| {
-        let (mut doc,source_pages)=run_stages_counted(&input,&request.scene,&request.sections)?;
+        let (mut doc,source_pages,signed)=run_stages_counted(&input,&request.scene,&request.sections)?;
         let mut bytes=Vec::new();
         doc.save_to(&mut bytes).map_err(err)?;
         report_progress(request.scene.pages.len(), request.scene.pages.len());
@@ -918,9 +922,12 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
         file.write_all(&bytes).and_then(|_|file.sync_all()).map_err(err)?;
         drop(file);
         let path=reservation.publish().map_err(err)?;
-        Ok::<_,String>((path,page_summary(&request.scene,source_pages)))
+        Ok::<_,String>((path,page_summary(&request.scene,source_pages),signed))
     })();
-    match result { Ok((path,summary))=>JobOutcome::succeeded(input, vec![path], summary),Err(e)=>JobOutcome::failure(input,ToolError::processing(e)) }
+    match result {
+        Ok((path,summary,signed))=>super::note_signature_removed(JobOutcome::succeeded(input, vec![path], summary), signed),
+        Err(e)=>JobOutcome::failure(input,ToolError::processing(e)),
+    }
 }
 
 #[cfg(test)]
@@ -1754,6 +1761,54 @@ mod tests {
         assert!(result.error().is_some_and(|error| error.message.contains("Digitally signed")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("signed-edited.pdf").exists());
+    }
+    #[test]
+    fn inspect_reports_whether_the_source_holds_a_signature_value() {
+        let temp=TempDir::new().unwrap();
+        let plain=temp.0.join("plain.pdf"); fixture(&plain);
+        let signed=temp.0.join("signed.pdf"); fixture(&signed);
+        let mut source=Document::load(&signed).unwrap(); crate::kit::pdf::tests::sign(&mut source); source.save(&signed).unwrap();
+        let empty_field=temp.0.join("empty-field.pdf"); fixture(&empty_field);
+        let mut source=Document::load(&empty_field).unwrap(); crate::kit::pdf::tests::add_signature_field(&mut source, None); source.save(&empty_field).unwrap();
+        assert!(inspect(&signed).unwrap().signed);
+        assert!(!inspect(&plain).unwrap().signed);
+        assert!(!inspect(&empty_field).unwrap().signed);
+        assert!(super::super::metadata::inspect(&signed).unwrap().signed);
+        assert!(!super::super::metadata::inspect(&plain).unwrap().signed);
+    }
+    #[test]
+    fn scene_export_of_a_signed_source_succeeds_warns_and_writes_an_unsigned_copy() {
+        use crate::kit::contracts::{OutcomeWarning, WarningKind};
+        let removed=vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        let reorder=PdfScene { pages:vec![
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+        ] };
+        let overlay=PdfScene { pages:vec![
+            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![object(Kind::Shape),object(Kind::Text)]},
+            ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![]},
+        ] };
+        for (name,scene) in [("reorder",reorder),("overlay",overlay)] {
+            let temp=TempDir::new().unwrap();
+            let signed=temp.0.join("signed.pdf"); fixture(&signed);
+            let mut source=Document::load(&signed).unwrap(); crate::kit::pdf::tests::sign(&mut source); source.save(&signed).unwrap();
+            let plain=temp.0.join("plain.pdf"); fixture(&plain);
+            let signed_bytes=fs::read(&signed).unwrap(); let plain_bytes=fs::read(&plain).unwrap();
+
+            let outcome=export(&ExportRequest {paths:vec![signed.clone()],scene:scene.clone(),output_location:OutputLocation::AlongsideInput, sections: Default::default()},signed.clone());
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            assert_eq!(outcome.output_paths(),[temp.0.join("signed-edited.pdf")], "{name}");
+            assert_eq!(outcome.warnings,removed, "{name}");
+            let copy=Document::load(&outcome.output_paths()[0]).unwrap();
+            assert_eq!(copy.get_pages().len(),2, "{name}");
+            assert!(!crate::kit::pdf::has_signed_signature_field(&copy), "{name}: the copy still holds a signature value");
+            assert_eq!(fs::read(&signed).unwrap(),signed_bytes, "{name}: the signed original changed");
+
+            let outcome=export(&ExportRequest {paths:vec![plain.clone()],scene,output_location:OutputLocation::AlongsideInput, sections: Default::default()},plain.clone());
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            assert!(outcome.warnings.is_empty(), "{name}: an unsigned source must not warn");
+            assert_eq!(fs::read(&plain).unwrap(),plain_bytes, "{name}: the unsigned original changed");
+        }
     }
     #[test]
     fn scene_rejects_catalog_permissions_and_signature_dictionaries_before_output() {

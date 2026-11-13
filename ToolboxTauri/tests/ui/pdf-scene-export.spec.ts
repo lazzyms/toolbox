@@ -7,6 +7,7 @@ type ExportWindow = Window & {
   dialogNext: string | null;
   holdExport: boolean;
   exportOutcome: unknown;
+  signed: boolean;
   __emit: (payload: unknown) => void;
   __finish: () => void;
 };
@@ -26,6 +27,7 @@ test.beforeEach(async ({ page }) => {
     w.dialogNext = null;
     w.holdExport = false;
     w.exportOutcome = success;
+    w.signed = false;
     Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'MacIntel' });
     const dispatch = (name: string, payload: unknown) => {
       for (const [id, listener] of listeners) if (listener.event === name) callbacks.get(listener.handler)?.({ event: name, id, payload });
@@ -52,7 +54,7 @@ test.beforeEach(async ({ page }) => {
           if (args?.options?.directory) return w.dialogNext;
           return '/local/docs/scene-fixture.pdf';
         }
-        if (command === 'inspect_pdf_scene') return { path: '/local/docs/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
+        if (command === 'inspect_pdf_scene') return { path: '/local/docs/scene-fixture.pdf', signed: w.signed, pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') return { index: args.request.pageIndex, width: 612, height: 792, preview: svg, textRuns: [] };
         if (command === 'preview_pdf_scene_pages') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         if (command === 'export_pdf_scene') {
@@ -187,4 +189,37 @@ test('the result row offers Open and Reveal, or shows the failure message', asyn
   await expect(rows.first()).toContainText('The destination folder is read-only.');
   await expect(rows.first().getByRole('button', { name: /^Open / })).toHaveCount(0);
   await expect(rows.first().getByRole('button', { name: /^Show in Finder/ })).toHaveCount(0);
+});
+
+test('a signed PDF shows the signature notice on open and the removed-signature warning on the result row', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as unknown as ExportWindow;
+    w.signed = true;
+    w.exportOutcome = [{ inputPath: '/local/docs/scene-fixture.pdf', outputPaths: ['/local/docs/scene-fixture-edited.pdf'], state: 'succeeded', detail: '3 pages kept, 0 removed, 0 rotated, 0 mirrored.', failure: null, reason: null,
+      warnings: [{ code: 'signatureRemoved', message: 'native wording' }] }];
+  });
+  await openDirtyEditor(page);
+  const notice = page.getByRole('status').filter({ hasText: 'This PDF is digitally signed.' });
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("Any copy you export won't be signed any more. The original keeps its signature.");
+
+  await exportButton(page).click();
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem').first();
+  await expect(row).toContainText('Saved. The digital signature was removed, because changing the file breaks it.');
+  await expect(row).toHaveAttribute('data-tone', 'warn');
+
+  await notice.getByRole('button', { name: 'Dismiss signature notice' }).click();
+  await expect(notice).toHaveCount(0);
+});
+
+test('an unsigned PDF shows no signature notice and no removed-signature warning', async ({ page }) => {
+  await openDirtyEditor(page);
+  await expect(page.getByText('This PDF is digitally signed.')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Dismiss signature notice' })).toHaveCount(0);
+
+  await exportButton(page).click();
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem').first();
+  await expect(row).toContainText('3 pages kept, 0 removed, 0 rotated, 0 mirrored.');
+  await expect(row).not.toContainText('digital signature');
+  await expect(row).not.toHaveAttribute('data-tone', 'warn');
 });
