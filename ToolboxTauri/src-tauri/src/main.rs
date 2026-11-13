@@ -3541,6 +3541,151 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// An upright 96 x 64 photo with four solid quadrants, stored the way a camera with the
+    /// given EXIF orientation writes it, as a JPEG that carries that orientation tag.
+    fn oriented_jpeg(path: &PathBuf, orientation: u16) {
+        const W: u32 = 96;
+        const H: u32 = 64;
+        let upright = |x: u32, y: u32| quadrant_colour(x < W / 2, y < H / 2);
+        // Where each stored pixel lands in the upright image, written out independently of the
+        // code under test.
+        let (stored_w, stored_h) = if orientation >= 5 { (H, W) } else { (W, H) };
+        let stored = image::RgbImage::from_fn(stored_w, stored_h, |sx, sy| {
+            let (ux, uy) = match orientation {
+                1 => (sx, sy),
+                2 => (W - 1 - sx, sy),
+                3 => (W - 1 - sx, H - 1 - sy),
+                4 => (sx, H - 1 - sy),
+                5 => (sy, sx),
+                6 => (W - 1 - sy, sx),
+                7 => (W - 1 - sy, H - 1 - sx),
+                8 => (sy, H - 1 - sx),
+                _ => unreachable!(),
+            };
+            upright(ux, uy)
+        });
+        let encoded = crate::kit::images::encode(&image::DynamicImage::ImageRgb8(stored), crate::kit::images::OutputFormat::Jpeg, 95).unwrap();
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend(crate::kit::images::metadata::fixtures::exif(Some(orientation), false));
+        let mut bytes = encoded[..2].to_vec();
+        bytes.extend([0xFF, 0xE1]);
+        bytes.extend(((payload.len() + 2) as u16).to_be_bytes());
+        bytes.extend(payload);
+        bytes.extend(&encoded[2..]);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn quadrant_colour(left: bool, top: bool) -> image::Rgb<u8> {
+        match (left, top) {
+            (true, true) => image::Rgb([255, 0, 0]),
+            (false, true) => image::Rgb([0, 255, 0]),
+            (true, false) => image::Rgb([0, 0, 255]),
+            (false, false) => image::Rgb([255, 255, 255]),
+        }
+    }
+
+    /// The four corners of an upright result show red, green, blue and white, as the upright photo does.
+    fn assert_upright_corners(image: &image::DynamicImage, label: &str) {
+        let rgb = image.to_rgb8();
+        let (w, h) = rgb.dimensions();
+        for (x, y, left, top) in [(2, 2, true, true), (w - 3, 2, false, true), (2, h - 3, true, false), (w - 3, h - 3, false, false)] {
+            let actual = rgb.get_pixel(x, y).0;
+            let expected = quadrant_colour(left, top).0;
+            assert!(actual.iter().zip(expected).all(|(a, e)| (*a as i32 - e as i32).abs() <= 48), "{label}: pixel ({x}, {y}) is {actual:?}, the upright photo has {expected:?} there");
+        }
+    }
+
+    fn preview_image(preview: &crate::kit::images::tools::ImagePreview) -> image::DynamicImage {
+        let encoded = preview.data_url.strip_prefix("data:image/png;base64,").expect("previews are PNG data URLs");
+        image::load_from_memory(&STANDARD.decode(encoded).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn edit_stack_bakes_every_camera_orientation_once_before_crop_and_resize() {
+        use crate::kit::images::tools::{inspect_edit_preview, inspect_preview, ImageEditPreviewRequest, ImagePreviewRequest, ORIENTATION_APPLIED_FIRST};
+        let root = sandbox("edit_stack_orientation");
+        let crop = r#"{"crop":{"x":0,"y":0,"width":72,"height":48,"mode":"rectangle","aspectWidth":0,"aspectHeight":0,"anchor":"custom"}}"#;
+        let resize = r#"{"resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":48,"resampling":"lanczos","keepAspectRatio":true}}"#;
+        let crop_edit = ImageEdit::Crop { x: 0, y: 0, width: 72, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
+        let resize_edit = ImageEdit::Resize { width: 0, height: 0, mode: "longestSide".into(), percentage: 100, longest_side: 48, resampling: "lanczos".into(), keep_aspect_ratio: true };
+
+        for orientation in 2..=8u16 {
+            let photo = root.join(format!("camera-{orientation}.jpg"));
+            oriented_jpeg(&photo, orientation);
+            assert_eq!(crate::kit::images::metadata::read_file(&photo).unwrap().orientation, Some(orientation as u8), "the fixture carries orientation {orientation}");
+            let original = (Original::of(&photo), std::fs::read(&photo).unwrap());
+
+            let source = inspect_preview(&ImagePreviewRequest { path: photo.clone() }).unwrap();
+            assert_eq!((source.width, source.height), (96, 64), "orientation {orientation}: the source preview is upright, so crop coordinates are upright");
+            assert_upright_corners(&preview_image(&source), &format!("orientation {orientation} source preview"));
+
+            for (label, steps, edit, size) in [("crop", crop, crop_edit.clone(), (72, 48)), ("resize", resize, resize_edit.clone(), (48, 32))] {
+                let folder = root.join(format!("{label}-{orientation}"));
+                std::fs::create_dir_all(&folder).unwrap();
+                let outcome = tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                    paths: vec![photo.clone()], steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(folder.clone()),
+                }));
+                assert!(outcome[0].error().is_none(), "orientation {orientation} {label}: {:?}", outcome[0].error());
+                assert_eq!(outcome[0].detail, ORIENTATION_APPLIED_FIRST, "orientation {orientation} {label}: the result says the orientation was applied");
+                let output = &outcome[0].output_paths()[0];
+                let exported = image::open(output).unwrap();
+                assert_eq!((exported.width(), exported.height()), size, "orientation {orientation} {label}: the output has the upright size");
+                assert_upright_corners(&exported, &format!("orientation {orientation} {label} export"));
+                let tag = crate::kit::images::metadata::read_file(output).unwrap().orientation;
+                assert!(matches!(tag, None | Some(1)), "orientation {orientation} {label}: the output carries orientation {tag:?}, so a viewer would turn it again");
+
+                let preview = inspect_edit_preview(&ImageEditPreviewRequest { path: photo.clone(), plan: ImageEditPlan { edits: vec![edit], output_location: OutputLocation::CustomFolder(folder) } }).unwrap();
+                assert_eq!((preview.width, preview.height), size, "orientation {orientation} {label}: preview and export agree on size");
+                assert_upright_corners(&preview_image(&preview), &format!("orientation {orientation} {label} preview"));
+            }
+            original.0.assert_untouched();
+            assert_eq!(std::fs::read(&photo).unwrap(), original.1);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn edit_stack_reports_orientation_only_when_it_changed_the_pixels() {
+        use crate::kit::images::tools::{ORIENTATION_APPLIED_FIRST, REENCODED_AFTER_ROTATING};
+        let root = sandbox("edit_stack_orientation_notes");
+        let sideways = root.join("sideways.jpg");
+        let neutral = root.join("neutral.jpg");
+        let damaged = root.join("damaged.jpg");
+        oriented_jpeg(&sideways, 6);
+        oriented_jpeg(&neutral, 1);
+        // A decodable JPEG whose EXIF segment is cut short keeps its pixels as decoded.
+        let plain = crate::kit::images::encode(&image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(96, 64, |x, y| quadrant_colour(x < 48, y < 32))), crate::kit::images::OutputFormat::Jpeg, 95).unwrap();
+        let mut broken = plain[..2].to_vec();
+        broken.extend([0xFF, 0xE1, 0x00, 0x0A]);
+        broken.extend(b"Exif\0\0MM");
+        broken.extend(&plain[2..]);
+        std::fs::write(&damaged, broken).unwrap();
+        let run = |steps: &str, path: &PathBuf, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths: vec![path.clone()], steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(root.join(folder)),
+            })).remove(0)
+        };
+
+        let turned = run(r#"{"rotate":{"degrees":90,"flip":"none"}}"#, &sideways, "turned");
+        assert_eq!(turned.detail, format!("{ORIENTATION_APPLIED_FIRST} {REENCODED_AFTER_ROTATING}"), "both notes show when the stack rotates an oriented photo");
+        let rotated = image::open(&turned.output_paths()[0]).unwrap();
+        assert_eq!((rotated.width(), rotated.height()), (64, 96), "the rotate step turns the upright photo, not the stored pixels");
+        // Upright red top-left turns to the top-right after a clockwise quarter turn.
+        let rgb = rotated.to_rgb8();
+        assert!(rgb.get_pixel(61, 2).0[0] > 200 && rgb.get_pixel(61, 2).0[1] < 60, "{:?}", rgb.get_pixel(61, 2));
+
+        let level = run(r#"{"resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":48,"resampling":"lanczos","keepAspectRatio":true}}"#, &neutral, "level");
+        assert_eq!(level.detail, "Image saved", "a neutral tag changes nothing, so there is nothing to report");
+        assert_upright_corners(&image::open(&level.output_paths()[0]).unwrap(), "neutral orientation");
+
+        assert!(crate::kit::images::metadata::read_file(&damaged).is_err(), "the fixture's EXIF is unreadable");
+        let kept = run(r#"{"resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":48,"resampling":"lanczos","keepAspectRatio":true}}"#, &damaged, "damaged");
+        assert!(kept.error().is_none(), "damaged metadata never fails a decodable image: {:?}", kept.error());
+        assert_eq!(kept.detail, "Image saved");
+        assert_upright_corners(&image::open(&kept.output_paths()[0]).unwrap(), "damaged metadata");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn convert_encodes_lossy_targets_at_the_shared_quality_of_90() {
