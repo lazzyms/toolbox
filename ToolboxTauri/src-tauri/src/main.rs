@@ -1334,6 +1334,37 @@ mod command_tests {
     }
 
     #[test]
+    fn heic_and_oriented_sources_run_through_the_icon_and_gif_commands() {
+        use crate::kit::images::fixtures;
+        let root = sandbox("heic-media-sources");
+        let source = fixtures::red_left_blue_right(64, 32);
+        let heic = root.join("master.heic");
+        let deep = root.join("deep.heif");
+        let oriented = root.join("oriented.jpg");
+        std::fs::write(&heic, fixtures::heic(&source)).unwrap();
+        std::fs::write(&deep, fixtures::heic_10bit(&source)).unwrap();
+        std::fs::write(&oriented, fixtures::jpeg_with_orientation(&source, 6)).unwrap();
+        let inputs = [&heic, &deep, &oriented].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+
+        for (input, warned) in [(&heic, false), (&deep, true), (&oriented, false)] {
+            let outcomes = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest {
+                paths: vec![input.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons"),
+            }));
+            assert!(outcomes[0].error().is_none(), "{}: {:?}", input.display(), outcomes[0].error());
+            assert_eq!(outcomes[0].warnings.len(), usize::from(warned), "{}", input.display());
+            let first = image::open(&outcomes[0].output_paths()[0]).unwrap();
+            assert!(matches!(first.color(), image::ColorType::Rgb8 | image::ColorType::Rgba8));
+            assert_eq!(fixtures::red_edge(&first), if input == &oriented { "top" } else { "left" });
+        }
+        let gif = assert_aggregate_success("GIF from HEIC frames", &[heic.clone(), deep.clone(), oriented.clone()], run_create_gif(&GifCreateRequest {
+            paths: vec![heic.clone(), deep.clone(), oriented.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "gif"), output_path: None,
+        }));
+        assert!(gif[0].extension().is_some_and(|extension| extension == "gif"));
+        for (path, bytes) in inputs { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_pdf_over_the_recorded_size_fails_alone() {
         let root = sandbox("limit-size");
         let offender = root.join("oversized.pdf");

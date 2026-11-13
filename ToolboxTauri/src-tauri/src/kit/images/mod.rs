@@ -48,6 +48,30 @@ fn lower_ext(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_ascii_lowercase())
 }
 
+/// A source decoded the way a viewer shows it, plus the HEIF bit depth when it
+/// is above 8 so callers that write 8-bit output can say so.
+pub(crate) struct UprightImage {
+    pub image: image::DynamicImage,
+    pub high_bit_depth: Option<u8>,
+}
+
+/// Decodes a source upright, applying its orientation exactly once. libheif
+/// already applies HEIF irot/imir transforms while decoding, so `decode`
+/// reports no orientation for HEIC/HEIF sources and they are never rotated
+/// again here; every other format applies its EXIF orientation tag after
+/// decoding. Only HEIF reports a bit depth above 8: the image crate's
+/// decoders hand back 8-bit samples for the formats the 8-bit tools accept.
+pub(crate) fn load_upright_image(path: &std::path::Path) -> Result<UprightImage, String> {
+    let decoded = decode(path)?;
+    let high_bit_depth = (decoded.family == source::ImageFamily::Heif && decoded.bits_per_channel > 8).then_some(decoded.bits_per_channel);
+    let orientation = decoded.orientation;
+    let mut image = decoded.into_first_page();
+    if let Some(orientation) = orientation {
+        image.apply_orientation(orientation);
+    }
+    Ok(UprightImage { image, high_bit_depth })
+}
+
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
@@ -391,6 +415,57 @@ mod tests {
         cleanup(&result.output_paths());
         let _ = std::fs::remove_file(src);
     }
+
+    #[test]
+    fn generated_high_bit_depth_heic_is_a_real_ten_bit_image() {
+        let source = fixtures::red_left_blue_right(64, 32);
+        let ten = fixtures::heic_10bit(&source);
+        assert_eq!(heif::probe(&ten).unwrap().bit_depth, heif::BitDepth::Ten);
+        let decoded = heif::decode(&ten).unwrap();
+        assert!(matches!(decoded.color(), image::ColorType::Rgb16 | image::ColorType::Rgba16), "{:?}", decoded.color());
+        assert_eq!(heif::probe(&fixtures::heic(&source)).unwrap().bit_depth, heif::BitDepth::Eight);
+    }
+
+    #[test]
+    fn upright_loader_applies_each_orientation_exactly_once() {
+        let source = fixtures::red_left_blue_right(64, 32);
+        assert_eq!(fixtures::red_edge(&source), "left");
+        // EXIF 6 is "rotate 90 degrees clockwise to display"; irot 1 is a
+        // 90 degree anti-clockwise HEIF transform that libheif applies itself.
+        let cases: [(&str, Vec<u8>, &str); 4] = [
+            ("upright.jpg", fixtures::jpeg_with_orientation(&source, 1), "left"),
+            ("exif-6.jpg", fixtures::jpeg_with_orientation(&source, 6), "top"),
+            ("exif-3.jpg", fixtures::jpeg_with_orientation(&source, 3), "right"),
+            ("irot-1.heic", fixtures::heic_rotated(&source, 1), "bottom"),
+        ];
+        for (name, bytes, edge) in cases {
+            let path = temp_path(&format!("upright-{name}"));
+            std::fs::write(&path, &bytes).unwrap();
+            let loaded = load_upright_image(&path).unwrap();
+            let expected = if edge == "left" || edge == "right" { (64, 32) } else { (32, 64) };
+            assert_eq!((loaded.image.width(), loaded.image.height()), expected, "{name}");
+            assert_eq!(fixtures::red_edge(&loaded.image), edge, "{name} must be rotated exactly once");
+            assert_eq!(loaded.high_bit_depth, None);
+            if name.ends_with(".jpg") {
+                // The tag is real: a decode that ignores it still sees the stored landscape pixels.
+                assert_eq!(fixtures::red_edge(&image::open(&path).unwrap()), "left", "{name}");
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name} original must stay byte-identical");
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn upright_loader_reports_high_bit_depth_heic() {
+        let path = temp_path("upright-10bit.heic");
+        std::fs::write(&path, fixtures::heic_10bit(&fixtures::red_left_blue_right(64, 32))).unwrap();
+        let loaded = load_upright_image(&path).unwrap();
+        assert_eq!(loaded.high_bit_depth, Some(10));
+        assert_eq!(fixtures::red_edge(&loaded.image), "left");
+        let _ = std::fs::remove_file(path);
+    }
 }
 pub mod metadata;
 pub mod tools;
+#[cfg(test)]
+pub(crate) mod fixtures;

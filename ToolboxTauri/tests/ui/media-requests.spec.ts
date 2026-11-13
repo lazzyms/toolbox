@@ -8,6 +8,7 @@ type MediaWindow = Window & {
     __invocations: Array<{ command: string; args: unknown }>;
     __dialogResults: Array<string | string[] | null>;
     __outputSettings: OutputSettings;
+    __warnings: Record<string, Array<{ code: string; message: string }>>;
 };
 
 const customFolder: OutputSettings = { mode: "customFolder", folder: "/Users/test/Media out" };
@@ -19,6 +20,7 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
         win.__invocations = [];
         win.__dialogResults = [];
         win.__outputSettings = settings;
+        win.__warnings = {};
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         window.__TAURI_INTERNALS__ = {
             metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
@@ -50,7 +52,7 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     state: "succeeded",
                     failure: null,
                     reason: null,
-                    warnings: [],
+                    warnings: win.__warnings[inputPath] ?? [],
                 }));
             },
             transformCallback: () => 1,
@@ -121,6 +123,23 @@ test.describe("Media requests", () => {
             sizes: [16, 32, 64, 128, 256],
             outputLocation: "alongsideInput",
         } });
+    });
+
+    test("App Icon Set shows the bit-depth reduction warning on the HEIC result row", async ({ page }) => {
+        await start(page);
+        await page.evaluate(() => {
+            (window as unknown as MediaWindow).__warnings = {
+                "/local/art/widget-small.heic": [{ code: "precisionReduced", message: "10-bit HEIC saved as 8-bit sRGB." }],
+            };
+        });
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, "/local/art/widget-small.heic");
+        await runOnce(page, "generate_icon_set");
+
+        const row = page.locator(".result-row", { hasText: "widget-small" });
+        await expect(row).toHaveAttribute("data-tone", "warn");
+        await expect(row.locator(".result-row-detail").first()).toHaveText("10-bit HEIC saved as 8-bit sRGB.");
+        await expect(row.locator(".result-row-state .sr-only")).toHaveText("Generated with a warning");
     });
 
     test("Create GIF sends frame order, delay, loop, and the saved path", async ({ page }) => {

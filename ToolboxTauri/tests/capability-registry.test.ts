@@ -68,6 +68,9 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("create_gif")?.inputCardinality, "ordered");
   assert.equal(capabilitiesByCommand.get("create_gif")?.supportsPreview, true);
   assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.supportsPreview, false);
+  for (const command of ["generate_icon_set", "create_gif"]) {
+    assert.deepEqual(capabilitiesByCommand.get(command)?.acceptedExtensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], command);
+  }
   assert.equal(capabilitiesByCommand.get("ocr_pdf")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("blur_faces")?.nativeAvailability, "unavailable");
   assert.equal(capabilitiesByCommand.get("remove_image_background")?.nativeAvailability, "unavailable");

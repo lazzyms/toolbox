@@ -718,8 +718,9 @@ fn unsupported_watermark_characters(characters: impl IntoIterator<Item = char>) 
     format!("Unsupported watermark characters: {details}.")
 }
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
-    let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
+    let source = match crate::kit::images::load_upright_image(&input) { Ok(source) => source, Err(error) => return failure(input, format!("Could not read image: {error}")) };
     let (prefix, sizes) = match icon_plan(&request.preset, &request.sizes) { Ok(plan) => plan, Err(error) => return failure(input, error) };
+    let image = match source.high_bit_depth { Some(_) => to_8bit(&source.image), None => source.image };
     let mut outputs = Vec::new();
     for &size in &sizes {
         let output = match OutputNaming::reserve_destination(&input, &request.output_location, &format!("-{prefix}-{size}"), "png") {
@@ -754,7 +755,21 @@ pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
         "android" => "Android PNG icon set saved.",
         _ => "Custom PNG icon set saved.",
     };
-    JobOutcome::succeeded(input, outputs, detail.to_string())
+    let outcome = JobOutcome::succeeded(input, outputs, detail.to_string());
+    match source.high_bit_depth {
+        Some(bits) => outcome.with_warning(precision_reduced(format!("{bits}-bit HEIC saved as 8-bit sRGB."))),
+        None => outcome,
+    }
+}
+
+// Icon and GIF outputs are 8-bit; a high-bit-depth HEIC source is reduced once,
+// keeping its alpha channel when it has one.
+fn to_8bit(image: &image::DynamicImage) -> image::DynamicImage {
+    if image.color().has_alpha() { image::DynamicImage::ImageRgba8(image.to_rgba8()) } else { image::DynamicImage::ImageRgb8(image.to_rgb8()) }
+}
+
+fn precision_reduced(message: String) -> crate::kit::contracts::OutcomeWarning {
+    crate::kit::contracts::OutcomeWarning { kind: crate::kit::contracts::WarningKind::PrecisionReduced, message }
 }
 
 fn write_icns(output: &Path, sizes: &[u32], pngs: &[PathBuf]) -> Result<(), String> {
@@ -808,13 +823,17 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
         Ok(destination) => destination,
         Err(error) => return failure(input, error.to_string()),
     };
+    let mut reduced = Vec::new();
     let encode_result = {
         let mut encoder = image::codecs::gif::GifEncoder::new(file);
         if request.loop_forever { if let Err(error) = encoder.set_repeat(image::codecs::gif::Repeat::Infinite) { return failure(input, format!("Could not configure GIF loop: {error}")); } }
         let mut images = Vec::with_capacity(request.paths.len());
-        for path in &request.paths {
-            match image::open(path) {
-                Ok(image) => images.push(image.to_rgba8()),
+        for (index, path) in request.paths.iter().enumerate() {
+            match crate::kit::images::load_upright_image(path) {
+                Ok(source) => {
+                    if let Some(bits) = source.high_bit_depth { reduced.push((index + 1, path, bits)); }
+                    images.push(source.image.to_rgba8());
+                }
                 Err(error) => {
                     return failure(path.clone(), format!("Could not create GIF from {}: {error}", path.display()));
                 }
@@ -828,7 +847,17 @@ pub fn gif_create(request: &GifCreateRequest) -> JobOutcome {
     };
     match encode_result {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome::succeeded(input, vec![path], "GIF saved"),
+            Ok(path) => {
+                let outcome = JobOutcome::succeeded(input, vec![path], "GIF saved");
+                match reduced.as_slice() {
+                    [] => outcome,
+                    [(frame, path, bits)] => {
+                        let name = path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+                        outcome.with_warning(precision_reduced(format!("Frame {frame} ({name}) is {bits}-bit HEIC, saved as 8-bit sRGB.")))
+                    }
+                    frames => outcome.with_warning(precision_reduced(format!("{} frames are high-bit-depth HEIC, saved as 8-bit sRGB.", frames.len()))),
+                }
+            }
             Err(error) => failure(input, format!("Could not publish GIF output: {error}")),
         },
         Err(error) => failure(input, format!("Could not create GIF: {error}")),
@@ -1334,6 +1363,96 @@ mod tests {
         assert!(bytes.windows(4).any(|item| item == b"icp4"));
         for output in result.output_paths() { let _ = std::fs::remove_file(output); }
         let _ = std::fs::remove_file(input);
+    }
+
+    fn write_fixture(name: &str, bytes: &[u8]) -> PathBuf {
+        let input = path(name);
+        std::fs::write(&input, bytes).unwrap();
+        input
+    }
+
+    fn icon_request(input: &Path, preset: &str) -> IconSetRequest {
+        IconSetRequest { paths: vec![input.to_path_buf()], preset: preset.to_string(), sizes: vec![32, 64], output_location: OutputLocation::AlongsideInput }
+    }
+
+    fn assert_8bit_png(output: &Path) {
+        let color = image::open(output).unwrap().color();
+        assert!(matches!(color, image::ColorType::Rgb8 | image::ColorType::Rgba8), "{} is {color:?}", output.display());
+    }
+
+    #[test]
+    fn heic_masters_make_icon_sets_and_high_bit_depth_is_reduced_with_a_warning() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        for (name, bytes, warning) in [
+            ("icon-master-8bit.heic", fixtures::heic(&source), None),
+            ("icon-master-10bit.heif", fixtures::heic_10bit(&source), Some("10-bit HEIC saved as 8-bit sRGB.")),
+        ] {
+            let input = write_fixture(name, &bytes);
+            for preset in ["custom", "macos"] {
+                let result = icon_set(&icon_request(&input, preset), input.clone());
+                assert!(result.error().is_none(), "{name}: {:?}", result.error());
+                let pngs = result.output_paths().iter().filter(|output| output.extension().is_some_and(|extension| extension == "png")).collect::<Vec<_>>();
+                assert!(!pngs.is_empty());
+                for png in &pngs { assert_8bit_png(png); }
+                assert_eq!(fixtures::red_edge(&image::open(pngs[0]).unwrap()), "left");
+                match warning {
+                    Some(message) => assert_eq!(result.warnings, vec![crate::kit::contracts::OutcomeWarning { kind: crate::kit::contracts::WarningKind::PrecisionReduced, message: message.to_string() }]),
+                    None => assert!(result.warnings.is_empty(), "{name}: {:?}", result.warnings),
+                }
+                for output in result.output_paths() { let _ = std::fs::remove_file(output); }
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), bytes, "{name} must stay byte-identical");
+            let _ = std::fs::remove_file(input);
+        }
+    }
+
+    #[test]
+    fn oriented_icon_masters_are_used_upright() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        for (name, bytes) in [("icon-exif-6.jpg", fixtures::jpeg_with_orientation(&source, 6)), ("icon-irot-3.heic", fixtures::heic_rotated(&source, 3))] {
+            let input = write_fixture(name, &bytes);
+            let result = icon_set(&icon_request(&input, "custom"), input.clone());
+            assert!(result.error().is_none(), "{name}: {:?}", result.error());
+            // Both sources display with the red half on top; a second rotation would move it.
+            for output in result.output_paths() {
+                assert_eq!(fixtures::red_edge(&image::open(output).unwrap()), "top", "{name} -> {}", output.display());
+                let _ = std::fs::remove_file(output);
+            }
+            assert_eq!(std::fs::read(&input).unwrap(), bytes, "{name} must stay byte-identical");
+            let _ = std::fs::remove_file(input);
+        }
+    }
+
+    #[test]
+    fn gif_accepts_heic_and_oriented_frames_upright_and_names_the_reduced_frame() {
+        use crate::kit::images::fixtures;
+        let source = fixtures::red_left_blue_right(64, 32);
+        let frames = [
+            write_fixture("gif-frame-exif-6.jpg", &fixtures::jpeg_with_orientation(&source, 6)),
+            write_fixture("gif-frame-10bit.heic", &fixtures::heic_10bit(&fixtures::red_left_blue_right(32, 64))),
+            write_fixture("gif-frame-irot-3.heif", &fixtures::heic_rotated(&source, 3)),
+        ];
+        let originals = frames.iter().map(|frame| std::fs::read(frame).unwrap()).collect::<Vec<_>>();
+        let result = gif_create(&GifCreateRequest { paths: frames.to_vec(), frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert!(result.error().is_none(), "{:?}", result.error());
+        assert_eq!(result.warnings, vec![crate::kit::contracts::OutcomeWarning {
+            kind: crate::kit::contracts::WarningKind::PrecisionReduced,
+            message: format!("Frame 2 ({}) is 10-bit HEIC, saved as 8-bit sRGB.", frames[1].file_name().unwrap().to_string_lossy()),
+        }]);
+        let output = result.output_paths()[0].clone();
+        let decoded = image::codecs::gif::GifDecoder::new(BufReader::new(File::open(&output).unwrap())).unwrap().into_frames().collect_frames().unwrap();
+        assert_eq!(decoded.len(), 3);
+        let edges = decoded.into_iter().map(|frame| {
+            assert_eq!(frame.buffer().dimensions(), (32, 64), "every frame is upright portrait, so the canvas is too");
+            fixtures::red_edge(&image::DynamicImage::ImageRgba8(frame.into_buffer()))
+        }).collect::<Vec<_>>();
+        assert_eq!(edges, ["top", "left", "top"]);
+        for (frame, original) in frames.iter().zip(&originals) { assert_eq!(&std::fs::read(frame).unwrap(), original, "{} must stay byte-identical", frame.display()); }
+        let several = gif_create(&GifCreateRequest { paths: vec![frames[1].clone(), frames[1].clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: None });
+        assert_eq!(several.warnings[0].message, "2 frames are high-bit-depth HEIC, saved as 8-bit sRGB.");
+        for path in frames.iter().chain(result.output_paths()).chain(several.output_paths()) { let _ = std::fs::remove_file(path); }
     }
 
     #[test]
