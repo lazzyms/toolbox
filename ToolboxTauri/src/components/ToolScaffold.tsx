@@ -928,6 +928,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 runningVerb={utility.runningVerb}
                 runningDetail={utility.runningDetail}
                 signatureRemovedNote={utility.signatureRemovedNote}
+                precisionReducedIsNote={utility.precisionReducedIsNote}
                 live={live}
                 combinedInputs={combinedInputs}
                 combined={saveStep?.combined}

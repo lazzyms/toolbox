@@ -2383,6 +2383,46 @@ mod command_tests {
         }
     }
 
+    /// A white letter page at 150 pixels per inch with `lines` inked in black from the
+    /// bundled font, the way a scanner sees printed text. Returns the raster and where
+    /// each word is inked, as left, top, right and bottom pixels.
+    fn scanned_page(lines: &[&str]) -> (image::GrayImage, Vec<(String, [i32; 4])>) {
+        const WIDTH: usize = 1275;
+        const HEIGHT: usize = 1650;
+        const SIZE: f32 = 56.0;
+        let font = fontdue::Font::from_bytes(include_bytes!("../resources/fonts/DejaVuSans.ttf") as &[u8], fontdue::FontSettings::default()).unwrap();
+        let mut pixels = vec![255u8; WIDTH * HEIGHT];
+        let mut words = Vec::new();
+        for (row, line) in lines.iter().enumerate() {
+            let baseline = 200 + row * 120;
+            let mut pen = 120.0f32;
+            let mut word: Option<(String, [i32; 4])> = None;
+            for character in line.chars() {
+                let (metrics, coverage) = font.rasterize(character, SIZE);
+                let top = baseline as i32 - metrics.height as i32 - metrics.ymin;
+                if character == ' ' {
+                    words.extend(word.take());
+                } else {
+                    let (left, right) = (pen as i32 + metrics.xmin, pen as i32 + metrics.xmin + metrics.width as i32);
+                    let (text, bounds) = word.get_or_insert_with(|| (String::new(), [left, top, right, top + metrics.height as i32]));
+                    text.push(character);
+                    *bounds = [bounds[0].min(left), bounds[1].min(top), bounds[2].max(right), bounds[3].max(top + metrics.height as i32)];
+                }
+                for y in 0..metrics.height {
+                    for x in 0..metrics.width {
+                        let (px, py) = (pen as i32 + metrics.xmin + x as i32, top + y as i32);
+                        if px < 0 || py < 0 || px as usize >= WIDTH || py as usize >= HEIGHT { continue; }
+                        let index = py as usize * WIDTH + px as usize;
+                        pixels[index] = pixels[index].min(255 - coverage[y * metrics.width + x]);
+                    }
+                }
+                pen += metrics.advance_width;
+            }
+            words.extend(word);
+        }
+        (image::GrayImage::from_raw(WIDTH as u32, HEIGHT as u32, pixels).unwrap(), words)
+    }
+
     /// Writes a PDF whose pages are only pictures of text, the way a scanner makes them.
     /// There is no text layer, so the words can come back only through OCR. A page with
     /// no lines is a blank white scan. Returns where each page's words are inked, as
@@ -2391,50 +2431,18 @@ mod command_tests {
         use flate2::{write::ZlibEncoder, Compression};
         use lopdf::{dictionary, Document, Object, Stream};
         use std::io::Write;
-        const WIDTH: usize = 1275;
-        const HEIGHT: usize = 1650;
-        const SIZE: f32 = 56.0;
-        let font = fontdue::Font::from_bytes(include_bytes!("../resources/fonts/DejaVuSans.ttf") as &[u8], fontdue::FontSettings::default()).unwrap();
         let mut document = Document::with_version("1.7");
         let pages_id = document.new_object_id();
         let mut kids = Vec::new();
         let mut inked = Vec::new();
         for lines in pages {
-            let mut pixels = vec![255u8; WIDTH * HEIGHT];
-            let mut words = Vec::new();
-            for (row, line) in lines.iter().enumerate() {
-                let baseline = 200 + row * 120;
-                let mut pen = 120.0f32;
-                let mut word: Option<(String, [i32; 4])> = None;
-                for character in line.chars() {
-                    let (metrics, coverage) = font.rasterize(character, SIZE);
-                    let top = baseline as i32 - metrics.height as i32 - metrics.ymin;
-                    if character == ' ' {
-                        words.extend(word.take());
-                    } else {
-                        let (left, right) = (pen as i32 + metrics.xmin, pen as i32 + metrics.xmin + metrics.width as i32);
-                        let (text, bounds) = word.get_or_insert_with(|| (String::new(), [left, top, right, top + metrics.height as i32]));
-                        text.push(character);
-                        *bounds = [bounds[0].min(left), bounds[1].min(top), bounds[2].max(right), bounds[3].max(top + metrics.height as i32)];
-                    }
-                    for y in 0..metrics.height {
-                        for x in 0..metrics.width {
-                            let (px, py) = (pen as i32 + metrics.xmin + x as i32, top + y as i32);
-                            if px < 0 || py < 0 || px as usize >= WIDTH || py as usize >= HEIGHT { continue; }
-                            let index = py as usize * WIDTH + px as usize;
-                            pixels[index] = pixels[index].min(255 - coverage[y * metrics.width + x]);
-                        }
-                    }
-                    pen += metrics.advance_width;
-                }
-                words.extend(word);
-            }
-            let points = 612.0 / WIDTH as f32;
+            let (raster, words) = scanned_page(lines);
+            let points = 612.0 / raster.width() as f32;
             inked.push(words.into_iter().map(|(text, bounds)| (text, bounds.map(|pixel| pixel as f32 * points))).collect::<Vec<_>>());
             let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-            encoder.write_all(&pixels).unwrap();
+            encoder.write_all(raster.as_raw()).unwrap();
             let mut scan = Stream::new(dictionary! {
-                "Type" => "XObject", "Subtype" => "Image", "Width" => WIDTH as i64, "Height" => HEIGHT as i64,
+                "Type" => "XObject", "Subtype" => "Image", "Width" => raster.width() as i64, "Height" => raster.height() as i64,
                 "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8, "Filter" => "FlateDecode",
             }, encoder.finish().unwrap());
             scan.allows_compression = false;
@@ -2792,6 +2800,226 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(text.split_whitespace().collect::<Vec<_>>().join(" ").contains("Привет κόσμε café"), "{text:?}");
+    }
+
+    /// A baseline JPEG of `image`, with an EXIF orientation tag after its JFIF header
+    /// when `orientation` is given.
+    fn jpeg_of(image: &image::DynamicImage, orientation: Option<u16>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95).encode_image(image).unwrap();
+        if let Some(orientation) = orientation {
+            let payload = [b"Exif\0\0".as_slice(), &crate::kit::images::metadata::fixtures::exif(Some(orientation), false)].concat();
+            let mut segment = vec![0xFF, 0xE1];
+            segment.extend(((payload.len() + 2) as u16).to_be_bytes());
+            segment.extend(payload);
+            let after_jfif = 4 + u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
+            bytes.splice(after_jfif..after_jfif, segment);
+        }
+        bytes
+    }
+
+    /// The image a one-page PDF draws, with its decoded samples, and the page's MediaBox.
+    fn drawn_image(path: &PathBuf) -> (lopdf::Dictionary, Vec<u8>, Vec<u8>, Vec<f32>) {
+        let document = lopdf::Document::load(path).unwrap();
+        let page = *document.get_pages().get(&1).unwrap();
+        let page = document.get_dictionary(page).unwrap();
+        let media_box = page.get(b"MediaBox").unwrap().as_array().unwrap().iter().map(|value| match value {
+            lopdf::Object::Integer(value) => *value as f32,
+            value => value.as_float().unwrap(),
+        }).collect();
+        let resources = page.get(b"Resources").and_then(lopdf::Object::as_dict).unwrap();
+        let image = resources.get(b"XObject").and_then(lopdf::Object::as_dict).unwrap().get(b"Im0").and_then(lopdf::Object::as_reference).unwrap();
+        let stream = document.get_object(image).unwrap().as_stream().unwrap();
+        let samples = stream.decompressed_content().unwrap_or_else(|_| stream.content.clone());
+        (stream.dict.clone(), stream.content.clone(), samples, media_box)
+    }
+
+    #[test]
+    fn ocr_reads_png_and_jpeg_scans_and_keeps_their_pixels_in_the_searchable_pdf() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-images");
+        let (raster, _) = scanned_page(&["Quarterly invoice summary", "Northwind shipping ledger"]);
+        let png = root.join("page.png");
+        let jpeg = root.join("photo.jpg");
+        raster.save(&png).unwrap();
+        std::fs::write(&jpeg, jpeg_of(&image::DynamicImage::ImageLuma8(raster.clone()), None)).unwrap();
+        let paths = vec![png.clone(), jpeg.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let texts = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "text")), no_packs()));
+        let pdfs = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(paths.clone(), location(&root, "pdf")), no_packs()));
+        let names = texts.iter().chain(&pdfs).map(|outcome| outcome.output_paths().first().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).unwrap_or_default()).collect::<Vec<_>>();
+        let words = texts.iter().map(|outcome| std::fs::read_to_string(&outcome.output_paths()[0]).unwrap()).collect::<Vec<_>>();
+        let (png_page, jpeg_page) = (drawn_image(&pdfs[0].output_paths()[0]), drawn_image(&pdfs[1].output_paths()[0]));
+        let searchable = pdfs.iter().map(|outcome| extracted_text(&root, &outcome.output_paths()[0], "extracted")).collect::<Vec<_>>();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        for outcome in texts.iter().chain(&pdfs) { assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error()); }
+        assert_eq!(names, ["page-ocr.txt", "photo-ocr.txt", "page-ocr.pdf", "photo-ocr.pdf"]);
+        assert_eq!(texts[0].detail, "1 page recognized. English.");
+        for text in words.iter().chain(&searchable) {
+            for word in ["Quarterly", "invoice", "Northwind", "ledger"] { assert!(text.contains(word), "{word} is missing from {text:?}"); }
+        }
+        let (dictionary, _, samples, media_box) = png_page;
+        assert_eq!(dictionary.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode", "a PNG is stored losslessly");
+        assert_eq!(dictionary.get(b"ColorSpace").unwrap().as_name().unwrap(), b"DeviceGray");
+        assert!(samples == raster.as_raw().as_slice(), "the PNG's pixels are kept exactly");
+        assert_eq!(media_box, [0., 0., 1275., 1650.]);
+        let (dictionary, content, _, media_box) = jpeg_page;
+        assert_eq!(dictionary.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode", "a JPEG is embedded as it is");
+        assert!(content == originals[1], "the JPEG's bytes are kept exactly");
+        assert_eq!(media_box, [0., 0., 1275., 1650.]);
+        assert_eq!(after, originals, "originals are never changed");
+    }
+
+    #[test]
+    fn ocr_reads_a_jpeg_the_way_its_orientation_tag_shows_it() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-image-orientation");
+        let (raster, _) = scanned_page(&["Quarterly invoice summary", "Northwind shipping ledger"]);
+        // Orientation 6 shows the stored pixels turned a quarter clockwise, so store them turned back.
+        let stored = image::DynamicImage::ImageLuma8(image::imageops::rotate270(&raster));
+        let input = root.join("sideways.jpg");
+        std::fs::write(&input, jpeg_of(&stored, Some(6))).unwrap();
+        let original = std::fs::read(&input).unwrap();
+
+        let text = assert_success("ocr sideways text", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], location(&root, "text")), no_packs()));
+        let pdf = assert_success("ocr sideways pdf", run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], location(&root, "pdf")), no_packs()));
+        let text = std::fs::read_to_string(&text[0]).unwrap();
+        let (dictionary, content, _, media_box) = drawn_image(&pdf[0]);
+        let searchable = extracted_text(&root, &pdf[0], "extracted");
+        let after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        for words in [&text, &searchable] {
+            for word in ["Quarterly", "invoice", "Northwind", "ledger"] { assert!(words.contains(word), "{word} is missing from {words:?}"); }
+        }
+        assert!(text.find("Quarterly") < text.find("Northwind"), "lines read top to bottom: {text:?}");
+        assert_eq!(dictionary.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
+        assert!(content == original, "the JPEG is embedded as it is, tag included");
+        assert_eq!(media_box, [0., 0., 1275., 1650.], "the page is the upright size");
+        assert_eq!(after, original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_holds_each_image_to_the_pixel_and_decompression_limits_on_its_own() {
+        use crate::kit::common::limits::fixtures::png_header;
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-image-limits");
+        let [_, engine, tessdata] = fake_ocr_helpers(&root);
+        // An image needs no page renderer, so a missing one fails nothing here.
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(root.join("missing"))), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let [first, many_pixels, huge, last] = ["first", "many-pixels", "huge", "last"].map(|name| root.join(format!("{name}.png")));
+        write_png(&first, 32, 10);
+        std::fs::write(&many_pixels, png_header(8000, 6000)).unwrap();
+        std::fs::write(&huge, png_header(20000, 20000)).unwrap();
+        write_png(&last, 32, 20);
+        let paths = vec![first, many_pixels, huge, last];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "ocr")), no_packs()));
+        let mut written = std::fs::read_dir(root.join("ocr")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        written.sort();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        for index in [0, 3] { assert!(outcomes[index].error().is_none(), "{} still runs: {:?}", paths[index].display(), outcomes[index].error()); }
+        let pixels = outcomes[1].error().expect("an image over the pixel limit fails");
+        assert_eq!(pixels.kind, ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert_eq!(pixels.message, "This image has more than 40 million pixels, which is over the OCR limit. Use a smaller image and try again.");
+        let decompressed = outcomes[2].error().expect("an image over the decompression limit fails");
+        assert_eq!(decompressed.kind, ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert!(outcomes[1].output_paths().is_empty() && outcomes[2].output_paths().is_empty());
+        assert_eq!(written, ["first-ocr.txt", "last-ocr.txt"]);
+        assert_eq!(after, originals);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_gives_one_output_per_file_in_a_batch_of_pdfs_and_every_image_type() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-image-batch");
+        let scan = root.join("scan.pdf");
+        let png = root.join("page.png");
+        let jpeg = root.join("photo.jpg");
+        let webp = root.join("screen.webp");
+        let heic = root.join("phone.heic");
+        drawn_pdf(&scan, 1);
+        write_png(&png, 64, 30);
+        let colour = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(64, 48, |x, y| image::Rgb([x as u8 * 4, y as u8 * 5, 90])));
+        std::fs::write(&jpeg, jpeg_of(&colour, None)).unwrap();
+        colour.save(&webp).unwrap();
+        std::fs::write(&heic, heif::encode(&colour).unwrap()).unwrap();
+        let paths = vec![scan, png, jpeg.clone(), webp, heic];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+
+        let pdfs = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(paths.clone(), location(&root, "pdf")), no_packs()));
+        drop(env);
+        let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
+        let env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let texts = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "text")), no_packs()));
+        drop(env);
+        let pdf_names = pdfs.iter().map(|outcome| outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let text_contents = texts.iter().map(|outcome| outcome.output_paths().iter().map(|path| std::fs::read_to_string(path).unwrap()).collect::<Vec<_>>()).collect::<Vec<_>>();
+        let searchable = pdfs.iter().map(|outcome| outcome.output_paths().first().map(|pdf| extracted_text(&root, pdf, "extracted").split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default()).collect::<Vec<_>>();
+        let images = pdfs[1..].iter().map(|outcome| drawn_image(&outcome.output_paths()[0]).0).collect::<Vec<_>>();
+        let jpeg_content = drawn_image(&pdfs[2].output_paths()[0]).1;
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        for outcome in pdfs.iter().chain(&texts) { assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error()); }
+        assert_eq!(pdf_names, [["scan-ocr.pdf"], ["page-ocr.pdf"], ["photo-ocr.pdf"], ["screen-ocr.pdf"], ["phone-ocr.pdf"]], "one output per input");
+        assert_eq!(text_contents, vec![vec!["recognized words\n".to_string()]; 5]);
+        assert!(searchable.iter().all(|text| text == "Searchable words"), "{searchable:?}");
+        assert!(images[0].get(b"SMask").is_ok(), "the PNG's transparency is kept as a soft mask");
+        assert_eq!(images[1].get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
+        assert!(jpeg_content == originals[2], "the JPEG is embedded as it is");
+        for image in [&images[2], &images[3]] {
+            assert_eq!(image.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode", "WebP and HEIC are stored losslessly");
+            assert_eq!(image.get(b"ColorSpace").unwrap().as_name().unwrap(), b"DeviceRGB");
+        }
+        assert_eq!(after, originals, "originals are never changed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_notes_a_high_bit_depth_image_saved_as_8_bit_and_skips_an_image_a_range_leaves_empty() {
+        use crate::kit::contracts::WarningKind;
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-image-precision");
+        let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+        let deep = root.join("deep.png");
+        let plain = root.join("plain.png");
+        image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(64, 48, |x, y| image::Rgb([x as u16 * 1000, y as u16 * 1300, 40000]))).save(&deep).unwrap();
+        write_png(&plain, 64, 40);
+        let paths = vec![deep.clone(), plain.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(paths.clone(), location(&root, "pdf")), no_packs()));
+        let ranged = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), vision::OcrRequest { page_range: Some("2-".into()), ..searchable_pdf_request(vec![plain.clone()], location(&root, "ranged")) }, no_packs()));
+        let (deep_image, _, samples, _) = drawn_image(&outcomes[0].output_paths()[0]);
+        let ranged_written = std::fs::read_dir(root.join("ranged")).unwrap().count();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        for outcome in &outcomes { assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error()); }
+        assert_eq!(outcomes[0].warnings.len(), 1, "{:?}", outcomes[0].warnings);
+        assert_eq!(outcomes[0].warnings[0].kind, WarningKind::PrecisionReduced);
+        assert_eq!(outcomes[0].warnings[0].message, "Saved as 8-bit colour, because the image is 16-bit.");
+        assert_eq!(outcomes[0].detail, "1 page recognized. English.");
+        assert!(outcomes[1].warnings.is_empty(), "an 8-bit image needs no note");
+        assert_eq!(deep_image.get(b"BitsPerComponent").unwrap().as_i64().unwrap(), 8);
+        assert_eq!(samples.len(), 64 * 48 * 3);
+        let OutcomeState::Skipped { reason } = &ranged[0].state else { panic!("a range past its one page skips the image: {:?}", ranged[0]) };
+        assert_eq!(reason.message, "No pages left in 2-. It has 1 page, so nothing was made.");
+        assert_eq!(ranged_written, 0);
+        assert_eq!(after, originals);
     }
 
     /// Turns each page of a `scanned_pdf` so it is shown with /Rotate `rotation` yet still

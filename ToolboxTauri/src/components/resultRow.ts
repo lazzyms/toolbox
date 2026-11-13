@@ -2,6 +2,7 @@ import type { ErrorKind, FontSource, JobOutcome, JpegColour, OutcomePointer, Out
 import { UtilityRegistry } from "../registry";
 import { formatBatchSaving, formatBytes, formatSizeChange } from "../shared/fileSize";
 
+/** A note is a warning that needs nothing from the user, such as a photo saved at a lower bit depth. */
 export type RowTone = "ok" | "warn" | "note" | "skip" | "fail";
 
 export type RowPointer = { label: string; pointer: OutcomePointer };
@@ -148,8 +149,12 @@ const jpegColourText = ({ colour, pages, images }: { colour: JpegColour; pages: 
 };
 
 export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
-/** Notes tell what was approximated or what another tool can still do for a file; they don't say anything went wrong. */
-const isNote = (warning: OutcomeWarning) => warning.code === "approximateLayout" || warning.code === "pagesWithoutText";
+/**
+ * Notes tell what was approximated or what another tool can still do for a file; they don't say anything went wrong.
+ * A lower bit depth is a note only on tools that set `precisionReducedIsNote`; image tools keep it a warning.
+ */
+const isNote = (warning: OutcomeWarning, precisionReducedIsNote = false) =>
+    warning.code === "approximateLayout" || warning.code === "pagesWithoutText" || (precisionReducedIsNote && warning.code === "precisionReduced");
 /** Saved-as notes say how a finished file was saved. They show on its row after the detail but leave it done, not warned. */
 const isSavedAs = (warning: OutcomeWarning) => warning.code === "transparencyFlattened";
 
@@ -198,7 +203,7 @@ export const neededPack = (outcome: JobOutcome): PackPointer | null =>
  * to run again. `installedPacks` holds the packs installed, repaired or updated since the run.
  * A tool's `signatureRemovedNote` replaces the shared signature wording on its rows.
  */
-export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, outputNoun?: string, installedPacks: ReadonlySet<string> = new Set(), signatureRemovedNote?: string): RowView => {
+export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, outputNoun?: string, installedPacks: ReadonlySet<string> = new Set(), signatureRemovedNote?: string, precisionReducedIsNote = false): RowView => {
     const detailOf = (warning: OutcomeWarning) => warningDetail(warning, signatureRemovedNote);
     const warnings = outcome.warnings.map(detailOf);
     const sizes = sizeLine(outcome);
@@ -210,7 +215,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
             const cautions = flaggedWarnings.map(detailOf);
             const notes = outcome.warnings.filter(isSavedAs).map((warning) => warningText(warning, signatureRemovedNote));
             const warned = cautions.length > 0;
-            const noted = warned && flaggedWarnings.every(isNote);
+            const noted = warned && flaggedWarnings.every((warning) => isNote(warning, precisionReducedIsNote));
             const flagged = noted ? (cautions.length === 1 ? "a note" : "notes") : cautions.length === 1 ? "a warning" : "warnings";
             const pointsAtOcr = outcome.warnings.some((warning) => warning.code === "pagesWithoutText");
             const byOutput = namedByOutput && first !== null;
@@ -325,11 +330,11 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
     return parts.join(", ");
 };
 
-export const resultSummary = (results: JobOutcome[], resultVerb: string, resultNoun?: string): ResultSummary => {
+export const resultSummary = (results: JobOutcome[], resultVerb: string, resultNoun?: string, precisionReducedIsNote = false): ResultSummary => {
     const verb = resultVerb.toLowerCase();
     const flagged = results.filter((result) => result.state === "succeeded" && result.warnings.some((warning) => !isSavedAs(warning)));
     const warned = flagged.length;
-    const noted = flagged.some((result) => result.warnings.some(isNote));
+    const noted = flagged.some((result) => result.warnings.some((warning) => isNote(warning, precisionReducedIsNote)));
     const files = resultNoun ? (warned === 1 ? resultNoun : `${resultNoun}s`) : `${verb} ${warned === 1 ? "file" : "files"}`;
     const flag = noted ? `${warned === 1 ? "has" : "have"} a warning or note` : warned === 1 ? "has a warning" : "have warnings";
     const cancelled = results.some(isCancelled);

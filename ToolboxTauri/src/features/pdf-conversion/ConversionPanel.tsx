@@ -86,8 +86,9 @@ export const ConversionPanel = ({
 }: ConversionPanelProps) => {
   const pagesPerPdf = tool.pagesPerPdf;
   const batchRange = tool.batchPageRange === true;
-  // A batch-wide range offers thumbnails only while the list holds exactly one PDF.
-  const inputPath = batchRange ? (files.length === 1 ? files[0] : undefined) : pagesPerPdf ? files[selectedFileIndex] ?? files[0] : files[0];
+  // A batch-wide range offers thumbnails only while the list holds exactly one PDF, not one image.
+  const onePdf = files.length === 1 && files[0].toLowerCase().endsWith(".pdf");
+  const inputPath = batchRange ? (onePdf ? files[0] : undefined) : pagesPerPdf ? files[selectedFileIndex] ?? files[0] : files[0];
   const [pageRangeFromPicks, setPageRangeFromPicks] = useState(false);
   const [inspection, setInspection] = useState<PdfInspectionState>({ kind: "idle" });
   const [pageCounts, setPageCounts] = useState<Record<string, PageCount>>({});
@@ -245,7 +246,7 @@ export const ConversionPanel = ({
           ) : (
             <p className="workspace-note">{inspection.kind === "error" && inspection.path === inputPath
               ? inspectError
-              : batchRange && files.length > 1 ? "With one PDF in the list, its pages appear here as thumbnails to pick from." : "Select a PDF to load its page previews."}</p>
+              : batchRange && files.length > 0 ? "With one PDF in the list, its pages appear here as thumbnails to pick from." : "Select a PDF to load its page previews."}</p>
           )}
           {inspectedDocument && !pagesPerPdf && !batchRange && <p className="workspace-note">{selectionIssue?.message || selectedPageLabel(selectionCount)}</p>}
           {inspectedDocument && batchRange && typedRange?.ok !== false && (
