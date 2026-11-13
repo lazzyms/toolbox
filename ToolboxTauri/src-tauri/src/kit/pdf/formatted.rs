@@ -7,15 +7,23 @@ use serde::Deserialize;
 use crate::kit::common::limits::{self, ToolLimits};
 use crate::kit::common::{note_renamed, OutputLocation, OutputNaming};
 use crate::kit::contracts::{JobOutcome, LimitKind, ToolError};
-use crate::kit::pdf::convert::{page_count, PageDefaults, PageSize};
+use crate::kit::pdf::convert::{page_count, Margins, Orientation, PageSize};
 use crate::kit::pdf::font_resolver::{FontResolver, SystemFontLookup};
-use crate::kit::pdf::layout::{assemble, Assembly, Block, FontBook, Flow, Geometry, Span, Style, Theme};
+use crate::kit::pdf::layout::{assemble, Align, Assembly, Block, FontBook, Flow, Geometry, Paragraph, Span, Style, Theme, PAGE_COUNT, PAGE_NUMBER};
 use crate::packs::uninstall::RunPacks;
 
 pub const COMMAND: &str = "create_formatted_pdf";
 /// Headings and paragraphs have no code, but the theme names a family for it.
 const CODE_FAMILY: &str = "Liberation Mono";
 const FONT_SIZES: std::ops::RangeInclusive<f32> = 6.0..=72.0;
+/// Header, footer and page numbers are drawn small and grey, in the document's font.
+const BAND_SIZE: f32 = 9.;
+const BAND_LEADING: f32 = 1.3;
+const BAND_INK: [u8; 3] = [0x66, 0x66, 0x66];
+/// How far into the margin, as a share of it, the header and footer sit from the page edge.
+const BAND_INSET: f32 = 0.4;
+/// The least space between a header or footer and the text.
+const BAND_GAP: f32 = 6.;
 
 /// A stretch of paragraph or list text in one style.
 #[derive(Debug, Clone, Deserialize)]
@@ -64,13 +72,59 @@ pub struct DocumentFont {
     pub size: f32,
 }
 
+/// How every page looks: its size, orientation and margins, and the header, footer and page numbers drawn on it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageSettings {
+    pub page_size: PageSize,
+    pub orientation: Orientation,
+    pub margins: Margins,
+    pub header: String,
+    pub footer: String,
+    pub page_numbers: bool,
+}
+
+impl PageSettings {
+    /// The media box width and height, in points.
+    fn size(&self) -> (f32, f32) {
+        let (width, height) = self.page_size.points();
+        match self.orientation { Orientation::Portrait => (width, height), Orientation::Landscape => (height, width) }
+    }
+
+    fn header_blocks(&self) -> Vec<Block> {
+        band_line(&self.header, Align::Left).into_iter().collect()
+    }
+
+    /// The footer text, then the page number on its own line; `numbers` stands in for the page number and count.
+    fn footer_blocks(&self, numbers: (&str, &str)) -> Vec<Block> {
+        let page = self.page_numbers.then(|| format!("Page {} of {}", numbers.0, numbers.1));
+        band_line(&self.footer, Align::Left).into_iter().chain(page.and_then(|page| band_line(&page, Align::Center))).collect()
+    }
+
+    fn label(&self) -> String {
+        let size = page_size_label(self.page_size);
+        match self.orientation { Orientation::Portrait => size.to_string(), Orientation::Landscape => format!("{size} landscape") }
+    }
+}
+
+/// One line of a header or footer, or nothing for blank text.
+fn band_line(text: &str, align: Align) -> Option<Block> {
+    let text = text.trim();
+    if text.is_empty() { return None; }
+    let style = Style { color: Some(BAND_INK), ..Style::default() };
+    Some(Block::Formatted(Paragraph {
+        spans: vec![Span { text: text.to_string(), style, link: None }],
+        align, indent: 0., right_indent: 0., before: 0., after: 0., size: BAND_SIZE, leading: BAND_LEADING,
+    }))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FormattedDocument {
     pub title: String,
     pub author: String,
     pub blocks: Vec<DocumentBlock>,
-    pub page: PageDefaults,
+    pub page: PageSettings,
     pub font: DocumentFont,
 }
 
@@ -103,7 +157,8 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
             return Err(ToolError::invalid_input(format!("Text size must be between {} and {} pt.", FONT_SIZES.start(), FONT_SIZES.end())));
         }
         let limits = limits();
-        let bytes = document.title.len() + document.author.len() + document.blocks.iter().map(DocumentBlock::text_bytes).sum::<usize>();
+        let page = &document.page;
+        let bytes = document.title.len() + document.author.len() + page.header.len() + page.footer.len() + document.blocks.iter().map(DocumentBlock::text_bytes).sum::<usize>();
         if bytes as u64 > limits.max_bytes {
             return Err(ToolError::limit_exceeded(
                 LimitKind::FileSize,
@@ -111,11 +166,31 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
             ));
         }
 
-        let size = document.page.page_size.points();
-        let geometry = Geometry::uniform(size.0, size.1, document.page.margins.points());
+        let size = page.size();
+        let theme = Theme::new(&document.font.family, CODE_FAMILY, document.font.size, false);
+        let margin = page.margins.points();
+        let inset = margin * BAND_INSET;
+        let header = page.header_blocks();
         let mut book = FontBook::new(fonts, packs);
-        let mut flow = Flow::new(&mut book, Theme::new(&document.font.family, CODE_FAMILY, document.font.size, false), &[], geometry);
+        // The text starts below the header and ends above the footer, even where a long one reaches past the margin.
+        let geometry = {
+            let mut measure = Flow::new(&mut book, theme.clone(), &[], Geometry::uniform(size.0, size.1, margin));
+            let mut edge = |blocks: &[Block], name: &str| -> Result<f32, ToolError> {
+                if blocks.is_empty() { return Ok(margin); }
+                let reach = inset + measure.band_height(blocks)? + BAND_GAP;
+                if reach > size.1 / 4. {
+                    return Err(ToolError::invalid_input(format!("The {name} is too long to fit on the page. Shorten it and try again.")));
+                }
+                Ok(margin.max(reach))
+            };
+            let top = edge(&header, "header")?;
+            let bottom = edge(&page.footer_blocks(("9999", "9999")), "footer")?;
+            Geometry { top, bottom, ..Geometry::uniform(size.0, size.1, margin) }
+        };
+        let mut flow = Flow::new(&mut book, theme, &[], geometry);
         flow.blocks(&blocks)?;
+        let footer = page.footer_blocks((&PAGE_NUMBER.to_string(), &PAGE_COUNT.to_string()));
+        flow.bands(&header, &footer, inset, inset)?;
         let laid = flow.finish();
         let count = laid.pages.len();
         limits.check_made_pages(count)?;
@@ -128,7 +203,7 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
             .map_err(|error| ToolError::invalid_input(format!("Could not save the PDF there: {error}")))?;
         pdf.save(output.path()).map_err(|error| ToolError::processing(format!("Could not write the PDF: {error}")))?;
         let path = output.publish().map_err(|error| ToolError::processing(format!("Could not save the PDF: {error}")))?;
-        let detail = format!("{}, {}.", page_count(count), page_size_label(document.page.page_size));
+        let detail = format!("{}, {}.", page_count(count), page.label());
         Ok(JobOutcome::succeeded(request.output_path.clone(), vec![path], detail).with_fonts(book.reports()))
     })();
     result.unwrap_or_else(|error| JobOutcome::failure(request.output_path.clone(), error))
@@ -226,7 +301,7 @@ mod tests {
                 "title": "Move-out checklist",
                 "author": "Sam Lee",
                 "blocks": blocks,
-                "page": { "pageSize": "a4", "margins": "normal" },
+                "page": { "pageSize": "a4", "orientation": "portrait", "margins": "normal", "header": "", "footer": "", "pageNumbers": false },
                 "font": { "family": "Liberation Serif", "size": 11 },
             },
             "outputPath": output_path,
@@ -386,7 +461,7 @@ mod tests {
     #[test]
     fn the_request_is_a_structured_model_not_markup() {
         let document = |blocks: serde_json::Value| json!({
-            "document": { "title": "", "author": "", "blocks": blocks, "page": { "pageSize": "a4", "margins": "normal" }, "font": { "family": "Liberation Serif", "size": 11 } },
+            "document": { "title": "", "author": "", "blocks": blocks, "page": { "pageSize": "a4", "orientation": "portrait", "margins": "normal", "header": "", "footer": "", "pageNumbers": false }, "font": { "family": "Liberation Serif", "size": 11 } },
             "outputPath": "/tmp/x.pdf",
         });
         for rejected in [
@@ -516,6 +591,146 @@ mod tests {
         assert!(drawn(&document, 3).is_empty(), "two page breaks in a row leave a blank page");
         assert!(text(4).contains("Signed by the tenant."), "{:?}", text(4));
         assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap(), "the same content must make the same bytes");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn long_blocks(count: usize) -> serde_json::Value {
+        let filler = "Every room is swept, every shelf is wiped, and every light works before the keys go back. ".repeat(4);
+        json!((0..count).map(|index| paragraph(&format!("Part {index}. {filler}"))).collect::<Vec<_>>())
+    }
+
+    fn with_page(blocks: serde_json::Value, path: &Path, page: serde_json::Value) -> FormattedPdfRequest {
+        serde_json::from_value(json!({
+            "document": { "title": "Move-out checklist", "author": "Sam Lee", "blocks": blocks, "page": page_json(&page), "font": { "family": "Liberation Serif", "size": 11 } },
+            "outputPath": path,
+        })).unwrap()
+    }
+
+    /// The view's default page settings with `changes` applied.
+    fn page_json(changes: &serde_json::Value) -> serde_json::Value {
+        let mut page = json!({ "pageSize": "a4", "orientation": "portrait", "margins": "normal", "header": "", "footer": "", "pageNumbers": false });
+        for (key, value) in changes.as_object().unwrap() { page[key] = value.clone(); }
+        page
+    }
+
+    #[test]
+    fn each_page_size_and_orientation_gives_its_media_box_on_every_page() {
+        let root = sandbox("sizes");
+        for (size, orientation, expected, label) in [
+            ("a4", "portrait", [595., 842.], "A4"), ("a4", "landscape", [842., 595.], "A4 landscape"),
+            ("letter", "portrait", [612., 792.], "Letter"), ("letter", "landscape", [792., 612.], "Letter landscape"),
+            ("legal", "portrait", [612., 1008.], "Legal"), ("legal", "landscape", [1008., 612.], "Legal landscape"),
+        ] {
+            let path = root.join(format!("{size}-{orientation}.pdf"));
+            let outcome = run(&with_page(long_blocks(30), &path, json!({ "pageSize": size, "orientation": orientation })));
+            assert!(outcome.error().is_none(), "{size} {orientation}: {:?}", outcome.error());
+            let document = Document::load(&path).unwrap();
+            let pages = document.get_pages();
+            assert!(pages.len() > 1, "{size} {orientation} flows onto more pages");
+            assert_eq!(outcome.detail, format!("{} pages, {label}.", pages.len()));
+            for page in pages.values() {
+                assert_eq!(media_box(&document, *page), [0., 0., expected[0], expected[1]], "{size} {orientation}");
+            }
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn larger_margins_give_more_pages_for_the_same_content() {
+        let root = sandbox("margins");
+        // A few long paragraphs, so the line count follows the text width rather than rounding up per paragraph.
+        let text = "Every room is swept, every shelf is wiped, and every light works before the keys go back. ".repeat(60);
+        let blocks = json!((0..6).map(|_| paragraph(&text)).collect::<Vec<_>>());
+        let pages = ["narrow", "normal", "wide"].map(|margins| {
+            let path = root.join(format!("{margins}.pdf"));
+            let outcome = run(&with_page(blocks.clone(), &path, json!({ "margins": margins })));
+            assert!(outcome.error().is_none(), "{margins}: {:?}", outcome.error());
+            Document::load(&path).unwrap().get_pages().len()
+        });
+        assert!(pages[0] < pages[1] && pages[1] < pages[2], "narrow, normal and wide margins give {pages:?} pages");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The lowest and highest baselines of the text drawn on a page whose text contains `needle`, from the text matrices.
+    fn baselines(document: &Document, page: u32, needle: &str) -> Vec<f32> {
+        let id = document.get_pages()[&page];
+        let fonts = document.get_page_fonts(id).unwrap();
+        let content = lopdf::content::Content::decode(&document.get_page_content(id)).unwrap();
+        let (mut font, mut y, mut found) = (None, 0., Vec::new());
+        for operation in content.operations {
+            match operation.operator.as_str() {
+                "Tf" => font = fonts.get(operation.operands[0].as_name().unwrap()).copied(),
+                "Td" => y = operation.operands[1].as_float().unwrap(),
+                "Tm" => y = operation.operands[5].as_float().unwrap(),
+                "Tj" | "TJ" => {
+                    let encoding = font.unwrap().get_font_encoding(document).unwrap();
+                    let strings = match &operation.operands[0] { Object::Array(parts) => parts.clone(), other => vec![other.clone()] };
+                    let text = strings.iter().filter_map(|part| part.as_str().ok()).map(|bytes| Document::decode_text(&encoding, bytes).unwrap()).collect::<String>();
+                    if text.contains(needle) { found.push(y); }
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn header_footer_and_page_numbers_are_on_every_page_outside_the_text_and_recoverable() {
+        let root = sandbox("bands");
+        let path = root.join("bands.pdf");
+        let page = json!({ "header": "  Flat 4B, 12 Elm Street ", "footer": "Signed copy for the landlord", "pageNumbers": true });
+        let outcome = run(&with_page(long_blocks(40), &path, page.clone()));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let document = Document::load(&path).unwrap();
+        let count = document.get_pages().len() as u32;
+        assert!(count >= 3, "the content fills several pages, got {count}");
+        for number in 1..=count {
+            let text = flat(&document.extract_text(&[number]).unwrap());
+            for expected in ["Flat 4B, 12 Elm Street", "Signed copy for the landlord", &format!("Page {number} of {count}")] {
+                assert!(text.contains(expected), "page {number} is missing {expected:?}: {text:?}");
+            }
+            let header = baselines(&document, number, "Flat 4B");
+            let footer = baselines(&document, number, "Signed copy");
+            let numbers = baselines(&document, number, &format!("Page {number} of"));
+            let body = baselines(&document, number, "Part ");
+            assert!(header.len() == 1 && footer.len() == 1 && numbers.len() == 1 && !body.is_empty(), "page {number}");
+            let (top, bottom) = (body.iter().copied().fold(f32::MIN, f32::max), body.iter().copied().fold(f32::MAX, f32::min));
+            assert!(header[0] > top + 11. && footer[0] < bottom - 11. && numbers[0] < footer[0], "page {number}: header {header:?}, text {top}..{bottom}, footer {footer:?}, numbers {numbers:?}");
+            assert!(header[0] > 842. - 72. && footer[0] < 72., "the header and footer sit in the margins on page {number}");
+        }
+        // The same document saves byte-identical.
+        let again = root.join("again.pdf");
+        assert!(run(&with_page(long_blocks(40), &again, page)).error().is_none());
+        assert_eq!(fs::read(&path).unwrap(), fs::read(&again).unwrap());
+
+        // Without them, nothing more is drawn.
+        let plain_path = root.join("plain.pdf");
+        assert!(run(&with_page(long_blocks(40), &plain_path, json!({ "header": "   ", "footer": "" }))).error().is_none());
+        let plain = Document::load(&plain_path).unwrap();
+        for number in 1..=plain.get_pages().len() as u32 {
+            let text = flat(&plain.extract_text(&[number]).unwrap());
+            assert!(!text.contains("Page ") && !text.contains("Flat 4B"), "{text:?}");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_header_too_long_for_the_page_is_refused_and_page_settings_are_required() {
+        let root = sandbox("long_header");
+        let path = root.join("x.pdf");
+        let outcome = run(&with_page(short_blocks(), &path, json!({ "header": "Flat 4B, 12 Elm Street. ".repeat(200) })));
+        let error = outcome.error().expect("a header taller than the page allows is refused");
+        assert!(matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("header is too long"), "{error:?}");
+        assert!(fs::read_dir(&root).unwrap().next().is_none(), "a refused document writes nothing");
+        let document = |page: serde_json::Value| json!({
+            "document": { "title": "", "author": "", "blocks": short_blocks(), "page": page, "font": { "family": "Liberation Serif", "size": 11 } },
+            "outputPath": "/tmp/x.pdf",
+        });
+        let mut missing = page_json(&json!({}));
+        missing.as_object_mut().unwrap().remove("pageNumbers");
+        for rejected in [missing, page_json(&json!({ "orientation": "sideways" })), page_json(&json!({ "headerAlign": "right" })), page_json(&json!({ "pageSize": "a3" }))] {
+            assert!(serde_json::from_value::<FormattedPdfRequest>(document(rejected.clone())).is_err(), "{rejected} must be refused");
+        }
         let _ = fs::remove_dir_all(root);
     }
 }

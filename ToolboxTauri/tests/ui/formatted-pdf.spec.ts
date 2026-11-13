@@ -68,6 +68,19 @@ const caretAt = (page: Page, where: "start" | "end") => page.evaluate((where) =>
     window.getSelection()?.addRange(range);
 }, where);
 
+const defaultPage = { pageSize: "a4", orientation: "portrait", margins: "normal", header: "", footer: "", pageNumbers: false };
+
+/** Opens a fresh document, applies one page-setting change, saves and returns the page settings create_formatted_pdf received. */
+const pageSentAfter = async (page: Page, change: (page: Page) => Promise<void>) => {
+    await openFormatted(page);
+    await block(page, "Block 1, Paragraph").fill("Dear neighbour,");
+    await change(page);
+    await saveButton(page).click();
+    await page.getByRole("dialog", { name: "Save the PDF" }).getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => invocation(page, "create_formatted_pdf")).toBeDefined();
+    return ((await invocation(page, "create_formatted_pdf")) as { document: { page: unknown } }).document.page;
+};
+
 const saveButton = (page: Page) => page.getByRole("button", { name: /^Save PDF/ });
 
 const resultRows = (page: Page) => page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
@@ -123,7 +136,7 @@ test("Formatted PDF sends the exact structured document and shows the numbered n
                 { kind: "heading1", text: "Move-out checklist" },
                 { kind: "paragraph", runs: [plain("Return the keys.\nRead the meters.")] },
             ],
-            page: { pageSize: "a4", margins: "normal" },
+            page: defaultPage,
             font: { family: "Liberation Serif", size: 11 },
         },
         outputPath: "/Users/test/Documents/Move-out checklist.pdf",
@@ -155,6 +168,66 @@ test("Formatted PDF sends the exact structured document and shows the numbered n
     await expect(resultRows(page)).toHaveCount(0);
     await expect(block(page, "Block 1, Paragraph")).toHaveText("");
     await expect(saveButton(page)).toBeDisabled();
+});
+
+test("Formatted PDF sends the exact page settings chosen with each page and header control", async ({ page }) => {
+    const settings = page.getByRole("complementary", { name: "Document settings" });
+    const cases: Array<[(page: Page) => Promise<void>, Record<string, unknown>]> = [
+        [async () => undefined, {}],
+        [() => settings.getByLabel("Size").selectOption("letter"), { pageSize: "letter" }],
+        [() => settings.getByLabel("Size").selectOption("legal"), { pageSize: "legal" }],
+        [() => settings.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click(), { orientation: "landscape" }],
+        [() => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Narrow" }).click(), { margins: "narrow" }],
+        [() => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Wide" }).click(), { margins: "wide" }],
+        [() => settings.getByLabel("Header text").fill("Flat 4B handover"), { header: "Flat 4B handover" }],
+        [() => settings.getByLabel("Footer text").fill("Confidential"), { footer: "Confidential" }],
+        [() => settings.getByLabel("Page numbers at the bottom").check(), { pageNumbers: true }],
+    ];
+    for (const [change, expected] of cases) {
+        expect(await pageSentAfter(page, change)).toEqual({ ...defaultPage, ...expected });
+    }
+});
+
+test("Formatted PDF summarises the page settings, explains each margin and resets them for a new document", async ({ page }) => {
+    await openFormatted(page);
+    const settings = page.getByRole("complementary", { name: "Document settings" });
+    await expect(settings.getByLabel("Size")).toHaveValue("a4");
+    await expect(settings.getByLabel("Size").locator("option")).toHaveText(["A4, 210 × 297 mm", "Letter, 8.5 × 11 in", "Legal, 8.5 × 14 in"]);
+    await expect(settings.getByRole("group", { name: "Page" })).toContainText("A4, portrait, normal margins");
+    await expect(settings).toContainText("Normal is 25 mm on every side.");
+    await expect(settings.getByLabel("Footer text")).toHaveAttribute("placeholder", "None");
+
+    await settings.getByLabel("Size").selectOption("letter");
+    await settings.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click();
+    await settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Wide" }).click();
+    await expect(settings.getByRole("group", { name: "Page" })).toContainText("Letter, landscape, wide margins");
+    await expect(settings).toContainText("Wide is 38 mm on every side.");
+    await settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Narrow" }).click();
+    await expect(settings).toContainText("Narrow is 13 mm on every side.");
+
+    const bands = settings.getByRole("group", { name: "Header and footer" });
+    await expect(bands).toContainText("None");
+    await settings.getByLabel("Header text").fill("Flat 4B handover");
+    await settings.getByLabel("Page numbers at the bottom").check();
+    await expect(bands).toContainText("Header, page numbers");
+
+    await block(page, "Block 1, Paragraph").fill("Dear neighbour,");
+    await saveButton(page).click();
+    const save = page.getByRole("dialog", { name: "Save the PDF" });
+    await expect(save).toContainText("Letter landscape, Liberation Serif 11 pt");
+    await save.getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => invocation(page, "create_formatted_pdf")).toMatchObject({
+        document: { page: { pageSize: "letter", orientation: "landscape", margins: "narrow", header: "Flat 4B handover", footer: "", pageNumbers: true } },
+    });
+    await page.evaluate(() => (window as unknown as FormattedWindow).__finish([{
+        inputPath: "/Users/test/Documents/Untitled.pdf", outputPaths: ["/Users/test/Documents/Untitled.pdf"], detail: "1 page, Letter landscape.",
+        state: "succeeded", failure: null, reason: null, warnings: [], fonts: [],
+    }]));
+    await expect(resultRows(page)).toHaveCount(1);
+    await page.getByRole("button", { name: "New document" }).click();
+    await expect(settings.getByRole("group", { name: "Page" })).toContainText("A4, portrait, normal margins");
+    await expect(settings.getByLabel("Header text")).toHaveValue("");
+    await expect(settings.getByLabel("Page numbers at the bottom")).not.toBeChecked();
 });
 
 test("Formatted PDF proposes Untitled in the last-used save folder, and cancelling saves nothing", async ({ page }) => {
