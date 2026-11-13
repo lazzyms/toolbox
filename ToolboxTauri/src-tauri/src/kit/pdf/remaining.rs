@@ -889,16 +889,19 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     let pages_id = document.new_object_id();
     let mut kids = Vec::new();
     let mut reduced = Vec::new();
-    for (index, path) in request.paths.iter().enumerate() {
-        let image = match embed_image(&mut document, path) { Ok(value) => value, Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())) };
-        if let Some(bits) = image.reduced_from_bits { reduced.push(format!("page {} ({bits}-bit)", index + 1)); }
-        let placement = request.layout.place(image.width, image.height);
-        let content_id = document.add_object(Stream::new(dictionary! {}, placement.content().into_bytes()));
-        let (page_width, page_height) = placement.page;
-        let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), page_width.into(), page_height.into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image.id } }, "Contents" => content_id });
-        kids.push(page_id.into());
+    for path in &request.paths {
+        let images = match embed_images(&mut document, path) { Ok(value) => value, Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())) };
+        for image in images {
+            if let Some(bits) = image.reduced_from_bits { reduced.push(format!("page {} ({bits}-bit)", kids.len() + 1)); }
+            let placement = request.layout.place(image.width, image.height);
+            let content_id = document.add_object(Stream::new(dictionary! {}, placement.content().into_bytes()));
+            let (page_width, page_height) = placement.page;
+            let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), page_width.into(), page_height.into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image.id } }, "Contents" => content_id });
+            kids.push(page_id.into());
+        }
     }
-    document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => request.paths.len() as i64 }.into());
+    let count = kids.len() as i64;
+    document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }.into());
     let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
     document.trailer.set("Root", catalog_id);
     match document.save(output.path()) {
@@ -924,35 +927,47 @@ struct EmbeddedImage {
     reduced_from_bits: Option<u8>,
 }
 
-// A baseline JPEG goes in as its own bytes; everything else is stored without
-// loss as 8-bit Flate samples, with any alpha kept as a soft mask.
 fn embed_image(document: &mut Document, path: &Path) -> Result<EmbeddedImage, String> {
     if !matches!(ImageFamily::of(path), ImageFamily::Jpeg | ImageFamily::Png | ImageFamily::WebP | ImageFamily::Heif) {
         return Err("Only PNG, JPEG, WebP, HEIC and HEIF images can be combined into a PDF.".to_string());
     }
+    let mut images = embed_images(document, path)?;
+    if images.len() != 1 { return Err("Multi-page images can't be combined into a PDF.".to_string()); }
+    Ok(images.swap_remove(0))
+}
+
+// A baseline JPEG goes in as its own bytes; everything else is stored without
+// loss as 8-bit Flate samples, with any alpha kept as a soft mask. A TIFF
+// gives one image per page, in page order.
+fn embed_images(document: &mut Document, path: &Path) -> Result<Vec<EmbeddedImage>, String> {
+    if !matches!(ImageFamily::of(path), ImageFamily::Jpeg | ImageFamily::Png | ImageFamily::WebP | ImageFamily::Heif | ImageFamily::Tiff) {
+        return Err("Only PNG, JPEG, WebP, HEIC, HEIF and TIFF images can be combined into a PDF.".to_string());
+    }
     let decoded = source::decode(path)?;
-    if decoded.pages.len() != 1 { return Err("Multi-page images can't be combined into a PDF.".to_string()); }
     let reduced_from_bits = (decoded.bits_per_channel > 8).then_some(decoded.bits_per_channel);
-    let has_alpha = decoded.has_alpha;
-    let baseline_jpeg = decoded.baseline_jpeg.clone();
-    let page = decoded.into_first_page();
-    let (width, height) = (page.width(), page.height());
-    let image = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8 };
-    if let Some((jpeg, color_space)) = baseline_jpeg.and_then(|bytes| jpeg_color_space(&bytes).map(|space| (bytes, space))) {
+    let baseline_jpeg = decoded.baseline_jpeg.and_then(|bytes| jpeg_color_space(&bytes).map(|space| (bytes, space)));
+    let mut images = Vec::with_capacity(decoded.pages.len());
+    for page in &decoded.pages {
+        let (width, height) = (page.width(), page.height());
+        let image = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8 };
+        if let Some((jpeg, color_space)) = &baseline_jpeg {
+            let mut dict = image;
+            dict.set("ColorSpace", *color_space);
+            dict.set("Filter", "DCTDecode");
+            images.push(EmbeddedImage { id: document.add_object(Stream::new(dict, jpeg.clone())), width, height, reduced_from_bits });
+            continue;
+        }
+        let (samples, color_space) = if page.color().has_color() { (page.to_rgb8().into_raw(), "DeviceRGB") } else { (page.to_luma8().into_raw(), "DeviceGray") };
         let mut dict = image;
         dict.set("ColorSpace", color_space);
-        dict.set("Filter", "DCTDecode");
-        return Ok(EmbeddedImage { id: document.add_object(Stream::new(dict, jpeg)), width, height, reduced_from_bits });
+        if page.color().has_alpha() {
+            let alpha = page.to_rgba8().pixels().map(|pixel| pixel[3]).collect::<Vec<_>>();
+            let mask = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8 };
+            dict.set("SMask", document.add_object(flate_stream(mask, &alpha)?));
+        }
+        images.push(EmbeddedImage { id: document.add_object(flate_stream(dict, &samples)?), width, height, reduced_from_bits });
     }
-    let (samples, color_space) = if page.color().has_color() { (page.to_rgb8().into_raw(), "DeviceRGB") } else { (page.to_luma8().into_raw(), "DeviceGray") };
-    let mut dict = image;
-    dict.set("ColorSpace", color_space);
-    if has_alpha {
-        let alpha = page.to_rgba8().pixels().map(|pixel| pixel[3]).collect::<Vec<_>>();
-        let mask = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8 };
-        dict.set("SMask", document.add_object(flate_stream(mask, &alpha)?));
-    }
-    Ok(EmbeddedImage { id: document.add_object(flate_stream(dict, &samples)?), width, height, reduced_from_bits })
+    Ok(images)
 }
 
 fn flate_stream(mut dict: lopdf::Dictionary, samples: &[u8]) -> Result<Stream, String> {
