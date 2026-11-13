@@ -7,7 +7,9 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(({ svg }) => {
     const w = window as any;
     w.calls = [];
-    w.sceneTextDelays = {};
+    w.sceneTextHeld = new Set();
+    w.sceneTextWaiting = [];
+    w.releaseSceneText = () => { w.sceneTextHeld.clear(); for (const resolve of w.sceneTextWaiting.splice(0)) resolve(); };
     w.sceneTextResponses = {};
     w.dialogNext = null;
     w.scriptPacks = [];
@@ -35,8 +37,7 @@ test.beforeEach(async ({ page }) => {
         if (command === 'inspect_pdf_scene') return { path: '/local/scene-fixture.pdf', pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') {
           const pageIndex = args.request.pageIndex;
-          const delay = w.sceneTextDelays[pageIndex] ?? 0;
-          if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+          if (w.sceneTextHeld.has(pageIndex)) await new Promise(resolve => w.sceneTextWaiting.push(resolve));
           const key = `${args.request.path}:${pageIndex}`;
           const response = (w.sceneTextResponses[key] ?? 0) + 1;
           w.sceneTextResponses[key] = response;
@@ -472,13 +473,15 @@ test('scene lazily requests text for the current source page', async ({ page }) 
 
 test('scene ignores stale page text responses after changing pages', async ({ page }) => {
   await page.goto('/');
-  await page.evaluate(() => { (window as any).sceneTextDelays[0] = 300; });
+  await page.evaluate(() => { (window as any).sceneTextHeld.add(0); });
   await openToolBySearch(page, "Edit PDF");
   await page.getByRole('button', { name: 'Choose files to process' }).click();
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await page.getByRole('button', { name: 'Page 2', exact: true }).click();
   await page.getByRole('button', { name: 'Highlight', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'inspect_pdf_scene_page').map((call: any) => call.args.request.pageIndex))).toEqual([0, 1]);
+  // Page 1's text arrives only after Page 2 is showing, however slow the machine.
+  await page.evaluate(() => (window as any).releaseSceneText());
   await expect.poll(() => page.evaluate(() => (window as any).sceneTextResponses['/local/scene-fixture.pdf:0'])).toBe(1);
   await expect.poll(() => page.locator('[data-text-run]').allTextContents()).toEqual(['/local/scene-fixture.pdf page 1 response 1']);
   await page.getByRole('button', { name: 'Page 1', exact: true }).click();
