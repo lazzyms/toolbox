@@ -171,11 +171,11 @@ test("ordered tools keep repeated drops in the order they arrive", async ({ page
     await drop(page, ["/local/a.pdf"]);
 
     await expect(rows(page)).toHaveCount(3);
-    await expect(rows(page).nth(2)).toContainText("Added twice");
-    const warningColor = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--warning").trim());
-    const badgeColor = await rows(page).nth(2).getByText("Added twice").evaluate((element) => getComputedStyle(element).color);
-    const probe = await page.evaluate((color) => { const span = document.createElement("span"); span.style.color = color; document.body.append(span); const value = getComputedStyle(span).color; span.remove(); return value; }, warningColor);
-    expect(badgeColor).toBe(probe);
+    // Merge allows repeats, so each copy carries a neutral tag rather than a warning.
+    await expect(rows(page).nth(0)).toContainText("Copy 1 of 2");
+    await expect(rows(page).nth(2)).toContainText("Copy 2 of 2");
+    await expect(rows(page).nth(1)).not.toContainText("Copy");
+    await expect(rows(page).nth(2).getByText("Copy 2 of 2")).not.toHaveAttribute("data-tone", "warning");
     await expect(page.getByRole("region", { name: "Not added" })).toHaveCount(0);
 
     await runAndSave(page);
@@ -278,7 +278,7 @@ test("drag and keyboard reorder set the order sent in the request", async ({ pag
     await b.press("Meta+ArrowUp");
     await expect(rows(page)).toHaveText([/c\.pdf/, /b\.pdf/, /a\.pdf/]);
     await expect(page.getByRole("status").filter({ hasText: "Moved" })).toHaveText("Moved b.pdf to position 2.");
-    await expect(rows(page).nth(1)).toHaveAttribute("aria-label", "2 of 3, b.pdf");
+    await expect(rows(page).nth(1)).toHaveAttribute("aria-label", "2. b.pdf");
 
     await page.getByRole("button", { name: "Move a.pdf up" }).click();
     await expect(rows(page)).toHaveText([/c\.pdf/, /a\.pdf/, /b\.pdf/]);

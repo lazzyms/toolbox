@@ -768,6 +768,20 @@ body {
 .file-selection-move {
   flex: 0 0 auto;
 }
+.file-selection-fact {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.file-selection-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
 .file-selection-move {
   display: inline-flex;
   gap: 2px;

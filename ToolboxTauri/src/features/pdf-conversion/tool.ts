@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { RunContext } from "../../components/ToolScaffold";
-import type { OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
+import type { AtomicToolId, OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
 import type { PdfDocument } from "../pdf-editor";
 
 export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string };
@@ -13,6 +13,7 @@ export type OptionsPanelProps<Options> = {
   selectedPages: number[];
   pageRange: string;
   choosePageRange: (value: string) => void;
+  onSelectTool?: (id: AtomicToolId) => void;
 };
 
 export interface ConversionTool<Options = unknown> {
@@ -21,6 +22,8 @@ export interface ConversionTool<Options = unknown> {
   initialPages?(document: PdfDocument): number[];
   outputPreview(options: Options, selectedPages: number[]): string;
   exportBlocked?(options: Options, files: string[], pageRange: string): boolean;
+  /** A status shown above the export action while the list can't be exported yet. */
+  exportNote?(files: string[]): string | null;
   OptionsPanel?(props: OptionsPanelProps<Options>): ReactNode;
   exampleName?(inputPath: string, utility: ToolDefinition, options: Options): string;
   request(paths: string[], outputLocation: OutputLocation, run: RunContext, options: Options, selection: PageSelection): Promise<ToolResult>;
