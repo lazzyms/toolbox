@@ -4,6 +4,7 @@ pub mod page_ranges;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+pub mod page_text;
 #[cfg(test)]
 pub(crate) mod jbig2_fixtures;
 #[cfg(test)]
