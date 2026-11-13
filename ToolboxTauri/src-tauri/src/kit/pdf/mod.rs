@@ -230,9 +230,37 @@ pub(crate) fn read_preview_png(path: &Path) -> Result<(Vec<u8>, u32, u32), Strin
         return Err("PDF preview exceeds its file-size limit.".to_string());
     }
     let bytes = fs::read(path).map_err(|error| format!("Could not read PDF preview: {error}"))?;
-    let (width, height) = preview_png_dimensions(&bytes)?;
-    image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).map_err(|error| format!("PDF helper did not produce a valid PNG preview: {error}"))?;
+    let (width, height) = check_preview_png(&bytes)?;
     Ok((bytes, width, height))
+}
+
+/// A rendered preview's width and height, once it is a whole PNG within the raster limits.
+pub(crate) fn check_preview_png(bytes: &[u8]) -> Result<(u32, u32), String> {
+    let (width, height) = preview_png_dimensions(bytes)?;
+    image::load_from_memory_with_format(bytes, image::ImageFormat::Png).map_err(|error| format!("PDF helper did not produce a valid PNG preview: {error}"))?;
+    Ok((width, height))
+}
+
+/// The PNGs pdftoppm writes one after another to stdout when it renders several pages without an output root.
+pub(crate) fn split_png_stream(bytes: &[u8]) -> Result<Vec<&[u8]>, String> {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let mut images = Vec::new();
+    let mut start = 0;
+    while start < bytes.len() {
+        if !bytes[start..].starts_with(SIGNATURE) { return Err("PDF helper did not produce a PNG preview.".to_string()); }
+        let mut at = start + SIGNATURE.len();
+        loop {
+            let header = bytes.get(at..at + 8).ok_or("PDF helper produced a truncated PNG preview.")?;
+            let length = u32::from_be_bytes(header[..4].try_into().expect("PNG chunk length has four bytes")) as usize;
+            let end = at.checked_add(12).and_then(|value| value.checked_add(length)).filter(|end| *end <= bytes.len()).ok_or("PDF helper produced a truncated PNG preview.")?;
+            let last = &header[4..] == b"IEND";
+            at = end;
+            if last { break; }
+        }
+        images.push(&bytes[start..at]);
+        start = at;
+    }
+    Ok(images)
 }
 
 #[derive(Debug, Clone)]

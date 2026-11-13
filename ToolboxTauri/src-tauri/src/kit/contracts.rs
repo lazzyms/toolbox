@@ -1260,7 +1260,7 @@ mod tests {
         assert!(validate_command_inputs("pdf_to_epub", &[PathBuf::from("book.epub")]).is_err());
         let formatted = native_capability("create_formatted_pdf").unwrap();
         assert_eq!((formatted.input_cardinality, formatted.output_suffix.as_str()), (InputCardinality::None, ""), "Formatted PDF creates a new file from typed text, named by the save dialog");
-        assert!(formatted.accepted_extensions.is_empty() && formatted.native_available && !formatted.many_to_one && !formatted.supports_page_selection && !formatted.supports_preview);
+        assert!(formatted.accepted_extensions.is_empty() && formatted.native_available && !formatted.many_to_one && !formatted.supports_page_selection && formatted.supports_preview, "it previews the pages before saving");
         assert!(validate_command_inputs("create_formatted_pdf", &[]).is_ok());
         assert!(validate_command_inputs("create_formatted_pdf", &[PathBuf::from("notes.pdf")]).is_err(), "a creation tool takes no input files");
         let ocr = native_capability("ocr_pdf").unwrap();
