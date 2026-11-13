@@ -11,6 +11,8 @@ type MergeWindow = Window & {
     __writtenName: string | null;
     // A merge that fails on this input, worded as the native aggregate failure.
     __failingInput: string | null;
+    // Outcomes the native side reports for the next merge, one per entry, in place of the default success.
+    __mergeOutcomes: unknown[] | null;
     __drop: (paths: string[]) => void;
 };
 
@@ -27,6 +29,7 @@ test.beforeEach(async ({ page }) => {
         win.__facts = {};
         win.__writtenName = null;
         win.__failingInput = null;
+        win.__mergeOutcomes = null;
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         win.__drop = (paths) => {
             for (const [id, listener] of listeners) {
@@ -61,6 +64,7 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
                 if (command !== "merge_pdfs") throw `Unexpected command ${command}`;
                 const { request } = args as { request: { paths: string[]; outputPath: string } };
+                if (win.__mergeOutcomes) return win.__mergeOutcomes;
                 const failing = win.__failingInput;
                 if (failing && request.paths.includes(failing)) {
                     const failedAt = request.paths.indexOf(failing);
@@ -263,4 +267,52 @@ test("a failed merge names the input that stopped it on every row", async ({ pag
     await expect(results.nth(0)).toContainText("Stopped because site-photos.pdf failed. Nothing was saved.");
     await expect(results.nth(2)).toContainText("Stopped because site-photos.pdf failed. Nothing was saved.");
     await expect(rows(page)).toHaveCount(3);
+});
+
+const succeeded = (inputPath: string, detail: string, warnings: unknown[]) => ({
+    inputPath, outputPaths: ["/local/merge/Merged.pdf"], detail, state: "succeeded", failure: null, reason: null, warnings,
+});
+const signatureRemoved = { code: "signatureRemoved", message: "native wording", details: {} };
+const notCarried = (code: "bookmarksNotCarried" | "tagsNotCarried") => ({ code, message: "native wording", details: { into: "the merged file" } });
+
+test("a signed entry's warning shows on its own row only, and what wasn't carried is stated", async ({ page }) => {
+    await openMerge(page, facts);
+    await page.evaluate((outcomes) => { (window as unknown as MergeWindow).__mergeOutcomes = outcomes; }, [
+        succeeded(files.a, "Pages 1–2 of Merged.pdf.", [notCarried("bookmarksNotCarried")]),
+        succeeded(files.b, "Page 3 of Merged.pdf.", [signatureRemoved, notCarried("tagsNotCarried")]),
+        succeeded(files.c, "Pages 4–8 of Merged.pdf.", []),
+    ]);
+    await drop(page, [files.a, files.b, files.c]);
+    await mergeAndSave(page);
+
+    const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(results).toHaveCount(3);
+    const signature = "Saved. The digital signature was removed, because changing the file breaks it.";
+    await expect(results.nth(1)).toContainText(signature);
+    await expect(results.nth(0)).not.toContainText(signature);
+    await expect(results.nth(2)).not.toContainText(signature);
+    await expect(results.nth(0)).toContainText("Bookmarks weren’t carried into the merged file.");
+    await expect(results.nth(1)).toContainText("Accessibility tags weren’t carried into the merged file.");
+    await expect(results.nth(2)).toContainText("Pages 4–8 of Merged.pdf.");
+    await expect(results.nth(2)).not.toContainText("carried");
+});
+
+test("a password-protected entry points to Lock & Unlock, and the pointer opens it", async ({ page }) => {
+    await openMerge(page, facts);
+    const locked = "/local/merge/locked.pdf";
+    await page.evaluate(({ a, locked }) => { (window as unknown as MergeWindow).__mergeOutcomes = [
+        { inputPath: a, outputPaths: [], detail: "", state: "failed", reason: null, warnings: [],
+            failure: { kind: "processing", message: "Stopped because locked.pdf failed. Nothing was saved.", pointer: null } },
+        { inputPath: locked, outputPaths: [], detail: "", state: "failed", reason: null, warnings: [],
+            failure: { kind: "invalidInput", message: "Password-protected, so it can't be read. Remove the password, then add it again.", pointer: { kind: "tool", toolId: "lock-unlock" } } },
+    ]; }, { a: files.a, locked });
+    await drop(page, [files.a, locked]);
+    await mergeAndSave(page);
+
+    const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(results).toHaveCount(2);
+    await expect(results.nth(1)).toContainText("Password-protected, so it can't be read. Remove the password, then add it again.");
+    await expect(results.nth(0).getByRole("button", { name: "Open Lock & Unlock" })).toHaveCount(0);
+    await results.nth(1).getByRole("button", { name: "Open Lock & Unlock" }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("File Security");
 });

@@ -264,7 +264,22 @@ async fn merge_pdfs(app: tauri::AppHandle, request: remaining::MergePdfRequest) 
 async fn run_merge_pdfs(request: &remaining::MergePdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("merge_pdfs", &request.paths) { return outcomes; }
     let request = request.clone();
-    aggregate_outcomes("merge_pdfs", &request.paths.clone(), move || note_renamed(remaining::merge(&request), request.output_path.as_deref()))
+    let paths = request.paths.clone();
+    let chosen = request.output_path.clone();
+    let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&entries);
+    let outcomes = aggregate_outcomes("merge_pdfs", &paths, move || {
+        let merged = remaining::merge(&request);
+        *sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = merged.entries;
+        merged.combined
+    });
+    let mut entries = std::mem::take(&mut *entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    // The combined file is one result, but each entry gets its own row with its page span and its own notes.
+    if !matches!(outcomes.as_slice(), [combined] if matches!(combined.state, OutcomeState::Succeeded { .. })) || entries.len() != paths.len() {
+        return outcomes;
+    }
+    entries[0] = note_renamed(entries[0].clone(), chosen.as_deref());
+    entries
 }
 
 #[tauri::command]
@@ -691,6 +706,19 @@ mod command_tests {
         outcome.output_paths().to_vec()
     }
 
+    /// Merge makes one file but reports it once per entry, in list order, so each entry's row can carry its own notes.
+    fn assert_merge_success<F>(name: &str, paths: &[PathBuf], future: F) -> Vec<PathBuf>
+    where F: Future<Output = Vec<JobOutcome>> {
+        let outcomes = tauri::async_runtime::block_on(future);
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "{name} reports one outcome per entry in list order");
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_none()), "{name} failed: {:?}", outcomes.iter().find_map(JobOutcome::error));
+        let output = outcomes[0].output_paths().to_vec();
+        assert_eq!(output.len(), 1, "{name} makes one file");
+        assert!(output[0].is_file(), "{name} reported missing output {}", output[0].display());
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths() == output), "{name} reports the same merged file on every entry");
+        output
+    }
+
     fn assert_aggregate_failure<F>(name: &str, paths: &[PathBuf], failed_path: &PathBuf, future: F)
     where F: Future<Output = Vec<JobOutcome>> {
         let outcomes = tauri::async_runtime::block_on(future);
@@ -725,14 +753,15 @@ mod command_tests {
         let gif = chosen("loop.gif");
         let tiff_out = chosen("pages.tiff");
         let runs = [
-            (merge.clone(), "statement-1.pdf", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
-            (combined.clone(), "scans-1.pdf", tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
-            (gif.clone(), "loop-1.gif", tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
-            (tiff_out.clone(), "pages-1.tiff", tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
+            (merge.clone(), "statement-1.pdf", 2, tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
+            (combined.clone(), "scans-1.pdf", 1, tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
+            (gif.clone(), "loop-1.gif", 1, tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
+            (tiff_out.clone(), "pages-1.tiff", 1, tauri::async_runtime::block_on(run_process_tiff_pages(&TiffRequest { paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
         ];
-        for (existing, expected_name, outcomes) in runs {
+        for (existing, expected_name, entries, outcomes) in runs {
             let chosen_name = existing.file_name().unwrap().to_string_lossy().into_owned();
-            assert_eq!(outcomes.len(), 1, "{chosen_name} makes one file, so it reports one outcome");
+            assert_eq!(outcomes.len(), entries, "{chosen_name} makes one file; only merge reports it once per entry");
+            assert!(outcomes[1..].iter().all(|entry| entry.warnings.is_empty() && entry.output_paths() == [chosen_folder.join(expected_name)]), "the rename is noted once, on the first entry");
             let outcome = &outcomes[0];
             assert!(outcome.error().is_none(), "{chosen_name} failed: {:?}", outcome.error());
             assert_eq!(outcome.output_paths(), [chosen_folder.join(expected_name)]);
@@ -800,13 +829,15 @@ mod command_tests {
         let originals = [&a, &b].map(|path| (path.clone(), std::fs::read(path).unwrap()));
 
         let forward = merged(&root, "forward", &[&a, &b]);
-        assert_eq!(forward.len(), 1);
-        assert!(forward[0].error().is_none(), "{:?}", forward[0].error());
+        assert_eq!(forward.len(), 2, "each entry gets its own row");
+        assert!(forward.iter().all(|outcome| outcome.error().is_none()), "{:?}", forward[0].error());
+        let name = forward[0].output_paths()[0].file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(forward.iter().map(|outcome| outcome.detail.clone()).collect::<Vec<_>>(), [format!("Pages 1–2 of {name}."), format!("Pages 3–4 of {name}.")]);
         assert_eq!(page_labels(&forward[0].output_paths()[0]), ["A1", "A2", "B1", "B2"]);
 
         let reversed = merged(&root, "reversed", &[&b, &a]);
         assert_eq!(page_labels(&reversed[0].output_paths()[0]), ["B1", "B2", "A1", "A2"]);
-        assert_eq!(reversed[0].input_path, b, "the combined result is reported against the first entry");
+        assert_eq!(reversed.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [b.clone(), a.clone()], "rows follow the list order");
 
         // The page-count check counts a repeated file once per entry, so a repeat passes it.
         let repeated = merged(&root, "repeated", &[&a, &b, &a]);
@@ -847,6 +878,65 @@ mod command_tests {
     }
 
     #[test]
+    fn merge_accepts_structured_and_signed_pdfs_and_notes_each_entry_on_its_own_row() {
+        use crate::kit::contracts::WarningKind;
+        use crate::kit::pdf::remaining::tests::{assert_nothing_carried, media_boxes, structured_pdf, warning_kinds, Structure};
+        let root = sandbox("merge-structured");
+        let signed = root.join("signed.pdf");
+        structured_pdf(&signed, Structure { sizes: &[(842, 595)], form: true, signed: true, ..Structure::default() });
+        let plain = root.join("plain.pdf");
+        structured_pdf(&plain, Structure { sizes: &[(595, 842), (612, 792)], ..Structure::default() });
+        let marked = root.join("marked.pdf");
+        structured_pdf(&marked, Structure { sizes: &[(420, 595)], bookmarks: true, tags: true, form: true, ..Structure::default() });
+        let originals = [&signed, &plain, &marked].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+
+        let outcomes = merged(&root, "out", &[&signed, &plain, &marked]);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [signed.clone(), plain.clone(), marked.clone()]);
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_none()), "{:?}", outcomes.iter().find_map(JobOutcome::error));
+        let output = outcomes[0].output_paths()[0].clone();
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths() == [output.clone()]));
+        assert_eq!(warning_kinds(&outcomes[0]), [WarningKind::SignatureRemoved], "only the signed entry says its signature was removed");
+        assert!(outcomes[1].warnings.is_empty(), "an entry with nothing lost has no notes");
+        assert_eq!(warning_kinds(&outcomes[2]), [
+            WarningKind::BookmarksNotCarried { into: "the merged file".into() },
+            WarningKind::TagsNotCarried { into: "the merged file".into() },
+        ]);
+        let name = output.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(outcomes.iter().map(|outcome| outcome.detail.clone()).collect::<Vec<_>>(), [format!("Page 1 of {name}."), format!("Pages 2–3 of {name}."), format!("Page 4 of {name}.")]);
+        assert_eq!(media_boxes(&output), [(842, 595), (595, 842), (612, 792), (420, 595)], "each page keeps its own size and orientation");
+        assert_nothing_carried(&output);
+        for (path, bytes) in originals { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn merge_refuses_a_password_protected_or_empty_entry_and_writes_nothing() {
+        use crate::kit::contracts::{ErrorKind, OutcomePointer};
+        use crate::kit::pdf::remaining::tests::{password_protected_pdf, zero_page_pdf};
+        let root = sandbox("merge-refused");
+        let a = root.join("a.pdf"); make_labeled_pdf(&a, &["A1"]);
+        let b = root.join("b.pdf"); make_labeled_pdf(&b, &["B1"]);
+        let locked = root.join("locked.pdf"); password_protected_pdf(&locked);
+        let empty = root.join("empty.pdf"); zero_page_pdf(&empty);
+        let originals = [&a, &b, &locked, &empty].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+
+        for (folder, bad, pointer) in [("locked", &locked, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() })), ("empty", &empty, None)] {
+            let outcomes = merged(&root, folder, &[&a, bad, &b]);
+            assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.warnings.is_empty()), "{folder}");
+            let failed = outcomes[1].error().expect("the bad entry fails");
+            assert_eq!(failed.kind, ErrorKind::InvalidInput, "{folder}");
+            assert_eq!(failed.pointer, pointer, "{folder}");
+            if pointer.is_some() { assert_eq!(failed.message, remaining::PASSWORD_PROTECTED); }
+            let stopped = format!("Stopped because {}.pdf failed. Nothing was saved.", folder);
+            for index in [0, 2] { assert_eq!(outcomes[index].error().unwrap().message, stopped, "{folder}"); }
+            assert!(folder_files(&root, folder).is_empty(), "{folder}: nothing is written");
+        }
+        for (path, bytes) in originals { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn aggregate_commands_report_one_combined_success_and_each_missing_input() {
         let root = sandbox("aggregate-outcomes");
         let image = root.join("first.png"); write_png(&image, 32, 44);
@@ -860,7 +950,7 @@ mod command_tests {
         let missing_gif_frame = root.join("missing.gif.png");
         let missing_tiff = root.join("missing.tiff");
 
-        assert_aggregate_success("merge valid inputs", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest {
+        assert_merge_success("merge valid inputs", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest {
             paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge-valid"), output_path: None,
         }));
         assert_aggregate_failure("merge missing later input", &[pdf.clone(), missing_pdf.clone()], &missing_pdf, run_merge_pdfs(&MergePdfRequest {
@@ -1449,7 +1539,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], position: Some("bottom-right".into()), pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
-        outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_aggregate_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
+        outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_merge_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
         outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(RunEvents::silent(), PdfWatermarkRequest { paths: vec![pdf.clone()], options: WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: None, opacity: 70, color: None, position: Some(WatermarkPosition::Placement(WatermarkPlacement::Center)), rotation: 0.0 }, pages: None, output_location: location(&root, "watermark pdf") }))));
         outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], spec: CropSpec::Margins { top: 36.0, right: 18.0, bottom: 36.0, left: 18.0 }, scope: RangedPageScope::All, output_location: location(&root, "crop pdf") }))));
         outputs.extend(named(&mut naming, "edit_pdf", pdf.clone(), assert_success("edit pdf", edit_pdf(RunEvents::silent(), EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") }))));

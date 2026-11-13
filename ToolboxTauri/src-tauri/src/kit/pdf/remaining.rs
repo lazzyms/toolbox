@@ -10,10 +10,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::kit::common::limits::{self, StoppableHelper};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
-use crate::kit::contracts::{LimitKind, SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{LimitKind, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use super::metadata::{page_bounds, page_rotation};
 use super::page_ranges::PageRanges;
-use super::{mutation_preflight, PdfMutationIntent};
+use super::{has_signed_signature_field, mutation_preflight, note_signature_removed, remove_signatures, resolve, PdfMutationIntent};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +121,16 @@ pub struct RotatePdfRequest {
     pub output_location: OutputLocation,
 }
 
+/// A merge reports one combined outcome for the run's limits and, once it succeeds, one outcome per entry.
+pub struct Merged {
+    pub combined: JobOutcome,
+    pub entries: Vec<JobOutcome>,
+}
+
+impl From<JobOutcome> for Merged {
+    fn from(combined: JobOutcome) -> Self { Self { combined, entries: Vec::new() } }
+}
+
 pub(crate) type QpdfDeadline = limits::HelperDeadline;
 
 pub(crate) const QPDF_DEADLINE: QpdfDeadline = QpdfDeadline { per_file: Duration::from_secs(15), per_page: Duration::from_millis(50) };
@@ -134,49 +144,66 @@ fn run_qpdf(command: Command, deadline: Instant, limit: Duration, action: &str) 
     }
 }
 
-pub fn merge(request: &MergePdfRequest) -> JobOutcome {
+pub fn merge(request: &MergePdfRequest) -> Merged {
     merge_within(request, QPDF_DEADLINE)
 }
 
-fn merge_within(request: &MergePdfRequest, deadline: QpdfDeadline) -> JobOutcome {
-    let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one PDF.".to_string()); };
-    if request.paths.len() < 2 { return failure(first, "Select at least two PDFs to merge.".to_string()); }
+fn merge_within(request: &MergePdfRequest, deadline: QpdfDeadline) -> Merged {
+    let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one PDF.".to_string()).into(); };
+    if request.paths.len() < 2 { return failure(first, "Select at least two PDFs to merge.".to_string()).into(); }
     let max_pages = limits::recorded("merge_pdfs").and_then(|limits| limits.max_pages).map_or(u64::MAX, u64::from);
+    let mut inputs = Vec::with_capacity(request.paths.len());
     let mut expected_pages = 0usize;
     for path in &request.paths {
-        if path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) { return failure(path.clone(), format!("Only PDF inputs can be merged: {}", path.display())); }
-        let document = match load_existing_document_for_mutation(path) {
-            Ok(document) => document,
-            Err(error) => return failure(path.clone(), format!("Could not read {}: {error}", path.display())),
+        if path.extension().and_then(|extension| extension.to_str()).is_none_or(|extension| !extension.eq_ignore_ascii_case("pdf")) { return failure(path.clone(), format!("Only PDF inputs can be merged: {}", path.display())).into(); }
+        let input = match ReadableInput::inspect(path) {
+            Ok(input) => input,
+            Err(error) => return JobOutcome::failure(path.clone(), error).into(),
         };
-        expected_pages += document.get_pages().len();
+        expected_pages += input.pages;
         if expected_pages as u64 > max_pages {
             let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
             return JobOutcome::failure(path.clone(), ToolError::limit_exceeded(LimitKind::PageCount, format!(
                 "Adding {name} takes the merged PDF past {} pages, over the limit for one PDF. Merge fewer pages and try again.",
                 limits::count_label(max_pages),
-            )));
+            ))).into();
         }
+        inputs.push(input);
     }
-    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)).into() };
     let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-merged", "pdf") {
         Ok(output) => output,
-        Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
+        Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")).into(),
     };
     let mut command = Command::new(qpdf);
     command.arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path());
     let limit = deadline.limit(request.paths.len(), expected_pages);
-    match run_qpdf(command, Instant::now() + limit, limit, "Merging") {
+    let verified = match run_qpdf(command, Instant::now() + limit, limit, "Merging") {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
-            Ok(document) if document.get_pages().len() == expected_pages => match output.publish() {
-                Ok(path) => JobOutcome::succeeded(first, vec![path], format!("{} PDFs merged in input order", request.paths.len())),
-                Err(error) => failure(first, format!("Could not publish merged PDF output: {error}")),
-            },
-            Ok(document) => failure(first, format!("Merged PDF page count mismatch: expected {expected_pages}, got {}.", document.get_pages().len())),
-            Err(error) => failure(first, format!("Merged PDF could not be verified: {error}")),
+            Ok(document) if document.get_pages().len() == expected_pages => unsign_copy(document, output.path()),
+            Ok(document) => Err(format!("Merged PDF page count mismatch: expected {expected_pages}, got {}.", document.get_pages().len())),
+            Err(error) => Err(format!("Merged PDF could not be verified: {error}")),
         },
-        Ok(result) => failure(first, stderr(result, "qpdf failed to merge the PDFs.")),
-        Err(error) => JobOutcome::failure(first, error),
+        Ok(result) => Err(stderr(result, "qpdf failed to merge the PDFs.")),
+        Err(error) => return JobOutcome::failure(first, error).into(),
+    };
+    if let Err(error) = verified { return failure(first, error).into(); }
+    let merged = match output.publish() {
+        Ok(path) => path,
+        Err(error) => return failure(first, format!("Could not publish merged PDF output: {error}")).into(),
+    };
+    let merged_name = merged.file_name().map_or_else(|| merged.display().to_string(), |name| name.to_string_lossy().into_owned());
+    let mut next_page = 1;
+    let entries = request.paths.iter().zip(&inputs).map(|(path, input)| {
+        let (start, end) = (next_page, next_page + input.pages - 1);
+        next_page = end + 1;
+        let span = if start == end { format!("Page {start}") } else { format!("Pages {start}–{end}") };
+        let outcome = JobOutcome::succeeded(path.clone(), vec![merged.clone()], format!("{span} of {merged_name}."));
+        input.note_what_was_not_kept(outcome, "the merged file")
+    }).collect();
+    Merged {
+        combined: JobOutcome::succeeded(first, vec![merged], format!("{} PDFs merged in input order", request.paths.len())),
+        entries,
     }
 }
 
@@ -188,10 +215,11 @@ fn split_within(request: &PageSelectionRequest, input: PathBuf, deadline: QpdfDe
     if let Err(error) = validate_split_request(request) {
         return JobOutcome::failure(input, ToolError::invalid_input(error));
     }
-    let page_count = match load_existing_document_for_mutation(&input) {
-        Ok(document) => document.get_pages().len(),
-        Err(error) => return failure(input, error),
+    let readable = match ReadableInput::inspect(&input) {
+        Ok(readable) => readable,
+        Err(error) => return JobOutcome::failure(input, error),
     };
+    let page_count = readable.pages;
     let location = &request.output_location;
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let spans = match split_spans(request, page_count) {
@@ -208,6 +236,11 @@ fn split_within(request: &PageSelectionRequest, input: PathBuf, deadline: QpdfDe
         Ok(generated) => generated,
         Err(error) => return JobOutcome::failure(input, error),
     };
+    if readable.signed {
+        if let Err(error) = generated.iter().try_for_each(|(_, part)| Document::load(part).map_err(|error| format!("A split part could not be verified: {error}")).and_then(|document| unsign_copy(document, part))) {
+            return failure(input, error);
+        }
+    }
     match materialize_split_outputs(&input, location, &generated) {
         Ok(outputs) => {
             let detail = if request.page_ranges.as_deref().is_some_and(|value| !value.trim().is_empty()) {
@@ -216,7 +249,7 @@ fn split_within(request: &PageSelectionRequest, input: PathBuf, deadline: QpdfDe
             } else {
                 "PDF split".to_string()
             };
-            JobOutcome::succeeded(input, outputs, detail)
+            readable.note_what_was_not_kept(JobOutcome::succeeded(input, outputs, detail), "the parts")
         }
         Err(outcome) => outcome,
     }
@@ -269,7 +302,7 @@ fn write_split_spans(input: &Path, qpdf: &Path, workspace: &Path, spans: Vec<Spl
     spans.into_iter().enumerate().map(|(index, span)| {
         let part = workspace.join(format!("part-{index}.pdf"));
         let mut command = Command::new(qpdf);
-        command.arg(input).arg("--pages").arg(input).arg(format!("{}-{}", span.first, span.last)).arg("--").arg(&part);
+        command.arg("--empty").arg("--pages").arg(input).arg(format!("{}-{}", span.first, span.last)).arg("--").arg(&part);
         let result = run_qpdf(command, deadline, limit, "Splitting")?;
         if !result.status.success() { return Err(ToolError::processing(stderr(result, "qpdf failed to split the PDF."))); }
         if !part.is_file() { return Err(ToolError::processing("qpdf reported success but produced no split file.")); }
@@ -999,6 +1032,58 @@ fn validate_overlay_scope(pages: Option<&[usize]>, page_count: usize) -> Result<
         if pages.iter().any(|page| *page >= page_count) { return Err("A watermark page is outside the document.".to_string()); }
     }
     Ok(())
+}
+
+pub const PASSWORD_PROTECTED: &str = "Password-protected, so it can't be read. Remove the password, then add it again.";
+
+/// What Merge and Split learn from reading an input. They copy pages into a new file and never edit the input,
+/// so they only need it to open without a password and to have pages. Anything the new file can't keep is noted on the result.
+struct ReadableInput {
+    pages: usize,
+    signed: bool,
+    bookmarks: bool,
+    tags: bool,
+}
+
+impl ReadableInput {
+    fn inspect(path: &Path) -> Result<Self, ToolError> {
+        let document = Document::load(path).map_err(|error| ToolError::processing(format!("Could not read {}: {error}", path.display())))?;
+        if document.is_encrypted() {
+            return Err(ToolError::invalid_input(PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        }
+        let pages = document.get_pages().len();
+        if pages == 0 {
+            return Err(ToolError::invalid_input("Has no pages, so there's nothing to take from it. Nothing was saved."));
+        }
+        let catalog = document.catalog().ok();
+        let entry = |key: &[u8]| catalog.and_then(|catalog| resolve(&document, catalog.get(key).ok()?).ok()?.as_dict().ok());
+        Ok(Self {
+            pages,
+            signed: has_signed_signature_field(&document),
+            bookmarks: entry(b"Outlines").is_some_and(|outlines| outlines.has(b"First")),
+            tags: entry(b"StructTreeRoot").is_some(),
+        })
+    }
+
+    fn note_what_was_not_kept(&self, outcome: JobOutcome, into: &str) -> JobOutcome {
+        let mut outcome = note_signature_removed(outcome, self.signed);
+        if self.bookmarks {
+            outcome = outcome.with_warning(OutcomeWarning { kind: WarningKind::BookmarksNotCarried { into: into.into() }, message: format!("Bookmarks weren't carried into {into}.") });
+        }
+        if self.tags {
+            outcome = outcome.with_warning(OutcomeWarning { kind: WarningKind::TagsNotCarried { into: into.into() }, message: format!("Accessibility tags weren't carried into {into}.") });
+        }
+        outcome
+    }
+}
+
+/// qpdf keeps signature fields when it copies pages, but their signatures no longer match the new file, so the copy drops them.
+fn unsign_copy(mut document: Document, path: &Path) -> Result<(), String> {
+    if !has_signed_signature_field(&document) {
+        return Ok(());
+    }
+    remove_signatures(&mut document)?;
+    document.save(path).map(|_| ()).map_err(|error| format!("Could not save the unsigned copy: {error}"))
 }
 
 fn load_existing_document_for_mutation(input: &Path) -> Result<Document, String> {
@@ -1758,7 +1843,7 @@ pub(crate) mod tests {
         let output_folder = root.join("outputs");
         fs::create_dir_all(&output_folder).unwrap();
         let request = MergePdfRequest { paths: paths.clone(), output_location: OutputLocation::CustomFolder(output_folder.clone()), output_path: None };
-        let Some((outcome, elapsed)) = with_qpdf_stalling_on(&root, "stalls.pdf", || { let started = std::time::Instant::now(); (merge_within(&request, QpdfDeadline { per_file: Duration::from_millis(250), per_page: Duration::ZERO }), started.elapsed()) }) else { return };
+        let Some((outcome, elapsed)) = with_qpdf_stalling_on(&root, "stalls.pdf", || { let started = std::time::Instant::now(); (merge_within(&request, QpdfDeadline { per_file: Duration::from_millis(250), per_page: Duration::ZERO }).combined, started.elapsed()) }) else { return };
         assert_timed_out_with_nothing_saved(&outcome, &paths[0], &output_folder, elapsed, "Merging");
         let _ = fs::remove_dir_all(root);
     }
@@ -1987,6 +2072,180 @@ pub(crate) mod tests {
         assert!(!fs::read(&input).unwrap().windows(16).any(|window| window == b"ToolboxSignature"), "original must be unchanged");
         let _ = fs::remove_file(output);
         let _ = fs::remove_file(input);
+    }
+
+    /// Which document-level parts a generated structured PDF carries. Each page gets its own media box size.
+    #[derive(Default)]
+    pub(crate) struct Structure<'a> {
+        pub sizes: &'a [(i64, i64)],
+        pub bookmarks: bool,
+        pub form: bool,
+        pub tags: bool,
+        pub signed: bool,
+    }
+
+    pub(crate) fn structured_pdf(path: &Path, structure: Structure) {
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let catalog_id = document.new_object_id();
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let page_ids = structure.sizes.iter().enumerate().map(|(index, (width, height))| {
+            let content_id = document.add_object(Stream::new(dictionary! {}, format!("/P <</MCID 0>> BDC BT /F1 18 Tf 36 36 Td (Page {}) Tj ET EMC", index + 1).into_bytes()));
+            document.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id, "StructParents" => index as i64,
+                "MediaBox" => vec![0.into(), 0.into(), Object::Integer(*width), Object::Integer(*height)],
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } }, "Contents" => content_id,
+            })
+        }).collect::<Vec<_>>();
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => page_ids.iter().map(|id| Object::Reference(*id)).collect::<Vec<_>>(), "Count" => page_ids.len() as i64 }.into());
+        let mut catalog = dictionary! { "Type" => "Catalog", "Pages" => pages_id };
+        if structure.bookmarks {
+            let outlines_id = document.new_object_id();
+            let item_id = document.add_object(dictionary! { "Title" => Object::string_literal("Chapter 1"), "Parent" => outlines_id, "Dest" => vec![Object::Reference(page_ids[0]), "Fit".into()] });
+            document.objects.insert(outlines_id, dictionary! { "Type" => "Outlines", "First" => item_id, "Last" => item_id, "Count" => 1 }.into());
+            catalog.set("Outlines", outlines_id);
+        }
+        if structure.tags {
+            let root_id = document.new_object_id();
+            let paragraphs = page_ids.iter().map(|page| Object::Reference(document.add_object(dictionary! { "Type" => "StructElem", "S" => "P", "P" => root_id, "Pg" => *page, "K" => 0 }))).collect::<Vec<_>>();
+            let parent_tree = document.add_object(dictionary! { "Nums" => paragraphs.iter().enumerate().flat_map(|(index, paragraph)| [Object::Integer(index as i64), Object::Array(vec![paragraph.clone()])]).collect::<Vec<_>>() });
+            document.objects.insert(root_id, dictionary! { "Type" => "StructTreeRoot", "K" => paragraphs, "ParentTree" => parent_tree }.into());
+            catalog.set("StructTreeRoot", root_id);
+            catalog.set("MarkInfo", dictionary! { "Marked" => true });
+        }
+        let mut fields = Vec::new();
+        if structure.form {
+            fields.push(dictionary! {
+                "Type" => "Annot", "Subtype" => "Widget", "FT" => "Tx", "T" => Object::string_literal("Name"), "V" => Object::string_literal("Ada"),
+                "Rect" => vec![72.into(), 72.into(), 272.into(), 96.into()], "P" => page_ids[0],
+            });
+        }
+        if structure.signed {
+            let value = document.add_object(dictionary! {
+                "Type" => "Sig", "Filter" => "Adobe.PPKLite", "SubFilter" => "adbe.pkcs7.detached",
+                "ByteRange" => vec![0.into(), 0.into(), 0.into(), 0.into()], "Contents" => Object::String(vec![0; 16], lopdf::StringFormat::Hexadecimal),
+            });
+            fields.push(dictionary! {
+                "Type" => "Annot", "Subtype" => "Widget", "FT" => "Sig", "T" => Object::string_literal("Signature1"), "V" => value,
+                "Rect" => vec![0.into(), 0.into(), 0.into(), 0.into()], "P" => page_ids[0],
+            });
+        }
+        if !fields.is_empty() {
+            let field_ids = fields.into_iter().map(|field| Object::Reference(document.add_object(field))).collect::<Vec<_>>();
+            document.get_dictionary_mut(page_ids[0]).unwrap().set("Annots", field_ids.clone());
+            let mut form = dictionary! { "Fields" => field_ids };
+            if structure.signed { form.set("SigFlags", 3); }
+            catalog.set("AcroForm", form);
+        }
+        document.objects.insert(catalog_id, catalog.into());
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    pub(crate) fn zero_page_pdf(path: &Path) {
+        structured_pdf(path, Structure::default());
+    }
+
+    pub(crate) fn password_protected_pdf(path: &Path) {
+        fs::write(path, crate::kit::password::tests::pdf(Some(("owner-secret", crate::kit::TEST_PASSWORD)))).unwrap();
+    }
+
+    pub(crate) fn media_boxes(path: &Path) -> Vec<(i64, i64)> {
+        let document = Document::load(path).unwrap();
+        document.get_pages().values().map(|page| {
+            let (x0, y0, x1, y1) = page_bounds(&document, *page).unwrap();
+            ((x1 - x0).round() as i64, (y1 - y0).round() as i64)
+        }).collect()
+    }
+
+    /// The parts a copy must not keep: a live signature, bookmarks and the structure tree.
+    pub(crate) fn assert_nothing_carried(path: &Path) {
+        let document = Document::load(path).unwrap();
+        assert!(!has_signed_signature_field(&document), "{} still carries a signature", path.display());
+        let catalog = document.catalog().unwrap();
+        assert!(!catalog.has(b"Outlines"), "{} still carries bookmarks", path.display());
+        assert!(!catalog.has(b"StructTreeRoot"), "{} still carries tags", path.display());
+    }
+
+    pub(crate) fn warning_kinds(outcome: &JobOutcome) -> Vec<WarningKind> {
+        outcome.warnings.iter().map(|warning| warning.kind.clone()).collect()
+    }
+
+    const MIXED_SIZES: &[(i64, i64)] = &[(612, 792), (842, 595), (420, 595)];
+
+    #[test]
+    fn split_accepts_structured_and_signed_pdfs_and_notes_what_the_parts_do_not_keep() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() {
+            eprintln!("skipping: qpdf not available");
+            return;
+        }
+        let root = split_fixture_root("structured");
+        let input = root.join("contract.pdf");
+        structured_pdf(&input, Structure { sizes: MIXED_SIZES, bookmarks: true, form: true, tags: true, signed: true });
+        let original = fs::read(&input).unwrap();
+        for (mode, ranges, chunk, sizes) in [
+            ("pages", None, None, vec![vec![MIXED_SIZES[0]], vec![MIXED_SIZES[1]], vec![MIXED_SIZES[2]]]),
+            ("ranges", Some("1-2,3"), None, vec![MIXED_SIZES[..2].to_vec(), vec![MIXED_SIZES[2]]]),
+            ("chunks", None, Some(2), vec![MIXED_SIZES[..2].to_vec(), vec![MIXED_SIZES[2]]]),
+        ] {
+            let folder = root.join(mode);
+            fs::create_dir_all(&folder).unwrap();
+            let outcome = split(&split_request(OutputLocation::CustomFolder(folder), mode, ranges, chunk), input.clone());
+
+            assert!(outcome.error().is_none(), "{mode}: {:?}", outcome.error());
+            assert_eq!(warning_kinds(&outcome), [
+                WarningKind::SignatureRemoved,
+                WarningKind::BookmarksNotCarried { into: "the parts".into() },
+                WarningKind::TagsNotCarried { into: "the parts".into() },
+            ], "{mode}");
+            assert_eq!(outcome.output_paths().iter().map(|part| media_boxes(part)).collect::<Vec<_>>(), sizes, "{mode} keeps each page's own size");
+            for part in outcome.output_paths() { assert_nothing_carried(part); }
+            assert_eq!(fs::read(&input).unwrap(), original, "{mode} must not change the original");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn split_of_a_plain_pdf_has_no_notes() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() {
+            eprintln!("skipping: qpdf not available");
+            return;
+        }
+        let root = split_fixture_root("plain-notes");
+        let input = root.join("plain.pdf");
+        structured_pdf(&input, Structure { sizes: MIXED_SIZES, form: true, ..Structure::default() });
+        let outcome = split(&split_request(OutputLocation::CustomFolder(root.clone()), "pages", None, None), input);
+
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn split_refuses_password_protected_and_empty_pdfs_without_writing() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        let root = split_fixture_root("refused");
+        let locked = root.join("locked.pdf");
+        password_protected_pdf(&locked);
+        let empty = root.join("empty.pdf");
+        zero_page_pdf(&empty);
+        for (input, pointer) in [(&locked, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "lock-unlock".into() })), (&empty, None)] {
+            let original = fs::read(input).unwrap();
+            let folder = root.join(input.file_stem().unwrap());
+            fs::create_dir_all(&folder).unwrap();
+            let outcome = split(&split_request(OutputLocation::CustomFolder(folder.clone()), "pages", None, None), input.clone());
+
+            let error = outcome.error().expect("refused");
+            assert_eq!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput, "{}", input.display());
+            assert_eq!(error.pointer, pointer, "{}", input.display());
+            if pointer.is_some() { assert_eq!(error.message, PASSWORD_PROTECTED); }
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(fs::read_dir(&folder).unwrap().count(), 0, "{} wrote something", input.display());
+            assert_eq!(fs::read(input).unwrap(), original);
+        }
+        let _ = fs::remove_dir_all(root);
     }
 
     const BUNDLED_QPDF_CHILD: &str = "TOOLBOX_TEST_BUNDLED_QPDF_CHILD";
