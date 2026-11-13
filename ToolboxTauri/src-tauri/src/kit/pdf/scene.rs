@@ -5678,7 +5678,7 @@ mod tests {
         /// The output's text as the local Poppler extracts it, when it is installed.
         fn extracted_text(path: &Path) -> Option<String> {
             let output = Command::new("pdftotext").args(["-enc", "UTF-8"]).arg(path).arg("-").output().ok()?;
-            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"))
         }
 
         fn saved_files(folder: &Path) -> Vec<String> {

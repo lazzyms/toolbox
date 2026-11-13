@@ -1081,7 +1081,7 @@ pub(crate) mod tests {
     /// Installing from a file must work offline: this module has no network code.
     #[test]
     fn installing_makes_no_network_request() {
-        let source = include_str!("install.rs");
+        let source = include_str!("install.rs").replace("\r\n", "\n");
         let runtime = &source[..source.find("#[cfg(test)]\npub(crate) mod tests").unwrap()];
         for needle in ["std::net", "TcpStream", "UdpSocket", "ToSocketAddrs", "reqwest", "ureq", "hyper", "tauri_plugin_http", "Command::new"] {
             assert!(!runtime.contains(needle), "install.rs must not use {needle}");
