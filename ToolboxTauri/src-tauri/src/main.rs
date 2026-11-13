@@ -4825,14 +4825,14 @@ mod command_tests {
         assert!(text[2].output_paths().is_empty());
         assert_eq!(files_in(&root.join("text")), vec!["mixed-text.txt", "plain-text.txt"]);
 
-        // Images: the embedded JPEGs are copied byte for byte; a PDF without images fails alone.
+        // Images: the embedded JPEGs are copied byte for byte; a PDF without images is skipped alone.
         let images = run(vec![mixed.clone(), scanned.clone(), plain.clone()], ExtractMode::Images, None, "images");
         assert_eq!(images.len(), 3);
         assert_eq!(images[0].output_paths(), [root.join("images").join("mixed-images")]);
         assert_eq!(images[0].detail, "Saved 1 image.");
         assert_eq!(images[1].output_paths(), [root.join("images").join("scanned-images")]);
         assert_eq!(std::fs::read(images[0].output_paths()[0].join("page-1-image-1.jpg")).unwrap()[..2], [0xFF, 0xD8]);
-        assert_eq!(images[2].error().map(|error| error.message.as_str()), Some(NO_EMBEDDED_IMAGES));
+        assert!(matches!(&images[2].state, OutcomeState::Skipped { reason } if reason.code == SkipCode::NoEffectiveChange && reason.message == NO_EMBEDDED_IMAGES), "{:?}", images[2]);
         assert_eq!(files_in(&root.join("images")), vec!["mixed-images", "scanned-images"]);
         assert_eq!(files_in(&root.join("images").join("mixed-images")), vec!["page-1-image-1.jpg"]);
 

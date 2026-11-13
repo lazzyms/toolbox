@@ -539,7 +539,16 @@ pub enum WarningKind {
     TagsNotCarried { into: String },
     OmittedContent,
     ApproximateLayout,
+    ImageUnsupported { page: u32, image: u32, feature: String },
+    ImageDamaged { page: u32, image: u32 },
+    ImageTooLarge { page: u32, image: u32, width: u64, height: u64 },
+    JpegColourKept { colour: JpegColour, pages: Vec<u32>, images: u32 },
 }
+
+/// Why a JPEG copied byte for byte may show the wrong colours in some viewers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JpegColour { Cmyk, Inverted }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutcomeWarning {
@@ -841,9 +850,13 @@ mod tests {
             WarningKind::TagsNotCarried { into: "the parts".into() },
             WarningKind::OmittedContent,
             WarningKind::ApproximateLayout,
+            WarningKind::ImageUnsupported { page: 1, image: 1, feature: "JBIG2".into() },
+            WarningKind::ImageDamaged { page: 1, image: 1 },
+            WarningKind::ImageTooLarge { page: 1, image: 1, width: 2, height: 2 },
+            WarningKind::JpegColourKept { colour: JpegColour::Cmyk, pages: vec![1], images: 1 },
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried", "omittedContent", "approximateLayout"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried", "omittedContent", "approximateLayout", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept"]);
     }
 
     #[test]
@@ -892,6 +905,20 @@ mod tests {
                 style_used: FontStyle::Regular,
                 source: FontSource::BundledFallback,
             }]),
+            JobOutcome::succeeded(PathBuf::from("atlas.pdf"), vec![PathBuf::from("atlas-images")], "Saved 9 images. 3 images weren't saved.")
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::ImageUnsupported { page: 7, image: 2, feature: "JBIG2".into() },
+                    message: "Page 7, image 2 — JBIG2 isn't supported in this version. Not saved.".into(),
+                })
+                .with_warning(OutcomeWarning { kind: WarningKind::ImageDamaged { page: 19, image: 1 }, message: "Page 19, image 1 — The image data is damaged. Not saved.".into() })
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::ImageTooLarge { page: 41, image: 1, width: 61000, height: 48000 },
+                    message: "Page 41, image 1 — Would be 61,000 × 48,000 px when decoded, over the size limit. Not saved.".into(),
+                })
+                .with_warning(OutcomeWarning {
+                    kind: WarningKind::JpegColourKept { colour: JpegColour::Cmyk, pages: vec![2, 5, 9], images: 6 },
+                    message: "Pages 2, 5, 9 — 6 JPEGs use CMYK colour and were copied as they are. Some viewers show them with the wrong colours.".into(),
+                }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

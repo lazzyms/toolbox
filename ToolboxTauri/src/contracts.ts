@@ -166,7 +166,14 @@ export type OutcomeWarning =
   | { code: "bookmarksNotCarried"; message: string; details: { into: string } }
   | { code: "tagsNotCarried"; message: string; details: { into: string } }
   | { code: "omittedContent"; message: string }
-  | { code: "approximateLayout"; message: string };
+  | { code: "approximateLayout"; message: string }
+  | { code: "imageUnsupported"; message: string; details: { page: number; image: number; feature: string } }
+  | { code: "imageDamaged"; message: string; details: { page: number; image: number } }
+  | { code: "imageTooLarge"; message: string; details: { page: number; image: number; width: number; height: number } }
+  | { code: "jpegColourKept"; message: string; details: { colour: JpegColour; pages: number[]; images: number } };
+
+export const jpegColours = ["cmyk", "inverted"] as const;
+export type JpegColour = (typeof jpegColours)[number];
 
 export type WarningCode = OutcomeWarning["code"];
 
