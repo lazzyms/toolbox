@@ -305,10 +305,10 @@ test('inspector property edits stay in scene history and undo and redo exactly',
   await shape.selectOption('triangle');
   let result = await exported(page);
   expect(result.pages[0].objects[0].shape).toBe('triangle');
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   result = await exported(page);
   expect(result.pages[0].objects[0].shape).toBe('square');
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   result = await exported(page);
   expect(result.pages[0].objects[0].shape).toBe('triangle');
 });
@@ -395,7 +395,7 @@ test('PDF scene history retains exactly the latest 100 edits', async ({ page }) 
   await openEditor(page);
   const rotate = page.getByRole('button', { name: 'Rotate selected pages' });
   for (let index = 0; index < 101; index += 1) await rotate.click();
-  const undo = page.getByRole('button', { name: 'Undo', exact: true });
+  const undo = page.getByRole('button', { name: /^Undo \(/ });
   for (let index = 0; index < 100; index += 1) await undo.click();
   await expect(undo).toBeDisabled();
   const result = await exported(page);
@@ -486,17 +486,18 @@ test('scene crop and thumbnail rotate reorder delete share undo redo reset', asy
   expect(result.pages[0].objects).toHaveLength(1);
   expect(result.pages[1].crop).not.toBeNull();
   await page.getByRole('button', { name: 'Delete selected pages' }).click();
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   result = await exported(page);
   expect(result.pages).toHaveLength(3);
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   result = await exported(page);
   expect(result.pages).toHaveLength(2);
-  await page.getByRole('button', { name: 'Reset edits' }).click();
+  await page.getByRole('button', { name: 'Reset…' }).click();
+  await page.getByRole('alertdialog', { name: 'Reset all page changes?' }).getByRole('button', { name: 'Reset', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: /^Page \d/ })).toHaveText(['1', '2', '3'].map((n) => new RegExp(n)));
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  expect(await page.getByRole('button', { name: 'Reset edits' }).isEnabled()).toBe(true);
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
+  expect(await page.getByRole('button', { name: 'Reset…' }).isEnabled()).toBe(true);
 });
 
 test('scene drag reorders selected thumbnails together and protects the last page', async ({ page }) => {
@@ -516,9 +517,9 @@ test('Export stays disabled until the document has an effective change', async (
   await expect(exportButton).toBeDisabled();
   await draw(page, 'Shape', .4);
   await expect(exportButton).toBeEnabled();
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(exportButton).toBeDisabled();
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   await expect(exportButton).toBeEnabled();
   await exportButton.click();
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene'))).toHaveLength(1);
@@ -553,7 +554,7 @@ test('scene rejects stale and failed previews without exposing an unverified exp
   await draw(page, 'Text', .2);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await page.evaluate(() => { (window as any).previewFailure = true; });
@@ -602,7 +603,7 @@ test('Escape cancels a canvas gesture before pointer release', async ({ page }) 
 
   await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Undo \(/ })).toBeDisabled();
 });
 
 test('Escape releases pointer capture while cancelling object movement', async ({ page }, testInfo) => {
@@ -631,7 +632,7 @@ test('Escape releases pointer capture while cancelling object movement', async (
   await page.mouse.up();
   await expect(object).toHaveAttribute('x', originalX!);
   await expect(object).toHaveAttribute('y', originalY!);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('escape-releases-pointer-capture.png') });
 });
@@ -656,9 +657,9 @@ test('one signature drag stays in one undo step', async ({ page }) => {
   await openEditor(page);
   await draw(page, 'Signature', .2);
   await expect(page.locator('.scene-object-hit')).toHaveCount(1);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Redo', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: /^Redo \(/ })).toBeEnabled();
 });
 
 test('text in a script that needs a pack offers the pack install instead of an export error', async ({ page }) => {
@@ -748,7 +749,7 @@ test('undo and redo bindings work across sub-tools and switching keeps the edits
   await tools.getByRole('button', { name: 'Crop', exact: true }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(2);
   const hits = page.locator('.scene-object-hit');
-  for (const [key, count] of [['Meta+z', 1], ['Meta+Shift+z', 2], ['Control+z', 1], ['Control+Shift+z', 2], ['Control+z', 1], ['Control+y', 2]] as const) {
+  for (const [key, count] of [['Meta+z', 1], ['Meta+Shift+z', 2], ['Control+z', 1], ['Control+Shift+z', 2], ['Control+z', 1], ['Meta+Shift+z', 2]] as const) {
     await page.keyboard.press(key);
     await expect(hits, key).toHaveCount(count);
   }
@@ -1336,7 +1337,7 @@ test('a text edit is sent as textEdits to the preview and the export, and can be
   await inspector.getByRole('button', { name: 'Revert this text' }).click();
   await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(inspector.getByRole('group', { name: 'Edits on this document' })).toBeVisible();
 });
 

@@ -1184,11 +1184,12 @@ test("PDF editor protects the last page and supports unified history", async ({ 
     await expect(page.getByRole("button", { name: "Delete selected pages" })).toBeDisabled();
     await drawSceneMark(page, "Text");
     await expect(page.locator(".scene-object-hit")).toHaveCount(1);
-    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    await page.getByRole("button", { name: /^Undo \(/ }).click();
     await expect(page.locator(".scene-object-hit")).toHaveCount(0);
-    await page.getByRole("button", { name: "Redo", exact: true }).click();
+    await page.getByRole("button", { name: /^Redo \(/ }).click();
     await expect(page.locator(".scene-object-hit")).toHaveCount(1);
-    await page.getByRole("button", { name: "Reset edits" }).click();
+    await page.getByRole("button", { name: "Reset…" }).click();
+    await page.getByRole("alertdialog", { name: "Reset all page changes?" }).getByRole("button", { name: "Reset", exact: true }).click();
     await expect(page.locator(".scene-object-hit")).toHaveCount(0);
 });
 
@@ -2698,18 +2699,18 @@ test("single-input replacement keeps the source and edit state after cancellatio
     await openFromHome(page, "Edit PDF");
     await chooseFixture(page, pdfFixturePath);
     await drawSceneMark(page, "Crop");
-    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Reset…" })).toBeEnabled();
 
     await page.evaluate((path) => { (window as TestWindow).__toolboxDialogResults = [null, path]; }, pdfFixturePath);
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Reset…" })).toBeEnabled();
 
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Reset edits" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Reset…" })).toBeEnabled();
 });
 
 test("page-scoped actions disable export when the explicit selection is empty", async ({ page }) => {

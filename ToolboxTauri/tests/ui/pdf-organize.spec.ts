@@ -41,6 +41,7 @@ test.beforeEach(async ({ page }) => {
         if (command === 'plugin:event|unlisten') { listeners.delete(args.eventId); return null; }
         if (command === 'inspect_intake_paths') return args.paths.map((path: string) => ({ path, kind: 'file' }));
         if (command === 'plugin:dialog|open') return w.dialogNext;
+        if (command === 'check_output_folder') return 'ready';
         if (command === 'inspect_pdf_scene') {
           const path: string = args.request?.path ?? args.path;
           if (path.endsWith('locked.pdf')) throw { kind: 'invalidInput', message: lockedMessage, pointer: { kind: 'tool', toolId: 'lock-unlock' } };
@@ -173,7 +174,7 @@ test('switching between Organize and page view keeps the edited scene', async ({
   await expect(grid(page).getByRole('option').nth(1)).toHaveAccessibleName('Position 2, original page 1, rotated 90° right');
   await expect(grid(page).getByRole('option').nth(1)).toContainText('was page 1');
   await expect(focusPreview(page).getByText('Rotated 90° right')).toBeVisible();
-  await expect(page.getByText('5 pages. Changes not exported')).toBeVisible();
+  await expect(page.getByText('5 pages. 2 changes not exported')).toBeVisible();
   expect(await inspectionCount()).toBe(openedWith);
 });
 
@@ -370,7 +371,7 @@ const option = (page: Page, position: number) => grid(page).getByRole('option').
 const selectedPositions = (page: Page) => grid(page).getByRole('option').evaluateAll((options) =>
   options.flatMap((option, index) => option.getAttribute('aria-selected') === 'true' ? [index + 1] : []));
 const count = (page: Page) => page.getByRole('toolbar', { name: /^Page actions, / }).getByRole('status');
-const undoButton = (page: Page) => page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Undo', exact: true });
+const undoButton = (page: Page) => page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: /^Undo \(/ });
 const selectGroup = (page: Page) => page.getByRole('group', { name: 'Select', exact: true });
 async function openReport(page: Page) {
   await openOrganize(page);
@@ -612,7 +613,7 @@ test('dragging selected pages moves them together, shows the count and the drop 
   await undoButton(page).click();
   expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(undoButton(page)).toBeDisabled();
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   expect(await exportedOrder(page)).toEqual([2, 4, 5, 1, 3]);
 });
 
@@ -745,7 +746,7 @@ test('Page order reverses the selection or the whole document, each as one undo 
   await expect(liveStatus(page)).toHaveText('All 5 pages reversed');
   await undoButton(page).click();
   expect(await order(page)).toEqual([1, 4, 3, 2, 5]);
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   expect(await exportedOrder(page)).toEqual([5, 2, 3, 4, 1]);
 });
 
@@ -941,7 +942,7 @@ test('Reset orientation turns only the selected pages back and keeps the new ord
   await undoButton(page).click();
   expect(await order(page)).toEqual([4, 1, 2, 3, 5]);
   await expect(option(page, 2)).toHaveAccessibleName(/rotated 90° right/);
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   expect(await exportedRotations(page)).toEqual([[4, 0], [1, 0], [2, 0], [3, 90], [5, 0]]);
 });
 
@@ -1015,7 +1016,7 @@ test('H and V mirror the selected pages, each mirror is one undo step, and they 
   await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, mirrored left to right, selected');
   await undoButton(page).click();
   await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, selected');
-  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await page.getByRole('button', { name: /^Redo \(/ }).click();
   expect(await exportedOrientations(page)).toEqual([[1, 0, false], [2, 0, true], [3, 0, false], [4, 0, false], [5, 0, false]]);
 });
 
@@ -1124,7 +1125,7 @@ test('Backspace and Delete remove the selected pages, each as one undo step, and
   await expect(liveStatus(page)).toHaveText('Page 2 removed');
   await expect(count(page)).toHaveText('No pages selected');
   await expect(option(page, 2)).toBeFocused();
-  await expect(page.getByText('4 pages. Changes not exported')).toBeVisible();
+  await expect(page.getByText('4 pages. 1 change not exported')).toBeVisible();
   await page.keyboard.press('Meta+z');
   expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
 
@@ -1350,4 +1351,383 @@ test('Blank pages is off while it runs or exports, and a failed check changes no
   });
   await page.getByRole('button', { name: 'Export PDF' }).click();
   await expect(blankButton(page)).toBeDisabled();
+});
+
+// History, Reset, unexported changes and the shortcut reference. Every page action is one step in the shared
+// whole-scene history, Reset asks first, and leaving or replacing a PDF with unexported changes warns.
+const redoButton = (page: Page) => page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: /^Redo \(/ });
+const resetButton = (page: Page) => page.getByRole('button', { name: 'Reset…', exact: true });
+const pageStates = (page: Page) => grid(page).getByRole('option').evaluateAll((options) =>
+  options.map((option) => (option.getAttribute('aria-label') ?? '').replace(/, selected$/, '')));
+const exportCalls = (page: Page) => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length);
+const home = (page: Page) => page.locator('.topbar--home').getByRole('textbox', { name: 'Search tools' });
+const tabTo = async (page: Page, target: ReturnType<Page['locator']>) => {
+  for (let step = 0; step < 120; step += 1) {
+    if (await target.evaluate((element) => element === document.activeElement)) return;
+    await page.keyboard.press('Tab');
+  }
+  throw new Error('Tab never reached the target.');
+};
+// The editor toolbar is one tab stop: Tab reaches it, and the arrow keys move along it.
+const toolbarTo = async (page: Page, target: ReturnType<Page['locator']>) => {
+  await tabTo(page, page.getByRole('toolbar', { name: 'PDF editor tools' }).locator('[tabindex="0"]'));
+  for (let step = 0; step < 20; step += 1) {
+    if (await target.evaluate((element) => element === document.activeElement)) return;
+    await page.keyboard.press('ArrowRight');
+  }
+  throw new Error('The arrow keys never reached the target.');
+};
+
+test('drag, move, Move to, rotate, mirror and delete each undo and redo as one step', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  const actions: [string, () => Promise<void>][] = [
+    ['drag', async () => {
+      await selectRun(page, 1, 2);
+      const start = await center(page, 1);
+      const end = await center(page, 5, 'right');
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(end.x, end.y, { steps: 8 });
+      await page.mouse.up();
+    }],
+    ['move later', async () => { await selectRun(page, 1, 2); await page.keyboard.press('Meta+ArrowRight'); }],
+    ['Move to', async () => {
+      await selectRun(page, 4, 5);
+      await page.keyboard.press('m');
+      await page.getByRole('dialog', { name: 'Move 2 pages to a position' }).getByRole('textbox').fill('1');
+      await page.keyboard.press('Enter');
+    }],
+    ['rotate', async () => { await selectRun(page, 2, 4); await page.keyboard.press('Meta+R'); }],
+    ['mirror', async () => { await selectRun(page, 1, 3); await page.keyboard.press('h'); }],
+    ['delete', async () => { await selectRun(page, 2, 3); await page.keyboard.press('Backspace'); }],
+  ];
+  for (const [index, [name, act]] of actions.entries()) {
+    const before = await pageStates(page);
+    await act();
+    const after = await pageStates(page);
+    expect(after, name).not.toEqual(before);
+    await undoButton(page).click();
+    expect(await pageStates(page), `${name} undo`).toEqual(before);
+    await redoButton(page).click();
+    expect(await pageStates(page), `${name} redo`).toEqual(after);
+    await expect(page.getByText(`${index + 1} ${index ? 'changes' : 'change'} not exported`)).toBeVisible();
+  }
+  // Six undos go back to the file as it was opened.
+  for (let step = 0; step < 6; step += 1) await undoButton(page).click();
+  await expect(undoButton(page)).toBeDisabled();
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(page.getByText('5 pages. No changes')).toBeVisible();
+});
+
+test('Windows redoes with Ctrl+Y or Ctrl+Shift+Z and names Ctrl in the toolbar', async ({ page }) => {
+  await setPlatform(page, 'Win32');
+  await openReport(page);
+  await expect(undoButton(page)).toHaveAccessibleName('Undo (Ctrl+Z)');
+  await expect(undoButton(page)).toHaveAttribute('aria-keyshortcuts', 'Control+Z');
+  await expect(redoButton(page)).toHaveAccessibleName('Redo (Ctrl+Y)');
+  await expect(redoButton(page)).toHaveAttribute('aria-keyshortcuts', 'Control+Y Control+Shift+Z');
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await option(page, 3).click();
+  await page.keyboard.press('h');
+  const mirrored = await pageStates(page);
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect(option(page, 2)).toHaveAccessibleName(/^Position 2, original page 2(, selected)?$/);
+  // One Ctrl+Y is one redo.
+  await page.keyboard.press('Control+y');
+  await expect(option(page, 2)).toHaveAccessibleName(/mirrored left to right/);
+  await expect(option(page, 3)).not.toHaveAccessibleName(/mirrored/);
+  await page.keyboard.press('Control+Shift+z');
+  expect(await pageStates(page)).toEqual(mirrored);
+});
+
+test('macOS redoes with Shift+Command+Z, and Ctrl+Y does nothing', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(undoButton(page)).toHaveAccessibleName('Undo (⌘Z)');
+  await expect(undoButton(page)).toHaveAttribute('aria-keyshortcuts', 'Meta+Z');
+  await expect(redoButton(page)).toHaveAccessibleName('Redo (⇧⌘Z)');
+  await expect(redoButton(page)).toHaveAttribute('aria-keyshortcuts', 'Shift+Meta+Z');
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await page.keyboard.press('Meta+z');
+  await expect(option(page, 2)).not.toHaveAccessibleName(/mirrored/);
+  await page.keyboard.press('Control+y');
+  await expect(option(page, 2)).not.toHaveAccessibleName(/mirrored/);
+  await expect(redoButton(page)).toBeEnabled();
+  await page.keyboard.press('Meta+Shift+z');
+  await expect(option(page, 2)).toHaveAccessibleName(/mirrored left to right/);
+  await expect(redoButton(page)).toBeDisabled();
+});
+
+test('Reset asks first: Cancel keeps the edits, Reset restores the opened file as one undoable step', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(resetButton(page)).toBeDisabled();
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await option(page, 4).click();
+  await page.keyboard.press('Backspace');
+  const edited = await pageStates(page);
+  await expect(page.getByText('4 pages. 2 changes not exported')).toBeVisible();
+
+  await resetButton(page).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Reset all page changes?' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('All 5 pages go back to how report.pdf was opened: original order and orientation, with removed pages restored. This also clears changes from other PDF Editor tools. Your original file isn’t affected.');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await pageStates(page)).toEqual(edited);
+
+  await resetButton(page).click();
+  await dialog.getByRole('button', { name: 'Reset', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await pageStates(page)).toEqual([1, 2, 3, 4, 5].map((n) => `Position ${n}, original page ${n}`));
+  await expect(page.getByText('5 pages. No changes')).toBeVisible();
+  await expect(resetButton(page)).toBeDisabled();
+  expect(await exportCalls(page)).toBe(0);
+  await undoButton(page).click();
+  expect(await pageStates(page)).toEqual(edited);
+});
+
+test('opening another PDF with unexported changes asks first: Cancel, Discard changes and Export…', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  // Without changes, a dropped PDF simply replaces the open one.
+  await drop(page, ['/local/clean.pdf']);
+  await expect(grid(page, 'clean.pdf')).toBeVisible();
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+
+  await grid(page, 'clean.pdf').getByRole('option').nth(1).click();
+  await page.keyboard.press('h');
+  await drop(page, ['/local/other.pdf']);
+  const dialog = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await expect(dialog).toContainText('clean.pdf has 1 change');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(grid(page, 'clean.pdf')).toBeVisible();
+  await expect(grid(page, 'clean.pdf').getByRole('option').nth(1)).toHaveAccessibleName(/mirrored left to right/);
+
+  await drop(page, ['/local/other.pdf']);
+  await dialog.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(grid(page, 'other.pdf')).toBeVisible();
+  expect(await exportCalls(page)).toBe(0);
+
+  // Export… keeps the open PDF and exports its edited copy.
+  await grid(page, 'other.pdf').getByRole('option').nth(0).click();
+  await page.keyboard.press('v');
+  await grid(page, 'other.pdf').getByRole('option').nth(2).click();
+  await page.keyboard.press('Backspace');
+  await expect(exportButton(page)).toBeEnabled();
+  await drop(page, ['/local/third.pdf']);
+  await expect(dialog).toContainText('other.pdf has 2 changes');
+  await dialog.getByRole('button', { name: 'Export…', exact: true }).click();
+  await expect(grid(page, 'other.pdf')).toBeVisible();
+  await expect.poll(() => exportCalls(page)).toBe(1);
+  const exported = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').map((call: any) => call.args.request));
+  expect(exported).toHaveLength(1);
+  expect(exported[0].paths).toEqual(['/local/other.pdf']);
+  expect(exported[0].scene.pages.map((item: any) => item.sourceIndex + 1)).toEqual([1, 2, 4, 5]);
+});
+
+test('choosing one of several dropped PDFs also warns about unexported changes', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await drop(page, ['/local/a.pdf', '/local/b.pdf']);
+  const chooser = page.getByRole('dialog', { name: 'Organize works on one PDF at a time' });
+  await chooser.getByRole('radio', { name: 'b.pdf' }).click();
+  await chooser.getByRole('button', { name: 'Open', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await expect(dialog).toContainText('report.pdf has 1 change');
+  await expect(chooser).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(grid(page)).toBeVisible();
+  await drop(page, ['/local/a.pdf', '/local/b.pdf']);
+  await chooser.getByRole('radio', { name: 'b.pdf' }).click();
+  await chooser.getByRole('button', { name: 'Open', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(grid(page, 'b.pdf')).toBeVisible();
+});
+
+test('closing with unexported changes asks first: Cancel stays, Discard leaves, Export… exports and stays', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await option(page, 3).click();
+  await page.keyboard.press('h');
+  const dialog = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+
+  await page.getByRole('button', { name: '← All tools' }).first().click();
+  await expect(dialog).toContainText("report.pdf has 2 changes that haven't been exported. If you close now, they're lost.");
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(grid(page)).toBeVisible();
+  await expect(home(page)).toHaveCount(0);
+
+  // Escape outside the grid is the same close.
+  await page.locator('body').evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Discard changes', exact: true }).click();
+  await expect(home(page)).toBeVisible();
+  expect(await exportCalls(page)).toBe(0);
+
+  await openToolBySearch(page, 'Organize PDF');
+  await page.getByRole('button', { name: 'Open PDF', exact: true }).click();
+  await option(page, 1).click();
+  await page.keyboard.press('Backspace');
+  await expect(exportButton(page)).toBeEnabled();
+  await page.getByRole('button', { name: '← All tools' }).first().click();
+  await expect(dialog).toContainText('report.pdf has 1 change');
+  await dialog.getByRole('button', { name: 'Export…', exact: true }).click();
+  await expect.poll(() => exportCalls(page)).toBe(1);
+  await expect(grid(page)).toBeVisible();
+  await expect(home(page)).toHaveCount(0);
+});
+
+test('after an export, the header says so and leaving needs no warning', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(page.getByText('5 pages', { exact: true })).toBeVisible();
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await expect(page.getByText('5 pages. 1 change not exported')).toBeVisible();
+  await exportButton(page).click();
+  await expect(page.getByText('5 pages. All changes exported')).toBeVisible();
+  // Undo after an export is an unexported change again.
+  await undoButton(page).click();
+  await expect(page.getByText('5 pages. 1 change not exported')).toBeVisible();
+  await redoButton(page).click();
+  await expect(page.getByText('5 pages. All changes exported')).toBeVisible();
+  await page.getByRole('button', { name: '← All tools' }).first().click();
+  await expect(home(page)).toBeVisible();
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+});
+
+const macShortcuts = [
+  ['Select all', '⌘A'], ['Clear selection', 'Esc'], ['Add or remove a page', '⌘-click'], ['Select a run of pages', '⇧-click'],
+  ['Move focus', '← → ↑ ↓'], ['Select the focused page', 'Space'], ['Extend the selection', '⇧+Arrow'],
+  ['Move pages earlier or later', '⌘← →'], ['Move pages to the start', '⌘↑'], ['Move pages to the end', '⌘↓'],
+  ['Move pages to a position', 'M'], ['Rotate right', '⌘R'], ['Rotate left', '⇧⌘R'], ['Mirror left to right', 'H'],
+  ['Mirror top to bottom', 'V'], ['Delete the selected pages', '⌫'], ['Undo', '⌘Z'], ['Redo', '⇧⌘Z'],
+  ['Open in page view', '↵'], ['Export', '⌘↵'],
+];
+const windowsShortcuts = [
+  ['Select all', 'Ctrl+A'], ['Clear selection', 'Esc'], ['Add or remove a page', 'Ctrl+click'], ['Select a run of pages', 'Shift+click'],
+  ['Move focus', '← → ↑ ↓'], ['Select the focused page', 'Space'], ['Extend the selection', 'Shift+Arrow'],
+  ['Move pages earlier or later', 'Ctrl+← →'], ['Move pages to the start', 'Ctrl+Home'], ['Move pages to the end', 'Ctrl+End'],
+  ['Move pages to a position', 'M'], ['Rotate right', 'Ctrl+R'], ['Rotate left', 'Ctrl+Shift+R'], ['Mirror left to right', 'H'],
+  ['Mirror top to bottom', 'V'], ['Delete the selected pages', 'Delete'], ['Undo', 'Ctrl+Z'], ['Redo', 'Ctrl+Y'],
+  ['Open in page view', 'Enter'], ['Export', 'Ctrl+Enter'],
+];
+for (const [platform, expected] of [['MacIntel', macShortcuts], ['Win32', windowsShortcuts]] as const) {
+  test(`the shortcut reference lists every Organize shortcut on ${platform}, from the button or ?`, async ({ page }) => {
+    await setPlatform(page, platform);
+    await openReport(page);
+    const button = page.getByRole('button', { name: 'Keyboard shortcuts (?)' });
+    await expect(button).toHaveAttribute('aria-keyshortcuts', '?');
+    await button.click();
+    const dialog = page.getByRole('dialog', { name: 'Organize shortcuts' });
+    await expect(dialog).toContainText('These work while the page grid has focus.');
+    const rows = await dialog.locator('dl.scene-shortcuts > div').evaluateAll((items) =>
+      items.map((item) => [item.querySelector('dt')!.textContent, item.querySelector('dd kbd')!.textContent]));
+    expect(rows).toEqual(expected);
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await option(page, 1).focus();
+    await page.keyboard.press('?');
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(grid(page)).toBeVisible();
+  });
+}
+
+test('every Organize action is reachable from the keyboard alone', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openOrganize(page);
+  await tabTo(page, page.getByRole('button', { name: 'Open PDF', exact: true }));
+  await page.keyboard.press('Enter');
+  await expect(grid(page).getByRole('option')).toHaveCount(5);
+
+  // Select: the grid is one tab stop.
+  await tabTo(page, grid(page).locator('[role="option"][tabindex="0"]'));
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Shift+ArrowRight');
+  expect(await selectedPositions(page)).toEqual([1, 2]);
+  // Move, rotate, mirror and delete.
+  await page.keyboard.press('Meta+ArrowRight');
+  expect(await order(page)).toEqual([3, 1, 2, 4, 5]);
+  await page.keyboard.press('Meta+R');
+  await expect(option(page, 2)).toHaveAccessibleName(/rotated 90° right/);
+  await page.keyboard.press('h');
+  await expect(option(page, 2)).toHaveAccessibleName(/mirrored left to right/);
+  await page.keyboard.press('Backspace');
+  expect(await order(page)).toEqual([3, 4, 5]);
+  // Undo.
+  await page.keyboard.press('Meta+z');
+  expect(await order(page)).toEqual([3, 1, 2, 4, 5]);
+
+  // Blank pages selects them from the toolbar.
+  await setBlankPages(page, [4]);
+  await tabTo(page, blankButton(page));
+  await page.keyboard.press('Enter');
+  expect(await selectedPositions(page)).toEqual([5]);
+
+  // The toolbar Undo and the shortcut reference.
+  await toolbarTo(page, undoButton(page));
+  await page.keyboard.press('Enter');
+  await expect(option(page, 2)).not.toHaveAccessibleName(/mirrored/);
+  await tabTo(page, page.getByRole('button', { name: 'Keyboard shortcuts (?)' }));
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog', { name: 'Organize shortcuts' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await toolbarTo(page, redoButton(page));
+  await page.keyboard.press('Enter');
+  await expect(option(page, 2)).toHaveAccessibleName(/mirrored left to right/);
+
+  // Change destination for this run.
+  await page.evaluate(() => (window as any).dialogNext = '/local/out');
+  await toolbarTo(page, page.getByRole('button', { name: /^Save to .*Change for this export$/ }));
+  await page.keyboard.press('Enter');
+  const destination = page.getByRole('dialog', { name: 'Save this export to' });
+  await tabTo(page, destination.getByRole('button', { name: 'Choose folder…' }));
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: /this export only\. Change for this export$/ })).toBeVisible();
+
+  // Export.
+  await toolbarTo(page, exportButton(page));
+  await page.keyboard.press('Enter');
+  await expect.poll(() => exportCalls(page)).toBe(1);
+  const request = await page.evaluate(() => (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request);
+  expect(request.outputLocation).toEqual({ customFolder: '/local/out' });
+  expect(request.scene.pages.map((item: any) => item.sourceIndex + 1)).toEqual([3, 1, 2, 4, 5]);
+});
+
+for (const theme of ['light', 'dark']) test(`the Reset, unexported-changes and shortcut dialogs render in ${theme}`, async ({ page }, testInfo) => {
+  await page.addInitScript((theme) => localStorage.setItem('toolbox-theme', theme), theme);
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(page.locator('body')).toHaveAttribute('data-theme', theme);
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await resetButton(page).click();
+  await expect(page.getByRole('alertdialog', { name: 'Reset all page changes?' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath(`organize-reset-${theme}.png`) });
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Keyboard shortcuts (?)' }).click();
+  await expect(page.getByRole('dialog', { name: 'Organize shortcuts' })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath(`organize-shortcuts-${theme}.png`) });
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '← All tools' }).first().click();
+  const leave = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await expect(leave).toBeVisible();
+  await expect(leave.getByRole('button', { name: 'Export…', exact: true })).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath(`organize-unexported-${theme}.png`) });
 });
