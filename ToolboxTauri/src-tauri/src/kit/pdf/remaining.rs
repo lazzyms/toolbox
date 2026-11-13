@@ -12,6 +12,7 @@ use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReserva
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
 use crate::kit::contracts::{LimitKind, ToolError};
 use super::metadata::{page_bounds, page_rotation};
+use super::page_ranges::PageRanges;
 use super::{mutation_preflight, PdfMutationIntent};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -53,6 +54,13 @@ pub struct PageSelectionRequest {
     pub output_location: OutputLocation,
 }
 
+impl PageSelectionRequest {
+    pub(crate) fn split_page_ranges(&self) -> Option<&str> {
+        if self.split_mode.as_deref() == Some("chunks") { return None; }
+        self.page_ranges.as_deref().filter(|value| !value.trim().is_empty())
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergePdfRequest {
@@ -71,6 +79,12 @@ pub struct PdfToImagesRequest {
     #[serde(default)] pub page_range: Option<String>,
     #[serde(default)] pub pages: Option<Vec<usize>>,
     pub output_location: OutputLocation,
+}
+
+impl PdfToImagesRequest {
+    pub(crate) fn page_range(&self) -> Option<&str> {
+        self.page_range.as_deref().filter(|value| !value.trim().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -192,7 +206,7 @@ fn split_within(request: &PageSelectionRequest, input: PathBuf, deadline: QpdfDe
     let spans = match split_spans(request, page_count) {
         Ok(spans) if spans.is_empty() => return failure(input, "The PDF has no pages to split.".to_string()),
         Ok(spans) => spans,
-        Err(error) => return failure(input, error),
+        Err(error) => return JobOutcome::failure(input, error),
     };
     let workspace = match SplitWorkspace::new() {
         Ok(workspace) => workspace,
@@ -243,18 +257,19 @@ impl Drop for SplitWorkspace {
 
 struct SplitSpan { suffix: String, first: usize, last: usize }
 
-fn split_spans(request: &PageSelectionRequest, page_count: usize) -> Result<Vec<SplitSpan>, String> {
+fn split_spans(request: &PageSelectionRequest, page_count: usize) -> Result<Vec<SplitSpan>, ToolError> {
     let width = page_count.to_string().len();
     if request.split_mode.as_deref() == Some("chunks") {
-        let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return Err("Chunk size must be greater than zero.".to_string()); };
+        let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return Err(ToolError::processing("Chunk size must be greater than zero.")); };
         return Ok((1..=page_count).step_by(size).map(|first| {
             let last = (first + size - 1).min(page_count);
             let suffix = if size == 1 { format!("-split-{first:0width$}") } else { format!("-split-{first:0width$}-{last:0width$}") };
             SplitSpan { suffix, first, last }
         }).collect());
     }
-    if let Some(raw) = request.page_ranges.as_deref().filter(|value| !value.trim().is_empty()) {
-        return Ok(parse_split_ranges(raw, page_count)?.into_iter().enumerate().map(|(number, (first, last))| SplitSpan { suffix: format!("-split-{number}"), first, last }).collect());
+    if let Some(raw) = request.split_page_ranges() {
+        let ranges = PageRanges::parse(raw).map_err(ToolError::invalid_input)?;
+        return Ok(ranges.within(page_count).map_err(ToolError::processing)?.into_iter().enumerate().map(|(number, (first, last))| SplitSpan { suffix: format!("-split-{number}"), first, last }).collect());
     }
     Ok((1..=page_count).map(|page| SplitSpan { suffix: format!("-split-page-{page:0width$}"), first: page, last: page }).collect())
 }
@@ -302,19 +317,13 @@ fn validate_split_request(request: &PageSelectionRequest) -> Result<(), String> 
     Ok(())
 }
 
-fn parse_split_ranges(raw: &str, page_count: usize) -> Result<Vec<(usize, usize)>, String> {
-    raw.split(',').map(str::trim).map(|token| {
-        let (start, end) = token.split_once('-').unwrap_or((token, token));
-        let start = parse_page_number(start)?;
-        let end = if end.trim().is_empty() { page_count } else { parse_page_number(end)? };
-        if start > end || end > page_count { return Err(format!("Invalid page range: {token}.")); }
-        Ok((start, end))
-    }).collect()
-}
-
 pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     let format = request.format.to_lowercase();
     if format != "jpg" && format != "png" { return failure(input, "PDF images must be JPEG or PNG.".to_string()); }
+    let ranges = match request.page_range().map(PageRanges::parse).transpose() {
+        Ok(ranges) => ranges,
+        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+    };
     let Some(renderer) = tool("TOOLBOX_PDFTOPPM_PATH", "pdftoppm") else { return failure(input, "pdftoppm is required to render PDFs. Set TOOLBOX_PDFTOPPM_PATH or add pdftoppm to PATH.".to_string()); };
     let dpi = request.dpi.clamp(72, 300);
     let extension = if format == "jpg" { "jpg" } else { "png" };
@@ -344,28 +353,24 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
         return materialize_rendered_images(&input, &request.output_location, &generated);
     }
 
-    let mut command = Command::new(&renderer);
-    command.arg(format!("-{renderer_format}")).arg("-r").arg(dpi.to_string());
-    if let Some(range) = request.page_range.as_deref().filter(|value| !value.trim().is_empty()) {
-        let (first, last) = range.split_once('-').unwrap_or((range, range));
-        let first = match first.trim().parse::<usize>() { Ok(page) if page > 0 => page, _ => return failure(input, "Page range start must be a positive number.".to_string()) };
-        let last = match last.trim().parse::<usize>() { Ok(page) if page >= first => page, _ => return failure(input, "Page range must be ascending and use positive page numbers.".to_string()) };
-        command.arg("-f").arg(first.to_string()).arg("-l").arg(last.to_string());
-    }
-    let output = command.arg(&input).arg(&prefix).output_until_stopped();
-    match output {
-        Ok(result) if result.status.success() => {
-            let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
-            outputs.sort_by_key(|path| rendered_page_index(path, &prefix));
-            if outputs.is_empty() {
-                failure(input, "PDF renderer produced no images.".to_string())
-            } else {
-                materialize_rendered_images(&input, &request.output_location, &outputs)
-            }
+    let spans = ranges.map_or_else(|| vec![None], |ranges| ranges.spans().iter().copied().map(Some).collect());
+    for span in spans {
+        let mut command = Command::new(&renderer);
+        command.arg(format!("-{renderer_format}")).arg("-r").arg(dpi.to_string());
+        if let Some(span) = span {
+            command.arg("-f").arg(span.first.to_string());
+            if let Some(last) = span.last { command.arg("-l").arg(last.to_string()); }
         }
-        Ok(result) => failure(input, stderr(result, "pdftoppm failed to render the PDF.")),
-        Err(error) => failure(input, format!("Could not run pdftoppm: {error}")),
+        match command.arg(&input).arg(&prefix).output_until_stopped() {
+            Ok(result) if result.status.success() => {}
+            Ok(result) => return failure(input, stderr(result, "pdftoppm failed to render the PDF.")),
+            Err(error) => return failure(input, format!("Could not run pdftoppm: {error}")),
+        }
     }
+    let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
+    outputs.sort_by_key(|path| rendered_page_index(path, &prefix));
+    if outputs.is_empty() { return failure(input, "PDF renderer produced no images.".to_string()); }
+    materialize_rendered_images(&input, &request.output_location, &outputs)
 }
 
 fn rendered_page_index(path: &Path, prefix: &Path) -> Option<u32> {

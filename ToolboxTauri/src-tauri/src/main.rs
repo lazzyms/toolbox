@@ -12,6 +12,7 @@ use crate::kit::common::{note_renamed, with_measured_sizes, JobOutcome};
 use crate::kit::images::{ImageProcessor, Options as ImageOptions};
 use crate::kit::images::tools;
 use crate::kit::pdf::{editor, metadata, remaining, scene, PDFProcessor};
+use crate::kit::pdf::page_ranges::validate_page_ranges;
 use crate::kit::vision;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
@@ -267,6 +268,7 @@ async fn run_merge_pdfs(request: &remaining::MergePdfRequest) -> Vec<JobOutcome>
 #[tauri::command]
 async fn split_pdf(events: RunEvents, request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("split_pdf", &request.paths) { return outcomes; }
+    if let Err(outcomes) = validate_page_ranges(&request.paths, request.split_page_ranges()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "split_pdf", request.paths.clone(), &request.output_location, &request, remaining::split)
 }
@@ -275,6 +277,7 @@ async fn split_pdf(events: RunEvents, request: remaining::PageSelectionRequest) 
 async fn pdf_to_images(events: RunEvents, request: remaining::PdfToImagesRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("pdf_to_images", &request.paths) { return outcomes; }
     if let Err(outcomes) = validate_page_selection("pdf_to_images", &request.paths, request.pages.as_deref()) { return outcomes; }
+    if let Err(outcomes) = validate_page_ranges(&request.paths, request.page_range()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "pdf_to_images", request.paths.clone(), &request.output_location, &request, remaining::to_images)
 }
@@ -841,6 +844,67 @@ mod command_tests {
         assert!(outcomes[0].output_paths().is_empty());
         assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
         assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn split_ranges_request(paths: Vec<PathBuf>, ranges: &str, output_location: OutputLocation) -> PageSelectionRequest {
+        PageSelectionRequest { paths, pages: vec![], page_ranges: Some(ranges.into()), split_mode: Some("ranges".into()), chunk_size: None, output_location }
+    }
+
+    fn images_range_request(paths: Vec<PathBuf>, range: &str, output_location: OutputLocation) -> PdfToImagesRequest {
+        PdfToImagesRequest { paths, dpi: 72, format: "png".into(), page_range: Some(range.into()), pages: None, output_location }
+    }
+
+    #[test]
+    fn split_and_pdf_to_images_reject_malformed_ranges_before_any_file_runs() {
+        let root = sandbox("malformed-page-ranges");
+        let inputs = vec![root.join("first.pdf"), root.join("second.pdf")];
+        std::fs::write(&inputs[0], b"not a pdf yet").unwrap();
+        make_pdf(&inputs[1], 3);
+        for (range, named) in [("3-1", "\"3-1\""), ("0-2", "\"0-2\""), ("1,,2", "Entry 2"), ("1, two", "\"two\"")] {
+            let split = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(inputs[..1].to_vec(), range, location(&root, "split"))));
+            let images = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(inputs.clone(), range, location(&root, "images"))));
+            for (tool, outcomes, expected) in [("split", split, &inputs[..1]), ("pdf to images", images, &inputs[..])] {
+                assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), expected, "{tool} {range}");
+                for outcome in &outcomes {
+                    let error = outcome.error().unwrap_or_else(|| panic!("{tool} accepted {range}"));
+                    assert_eq!(error.kind, ErrorKind::InvalidInput, "{tool} {range}");
+                    assert!(error.message.contains(named), "{tool} {range}: {}", error.message);
+                    assert!(outcome.output_paths().is_empty(), "{tool} {range}");
+                }
+            }
+        }
+        assert_eq!(std::fs::read_dir(root.join("split")).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(root.join("images")).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn split_and_pdf_to_images_accept_pages_spans_and_open_ends() {
+        let _split = remaining::tests::SPLIT_TEST_LOCK.lock().unwrap();
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("page-range-grammar");
+        let input = root.join("document.pdf");
+        make_pdf(&input, 9);
+
+        let parts = assert_success("split ranges", split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1-3, 5, 8-", location(&root, "split"))));
+        let names = parts.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names, ["document-split-0.pdf", "document-split-1.pdf", "document-split-2.pdf"]);
+        let page_counts = parts.iter().map(|path| lopdf::Document::load(path).unwrap().get_pages().len()).collect::<Vec<_>>();
+        assert_eq!(page_counts, [3, 1, 2]);
+
+        let images = assert_success("pdf to images ranges", pdf_to_images(RunEvents::silent(), images_range_request(vec![input.clone()], "1-3, 5, 8-", location(&root, "images"))));
+        let names = images.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names, ["document-images-1.png", "document-images-2.png", "document-images-3.png", "document-images-5.png", "document-images-8.png", "document-images-9.png"]);
+
+        for (tool, outcomes) in [
+            ("split", tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))))),
+            ("pdf to images", tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(vec![input.clone()], "1, 10-", location(&root, "images-past-end"))))),
+        ] {
+            let error = outcomes[0].error().unwrap_or_else(|| panic!("{tool} accepted pages past the end"));
+            assert_eq!(error.kind, ErrorKind::Processing, "{tool}: {}", error.message);
+            assert!(outcomes[0].output_paths().is_empty(), "{tool}");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
