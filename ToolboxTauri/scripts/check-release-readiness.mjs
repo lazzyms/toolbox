@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import { inspectFallbackFonts, sourceFontsDir } from "./fallback-fonts.mjs";
 import { inspectPackRelease, inspectUninstallers, tauriNsisTemplate } from "./pack-release.mjs";
 import { inspectPdftotext, inspectQpdf, inspectRenderer, readPin } from "./qpdf-pin.mjs";
+import { describe, readOcrPin, verifyCommittedEnglishData, verifyOcrArtifact } from "./ocr-release.mjs";
 
 const projectFile = (path) => new URL(`../${path}`, import.meta.url);
 const config = JSON.parse(readFileSync(projectFile("src-tauri/tauri.conf.json"), "utf8"));
@@ -27,6 +28,9 @@ const workflow = readFileSync(projectFile("../.github/workflows/tauri-release.ym
 const notesHeader = readFileSync(projectFile("../.github/release-notes-header.md"), "utf8");
 if (!workflow.includes("node ToolboxTauri/scripts/release-notes.mjs") || !workflow.includes("--notes-file release-notes.md")) throw new Error("Releases must use the first-launch header and the PR release-notes changelog");
 if (!/Privacy & Security[\s\S]*Open Anyway/.test(notesHeader)) throw new Error("Release notes header must explain the macOS Open Anyway step");
+if (!/TOOLBOX_REQUIRE_OCR_RESOURCES: '1'/.test(workflow) || !workflow.includes("--ocr-artifact")) {
+  throw new Error("Release builds must require OCR resources and check every artifact with --ocr-artifact");
+}
 if (!/check-release-readiness\.mjs --packs pack-release/.test(workflow) || !/check-tool-matrix\.mjs --catalog pack-release\/pack-catalog\.json/.test(workflow)) {
   throw new Error("Releases must build their packs, gate them with --packs and check the catalog against the tool matrix");
 }
@@ -40,11 +44,14 @@ const uninstallers = inspectUninstallers({
 const keepsAppData = uninstallers.filter(({ cause }) => cause);
 if (keepsAppData.length) throw new Error(`Uninstaller check failed: ${keepsAppData.map(({ cause, message }) => `${cause}: ${message}`).join("; ")}`);
 const pin = readPin();
-console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}`);
+const ocrPin = readOcrPin();
+const englishProblem = verifyCommittedEnglishData(ocrPin);
+if (englishProblem) throw new Error(englishProblem);
+console.log(`Release configuration passed: ${requiredIcons.length} icons, all Tauri targets, updater and ${canonicalExtensions.length} file associations configured, qpdf minimum ${pin.minimumVersion}, English OCR data ${ocrPin.englishData.version}`);
 
 for (const { message } of uninstallers) console.log(`Uninstall: ${message}`);
 
-const { values } = parseArgs({ options: { qpdf: { type: "string" }, pdftotext: { type: "string" }, renderer: { type: "string" }, target: { type: "string" }, fonts: { type: "string" }, packs: { type: "string" }, "public-key": { type: "string" } } });
+const { values } = parseArgs({ options: { qpdf: { type: "string" }, pdftotext: { type: "string" }, renderer: { type: "string" }, target: { type: "string" }, fonts: { type: "string" }, packs: { type: "string" }, "public-key": { type: "string" }, "ocr-artifact": { type: "string" } } });
 const fonts = inspectFallbackFonts({ fontsDir: values.fonts ?? sourceFontsDir });
 if (fonts.cause) {
   console.error(`Fallback font release check failed (${fonts.cause}): ${fonts.message}`);
@@ -52,11 +59,25 @@ if (fonts.cause) {
 }
 console.log(`Fallback font release check passed: ${fonts.message}`);
 
+const ocrArtifact = values["ocr-artifact"];
+if (ocrArtifact !== undefined) {
+  if (!values.target) {
+    console.error("OCR release check failed (usage): --ocr-artifact needs --target");
+    process.exit(1);
+  }
+  const failures = verifyOcrArtifact({ root: ocrArtifact, target: values.target, pin: ocrPin });
+  if (failures.length) {
+    console.error(`OCR release check failed (${[...new Set(failures.map(({ cause }) => cause))].join(", ")}) for ${values.target} at ${ocrArtifact}:\n${describe(failures)}`);
+    process.exit(1);
+  }
+  console.log(`OCR release check passed: ${ocrArtifact} carries a native ${values.target} OCR engine and PDF rasterizer and the pinned English data`);
+}
+
 const helperChecks = [];
 if (values.renderer !== undefined) {
   helperChecks.push(["page renderer", () => inspectRenderer({ path: values.renderer, target: values.target })]);
 }
-if (values.qpdf !== undefined || (values.target !== undefined && values.pdftotext === undefined && values.renderer === undefined)) {
+if (values.qpdf !== undefined || (values.target !== undefined && values.pdftotext === undefined && values.renderer === undefined && ocrArtifact === undefined)) {
   helperChecks.push(["qpdf", () => inspectQpdf({ path: values.qpdf, target: values.target, pin })]);
 }
 if (values.pdftotext !== undefined) {

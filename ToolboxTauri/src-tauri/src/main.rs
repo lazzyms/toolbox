@@ -4046,10 +4046,18 @@ mod command_tests {
         assert_eq!(outcomes.len(), 1, "{name} should return one input outcome");
         let outcome = &outcomes[0];
         let resources_staged = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/ocr/manifest.json").is_file();
+        check_ocr_outcome(name, outcome, resources_staged, std::env::var_os("TOOLBOX_REQUIRE_OCR_RESOURCES").is_some());
+        outcome.output_paths().to_vec()
+    }
+
+    /// Release runs set TOOLBOX_REQUIRE_OCR_RESOURCES, so OCR must recognize the fixture there.
+    /// A local run without staged resources may get Unavailable and still pass.
+    fn check_ocr_outcome(name: &str, outcome: &JobOutcome, resources_staged: bool, release_strict: bool) {
         if let Some(error) = outcome.error() {
-            if matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable) {
-                assert!(!resources_staged && std::env::var_os("TOOLBOX_REQUIRE_OCR_RESOURCES").is_none(), "{name} resources were staged but OCR was unavailable: {error}");
-            }
+            let unavailable = matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable);
+            assert!(!(unavailable && release_strict), "{name}: release checks require OCR, but it was unavailable: {error}");
+            assert!(!(unavailable && resources_staged), "{name} resources were staged but OCR was unavailable: {error}");
+            assert!(!release_strict, "{name}: release checks require OCR to recognize the fixture, but it failed: {error}");
         } else {
             assert!(!outcome.output_paths().is_empty(), "{name} reported success without an output");
             for output in outcome.output_paths() { assert!(output.is_file(), "{name} reported missing output {}", output.display()); }
@@ -4059,7 +4067,67 @@ mod command_tests {
             assert!(text.contains("Toolbox page"), "{name} did not extract the fixture text: {text:?}");
             assert!(!text.contains('\r'), "{name} must end lines in LF: {text:?}");
         }
-        outcome.output_paths().to_vec()
+    }
+
+    #[test]
+    fn release_strictness_fails_the_ocr_check_on_unavailable_while_local_runs_without_resources_accept_it() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-strict");
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-resources"))), ("TOOLBOX_TESSERACT_PATH", Some(root.join("missing-tesseract")))]);
+        let scan = root.join("scan.pdf");
+        make_pdf(&scan, 1);
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan], location(&root, "ocr")), no_packs()));
+        let _ = std::fs::remove_dir_all(&root);
+        let outcome = &outcomes[0];
+        assert!(outcome.error().is_some_and(|error| matches!(error.kind, ErrorKind::Unavailable)), "{outcome:?}");
+
+        let fails = |staged: bool, strict: bool| std::panic::catch_unwind(|| check_ocr_outcome("ocr", outcome, staged, strict)).is_err();
+        assert!(!fails(false, false), "a local run without staged resources accepts Unavailable");
+        assert!(fails(false, true), "release strictness fails on Unavailable even when nothing was staged");
+        assert!(fails(true, false), "staged resources must make OCR available");
+        assert!(fails(true, true));
+    }
+
+    /// Recognizes the English fixture with a Release artifact's own OCR resources, as text and
+    /// as a searchable PDF, and saves both with their SHA-256 for the cross-target comparison.
+    /// Runs only when TOOLBOX_OCR_RELEASE_ROOT names the artifact's resource folder (a Windows
+    /// install folder or Toolbox.app/Contents/Resources) and TOOLBOX_OCR_RELEASE_OUT the folder
+    /// to save into. It never accepts Unavailable.
+    #[test]
+    fn release_artifact_recognizes_the_english_fixture_with_its_own_resources() {
+        let (Some(artifact), Some(out)) = (std::env::var_os("TOOLBOX_OCR_RELEASE_ROOT").map(PathBuf::from), std::env::var_os("TOOLBOX_OCR_RELEASE_OUT").map(PathBuf::from)) else {
+            eprintln!("skipping: TOOLBOX_OCR_RELEASE_ROOT and TOOLBOX_OCR_RELEASE_OUT are not set");
+            return;
+        };
+        let _guard = crate::kit::lock_process_env();
+        let _env = EnvGuard::set(&[
+            ("TOOLBOX_RESOURCE_ROOT", Some(artifact.clone())),
+            ("TOOLBOX_TESSERACT_PATH", None), ("TOOLBOX_TESSDATA_PATH", None), ("TOOLBOX_PDFTOPPM_PATH", None), ("TOOLBOX_OCR_LANGUAGE_DIR", None),
+        ]);
+        assert!(["ocr/manifest.json", "resources/ocr/manifest.json"].iter().any(|path| artifact.join(path).is_file()), "the artifact at {} has no OCR resource manifest", artifact.display());
+        let rasterizer = if cfg!(windows) { "pdftoppm.exe" } else { "pdftoppm" };
+        assert!(["pdf-bin", "resources", ""].iter().any(|folder| artifact.join(folder).join(rasterizer).is_file()), "the artifact at {} has no PDF rasterizer", artifact.display());
+
+        let root = sandbox("ocr-release");
+        let scan = root.join("scan.pdf");
+        scanned_pdf(&scan, &[&["Toolbox page one", "Quarterly invoice summary"]]);
+        let text = assert_success("release OCR text", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan.clone()], location(&root, "text")), no_packs()));
+        let searchable = assert_success("release searchable PDF", run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![scan.clone()], location(&root, "searchable")), no_packs()));
+        let recognized = std::fs::read_to_string(&text[0]).unwrap();
+        for word in ["Toolbox", "page", "Quarterly", "invoice"] { assert!(recognized.contains(word), "{word} is missing from {recognized:?}"); }
+        assert_eq!(lopdf::Document::load(&searchable[0]).unwrap().get_pages().len(), 1, "the searchable PDF keeps the scan's one page");
+
+        std::fs::create_dir_all(&out).unwrap();
+        let mut fingerprints = serde_json::Map::new();
+        for (name, path) in [("text.txt", &text[0]), ("searchable.pdf", &searchable[0])] {
+            let bytes = std::fs::read(path).unwrap();
+            std::fs::write(out.join(name), &bytes).unwrap();
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+            fingerprints.insert(name.into(), digest.into());
+        }
+        let summary = serde_json::json!({ "os": std::env::consts::OS, "architecture": std::env::consts::ARCH, "files": fingerprints });
+        std::fs::write(out.join("fingerprints.json"), format!("{}\n", serde_json::to_string_pretty(&summary).unwrap())).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn named(naming: &mut Vec<(&'static str, PathBuf, Vec<PathBuf>)>, command: &'static str, input: PathBuf, outputs: Vec<PathBuf>) -> Vec<PathBuf> {
