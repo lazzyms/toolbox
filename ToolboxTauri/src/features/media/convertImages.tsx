@@ -2,19 +2,14 @@ import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { exampleOutputName } from "../../components/RunDestination";
 import { extensionOf, type IntakeRedirect } from "../../components/intake";
-import type { ConvertImagesRequest } from "../../contracts";
+import type { ConvertImagesRequest, TiffCompression } from "../../contracts";
+import { convertImagesRequest, convertTargets, defaultTiffCompression, tiffCompressions } from "../../registry/convertTargets";
 import type { MediaPanelProps, MediaTool } from "./types";
 
 export interface ConvertImagesOptions {
   format: ConvertImagesRequest["format"];
+  tiffCompression: TiffCompression;
 }
-
-const convertTargets: { format: ConvertImagesRequest["format"]; name: string; hint: string }[] = [
-  { format: "jpg", name: "JPEG", hint: "Transparent areas become white, because JPEG has no transparency." },
-  { format: "png", name: "PNG", hint: "Lossless. Transparency is kept." },
-  { format: "webp", name: "WebP", hint: "Follows each source. PNG and TIFF stay lossless. JPEG and HEIC are lossy." },
-  { format: "heic", name: "HEIC", hint: "Saved as 8-bit. Transparency is kept." },
-];
 
 // Converting keeps one frame of a GIF, so Convert points GIFs at Extract GIF Frames instead.
 const convertGifRedirect = (path: string): IntakeRedirect | null => extensionOf(path) === ".gif"
@@ -33,24 +28,43 @@ const ConvertImagesPanel = ({ options, setOptions }: MediaPanelProps<ConvertImag
         aria-describedby="image-target-format-hint"
         value={options.format}
         onValueChange={(value) => {
-          if (value) setOptions(() => ({ format: value as ConvertImagesRequest["format"] }));
+          if (value) setOptions((current) => ({ ...current, format: value as ConvertImagesRequest["format"] }));
         }}
       >
         {convertTargets.map(({ format, name }) => <ToggleGroupItem key={format} value={format}>{name}</ToggleGroupItem>)}
       </ToggleGroup>
       <p id="image-target-format-hint" className="workspace-panel-copy">{convertTargets.find(({ format }) => format === options.format)?.hint}</p>
     </div>
+    {options.format === "tiff" && (
+      <div className="workspace-field">
+        <Label id="tiff-compression-label">TIFF compression</Label>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          aria-labelledby="tiff-compression-label"
+          aria-describedby="tiff-compression-hint"
+          value={options.tiffCompression}
+          onValueChange={(value) => {
+            if (value) setOptions((current) => ({ ...current, tiffCompression: value as TiffCompression }));
+          }}
+        >
+          {tiffCompressions.map(({ value, name }) => <ToggleGroupItem key={value} value={value}>{name}</ToggleGroupItem>)}
+        </ToggleGroup>
+        <p id="tiff-compression-hint" className="workspace-panel-copy">All three are lossless. LZW is the default. 16-bit sources stay 16-bit, and 8-bit sources stay 8-bit.</p>
+      </div>
+    )}
     <p className="workspace-note">Lossy results use the shared quality of 90, so a second run gives the same files. To choose a quality, use Compress.</p>
   </>
 );
 
 /** Convert Image Format sends the whole batch with one target; files already in that format are skipped natively. */
 export const convertImagesTool: MediaTool<ConvertImagesOptions> = {
-  initialOptions: { format: "jpg" },
+  initialOptions: { format: "jpg", tiffCompression: defaultTiffCompression },
   Panel: ConvertImagesPanel,
-  buildRequest: ({ format }, { paths, outputLocation }) => ({
+  buildRequest: ({ format, tiffCompression }, { paths, outputLocation }) => ({
     command: "convert_images",
-    request: { paths, format, outputLocation } satisfies ConvertImagesRequest,
+    request: { ...convertImagesRequest(paths, format, tiffCompression, outputLocation) },
   }),
   showFileOrdering: false,
   exampleName: ({ format }, path) => exampleOutputName(path, "convert_images", "-converted", format),

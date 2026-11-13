@@ -3390,6 +3390,8 @@ test.describe("per-run destination", () => {
         await expect(example).toHaveText("icon-converted.jpg");
         await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "WebP", exact: true }).click();
         await expect(example).toHaveText("icon-converted.webp");
+        await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "TIFF", exact: true }).click();
+        await expect(example).toHaveText("icon-converted.tiff");
 
         await page.goto("/");
         await openFromHome(page, "Extract from PDF");
