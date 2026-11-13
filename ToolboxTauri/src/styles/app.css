@@ -1727,10 +1727,13 @@ fieldset.scene-inspector-field { min-inline-size: 0; margin: 0; padding: 0; bord
 .scene-organize-grid { --scene-organize-thumb: 104px; display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--scene-organize-thumb) + 24px), 1fr)); align-content: start; gap: 12px; padding: 16px; overflow: auto; }
 .scene-organize-grid[data-size="small"] { --scene-organize-thumb: 72px; }
 .scene-organize-grid[data-size="large"] { --scene-organize-thumb: 152px; }
-.scene-organize-thumb { position: relative; display: grid; place-items: center; width: var(--scene-organize-thumb); aspect-ratio: 0.77; }
+.scene-organize-thumb { position: relative; display: grid; place-items: center; width: var(--scene-organize-thumb); min-height: 0; aspect-ratio: 0.77; }
 .scene-organize-thumb[data-selected] img, .scene-organize-thumb[data-selected]:not(:has(img)) { outline: 2px solid var(--primary); outline-offset: 2px; }
 .scene-organize-check { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--primary); color: var(--primary-foreground); font-size: 11px; line-height: 1; }
-.scene-organize-thumb img, .scene-organize-thumb:not(:has(img)) { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; background: var(--pdf-document-page); box-shadow: 0 1px 2px rgb(0 0 0 / 12%); }
+.scene-organize-thumb img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; }
+.scene-organize-thumb img, .scene-organize-thumb:not(:has(img)) { background: var(--pdf-document-page); box-shadow: 0 1px 2px rgb(0 0 0 / 12%); }
+.scene-organize-thumb[data-placeholder] { border: 1px dashed var(--border); border-radius: 2px; background: var(--muted); box-shadow: none; color: var(--muted-foreground); font-size: 12px; }
+.scene-empty-warning { width: 24px; height: 24px; color: var(--warning); }
 .scene-organize-label { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
 .scene-organize-grid-frame { position: relative; display: grid; min-height: 0; }
 .scene-organize-grid[data-dragging] { user-select: none; cursor: grabbing; }

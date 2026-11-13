@@ -90,6 +90,8 @@ test("each page is named by position, original page, orientation and selected st
   assert.equal(pageOptionName(3, { sourceIndex: 4, rotation: 180 }, false), "Position 3, original page 5, rotated 180°");
   assert.equal(pageOptionName(4, { sourceIndex: 3, rotation: 270 }, true), "Position 4, original page 4, rotated 90° left, selected");
   assert.equal(pageOptionName(5, { sourceIndex: null, rotation: 0 }, false), "Position 5");
+  assert.equal(pageOptionName(9, { sourceIndex: 8, rotation: 0 }, true, "loading"), "Position 9, original page 9, preview loading, selected");
+  assert.equal(pageOptionName(10, { sourceIndex: 9, rotation: 90 }, false, "failed"), "Position 10, original page 10, rotated 90° right, preview unavailable");
 });
 
 test("page positions read as a short phrase for announcements", () => {
