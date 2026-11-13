@@ -678,6 +678,7 @@ fn main() {
             resize_pdf,
             bates_number_pdfs,
             compress_files,
+            kit::compress_estimate::estimate_compressed_size,
             rotate_pdf,
             repair_pdf,
             inspect_pdf_privacy,

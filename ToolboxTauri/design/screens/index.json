@@ -1339,6 +1339,13 @@
   {
     "board": "Compress.dc.html",
     "title": "Compress Files: empty, files, options, running",
+    "state": "state-estimating",
+    "query": "state=estimating",
+    "screen": "Compress--state-estimating.jpg"
+  },
+  {
+    "board": "Compress.dc.html",
+    "title": "Compress Files: empty, files, options, running",
     "state": "state-empty",
     "query": "state=empty",
     "screen": "Compress--state-empty.jpg"
