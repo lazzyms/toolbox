@@ -2340,11 +2340,11 @@ mod command_tests {
         let names = images.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
         assert_eq!(names, ["document-page-01.png", "document-page-02.png", "document-page-03.png", "document-page-05.png", "document-page-08.png", "document-page-09.png"]);
 
-        // Split checks its ranges against the page count before writing, so going past the end is invalid input there.
+        // Split fits its ranges to each PDF, so a range past the end is shortened and the change is noted.
         let outcomes = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))));
-        let error = outcomes[0].error().expect("split accepted pages past the end");
-        assert_eq!(error.kind, ErrorKind::InvalidInput, "{}", error.message);
-        assert!(outcomes[0].output_paths().is_empty());
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert_eq!(outcomes[0].output_paths().len(), 2);
+        assert!(outcomes[0].detail.contains("8-12 was past page 9 and was shortened to 8\u{2013}9."), "{}", outcomes[0].detail);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6530,9 +6530,10 @@ mod command_tests {
         assert!(wrong_format[0].output_paths().is_empty());
         assert!(wrong_format[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
 
-        let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), SplitPdfRequest {
+        let wrong_cardinality = tauri::async_runtime::block_on(extract_pdf_pages(RunEvents::silent(), PageSelectionRequest {
             paths: vec![pdf.clone(), second_pdf.clone()],
-            mode: SplitMode::EveryN { pages: 1 }.into(),
+            pages: vec![],
+            page_ranges: Some("1".into()),
             output_location: location(&root, "wrong-cardinality"),
         }));
         assert_eq!(wrong_cardinality.len(), 2);

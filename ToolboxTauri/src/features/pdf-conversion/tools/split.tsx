@@ -29,7 +29,7 @@ const splitExampleNames = (stem: string, mode: SplitMode, pagesPerFile: string):
 export const split: ConversionTool<Options> = {
   initialOptions: { mode: "ranges", ranges: "", pagesPerFile: "1" },
   inspectsPdf: false,
-  outputPreview: () => "Output preview unavailable. Export creates one PDF for each range, or for every N pages.",
+  outputPreview: () => "Output preview unavailable. Export creates one PDF for each range, or for every N pages. Ranges are clamped to each PDF's page count.",
   exportBlocked: (options) => splitIssue(options) !== null,
   exampleName: (inputPath, _utility, { mode, pagesPerFile }) => splitExampleNames(stemOf(inputPath), mode, pagesPerFile)[0] ?? splitPartName(stemOf(inputPath), 1, 1),
   OptionsPanel: ({ options, setOptions, files }) => {
@@ -93,6 +93,10 @@ export const split: ConversionTool<Options> = {
             <span>{issue}</span>
           </p>
         )}
+        <div className="workspace-field" role="group" aria-labelledby="split-fitting-label">
+          <span id="split-fitting-label" className="text-sm leading-none font-medium">Fitting each PDF</span>
+          <p className="workspace-note">A range past the last page is shortened or dropped. A PDF is skipped when nothing is left or the result is the whole file.</p>
+        </div>
         {names.length > 0 && (
           <div className="workspace-field" role="group" aria-labelledby="split-names-label">
             <span id="split-names-label" className="text-sm leading-none font-medium">File names</span>
