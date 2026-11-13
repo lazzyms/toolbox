@@ -1753,8 +1753,9 @@ mod command_tests {
 
     // Icon presets and single-file TIFF splitting predate declared suffixes and keep their
     // shipped names. Extract from PDF declares its text suffix and names its images -image.
-    // These are the only outputs allowed a different suffix family.
-    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page"), ("extract_from_pdf", "-image")];
+    // Extract GIF Frames writes one timings file beside its frames. These are the only
+    // outputs allowed a different suffix family.
+    const LEGACY_SUFFIX_FAMILIES: &[(&str, &str)] = &[("generate_icon_set", "-favicon"), ("process_tiff_pages", "-page"), ("extract_from_pdf", "-image"), ("extract_gif_frames", "-timings")];
 
     fn assert_outputs_use_declared_suffixes(naming: &[(&'static str, PathBuf, Vec<PathBuf>)]) {
         let covered = naming.iter().map(|(command, _, _)| *command).collect::<std::collections::BTreeSet<_>>();

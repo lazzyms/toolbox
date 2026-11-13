@@ -465,6 +465,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 }
+pub mod gif_extract;
 pub(crate) mod gif_frames;
 pub mod metadata;
 pub mod tools;

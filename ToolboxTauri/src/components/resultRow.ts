@@ -1,4 +1,4 @@
-import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, ToolError } from "../contracts";
+import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, SucceededJobOutcome, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 
 export type RowTone = "ok" | "warn" | "skip" | "fail";
@@ -20,6 +20,26 @@ export interface RowView {
 }
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
+
+/** One part of a grouped result: a single file, or a numbered set of files shown as one row. */
+export interface OutputGroupPart {
+    kind: "file" | "set";
+    name: string;
+    hint: string;
+    /** The file Open acts on, or null when the part has no single file to open. */
+    open: string | null;
+    reveal: string;
+}
+
+/** A succeeded file whose several outputs show as one row that expands into its parts. */
+export interface OutputGroup {
+    hint: string;
+    /** The output the row's own Open and Reveal act on. */
+    primary: string;
+    parts: OutputGroupPart[];
+}
+
+export type OutputGrouping = (outcome: SucceededJobOutcome) => OutputGroup | null;
 
 const isRetryable = (failure: ToolError): boolean => {
     switch (failure.kind) {
