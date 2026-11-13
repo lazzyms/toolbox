@@ -7,8 +7,8 @@ import { NativeSelect } from "@/components/ui/native-select";
 import type { PdfDocument, PdfPage } from "../pdf-editor/contracts";
 import { isWindows } from "../../shortcuts";
 import {
-  describePage, keptRect, keptSize, moveRect, nudgeRect, paperName, rectBetween, resizeRect, sameRect, showLength, showSize, sizeKey,
-  type Handle, type Margins, type PageSize, type Rect, type Unit,
+  PAPER_TOLERANCE, cutsOff, describePage, keptRect, keptSize, moveRect, nudgeRect, paperName, placePage, rectBetween, resizeRect, sameRect, showLength, showSize, sizeKey,
+  type Handle, type Margins, type Orientation, type PagePlacement, type PageSize, type Placement, type Rect, type Unit,
 } from "./geometry";
 
 /** Page sizes for each PDF, read without rendering. Undefined while loading, "error" when unreadable. */
@@ -56,23 +56,64 @@ const handles: ReadonlyArray<{ handle: Handle; x: number; y: number }> = [
   { handle: "se", x: 100, y: 100 }, { handle: "s", x: 50, y: 100 }, { handle: "sw", x: 0, y: 100 }, { handle: "w", x: 0, y: 50 },
 ];
 
-/** Shade over the parts of the page outside the kept area. */
-const Shade = ({ rect }: { rect: Rect }) => {
-  const right = rect.left + rect.width;
-  const bottom = rect.top + rect.height;
+/** The parts of `outer` outside `inner`: full-width bands above and below, then the sides between them. */
+const bandsOutside = (outer: Rect, inner: Rect): Rect[] => {
+  const left = Math.max(outer.left, inner.left);
+  const top = Math.max(outer.top, inner.top);
+  const right = Math.min(outer.left + outer.width, inner.left + inner.width);
+  const bottom = Math.min(outer.top + outer.height, inner.top + inner.height);
   const bands: Rect[] = [
-    { left: 0, top: 0, width: 1, height: rect.top },
-    { left: 0, top: bottom, width: 1, height: 1 - bottom },
-    { left: 0, top: rect.top, width: rect.left, height: rect.height },
-    { left: right, top: rect.top, width: 1 - right, height: rect.height },
+    { left: outer.left, top: outer.top, width: outer.width, height: top - outer.top },
+    { left: outer.left, top: bottom, width: outer.width, height: outer.top + outer.height - bottom },
+    { left: outer.left, top, width: left - outer.left, height: bottom - top },
+    { left: right, top, width: outer.left + outer.width - right, height: bottom - top },
   ];
-  return <>{bands.filter((band) => band.width > 0.001 && band.height > 0.001).map((band, index) => <div key={index} className="crop-shade" style={boxStyle(band)} />)}</>;
+  return bands.filter((band) => band.width > 0.001 && band.height > 0.001);
 };
+
+/** Shade over the parts of the page outside the kept area. */
+const Shade = ({ rect }: { rect: Rect }) =>
+  <>{bandsOutside({ left: 0, top: 0, width: 1, height: 1 }, rect).map((band, index) => <div key={index} className="crop-shade" style={boxStyle(band)} />)}</>;
 
 type Drag =
   | { kind: "draw"; start: Rect; origin: { x: number; y: number } }
   | { kind: "move"; start: Rect; origin: { x: number; y: number } }
   | { kind: "resize"; start: Rect; handle: Handle };
+
+/** The preview's file picker and pager, with room for actions on the right. */
+const PreviewHeader = ({ files, selectedFileIndex, selectFile, pageIndex, pageCount, onPageChange, children }: {
+  files: readonly string[];
+  selectedFileIndex: number;
+  selectFile: (index: number) => void;
+  pageIndex: number;
+  pageCount: number;
+  onPageChange: (index: number) => void;
+  children?: React.ReactNode;
+}) => (
+  <div className="crop-preview-header">
+    <span className="crop-preview-label">Preview</span>
+    <NativeSelect
+      size="sm"
+      aria-label="PDF to preview"
+      className="crop-preview-file"
+      value={String(selectedFileIndex)}
+      onChange={(event) => { selectFile(Number(event.target.value)); onPageChange(0); }}
+    >
+      {files.map((file, index) => <option key={`${file}-${index}`} value={index}>{fileName(file)}</option>)}
+    </NativeSelect>
+    <span className="crop-preview-pager">
+      <Button variant="ghost" size="icon-sm" aria-label="Previous page in range" disabled={pageIndex <= 0} onClick={() => onPageChange(pageIndex - 1)}>
+        <ChevronLeft aria-hidden="true" />
+      </Button>
+      <span className="workspace-note" aria-live="polite">{pageCount ? `Page ${pageIndex + 1} of ${pageCount}` : ""}</span>
+      <Button variant="ghost" size="icon-sm" aria-label="Next page in range" disabled={pageIndex >= pageCount - 1} onClick={() => onPageChange(pageIndex + 1)}>
+        <ChevronRight aria-hidden="true" />
+      </Button>
+    </span>
+    <span className="crop-preview-spacer" />
+    {children}
+  </div>
+);
 
 const STAGE = { width: 230, height: 238 };
 const MINI = { width: 112, height: 98, pointsPerPixel: 25.4 / 72 / 0.32 };
@@ -160,27 +201,7 @@ export const CropPreview = ({
   return (
     <Card className="crop-preview py-0" role="region" aria-label="Preview">
       <CardContent className="p-0">
-        <div className="crop-preview-header">
-          <span className="crop-preview-label">Preview</span>
-          <NativeSelect
-            size="sm"
-            aria-label="PDF to preview"
-            className="crop-preview-file"
-            value={String(selectedFileIndex)}
-            onChange={(event) => { selectFile(Number(event.target.value)); onPageChange(0); }}
-          >
-            {files.map((file, index) => <option key={`${file}-${index}`} value={index}>{fileName(file)}</option>)}
-          </NativeSelect>
-          <span className="crop-preview-pager">
-            <Button variant="ghost" size="icon-sm" aria-label="Previous page in range" disabled={pageIndex <= 0} onClick={() => onPageChange(pageIndex - 1)}>
-              <ChevronLeft aria-hidden="true" />
-            </Button>
-            <span className="workspace-note" aria-live="polite">{pageCount ? `Page ${pageIndex + 1} of ${pageCount}` : ""}</span>
-            <Button variant="ghost" size="icon-sm" aria-label="Next page in range" disabled={pageIndex >= pageCount - 1} onClick={() => onPageChange(pageIndex + 1)}>
-              <ChevronRight aria-hidden="true" />
-            </Button>
-          </span>
-          <span className="crop-preview-spacer" />
+        <PreviewHeader files={files} selectedFileIndex={selectedFileIndex} selectFile={selectFile} pageIndex={pageIndex} pageCount={pageCount} onPageChange={onPageChange}>
           {history && (
             <>
               <Button variant="ghost" size="sm" disabled={!history.canUndo} onClick={history.onUndo} aria-keyshortcuts={isWindows() ? "Control+Z" : "Meta+Z"}>
@@ -189,7 +210,7 @@ export const CropPreview = ({
               <Button variant="ghost" size="sm" disabled={!history.canReset} onClick={history.onReset}>Reset crop</Button>
             </>
           )}
-        </div>
+        </PreviewHeader>
         <div className="crop-preview-body">
           <figure className="crop-preview-figure">
             <div className="crop-preview-well">
@@ -284,4 +305,197 @@ const otherSizes = (files: readonly string[], sizes: PageSizes, shown: string) =
     });
   }
   return minis;
+};
+
+/** The paper Resize sets pages to, how it is turned and where each page lands on it. */
+export type ResizeTarget = { paper: PageSize; name: string; orientation: Orientation; placement: Placement };
+
+/** "Letter", "landscape A4" or "58 × 120 mm": a page size for sentences. */
+const pageNoun = (page: PageSize, unit: Unit) => {
+  const name = paperName(page);
+  if (!name) return showSize(page, unit);
+  return name.endsWith(", landscape") ? `landscape ${name.slice(0, -", landscape".length)}` : name;
+};
+const withArticle = (noun: string) => `${/^([aeiou]|8|1[18](?!\d))/i.test(noun) ? "an" : "a"} ${noun}`;
+const scaledTo = (scale: number) => `${scale > 1.01 ? "Scaled up to" : "Scaled to"} ${Math.round(scale * 100)}%`;
+
+/** "16 mm is cut off the sides and 29 mm off the top and bottom.", totals across both edges of each axis. */
+const cutSentence = ({ cut }: PagePlacement, unit: Unit) => {
+  const length = (points: number) => `${showLength(points, unit)} ${unit}`;
+  const sides = cut.width > PAPER_TOLERANCE;
+  const ends = cut.height > PAPER_TOLERANCE;
+  if (sides && ends) return `${length(cut.width)} is cut off the sides and ${length(cut.height)} off the top and bottom.`;
+  return sides ? `${length(cut.width)} is cut off the sides.` : `${length(cut.height)} is cut off the top and bottom.`;
+};
+
+/** The new page and the scaled old page on one stage as large as both, in points from its top-left corner. */
+const resizeLayout = (page: PageSize, { target, scale, offset }: PagePlacement) => {
+  const content = { width: page.width * scale, height: page.height * scale };
+  const width = Math.max(target.width, content.width);
+  const height = Math.max(target.height, content.height);
+  const paper = { left: (width - target.width) / 2, top: (height - target.height) / 2, width: target.width, height: target.height };
+  const placed = { left: paper.left + offset.x, top: paper.top + offset.y, ...content };
+  const fraction = (box: Rect): Rect => ({ left: box.left / width, top: box.top / height, width: box.width / width, height: box.height / height });
+  return { width, height, paper: fraction(paper), content: fraction(placed) };
+};
+
+/** The extent a page takes on its stage: the page itself when it stays, or the new page and the placed page. */
+const stageSize = (page: PageSize, placement: PagePlacement | null) => placement ? resizeLayout(page, placement) : page;
+
+/** The new page with the old page placed on it; cut-off parts are hatched. A page that stays is drawn plain. */
+const ResizeStage = ({ page, placement, pointsToPixels, image, alt, testId }: {
+  page: PageSize;
+  placement: PagePlacement | null;
+  pointsToPixels: number;
+  image?: string | null;
+  alt: string;
+  testId?: string;
+}) => {
+  const picture = image ? <img src={image} alt="" draggable={false} /> : null;
+  if (!placement) {
+    return (
+      <div className="crop-stage" role="img" aria-label={alt} data-testid={testId} style={{ width: page.width * pointsToPixels, height: page.height * pointsToPixels }}>
+        <div className="crop-page">{picture}</div>
+      </div>
+    );
+  }
+  const layout = resizeLayout(page, placement);
+  return (
+    <div
+      className="crop-stage"
+      role="img"
+      aria-label={alt}
+      data-testid={testId}
+      data-target={`${placement.target.width.toFixed(2)} x ${placement.target.height.toFixed(2)}`}
+      data-scale={placement.scale.toFixed(4)}
+      data-offset={`${placement.offset.x.toFixed(2)} ${placement.offset.y.toFixed(2)}`}
+      style={{ width: layout.width * pointsToPixels, height: layout.height * pointsToPixels }}
+    >
+      <div className="resize-paper" style={boxStyle(layout.paper)} />
+      <div className="resize-content" style={boxStyle(layout.content)}>{picture}</div>
+      {bandsOutside(layout.content, layout.paper).map((band, index) => <div key={index} className="resize-cut" data-testid="resize-cut" style={boxStyle(band)} />)}
+      <div className="resize-target" style={boxStyle(layout.paper)} />
+    </div>
+  );
+};
+
+/**
+ * Resize's preview: the previewed page on its new paper, scaled to fit or at actual size and centred, using the
+ * same placement as the native resize, and the first page of each other size in the batch.
+ */
+export const ResizePreview = ({ files, selectedFileIndex, selectFile, sizes, pageIndex, onPageChange, target, unit }: {
+  files: readonly string[];
+  selectedFileIndex: number;
+  selectFile: (index: number) => void;
+  sizes: PageSizes;
+  pageIndex: number;
+  onPageChange: (index: number) => void;
+  /** The paper and placement, or null while the size can't be read. */
+  target: ResizeTarget | null;
+  unit: Unit;
+}) => {
+  const path = files[selectedFileIndex];
+  const pages = path === undefined ? undefined : sizes.get(path);
+  const page = Array.isArray(pages) ? pages[pageIndex] : undefined;
+  const image = usePagePreview(page ? path : undefined, pageIndex);
+  const pageCount = Array.isArray(pages) ? pages.length : 0;
+  const place = (size: PageSize) => target ? placePage(size, target.paper, target.orientation, target.placement) : null;
+  const actual = target?.placement === "actualSize";
+
+  const placement = page ? place(page) : null;
+  const extent = page ? stageSize(page, placement) : null;
+  const scale = extent ? Math.min(STAGE.width / extent.width, STAGE.height / extent.height) : 0;
+  let caption: { text: string; tone?: "error" | "warning" } | null = null;
+  let alt = `Page ${pageIndex + 1}`;
+  if (page) {
+    const noun = pageNoun(page, unit);
+    if (!target) {
+      caption = { text: "Fix the page size to see the result.", tone: "error" };
+      alt = `Page ${pageIndex + 1}, ${noun}, unchanged.`;
+    } else if (!placement) {
+      caption = { text: `${describePage(page, unit)}. Already ${target.name}. Unchanged.` };
+      alt = `Page ${pageIndex + 1}, ${noun}, unchanged.`;
+    } else {
+      const on = `${describePage(page, unit)} on ${describePage(placement.target, unit)}.`;
+      const onPage = `${withArticle(pageNoun(placement.target, unit))} page`;
+      if (!actual) {
+        caption = { text: `${on} ${scaledTo(placement.scale)}.` };
+        alt = `${noun} page scaled to fit ${onPage}, centered.`;
+      } else if (cutsOff(placement)) {
+        caption = { text: `${on} ${cutSentence(placement, unit)}`, tone: "warning" };
+        alt = `${noun} page placed at actual size on ${onPage}. Hatched areas are cut off.`;
+      } else {
+        caption = { text: `${on} Fits. Nothing is cut off.` };
+        alt = `${noun} page placed at actual size on ${onPage}, centered. Nothing is cut off.`;
+      }
+    }
+  }
+
+  const minis = page ? otherSizes(files, sizes, sizeKey(page)).map((mini) => ({ ...mini, placement: place(mini.page) })) : [];
+  const miniScale = Math.min(1 / MINI.pointsPerPixel, ...minis.map((mini) => {
+    const size = stageSize(mini.page, mini.placement);
+    return Math.min(MINI.width / size.width, MINI.height / size.height);
+  }));
+  const hint = actual
+    ? "Hatched areas are outside the new page and will be cut off."
+    : target?.orientation === "portrait" ? "Every page gets portrait paper and is scaled to fit, so nothing is cut off."
+      : target?.orientation === "landscape" ? "Every page gets landscape paper and is scaled to fit, so nothing is cut off."
+        : "Each page keeps its orientation and is scaled to fit, so nothing is cut off.";
+
+  return (
+    <Card className="crop-preview py-0" role="region" aria-label="Preview">
+      <CardContent className="p-0">
+        <PreviewHeader files={files} selectedFileIndex={selectedFileIndex} selectFile={selectFile} pageIndex={pageIndex} pageCount={pageCount} onPageChange={onPageChange} />
+        <div className="crop-preview-body">
+          <figure className="crop-preview-figure">
+            <div className="crop-preview-well">
+              {pages === "error" ? (
+                <span className="workspace-note">This PDF can't be previewed.</span>
+              ) : !page ? (
+                <span className="workspace-note">Loading the preview…</span>
+              ) : (
+                <ResizeStage page={page} placement={placement} pointsToPixels={scale} image={image} alt={alt} testId="resize-stage" />
+              )}
+            </div>
+            {caption && (
+              <figcaption
+                className={`workspace-note${caption.tone === "error" ? " workspace-note-error" : caption.tone === "warning" ? " workspace-note-warning" : ""}`}
+                data-testid="crop-preview-caption"
+              >
+                {caption.text}
+              </figcaption>
+            )}
+          </figure>
+          {minis.length > 0 && (
+            <div className="crop-minis">
+              <span className="crop-preview-label">On other page sizes</span>
+              <div className="crop-minis-row">
+                {minis.map((mini) => {
+                  const name = paperName(mini.page) ?? showSize(mini.page, unit);
+                  const cut = actual && cutsOff(mini.placement);
+                  const result = !target ? null
+                    : !mini.placement ? `Already ${target.name}. Unchanged.`
+                      : actual ? cut ? "Content cut off" : "Fits. Nothing is cut off."
+                        : `${target.orientation === "match" && mini.placement.target.width > mini.placement.target.height ? "Stays landscape. " : ""}${scaledTo(mini.placement.scale)}`;
+                  const sub = !result ? name : mini.placement ? `${name}. ${result}` : result;
+                  return (
+                    <figure key={mini.title} className="crop-mini" data-testid="crop-mini">
+                      <div className="crop-mini-stage">
+                        <ResizeStage page={mini.page} placement={mini.placement} pointsToPixels={miniScale} alt={`${mini.title}: ${result ?? name}`} />
+                      </div>
+                      <figcaption>
+                        <strong>{mini.title}</strong>
+                        <span className={cut ? "workspace-note-warning" : undefined}>{sub}</span>
+                      </figcaption>
+                    </figure>
+                  );
+                })}
+              </div>
+              <p className="workspace-note">{hint}</p>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
 };

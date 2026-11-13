@@ -1235,6 +1235,58 @@ mod session_tests {
     }
 
     #[test]
+    fn resize_places_every_shared_preview_case_where_the_preview_shows_it() {
+        #[derive(serde::Deserialize)]
+        struct Cases { cases: Vec<Case> }
+        #[derive(serde::Deserialize)]
+        struct Case { name: String, page: CasePage, size: TargetSize, orientation: ResizeOrientation, placement: ResizePlacement, expected: Option<Expected> }
+        #[derive(serde::Deserialize)]
+        struct CasePage { width: f32, height: f32, #[serde(default)] rotate: i64 }
+        #[derive(serde::Deserialize)]
+        struct Sides { width: f32, height: f32 }
+        #[derive(serde::Deserialize)]
+        struct Offset { x: f32, y: f32 }
+        #[derive(serde::Deserialize)]
+        struct Expected { target: Sides, scale: f32, offset: Offset, cut: Sides }
+        // The same cases the preview's placement is tested against, so the preview and the resized file agree.
+        let cases: Cases = serde_json::from_str(include_str!("../../../../shared/resize-placement-cases.json")).unwrap();
+        let output_dir = temp_path("resize-shared-cases-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        for (index, case) in cases.cases.iter().enumerate() {
+            let name = &case.name;
+            // Case pages are as displayed; a quarter-turned page stores its sides swapped.
+            let quarter_turn = case.page.rotate % 180 == 90;
+            let (width, height) = if quarter_turn { (case.page.height, case.page.width) } else { (case.page.width, case.page.height) };
+            let source = temp_path(&format!("resize-shared-case-{index}.pdf"));
+            make_boxed_pdf(&source, [0.0, 0.0, width, height], None, (case.page.rotate != 0).then_some(case.page.rotate));
+            let outcome = resize_with(&source, &output_dir, case.size.clone(), case.orientation, case.placement)(RangedPageScope::All);
+            let Some(expected) = &case.expected else {
+                assert!(matches!(&outcome.state, crate::kit::contracts::OutcomeState::Skipped { reason } if reason.code == SkipCode::NoEffectiveChange), "{name}: {:?}", outcome.state);
+                let _ = std::fs::remove_file(source);
+                continue;
+            };
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            let after = Document::load(&outcome.output_paths()[0]).unwrap();
+            let page = only_page(&after);
+            let media = page_box(&after, page, b"MediaBox");
+            let (shown_width, shown_height) = if quarter_turn { (media[3], media[2]) } else { (media[2], media[3]) };
+            assert_near(shown_width, expected.target.width, &format!("{name}: target width"));
+            assert_near(shown_height, expected.target.height, &format!("{name}: target height"));
+            let ([scale, e, f], _) = resize_wrapper(&after, page);
+            assert_near(scale, expected.scale, &format!("{name}: scale"));
+            // The page starts at the origin, so the translation is the gap to the new page's left and bottom edges.
+            // Centring makes those the displayed left and top gaps, swapped by a quarter turn.
+            let (left, top) = if quarter_turn { (f, e) } else { (e, f) };
+            assert_near(left, expected.offset.x, &format!("{name}: left"));
+            assert_near(top, expected.offset.y, &format!("{name}: top"));
+            assert_near((-2.0 * left).max(0.0), expected.cut.width, &format!("{name}: cut from the sides"));
+            assert_near((-2.0 * top).max(0.0), expected.cut.height, &format!("{name}: cut from the top and bottom"));
+            let _ = std::fs::remove_file(source);
+        }
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
     fn resize_paper_table_is_the_shared_one_the_ui_reads() {
         let table = paper_sizes();
         assert_eq!(table.tolerance_points, 1.5);

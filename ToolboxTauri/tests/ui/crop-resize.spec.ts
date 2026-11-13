@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { openToolBySearch } from "./open-tool";
 
 type Outcome = { inputPath: string; outputPaths: string[]; detail: string; state: string; failure: unknown; reason: unknown; warnings: unknown[] };
@@ -843,4 +844,124 @@ test("actual size warns how many pages in scope are larger than the new page, an
 
     await placementRadio(page, /^Scale to fit, centered/).click();
     await expect(warning).toHaveCount(0);
+});
+
+type PlacementCase = { name: string; expected: { target: { width: number; height: number }; scale: number; offset: { x: number; y: number } } | null };
+const placementCases: PlacementCase[] = JSON.parse(readFileSync(new URL("../../shared/resize-placement-cases.json", import.meta.url), "utf8")).cases;
+const resizeStage = (page: Page) => page.getByTestId("resize-stage");
+const pageSize = (page: Page) => panel(page).getByLabel("Page size");
+const sizeUnit = (page: Page) => panel(page).getByRole("region", { name: "Custom size" }).getByLabel("Unit");
+
+/** The big preview puts the page where the native resize does, as the shared cases record it. */
+const expectPlaced = async (page: Page, caseName: string) => {
+    const { expected } = placementCases.find(({ name }) => name === caseName)!;
+    if (!expected) throw new Error(`${caseName} has no placement`);
+    await expect(resizeStage(page)).toHaveAttribute("data-target", `${expected.target.width.toFixed(2)} x ${expected.target.height.toFixed(2)}`);
+    await expect(resizeStage(page)).toHaveAttribute("data-scale", expected.scale.toFixed(4));
+    await expect(resizeStage(page)).toHaveAttribute("data-offset", `${expected.offset.x.toFixed(2)} ${expected.offset.y.toFixed(2)}`);
+};
+
+test("the Resize preview shows the page on its new paper and follows every option without running", async ({ page }) => {
+    await withScenes(page, { "/local/letter.pdf": [LETTER, LETTER_TURNED], "/local/a4.pdf": [A4], "/local/receipt.pdf": [SMALL] });
+    await openCrop(page);
+    await addPdfs(page, ["/local/letter.pdf", "/local/a4.pdf", "/local/receipt.pdf"]);
+    await useResize(page);
+
+    // Scale to fit on A4: the Letter page is scaled and centred, exactly where the native resize puts it.
+    await expect(caption(page)).toHaveText("Letter, 216 × 279 mm on A4, 210 × 297 mm. Scaled to 97%.");
+    await expectPlaced(page, "Letter page fits on A4");
+    await expect(resizeStage(page)).toHaveAttribute("aria-label", "Letter page scaled to fit an A4 page, centered.");
+    await expect(resizeStage(page).getByTestId("resize-cut")).toHaveCount(0);
+    await expect(preview(page).getByRole("button", { name: "Undo" })).toHaveCount(0);
+    const minis = preview(page).getByTestId("crop-mini");
+    await expect(minis).toHaveCount(3);
+    await expect(minis.nth(0)).toContainText("letter.pdf, page 2");
+    await expect(minis.nth(0)).toContainText("Letter, landscape. Stays landscape. Scaled to 97%");
+    await expect(minis.nth(1)).toContainText("a4.pdf");
+    await expect(minis.nth(1)).toContainText("Already A4. Unchanged.");
+    await expect(minis.nth(2)).toContainText("receipt.pdf");
+    await expect(minis.nth(2)).toContainText("58 × 120 mm. Scaled up to 248%");
+    await expect(preview(page)).toContainText("Each page keeps its orientation and is scaled to fit, so nothing is cut off.");
+
+    // The other pages land where the shared cases say.
+    await preview(page).getByRole("button", { name: "Next page in range" }).click();
+    await expect(caption(page)).toHaveText("Letter, landscape, 279 × 216 mm on A4, landscape, 297 × 210 mm. Scaled to 97%.");
+    await expectPlaced(page, "Landscape Letter page fits on landscape A4");
+    await preview(page).getByLabel("PDF to preview").selectOption({ label: "receipt.pdf" });
+    await expect(caption(page)).toHaveText("58 × 120 mm on A4, 210 × 297 mm. Scaled up to 248%.");
+    await expectPlaced(page, "Small receipt is scaled up to A4");
+    await preview(page).getByLabel("PDF to preview").selectOption({ label: "a4.pdf" });
+    await expect(caption(page)).toHaveText("A4, 210 × 297 mm. Already A4. Unchanged.");
+    await expect(resizeStage(page)).not.toHaveAttribute("data-target");
+    await expect(resizeStage(page)).toHaveAttribute("aria-label", "Page 1, A4, unchanged.");
+
+    // Orientation and preset change the preview at once.
+    await orientationRadio(page, "Landscape").click();
+    await expect(caption(page)).toHaveText("A4, 210 × 297 mm on A4, landscape, 297 × 210 mm. Scaled to 71%.");
+    await expectPlaced(page, "A4 page forced onto landscape A4");
+    await expect(preview(page)).toContainText("Every page gets landscape paper and is scaled to fit, so nothing is cut off.");
+    await orientationRadio(page, "Match page").click();
+    await pageSize(page).selectOption("letter");
+    await expect(caption(page)).toHaveText("A4, 210 × 297 mm on Letter, 216 × 279 mm. Scaled to 94%.");
+    await pageSize(page).selectOption("a4");
+    await preview(page).getByLabel("PDF to preview").selectOption({ label: "letter.pdf" });
+
+    // Actual size: the page keeps its scale and what falls outside the new page is hatched and named.
+    await placementRadio(page, /^Actual size, centered/).click();
+    await expect(caption(page)).toHaveText("Letter, 216 × 279 mm on A4, 210 × 297 mm. 6 mm is cut off the sides.");
+    await expect(caption(page)).toHaveClass(/workspace-note-warning/);
+    await expect(resizeStage(page)).toHaveAttribute("data-scale", "1.0000");
+    await expect(resizeStage(page).getByTestId("resize-cut")).toHaveCount(2);
+    await expect(resizeStage(page)).toHaveAttribute("aria-label", "Letter page placed at actual size on an A4 page. Hatched areas are cut off.");
+    await expect(minis.nth(0)).toContainText("Content cut off");
+    await expect(minis.nth(1)).toContainText("Already A4. Unchanged.");
+    await expect(minis.nth(2)).toContainText("58 × 120 mm. Fits. Nothing is cut off.");
+    await expect(preview(page)).toContainText("Hatched areas are outside the new page and will be cut off.");
+
+    // A custom size, in the chosen unit; an unreadable size shows the page unchanged.
+    await useCustomSize(page);
+    await expect(caption(page)).toHaveText("Letter, 216 × 279 mm on 200 × 250 mm. 16 mm is cut off the sides and 29 mm off the top and bottom.");
+    await expectPlaced(page, "Letter page at actual size on a smaller custom page is cut on every side");
+    await expect(resizeStage(page).getByTestId("resize-cut")).toHaveCount(4);
+    await sizeUnit(page).selectOption("in");
+    await expect(caption(page)).toHaveText("Fix the page size to see the result.");
+    await expect(caption(page)).toHaveClass(/workspace-note-error/);
+    await expect(resizeStage(page)).not.toHaveAttribute("data-target");
+    await expect(resizeStage(page)).toHaveAttribute("aria-label", "Page 1, Letter, unchanged.");
+    await sizeField(page, "Width").fill("8");
+    await sizeField(page, "Height").fill("10");
+    await expect(caption(page)).toHaveText("Letter, 8.5 × 11 in on 8 × 10 in. 0.5 in is cut off the sides and 1 in off the top and bottom.");
+    await sizeField(page, "Width").fill("9");
+    await sizeField(page, "Height").fill("12");
+    await expect(caption(page)).toHaveText("Letter, 8.5 × 11 in on 9 × 12 in. Fits. Nothing is cut off.");
+    await expect(resizeStage(page).getByTestId("resize-cut")).toHaveCount(0);
+    await placementRadio(page, /^Scale to fit, centered/).click();
+    await expect(caption(page)).toHaveText("Letter, 8.5 × 11 in on 9 × 12 in. Scaled up to 106%.");
+
+    expect(await resizeRequests(page)).toHaveLength(0);
+});
+
+test("a PDF whose pages in scope already have the new size is marked to be skipped", async ({ page }) => {
+    await withScenes(page, { "/local/a4.pdf": [A4, LETTER], "/local/letter.pdf": [LETTER] });
+    await openCrop(page);
+    await addPdfs(page, ["/local/a4.pdf", "/local/letter.pdf"]);
+    await useResize(page);
+    const noted = page.locator("li").filter({ has: page.getByTestId("resize-file-note") });
+    await expect(noted).toHaveCount(0);
+
+    await pagesField(page).fill("1");
+    await expect(noted).toHaveCount(1);
+    await expect(noted).toContainText("a4.pdf");
+    await expect(noted.getByTestId("resize-file-note")).toHaveText("Already A4. Will be skipped.");
+
+    await pageSize(page).selectOption("letter");
+    await expect(noted).toHaveCount(1);
+    await expect(noted).toContainText("letter.pdf");
+    await expect(noted.getByTestId("resize-file-note")).toHaveText("Already Letter. Will be skipped.");
+
+    await pagesField(page).fill("");
+    await expect(noted).toHaveCount(1);
+    await expect(noted).toContainText("letter.pdf");
+    await page.getByRole("radiogroup", { name: "Mode" }).getByRole("radio", { name: "Crop pages" }).click();
+    await expect(page.getByTestId("resize-file-note")).toHaveCount(0);
 });

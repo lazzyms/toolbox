@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { ToolScaffold, type RunHandler } from "../components/ToolScaffold";
@@ -15,10 +15,10 @@ import { ShortcutHint } from "../components/ShortcutHint";
 import { parsePageRanges } from "../shared/pageRanges";
 import { shortcutTarget } from "../shortcuts";
 import { capabilityFor } from "../registry/capabilities";
-import { CropPreview, usePageSizes, type CropTarget } from "../features/pdf-crop/CropPreview";
+import { CropPreview, ResizePreview, usePageSizes, type CropTarget, type PageSizes, type ResizeTarget } from "../features/pdf-crop/CropPreview";
 import {
-  DEFAULT_RECT, cutsOff, describePage, fieldLength, papers, pointsPerUnit, readPaperSide, rectIssues, sameRect,
-  type Margins, type Orientation, type PageSize, type Rect, type RectField, type Unit,
+  DEFAULT_RECT, cutsOff, describePage, fieldLength, papers, placePage, pointsPerUnit, readPaperSide, rectIssues, sameRect, showSize,
+  type Margins, type Orientation, type PageSize, type Placement, type Rect, type RectField, type Unit,
 } from "../features/pdf-crop/geometry";
 
 type Mode = "crop" | "resize";
@@ -43,7 +43,6 @@ const CUSTOM = "custom";
 const SIZE_ERROR_ID = "size-err";
 const SIZE_FIX_REASON = "Fix the page size to resize.";
 
-type Placement = "fit" | "actualSize";
 type PaperSide = "width" | "height";
 type TargetSize = { preset: string } | { custom: { width: number; height: number } };
 
@@ -52,13 +51,15 @@ const paperSides: ReadonlyArray<{ key: PaperSide; label: string }> = [
   { key: "height", label: "Height" },
 ];
 
-type SizeCheck = { size: TargetSize; paper: PageSize; errors: [] } | { size: null; paper: null; errors: Array<{ side: PaperSide; message: string }> };
+type SizeCheck =
+  | { size: TargetSize; paper: PageSize; name: string; errors: [] }
+  | { size: null; paper: null; name: null; errors: Array<{ side: PaperSide; message: string }> };
 
 /** The size to send for the chosen preset or typed custom size, converted to points once, or why it can't be used. */
 const checkSize = (paper: string, custom: Record<PaperSide, string>, unit: Unit): SizeCheck => {
   if (paper !== CUSTOM) {
     const preset = papers.find(({ id }) => id === paper)!;
-    return { size: { preset: paper }, paper: preset, errors: [] };
+    return { size: { preset: paper }, paper: preset, name: preset.name, errors: [] };
   }
   const errors: Array<{ side: PaperSide; message: string }> = [];
   const points = {} as Record<PaperSide, number>;
@@ -67,7 +68,9 @@ const checkSize = (paper: string, custom: Record<PaperSide, string>, unit: Unit)
     if ("error" in read) errors.push({ side: key, message: read.error });
     else points[key] = read.points;
   }
-  return errors.length ? { size: null, paper: null, errors } : { size: { custom: points }, paper: points, errors: [] };
+  return errors.length
+    ? { size: null, paper: null, name: null, errors }
+    : { size: { custom: points }, paper: points, name: showSize(points, unit), errors: [] };
 };
 
 /** Pages a typed scope covers in a PDF of this many pages, clamped to it; null when the scope can't be read. */
@@ -81,6 +84,10 @@ const pagesInScope = (text: string, pageCount: number): number[] | null => {
   }
   return [...covered];
 };
+
+/** The pages in scope Resize places on the new paper and those already that paper, for one PDF. */
+const resizePlan = (pages: readonly PageSize[], scopeText: string, paper: PageSize, orientation: Orientation, placement: Placement) =>
+  (pagesInScope(scopeText, pages.length) ?? []).map((index) => placePage(pages[index], paper, orientation, placement));
 
 const rectFields: ReadonlyArray<{ key: RectField; label: string; axis: "width" | "height" }> = [
   { key: "left", label: "Left", axis: "width" },
@@ -218,6 +225,12 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
   const [customSize, setCustomSize] = useState<Record<PaperSide, string>>({ width: "200", height: "250" });
   const [orientation, setOrientation] = useState<Orientation>("match");
   const [placement, setPlacement] = useState<Placement>("fit");
+  const [files, setFiles] = useState<readonly string[]>([]);
+  const sizes = usePageSizes(files);
+  const trackFiles = useCallback((paths: readonly string[]) => {
+    setFiles(paths);
+    onFilesChange?.(paths);
+  }, [onFilesChange]);
   // Resize runs its own command, so its rows, running label and output names come from resize_pdf.
   const resizeUtility = useMemo<ToolDefinition>(() => ({
     ...utility, command: "resize_pdf", capability: capabilityFor("resize_pdf"), resultVerb: "Resized", runningVerb: "Resizing",
@@ -256,7 +269,15 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
       sessionKey="pdf-crop"
       utility={mode === "resize" ? resizeUtility : utility}
       initialPaths={initialPaths}
-      onFilesChange={onFilesChange}
+      onFilesChange={trackFiles}
+      renderFileExtra={(path) => {
+        // A PDF whose pages in scope are all already the new paper is skipped, as the native resize does.
+        const pages = sizes.get(path);
+        if (mode !== "resize" || !sizeCheck.paper || !Array.isArray(pages)) return null;
+        const plan = resizePlan(pages, pagesText, sizeCheck.paper, orientation, placement);
+        if (!plan.length || plan.some((page) => page !== null)) return null;
+        return <span className="file-selection-note" data-testid="resize-file-note">Already {sizeCheck.name}. Will be skipped.</span>;
+      }}
       onRun={mode === "resize"
         ? sizeCheck.size && "scope" in pages
           ? resizeWith(sizeCheck.size, orientation, placement, pages.scope)
@@ -267,6 +288,7 @@ export const CropResizeView = ({ utility, initialPaths, onFilesChange, onSelectT
         <CropWorkspace
           {...props}
           utility={utility}
+          sizes={sizes}
           mode={mode}
           onModeChange={setMode}
           cropBy={cropBy}
@@ -394,10 +416,11 @@ type RectangleControls = {
 
 /** The preview and options for the files in the scaffold; owns what depends on the loaded PDFs. */
 const CropWorkspace = ({
-  files, run, loading, destination, selectedFileIndex, selectFile, utility, mode, onModeChange, cropBy, onCropByChange, unit, onUnitChange, spec, fixReason,
+  files, run, loading, destination, selectedFileIndex, selectFile, utility, sizes, mode, onModeChange, cropBy, onCropByChange, unit, onUnitChange, spec, fixReason,
   resize, pages: pageScope, onSelectTool, rectangle, margins, marginsTarget,
 }: ScaffoldProps & {
   utility: ToolDefinition;
+  sizes: PageSizes;
   mode: Mode;
   onModeChange: (mode: Mode) => void;
   cropBy: CropBy;
@@ -413,7 +436,6 @@ const CropWorkspace = ({
   margins: React.ReactNode;
   marginsTarget: CropTarget | null;
 }) => {
-  const sizes = usePageSizes(files);
   const path = files[selectedFileIndex];
   const [shownPage, setShownPage] = useState<{ path: string | undefined; index: number }>({ path, index: 0 });
   const pages = path === undefined ? undefined : sizes.get(path);
@@ -440,10 +462,12 @@ const CropWorkspace = ({
     ? files.reduce((count, file) => {
       const filePages = sizes.get(file);
       if (!Array.isArray(filePages)) return count;
-      const scoped = pagesInScope(pageScope.text, filePages.length) ?? [];
-      return count + scoped.filter((index) => cutsOff(filePages[index], resizePaper, resize.orientation)).length;
+      return count + resizePlan(filePages, pageScope.text, resizePaper, resize.orientation, resize.placement).filter(cutsOff).length;
     }, 0)
     : 0;
+  const resizeTarget: ResizeTarget | null = resize.check.paper
+    ? { paper: resize.check.paper, name: resize.check.name, orientation: resize.orientation, placement: resize.placement }
+    : null;
   const target: CropTarget | null = byRectangle ? (rectangle.errors.length ? null : { rect }) : marginsTarget;
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -471,6 +495,18 @@ const CropWorkspace = ({
           history={byRectangle ? { canUndo: rectangle.canUndo, canReset: rectangle.canReset, onUndo: rectangle.undo, onReset: rectangle.reset } : null}
           onRect={rectangle.show}
           onRecord={rectangle.record}
+        />
+      )}
+      {mode === "resize" && files.length > 0 && (
+        <ResizePreview
+          files={files}
+          selectedFileIndex={selectedFileIndex}
+          selectFile={selectFile}
+          sizes={sizes}
+          pageIndex={pageIndex}
+          onPageChange={(index) => setShownPage({ path: files[selectedFileIndex], index })}
+          target={resizeTarget}
+          unit={unit}
         />
       )}
       <Card className="workspace-control-panel py-0">

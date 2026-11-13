@@ -109,7 +109,7 @@ export type Paper = { id: string; name: string; width: number; height: number };
 export const papers: ReadonlyArray<Paper> = paperSizes.sizes;
 
 /** A page within this many points of a paper on both sides already is that paper. */
-const PAPER_TOLERANCE = paperSizes.tolerancePoints;
+export const PAPER_TOLERANCE = paperSizes.tolerancePoints;
 
 /** "A4", "Letter, landscape", or null for a size without a common name. */
 export const paperName = (page: PageSize): string | null => {
@@ -174,8 +174,37 @@ export const orientedPaper = (paper: PageSize, page: PageSize, orientation: Orie
   return (page.width > page.height) !== (paper.width > paper.height) ? { width: paper.height, height: paper.width } : paper;
 };
 
-/** Whether placing a page at actual size on the paper cuts off some of it: the page is larger on either side. */
-export const cutsOff = (page: PageSize, paper: PageSize, orientation: Orientation) => {
-  const target = orientedPaper(paper, page, orientation);
-  return page.width - target.width > PAPER_TOLERANCE || page.height - target.height > PAPER_TOLERANCE;
+export type Placement = "fit" | "actualSize";
+
+/** Where one page lands on the new paper, as displayed, in points. Mirrors the native resize placement exactly. */
+export type PagePlacement = {
+  /** The new page: the paper turned by the orientation rule. */
+  target: PageSize;
+  /** Uniform scale of the old page: the smaller ratio to fit, 1 at actual size. */
+  scale: number;
+  /** The scaled old page's top-left corner on the new page; negative where it runs past an edge. */
+  offset: { x: number; y: number };
+  /** How much of the scaled old page lies outside the new page, across both edges of each axis. */
+  cut: PageSize;
 };
+
+/**
+ * The new page for a page as displayed, or null when it is already that paper within the shared tolerance and
+ * the native resize leaves it unchanged. The old page is scaled uniformly and centred on the new one.
+ */
+export const placePage = (page: PageSize, paper: PageSize, orientation: Orientation, placement: Placement): PagePlacement | null => {
+  const target = orientedPaper(paper, page, orientation);
+  if (Math.abs(page.width - target.width) <= PAPER_TOLERANCE && Math.abs(page.height - target.height) <= PAPER_TOLERANCE) return null;
+  const scale = placement === "fit" ? Math.min(target.width / page.width, target.height / page.height) : 1;
+  const [width, height] = [page.width * scale, page.height * scale];
+  return {
+    target,
+    scale,
+    offset: { x: (target.width - width) / 2, y: (target.height - height) / 2 },
+    cut: { width: Math.max(0, width - target.width), height: Math.max(0, height - target.height) },
+  };
+};
+
+/** Whether a placement cuts off more of the page than the shared tolerance. */
+export const cutsOff = (placement: PagePlacement | null) =>
+  placement !== null && (placement.cut.width > PAPER_TOLERANCE || placement.cut.height > PAPER_TOLERANCE);
