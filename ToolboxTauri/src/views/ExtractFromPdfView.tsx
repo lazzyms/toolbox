@@ -19,14 +19,14 @@ const MIN_IMAGE_SIZE = { initial: 64, min: 1, max: 2000 };
 
 const modeHints: Record<ExtractMode, string> = {
   text: "One text file for each PDF, in reading order.",
-  images: "The embedded images of each PDF, saved next to it.",
-  both: "A text file and the embedded images of each PDF.",
+  images: "One folder of images for each PDF.",
+  both: "A text file and a folder of images for each PDF.",
 };
 
 const exampleHints: Record<ExtractMode, string> = {
   text: "UTF-8 text, a page break between pages. An existing name gets -1, -2 and so on.",
-  images: "JPEG images are copied as they are. An existing name gets -1, -2 and so on.",
-  both: "An existing file is never replaced: the new one gets -1, -2 and so on.",
+  images: "JPEG images are copied as they are. An existing folder is never reused: the new one gets -1, -2 and so on.",
+  both: "An existing file or folder is never replaced: the new one gets -1, -2 and so on.",
 };
 
 // The same range applies to every PDF, so only its syntax can be checked before the run.
@@ -70,7 +70,7 @@ export const ExtractFromPdfView = ({ utility, initialPaths = [], onFilesChange }
       utility={utility}
       initialPaths={initialPaths}
       onFilesChange={onFilesChange}
-      exampleName={mode === "images" ? (path) => exampleOutputName(path, utility.command, "-image-1-0", "jpg") : undefined}
+      exampleName={mode === "images" ? (path) => exampleOutputName(path, utility.command, "-images", "") : undefined}
       onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>("extract_from_pdf", {
         runId,
         request: {
