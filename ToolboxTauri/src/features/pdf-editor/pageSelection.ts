@@ -59,11 +59,14 @@ export const selectionCountLabel = (count: number) => (count === 0 ? "No pages s
 
 const orientationWords: Record<number, string> = { 90: "rotated 90° right", 180: "rotated 180°", 270: "rotated 90° left" };
 
-export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIndex" | "rotation">, selected: boolean) => {
+const previewWords = { loading: "preview loading", failed: "preview unavailable" } as const;
+
+export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIndex" | "rotation">, selected: boolean, preview?: keyof typeof previewWords) => {
   const parts = [`Position ${position}`];
   if (page.sourceIndex !== null) parts.push(`original page ${page.sourceIndex + 1}`);
   const orientation = orientationWords[((page.rotation % 360) + 360) % 360];
   if (orientation) parts.push(orientation);
+  if (preview) parts.push(previewWords[preview]);
   if (selected) parts.push("selected");
   return parts.join(", ");
 };
