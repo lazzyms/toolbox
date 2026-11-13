@@ -792,31 +792,35 @@ test("Compress defaults to Medium, describes each strength and sends the paths i
 });
 
 for (const theme of ["light", "dark"] as const) {
-    test(`Compress explains what each strength does to PDFs, JPEGs and PNGs and sends that strength in the ${theme} theme`, async ({ page }) => {
+    test(`Compress names the formats it takes and explains what each strength does to PDFs, JPEGs, PNGs and WebPs in the ${theme} theme`, async ({ page }) => {
         await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
         await page.goto("/");
         await openFromHome(page, "Compress");
         await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await expect(page.getByRole("heading", { level: 1, name: "Compress Files" })).toBeVisible();
+        await expect(page.locator(".tool-workspace-header")).toContainText("Make PDFs and images smaller. Originals are never changed.");
+        await expect(page.locator(".workspace-source-copy")).toContainText("PDF, JPEG, PNG and WebP. Mix them in one batch.");
         const strength = page.getByRole("radiogroup", { name: "Strength" });
-        const paths = ["/local/scan.pdf", "/local/IMG_4012.jpg", "/local/IMG_4031.jpeg", "/local/floor-plan.png"];
+        const paths = ["/local/scan.pdf", "/local/IMG_4012.jpg", "/local/IMG_4031.jpeg", "/local/floor-plan.png", "/local/hero-banner.webp"];
         await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
         await page.getByRole("button", { name: "Choose files to process" }).click();
-        await expect(page.locator(".file-selection-count")).toHaveText("4 files");
+        await expect(page.locator(".file-selection-count")).toHaveText("5 files");
+        await expect(page.locator(".workspace-source-copy")).not.toContainText("Mix them in one batch.");
 
         const expected = [
-            { level: "low", name: "Low", pdf: "Repacked without loss. Images untouched.", jpeg: "Re-saved at high quality.", png: "Lossless. Pixels unchanged." },
-            { level: "medium", name: "Medium", pdf: "Images inside recompressed and scaled down.", jpeg: "Re-saved at medium quality.", png: "Lossless. Pixels unchanged." },
-            { level: "high", name: "High", pdf: "Images at lower quality and resolution.", jpeg: "Re-saved at low quality.", png: "Cut to 256 colours, dithered." },
+            { level: "low", name: "Low", pdf: "Repacked without loss. Images untouched.", jpeg: "Re-saved at high quality.", png: "Lossless. Pixels unchanged.", webp: "Lossless stays lossless. Lossy at high quality." },
+            { level: "medium", name: "Medium", pdf: "Images inside recompressed and scaled down.", jpeg: "Re-saved at medium quality.", png: "Lossless. Pixels unchanged.", webp: "Lossless stays lossless. Lossy at medium quality." },
+            { level: "high", name: "High", pdf: "Images at lower quality and resolution.", jpeg: "Re-saved at low quality.", png: "Cut to 256 colours, dithered.", webp: "All become lossy, at low quality." },
         ] as const;
-        for (const [index, { name, pdf, jpeg, png }] of expected.entries()) {
+        for (const [index, { name, pdf, jpeg, png, webp }] of expected.entries()) {
             await strength.getByRole("radio", { name: new RegExp(`^${name}`) }).click();
             await expect(page.getByText(`What ${name} does`, { exact: true })).toBeVisible();
-            await expect(page.getByRole("term")).toHaveText(["PDF", "JPEG", "PNG"]);
-            await expect(page.getByRole("definition")).toHaveText([pdf, jpeg, png]);
-            await page.getByRole("button", { name: "Compress 4 files", exact: true }).click();
+            await expect(page.getByRole("term")).toHaveText(["PDF", "JPEG", "PNG", "WebP"]);
+            await expect(page.getByRole("definition")).toHaveText([pdf, jpeg, png, webp]);
+            await page.getByRole("button", { name: "Compress 5 files", exact: true }).click();
             await expect.poll(() => invocationCount(page, "compress_files")).toBe(index + 1);
         }
-        await expect(page.getByRole("definition").last()).toContainText("256 colours");
+        await expect(page.getByRole("definition").nth(2)).toContainText("256 colours");
 
         const levels = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
             .filter(({ command }) => command === "compress_files")
@@ -2331,6 +2335,61 @@ for (const theme of ["light", "dark"] as const) {
         await expect(rows.nth(0)).toContainText("1.8 MB → 600 KB, 67% smaller");
         await expect(rows.nth(0).getByRole("button", { name: "Open floor-plan-compressed.png" })).toBeVisible();
         await expect(resultSummaryStatus(page).locator("strong")).toHaveText("Done. 2 compressed, 1 failed");
+    });
+}
+
+for (const theme of ["light", "dark"] as const) {
+    test(`Compress shows compressed, skipped and animated WebPs on their own rows in a mixed batch in the ${theme} theme`, async ({ page }) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        const paths = ["/local/brochure.pdf", "/local/hero-banner.webp", "/local/IMG_4012.jpg", "/local/icon-set.webp", "/local/loading-spinner.webp", "/local/floor-plan.png"];
+        const animated = "Animated WebP isn't supported. Only still images can be compressed.";
+        await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+            succeeded(paths[0], ["/local/brochure-compressed.pdf"], { detail: "PDF repacked without loss", originalBytes: 2_400_000, outputBytes: 1_200_000 }),
+            succeeded(paths[1], ["/local/hero-banner-compressed.webp"], { detail: "Lossy at quality 75. EXIF and colour profile kept.", originalBytes: 640_000, outputBytes: 410_000 }),
+            succeeded(paths[2], ["/local/IMG_4012-compressed.jpg"], { detail: "Re-saved at quality 75. EXIF and colour profile kept.", originalBytes: 3_200_000, outputBytes: 1_600_000 }),
+            {
+                inputPath: paths[3],
+                outputPaths: [],
+                detail: "",
+                state: "skipped",
+                failure: null,
+                reason: { code: "noSavings", message: "No savings: already well compressed", pointer: null },
+                warnings: [],
+                originalBytes: 48_000,
+                outputBytes: 51_000,
+            },
+            failed(paths[4], "invalidInput", animated),
+            succeeded(paths[5], ["/local/floor-plan-compressed.png"], { detail: "Lossless, pixels unchanged. EXIF and colour profile kept.", originalBytes: 900_000, outputBytes: 700_000 }),
+        ] satisfies MockOutcome[]);
+        await openFromHome(page, "Compress");
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await page.getByRole("button", { name: "Compress 6 files", exact: true }).click();
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveText([/^brochure\.pdf/, /^hero-banner\.webp/, /^IMG_4012\.jpg/, /^icon-set\.webp/, /^loading-spinner\.webp/, /^floor-plan\.png/]);
+        const compressed = rows.nth(1);
+        await expect(compressed).toContainText("640 KB → 410 KB, 36% smaller");
+        await expect(compressed).toContainText("hero-banner-compressed.webp");
+        await expect(compressed.getByRole("button", { name: "Open hero-banner-compressed.webp" })).toBeVisible();
+
+        const skipped = rows.nth(3);
+        await expect(skipped).toContainText("Skipped");
+        await expect(skipped).toContainText("48 KB → 51 KB, no savings");
+        await expect(skipped).toContainText("No savings: already well compressed");
+        await expect(skipped.getByRole("button")).toHaveCount(0);
+
+        const refused = rows.nth(4);
+        await expect(refused).toContainText("Failed");
+        await expect(refused).toContainText(animated);
+        await expect(refused).not.toContainText("→");
+        await expect(refused.getByRole("button")).toHaveCount(0);
+        for (const index of [0, 1, 2, 3, 5]) {
+            await expect(rows.nth(index)).not.toContainText(animated);
+        }
+        await expect(resultSummaryStatus(page).locator("strong")).toHaveText("Done. 4 compressed, 1 skipped, 1 failed");
     });
 }
 

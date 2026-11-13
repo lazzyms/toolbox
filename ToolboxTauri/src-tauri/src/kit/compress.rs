@@ -6,6 +6,7 @@ use crate::kit::common::{JobOutcome, OutputLocation};
 use crate::kit::contracts::ToolError;
 use crate::kit::images;
 use crate::kit::images::compress::png::PngMethod;
+use crate::kit::images::compress::webp::WebpMethod;
 use crate::kit::pdf::{recompress, remaining};
 
 /// How hard Compress Files works. Low keeps the most detail and High saves the most space.
@@ -56,6 +57,18 @@ impl CompressLevel {
             CompressLevel::High => PngMethod::Palette { effort: 4 },
         }
     }
+
+    /// How WebPs are re-saved: a lossless WebP stays lossless at Low and Medium, Medium also trying
+    /// libwebp's slowest preset and keeping the smaller, and becomes lossy at High. Lossy WebPs, and lossless ones at High, are re-encoded at
+    /// the same qualities as JPEGs.
+    pub fn webp_method(self) -> WebpMethod {
+        let lossless_levels: &[u8] = match self {
+            CompressLevel::Low => &[6],
+            CompressLevel::Medium => &[6, 9],
+            CompressLevel::High => &[],
+        };
+        WebpMethod { lossless_levels, quality: self.jpeg_quality() }
+    }
 }
 
 pub const NO_SAVINGS: &str = "No savings: already well compressed";
@@ -64,13 +77,15 @@ pub const NOT_COMPRESSIBLE: &str = "Not a PDF or image. Compress takes PDF, JPEG
 /// Compresses one file by its type. Every PDF is repacked without loss; at Medium and High its
 /// photographs are also recompressed and downsampled first. JPEGs are re-saved at the level's
 /// quality and stay JPEG. PNGs stay PNG: repacked without loss at Low and Medium, cut to 256
-/// colours at High. Strip EXIF applies to images only.
+/// colours at High. WebPs stay WebP: lossless ones stay lossless at Low and Medium, and lossy ones
+/// are re-encoded at the level's quality. Strip EXIF applies to images only.
 pub fn compress_file(request: &CompressFilesRequest, input: PathBuf) -> JobOutcome {
     let extension = input.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase);
     match extension.as_deref() {
         Some("pdf") => remaining::compress_pdf(input, &request.output_location, request.level.pdf_images()),
         Some("jpg" | "jpeg") => images::compress::compress_jpeg(input, &request.output_location, request.level.jpeg_quality(), request.strip_exif),
         Some("png") => images::compress::png::compress_png(input, &request.output_location, request.level.png_method(), request.strip_exif),
+        Some("webp") => images::compress::webp::compress_webp(input, &request.output_location, request.level.webp_method(), request.strip_exif),
         _ => JobOutcome::failure(input, ToolError::invalid_input(NOT_COMPRESSIBLE)),
     }
 }

@@ -98,6 +98,8 @@ interface ToolScaffoldProps {
     fileWarning?: (path: string) => string | null;
     retryWithPassword?: (inputPath: string, password: string) => RunHandler;
     intakeCopy?: IntakeCopy;
+    /** What the workspace source bar says before any file is open, such as the formats it takes. */
+    emptyHint?: string;
     initialPaths?: readonly string[];
     fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
     onActivationAccepted?: (activationId: string) => void;
@@ -149,7 +151,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -814,7 +816,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             <div className="workspace-source-copy">
                 <span className="workspace-source-kicker">Source</span>
                 <strong>{entries.length ? `${entries.length} ${entries.length === 1 ? 'file' : 'files'} open` : 'Open a file to begin'}</strong>
-                <span>{entries.length ? renderReport ? 'Nothing is changed or saved. Your original stays unchanged.' : 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
+                <span>{entries.length ? renderReport ? 'Nothing is changed or saved. Your original stays unchanged.' : 'Export saves a new copy. Your original stays unchanged.' : emptyHint}</span>
             </div>
             <div className="workspace-source-actions">
                 <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
