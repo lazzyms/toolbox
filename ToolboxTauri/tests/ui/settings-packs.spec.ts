@@ -13,6 +13,8 @@ type PacksWindow = Window & {
     /** Downloads in the order Install was pressed, held until the test settles them. */
     __downloads: Array<{ packId: string; runId: string; settle: (outcome: Outcome<PackList>) => void }>;
     __progress: (payload: PackProgress) => void;
+    /** Uninstalls in the order Remove was pressed, held until the test settles them. */
+    __uninstalls: Array<{ packId: string; settle: (outcome: Outcome<PackList>) => void }>;
 };
 
 const MB = 1024 * 1024;
@@ -58,6 +60,7 @@ test.beforeEach(async ({ page }) => {
         win.__invocations = [];
         win.__dialog = [];
         win.__downloads = [];
+        win.__uninstalls = [];
         const callbacks = new Map<number, (event: unknown) => void>();
         const listeners = new Map<number, { event: string; handler: number }>();
         let nextId = 1;
@@ -100,6 +103,12 @@ test.beforeEach(async ({ page }) => {
                     const { packId, runId } = args as { packId: string; runId: string };
                     return new Promise((resolve, reject) => {
                         win.__downloads.push({ packId, runId, settle: (outcome) => "error" in outcome ? reject(outcome.error) : resolve(outcome.ok) });
+                    });
+                }
+                if (command === "uninstall_pack") {
+                    const { packId } = args as { packId: string };
+                    return new Promise((resolve, reject) => {
+                        win.__uninstalls.push({ packId, settle: (outcome) => "error" in outcome ? reject(outcome.error) : resolve(outcome.ok) });
                     });
                 }
                 if (command === "cancel_run") {
@@ -156,10 +165,14 @@ test("Packs shows every status with sizes, license, tools, total disk usage and 
 
     await expect(region.getByRole("status").last()).toHaveText("4 installed, 415 MB used.");
 
-    // Only the pack that isn't installed offers an action: updating, repairing and removing arrive later.
-    await expect(list.getByRole("button")).toHaveCount(6);
+    // The pack that isn't installed offers Install and every installed pack offers Remove: updating and repairing arrive later.
+    await expect(list.getByRole("button")).toHaveCount(10);
     await expect(list.getByRole("button", { name: /^Details for / })).toHaveCount(5);
     await expect(rows.notInstalled.getByRole("button", { name: "Install Text recognition, Hindi" })).toBeEnabled();
+    await expect(rows.notInstalled.getByRole("button", { name: /^Remove/ })).toHaveCount(0);
+    for (const [row, name] of [[rows.installed, "More writing systems"], [rows.update, "Text recognition, Gujarati"], [rows.damaged, "Text recognition, French"], [rows.incompatible, "Text recognition, German"]] as const) {
+        await expect(row.getByRole("button", { name: `Remove… ${name}` })).toBeEnabled();
+    }
 
     const details = rows.notInstalled.getByRole("button", { name: "Details for Text recognition, Hindi" });
     await expect(details).toHaveAttribute("aria-expanded", "false");
@@ -490,4 +503,80 @@ test("offline shows the offline note and holds Install until the network returns
     await expect(region.getByRole("button", { name: `Install ${hindi}` })).toBeEnabled();
     await expect(region.getByRole("listitem", { name: `${hindi}, Not installed` })).toBeVisible();
     await expect(region.getByText("You're offline.")).toHaveCount(0);
+});
+
+const writing = "More writing systems";
+const afterRemove: PackList = {
+    ...everyStatus,
+    packs: everyStatus.packs.map((entry) => entry.id === "scripts" ? { ...entry, status: "notInstalled", installedVersion: null, diskBytes: 0 } : entry),
+    installedCount: 3,
+    totalBytes: 319 * MB,
+};
+
+const uninstalls = async (page: Page) => {
+    await expect.poll(() => page.evaluate(() => (window as unknown as PacksWindow).__uninstalls.length)).toBeGreaterThan(0);
+    return page.evaluate(() => (window as unknown as PacksWindow).__uninstalls.map(({ packId }) => packId));
+};
+
+const settleUninstall = (page: Page, index: number, outcome: Outcome<PackList>) =>
+    page.evaluate(({ index, outcome }) => (window as unknown as PacksWindow).__uninstalls[index].settle(outcome), { index, outcome });
+
+test("Remove sends the pack id and the row returns to not installed with updated totals", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    const row = region.getByRole("listitem", { name: `${writing}, Installed, version 1.4` });
+    await row.getByRole("button", { name: `Remove… ${writing}` }).click();
+
+    expect(await uninstalls(page)).toEqual(["scripts"]);
+    expect(await calls(page, "uninstall_pack")).toEqual([{ packId: "scripts" }]);
+    // One removal at a time per pack while the first is still working.
+    await expect(row.getByRole("button", { name: `Remove… ${writing}` })).toBeDisabled();
+
+    await settleUninstall(page, 0, { ok: afterRemove });
+    const removed = region.getByRole("listitem", { name: `${writing}, Not installed` });
+    await expect(removed).toContainText("Used by Edit PDF. 12 MB download.");
+    await expect(removed.getByRole("button", { name: `Install ${writing}` })).toBeEnabled();
+    await expect(removed.getByRole("button", { name: /^Remove/ })).toHaveCount(0);
+    await expect(region.getByRole("status").last()).toHaveText("3 installed, 319 MB used.");
+    await expect(region.getByRole("alert")).toHaveCount(0);
+});
+
+test("a pack in use is not removed: the refusal says why above the list and on its row, and nothing else changes", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: "Remove… Text recognition, French" }).click();
+    expect(await uninstalls(page)).toEqual(["ocr-french"]);
+    await settleUninstall(page, 0, { error: { kind: "inUse", message: "1 run(s) are using ocr-french" } });
+
+    const alerts = region.getByRole("alert");
+    await expect(alerts).toHaveCount(2);
+    await expect(alerts.first()).toHaveText("Text recognition, French wasn't removed. OCR PDF is using it right now. Remove it after the run finishes.");
+    const text = "Can't remove it while OCR PDF is running. Remove it when the run finishes.";
+    const row = region.getByRole("listitem", { name: `Text recognition, French, ${text}` });
+    await expect(row.getByRole("alert")).toHaveText(text);
+    await expect(row.getByRole("alert")).toHaveCSS("color", await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--warning)";
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+    }));
+    await expect(row.getByRole("button", { name: "Remove… Text recognition, French" })).toBeDisabled();
+    // The pack stays installed with its size, and the totals are unchanged.
+    await expect(row).toContainText("Used by OCR PDF. 9 MB on this disk.");
+    await expect(region.getByRole("status").last()).toHaveText("4 installed, 415 MB used.");
+    await expect(region.getByRole("listitem", { name: `${writing}, Installed, version 1.4` }).getByRole("button", { name: `Remove… ${writing}` })).toBeEnabled();
+    expect(await calls(page, "list_packs")).toHaveLength(1);
+});
+
+test("a removal that fails for another reason says so on its row and Remove can be tried again", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Remove… ${writing}` }).click();
+    await uninstalls(page);
+    await settleUninstall(page, 0, { error: { kind: "unavailable", message: "permission denied" } });
+
+    const row = region.getByRole("listitem", { name: `${writing}, Couldn't remove this pack. Try again.` });
+    await expect(row).toContainText("96 MB on this disk.");
+    await expect(region.getByText("wasn't removed.")).toHaveCount(0);
+    await row.getByRole("button", { name: `Remove… ${writing}` }).click();
+    expect(await calls(page, "uninstall_pack")).toEqual([{ packId: "scripts" }, { packId: "scripts" }]);
 });
