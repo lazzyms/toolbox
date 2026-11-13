@@ -549,8 +549,101 @@ body {
 }
 .icon-size-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
+}
+.icon-platforms {
+  display: grid;
+  gap: 4px;
+}
+.icon-platform-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+.icon-platform-summary {
+  justify-self: end;
+  text-align: right;
+}
+.icon-platform-sizes {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0 8px 24px;
+}
+.icon-platform-note {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+.icon-platform-note p {
+  margin: 0;
+}
+.icon-custom-sizes {
+  display: grid;
+  gap: 8px;
+}
+.icon-custom-add {
+  display: flex;
+  gap: 6px;
+}
+.icon-custom-add .icon-custom-input {
+  width: 110px;
+  height: 32px;
+}
+.icon-custom-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.icon-custom-chip {
+  padding-right: 2px;
+}
+/* Each ticked size of one platform, on a checkerboard so padding reads as transparent. */
+.icon-contact {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.icon-contact-sheet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--muted);
+}
+.icon-contact-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.icon-contact-image {
+  overflow: hidden;
+  border-radius: 20%;
+  background: repeating-conic-gradient(var(--muted) 0% 25%, var(--card) 0% 50%) 0 0 / 8px 8px;
+}
+.icon-contact-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.icon-contact-sheet[data-square-rule="crop"] .icon-contact-image img {
+  object-fit: cover;
+}
+.icon-contact-size {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.icon-contact-size.icon-contact-upscaled {
+  color: var(--warning);
 }
 .file-selection-order {
   display: inline-flex;

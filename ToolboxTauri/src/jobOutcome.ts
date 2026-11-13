@@ -88,6 +88,7 @@ const warningDetails: Record<WarningCode, Record<string, DetailParser> | null> =
   jpegColourKept: { colour, pages: counts, images: count },
   pagesWithoutText: { pages: counts },
   transparencyFlattened: null,
+  upscaled: { from: count, to: count },
 };
 
 const byteSizes = (outcome: Json, path: string): { originalBytes?: number; outputBytes?: number } => {

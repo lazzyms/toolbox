@@ -115,6 +115,8 @@ export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: stri
             return warning.details.pages.length === 1
                 ? `${pageList(warning.details.pages)} has no selectable text. OCR can read it.`
                 : `${pageList(warning.details.pages)} have no selectable text. OCR can read them.`;
+        case "upscaled":
+            return `Upscaled to ${warning.details.to} from ${warning.details.from} pixels.`;
         case "transparencyFlattened":
             return "Transparent areas were flattened onto white, because JPEG has none.";
     }
@@ -160,7 +162,7 @@ const isNote = (warning: OutcomeWarning, precisionReducedIsNote = false) =>
 /** Saved-as notes say how a finished file was saved. They show on its row after the detail but leave it done, not warned. */
 const isSavedAs = (warning: OutcomeWarning) => warning.code === "transparencyFlattened";
 
-export const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): RowDetail => ({ text: warningText(warning, signatureRemovedNote), tone: warning.code === "omittedContent" ? "warn" : null });
+export const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): RowDetail => ({ text: warningText(warning, signatureRemovedNote), tone: warning.code === "omittedContent" || warning.code === "upscaled" ? "warn" : null });
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;
