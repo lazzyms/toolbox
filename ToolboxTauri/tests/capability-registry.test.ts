@@ -186,3 +186,27 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     /invalid many-to-one flag/,
   );
 });
+
+const familySamples = JSON.parse(
+  readFileSync(new URL("../shared/capability-family-samples.json", import.meta.url), "utf8"),
+);
+
+test("format families derive accepted extensions and per-family flags like the native parser", () => {
+  const { row, acceptedExtensions, families } = familySamples.valid;
+  const [capability] = parseCapabilityRegistry([row]);
+
+  assert.deepEqual(capability.acceptedExtensions, acceptedExtensions);
+  assert.deepEqual(
+    capability.formatFamilies?.map(({ id, nativeAvailability, basicFidelity }) => ({ id, nativeAvailability, basicFidelity })),
+    families,
+  );
+  assert.ok(SharedCapabilityRegistry.every((shared) => !("formatFamilies" in shared)));
+});
+
+test("format families reject shared extensions, empty families and mixed extension shapes", () => {
+  const { formatFamilies: _families, ...base } = familySamples.valid.row;
+  for (const [name, shape] of Object.entries(familySamples.invalid)) {
+    assert.throws(() => parseCapabilityRegistry([{ ...base, ...(shape as object) }]), Error, `${name} must be rejected`);
+  }
+  assert.throws(() => parseCapabilityRegistry([base]), /either accepted extensions or format families/);
+});
