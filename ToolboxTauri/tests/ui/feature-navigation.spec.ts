@@ -2001,7 +2001,7 @@ test("OCR shows its own signature-removed wording on the signed scan's row while
 
     await expect(rows.nth(1)).toHaveAttribute("data-tone", "warn");
     await expect(rows.nth(1)).toContainText(signedNote);
-    await expect(rows.nth(1)).toContainText("Recognised with a warning");
+    await expect(rows.nth(1)).toContainText("Recognized with a warning");
     await expect(rows.nth(1)).not.toContainText("Saved. The digital signature was removed");
     await expect(rows.nth(1)).not.toContainText("native wording");
     await expect(rows.nth(1).getByRole("button", { name: "Open signed-contract-ocr.pdf", exact: true })).toBeVisible();

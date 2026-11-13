@@ -328,6 +328,7 @@ fn raster_size(bytes: &[u8]) -> (u64, (u64, u64)) {
 
 struct Clock {
     published: Mutex<Option<Vec<PathBuf>>>,
+    pages: Mutex<Option<(usize, usize)>>,
 }
 
 thread_local! {
@@ -346,6 +347,27 @@ impl CancelFlag {
 /// True once the job on this thread was cancelled or ran out of time, so helpers it starts should stop.
 pub fn job_stopped() -> bool {
     CLOCK.with(|clock| clock.borrow().as_ref().is_some_and(|clock| clock.published.lock().unwrap_or_else(PoisonError::into_inner).is_none()))
+}
+
+/// Records how many pages of the file on this thread are done, so a stop can say where it stopped and the view can show it.
+pub fn report_pages(done: usize, total: usize) {
+    let Some(clock) = CLOCK.with(|clock| clock.borrow().clone()) else { return };
+    *clock.pages.lock().unwrap_or_else(PoisonError::into_inner) = Some((done, total));
+    if !job_stopped() { crate::kit::common::batch_runner::report_progress(done, total) }
+}
+
+/// "Stopped at page 3 of 9" once a file has reported its pages.
+pub(crate) fn stopped_at(done: usize, total: usize) -> String {
+    format!("Stopped at page {} of {}", count_label((done + 1).min(total) as u64), count_label(total as u64))
+}
+
+/// What a file stopped at its time limit says once it has reported its pages.
+pub(crate) fn file_time_limit_message(input: &Path, done: usize, total: usize, saved: usize) -> String {
+    let advice = match Format::for_path(input) {
+        Format::Image => String::new(),
+        format => format!(" Split it into smaller {}s, then try again.", format.noun()),
+    };
+    format!("{}: it reached the time limit for one file. {}{advice}", stopped_at(done, total), saved_label(saved))
 }
 
 fn stopped_error() -> io::Error { io::Error::new(io::ErrorKind::Interrupted, "Processing was stopped.") }
@@ -396,7 +418,7 @@ fn run_timed<F>(input: PathBuf, max_duration: Duration, cancel: &CancelFlag, job
 where
     F: FnOnce() -> JobOutcome + Send + 'static,
 {
-    let clock = Arc::new(Clock { published: Mutex::new(Some(Vec::new())) });
+    let clock = Arc::new(Clock { published: Mutex::new(Some(Vec::new())), pages: Mutex::new(None) });
     let worker_clock = Arc::clone(&clock);
     let (sender, receiver) = mpsc::channel();
     let spawned = std::thread::Builder::new().name("toolbox-job".into()).spawn(move || {
@@ -430,7 +452,11 @@ where
         }
         Err(Stopped::TimedOut) => {
             let saved = saved();
-            let message = format!("Took longer than {} and was stopped. {}", duration_label(max_duration), saved_label(saved.len()));
+            let pages = *clock.pages.lock().unwrap_or_else(PoisonError::into_inner);
+            let message = match pages {
+                Some((done, total)) if total > 0 => file_time_limit_message(&input, done, total, saved.len()),
+                _ => format!("Took longer than {} and was stopped. {}", duration_label(max_duration), saved_label(saved.len())),
+            };
             JobOutcome::failure_with_outputs(input, saved, ToolError::limit_exceeded(LimitKind::Time, message))
         }
         Err(Stopped::Vanished) => {
@@ -598,6 +624,7 @@ mod tests {
     use super::fixtures::*;
     use super::*;
     use crate::kit::contracts::{native_capabilities, ErrorKind, OutcomeState};
+    use crate::kit::common::batch_runner::{report_progress_to, FileEvent, Sink};
     use std::io::Write;
     use std::time::Instant;
 
@@ -767,6 +794,45 @@ mod tests {
         assert!(late_result.recv().unwrap().is_err(), "a publish after cancel is refused");
         assert!(!late.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_timed_out_job_says_which_page_it_stopped_at_and_stops_reporting_pages() {
+        let root = sandbox("timed-pages");
+        let input = root.join("long.pdf");
+        std::fs::write(&input, b"%PDF-1.7\n").unwrap();
+        let reported = Arc::new(Mutex::new(Vec::new()));
+        let sink: Sink = {
+            let reported = Arc::clone(&reported);
+            Arc::new(move |event| if let FileEvent::Progress { completed, total, .. } = event { reported.lock().unwrap().push((completed, total)) })
+        };
+        let (late_sender, late_done) = mpsc::channel();
+        let limits = ToolLimits { max_duration: Duration::from_millis(150), ..small() };
+        let outcome = limits.run_each(input.clone(), &CancelFlag::default(), move |input| {
+            report_progress_to(0, Some(sink));
+            report_pages(0, 480);
+            report_pages(211, 480);
+            std::thread::sleep(Duration::from_millis(400));
+            report_pages(212, 480);
+            let _ = late_sender.send(());
+            JobOutcome::succeeded(input, Vec::new(), "done")
+        });
+
+        let error = outcome.error().expect("the file is stopped at the limit");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::Time });
+        assert_eq!(
+            error.message,
+            "Stopped at page 212 of 480: it reached the time limit for one file. Nothing was saved. Split it into smaller PDFs, then try again.",
+        );
+        late_done.recv().unwrap();
+        assert_eq!(*reported.lock().unwrap(), vec![(0, 480), (211, 480)], "pages after the stop are not reported");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn page_reports_outside_a_timed_job_are_ignored() {
+        report_pages(1, 2);
+        assert!(!job_stopped());
     }
 
     #[test]
