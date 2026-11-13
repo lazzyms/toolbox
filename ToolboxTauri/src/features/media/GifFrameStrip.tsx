@@ -1,10 +1,11 @@
-import { useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { ImagePreview } from "../../contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { fileName } from "../../components/intake";
-import { isWindows, matchShortcut } from "../../shortcuts";
+import { isWindows } from "../../shortcuts";
+import { useTileOrdering } from "./useTileOrdering";
 
 /** One frame of the GIF: its list entry, and its delay when that is in range. */
 export interface GifFrame {
@@ -18,7 +19,6 @@ const delayText = (frame: GifFrame) => frame.delayMs === null ? "Check delay" : 
 const frameLabel = (frame: GifFrame, index: number) =>
   `Frame ${index + 1}, ${fileName(frame.path)}, ${delayText(frame)}${frame.own ? ", own delay" : ""}`;
 const loopLength = (ms: number) => `${Number((ms / 1000).toFixed(2))} s per loop`;
-const DRAG_THRESHOLD_PX = 4;
 
 /**
  * The frames of a new GIF, in play order. A frame moves by dragging it or with
@@ -41,42 +41,8 @@ export const GifFrameStrip = ({ frames, previews, totalMs, supportsPreview, sele
   /** Shown below the frames, such as the playback preview. */
   children?: ReactNode;
 }) => {
-  const [drag, setDrag] = useState<{ index: number; over: number | null } | null>(null);
-  const pointer = useRef<{ index: number; x: number; y: number; moved: boolean } | null>(null);
-  const clickAfterDrag = useRef(false);
-  const tiles = useRef(new Map<string, HTMLButtonElement>());
-  const focusFrame = (key: string | undefined) => requestAnimationFrame(() => key && tiles.current.get(key)?.focus());
-  const frameAt = (x: number, y: number) => {
-    const key = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-frame-key]")?.dataset.frameKey;
-    const index = frames.findIndex((frame) => frame.key === key);
-    return index >= 0 ? index : null;
-  };
-  const endDrag = () => {
-    pointer.current = null;
-    setDrag(null);
-  };
-
-  const keyDown = (event: React.KeyboardEvent<HTMLOListElement>) => {
-    if (disabled || frames.length === 0) return;
-    const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0;
-    if (delta && !event.altKey) {
-      event.preventDefault();
-      const to = selectedIndex + delta;
-      if (to < 0 || to >= frames.length) return;
-      if (event.metaKey || event.ctrlKey) {
-        moveFrame(selectedIndex, to);
-        focusFrame(frames[selectedIndex].key);
-      } else {
-        selectIndex(to);
-        focusFrame(frames[to].key);
-      }
-      return;
-    }
-    if (matchShortcut(event.nativeEvent, "file-list") === "remove") {
-      event.preventDefault();
-      removeFrame(selectedIndex);
-    }
-  };
+  const keys = frames.map((frame) => frame.key);
+  const { drag, onKeyDown, itemProps, buttonProps } = useTileOrdering({ keys, selectedIndex, selectIndex, move: moveFrame, remove: removeFrame, disabled });
 
   const selected = frames[selectedIndex];
   const dragged = drag && frames[drag.index];
@@ -99,7 +65,7 @@ export const GifFrameStrip = ({ frames, previews, totalMs, supportsPreview, sele
         {frames.length === 0 ? (
           <p className="workspace-note">Select frames to arrange them here.</p>
         ) : (
-          <ol className="media-frame-grid" role="listbox" aria-label="Frames, in play order" aria-orientation="horizontal" onKeyDown={keyDown} data-dragging={drag ? "true" : undefined}>
+          <ol className="media-frame-grid" role="listbox" aria-label="Frames, in play order" aria-orientation="horizontal" onKeyDown={onKeyDown} data-dragging={drag ? "true" : undefined}>
             {frames.map((frame, index) => {
               const isSelected = index === selectedIndex;
               const label = frameLabel(frame, index);
@@ -110,52 +76,14 @@ export const GifFrameStrip = ({ frames, previews, totalMs, supportsPreview, sele
                   role="option"
                   aria-selected={isSelected}
                   aria-label={label}
-                  data-frame-key={frame.key}
-                  data-dragging={drag?.index === index ? "true" : undefined}
-                  data-drop-target={drag && drag.over === index && drag.index !== index ? (drag.over < drag.index ? "before" : "after") : undefined}
+                  {...itemProps(index)}
                   className="media-frame-tile"
                 >
                   <Button
-                    ref={(element) => {
-                      if (element) tiles.current.set(frame.key, element);
-                      else tiles.current.delete(frame.key);
-                    }}
+                    {...buttonProps(index)}
                     variant={isSelected ? "secondary" : "ghost"}
                     className="media-frame-tile-button"
                     aria-label={label}
-                    tabIndex={isSelected ? 0 : -1}
-                    disabled={disabled}
-                    onClick={() => {
-                      if (clickAfterDrag.current) {
-                        clickAfterDrag.current = false;
-                        return;
-                      }
-                      selectIndex(index);
-                    }}
-                    onPointerDown={(event) => {
-                      clickAfterDrag.current = false;
-                      if (event.button !== 0) return;
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      pointer.current = { index, x: event.clientX, y: event.clientY, moved: false };
-                    }}
-                    onPointerMove={(event) => {
-                      const start = pointer.current;
-                      if (!start) return;
-                      if (!start.moved && Math.hypot(event.clientX - start.x, event.clientY - start.y) < DRAG_THRESHOLD_PX) return;
-                      start.moved = true;
-                      setDrag({ index: start.index, over: frameAt(event.clientX, event.clientY) });
-                    }}
-                    onPointerUp={(event) => {
-                      const start = pointer.current;
-                      endDrag();
-                      if (!start?.moved) return;
-                      clickAfterDrag.current = true;
-                      const to = frameAt(event.clientX, event.clientY);
-                      if (to === null || to === start.index) return;
-                      moveFrame(start.index, to);
-                      focusFrame(frames[start.index].key);
-                    }}
-                    onPointerCancel={endDrag}
                   >
                     <span className="media-frame-picture" aria-hidden="true">
                       {supportsPreview && preview && <img src={preview.dataUrl} alt="" draggable={false} />}

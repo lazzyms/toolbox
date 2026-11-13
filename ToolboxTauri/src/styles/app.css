@@ -484,36 +484,40 @@ body {
   padding: 8px;
   text-align: center;
 }
-.media-frame-list {
-  display: grid;
+.media-page-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.media-page-toolbar strong {
+  margin-right: auto;
+}
+.media-page-sources {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.media-frame-list li button {
+.media-page-sources li {
   display: flex;
-  width: 100%;
   align-items: center;
-  gap: 8px;
-  text-align: left;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 2px 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
 }
-.media-frame-list li button span {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border-radius: 5px;
-  background: var(--card);
-  color: var(--foreground);
-  font-variant-numeric: tabular-nums;
+.media-page-sources .workspace-note {
+  margin-top: 0;
 }
-.media-frame-preview {
-  width: 32px;
-  height: 32px;
-  border-radius: 4px;
-  object-fit: contain;
-  background: var(--card);
+.media-page-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .media-frame-heading {
   display: flex;

@@ -1898,7 +1898,67 @@ mod command_tests {
         assert_eq!(outcomes.len(), 1);
         let outputs = outcomes[0].output_paths();
         assert_eq!(outputs.len(), 1, "one file in Combine mode makes one TIFF: {:?}", outcomes[0]);
-        assert_eq!(outputs[0].file_name().unwrap(), "scan-combined.tiff");
+        assert_eq!(outputs[0].file_name().unwrap(), "scan-combined.tif");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tiff_combine_builds_pages_in_the_requested_cross_file_order_and_never_replaces_the_chosen_name() {
+        use crate::kit::contracts::WarningKind;
+        use crate::kit::images::tools::TiffPageRef;
+        let root = sandbox("tiff-combine-page-refs");
+        let cover = root.join("cover.tif"); write_gray_tiff(&cover, &[&[1, 1]]);
+        let scan = root.join("scan.tiff"); write_gray_tiff(&scan, &[&[2, 2], &[3, 3], &[4, 4]]);
+        let paths = vec![cover.clone(), scan.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let chosen = root.join("cover-combined.tif");
+        std::fs::write(&chosen, b"existing cover-combined.tif").unwrap();
+        let pages = vec![
+            TiffPageRef { path: scan.clone(), page: 2 },
+            TiffPageRef { path: cover.clone(), page: 0 },
+            TiffPageRef { path: scan.clone(), page: 0 },
+        ];
+
+        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest {
+            mode: TiffMode::Combine, paths: paths.clone(), pages: Some(pages), output_location: OutputLocation::AlongsideInput, output_path: Some(chosen.clone()),
+        }));
+
+        assert_eq!(outcomes.len(), 1, "one combined TIFF is one outcome: {outcomes:?}");
+        let outcome = &outcomes[0];
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = root.join("cover-combined-1.tif");
+        assert_eq!(outcome.output_paths(), [output.clone()]);
+        assert_eq!(warning_codes(outcome), [WarningKind::RenamedToAvoidReplacing { chosen_name: "cover-combined.tif".into(), final_name: "cover-combined-1.tif".into() }]);
+        assert_eq!(tiff_pages(&output).into_iter().map(|(_, _, bytes)| bytes).collect::<Vec<_>>(), [vec![4, 4], vec![1, 1], vec![2, 2]], "pages follow the request, across files, and a left-out page stays out");
+        assert_eq!(std::fs::read(&chosen).unwrap(), b"existing cover-combined.tif", "the chosen path stays byte-identical");
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tiff_combine_names_the_file_and_page_it_cannot_read_and_publishes_nothing() {
+        use crate::kit::images::tools::TiffPageRef;
+        let root = sandbox("tiff-combine-bad-page");
+        let cover = root.join("cover.tif"); write_gray_tiff(&cover, &[&[1, 1]]);
+        let scan = root.join("scan.tiff");
+        std::fs::write(&scan, raw_tiff(&[gray_tiff_page(2, 1, 1, vec![2, 2]), gray_tiff_page(2, 1, 32809, vec![3, 3]), gray_tiff_page(2, 1, 1, vec![4, 4])])).unwrap();
+        let paths = vec![cover.clone(), scan.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let out = location(&root, "out");
+        let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
+        let folder = folder.clone();
+        let request = |pages: Vec<TiffPageRef>| TiffRequest { mode: TiffMode::Combine, paths: paths.clone(), pages: Some(pages), output_location: out.clone(), output_path: None };
+        let with_bad_page = vec![TiffPageRef { path: cover.clone(), page: 0 }, TiffPageRef { path: scan.clone(), page: 1 }, TiffPageRef { path: scan.clone(), page: 2 }];
+
+        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&request(with_bad_page.clone())));
+        let message = &outcomes.iter().find(|outcome| outcome.input_path == scan).unwrap().error().unwrap().message;
+        assert!(message.contains(&scan.display().to_string()) && message.contains("TIFF page 2 of 3 can't be read"), "{message}");
+        assert_aggregate_failure("tiff combine bad page", &paths, &scan, run_combine_tiff_pages(&request(with_bad_page)));
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no TIFF and no partial file is left behind");
+
+        let left_out = assert_aggregate_success("tiff combine without the bad page", &paths, run_combine_tiff_pages(&request(vec![TiffPageRef { path: scan.clone(), page: 2 }, TiffPageRef { path: cover.clone(), page: 0 }])));
+        assert_eq!(tiff_pages(&left_out[0]).into_iter().map(|(_, _, bytes)| bytes).collect::<Vec<_>>(), [vec![4, 4], vec![1, 1]], "a page left out is never read");
+        for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -9816,7 +9876,7 @@ mod command_tests {
         let outside = tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest {
             mode: TiffMode::Combine, paths: vec![multi.clone()], pages: Some(vec![TiffPageRef { path: multi.clone(), page: 3 }]), output_location: location(&root, "outside"), output_path: None,
         }));
-        assert_eq!(outside[0].error().map(|error| error.message.as_str()), Some("TIFF page 4 is outside the document."));
+        assert_eq!(outside[0].error().map(|error| error.message.clone()), Some(format!("Could not process {}: TIFF page 4 isn't in this file, which has 3 pages.", multi.display())));
 
         let previews = inspect_tiff_pages(TiffPreviewRequest { path: multi.clone() }).unwrap();
         assert_eq!(previews.iter().map(|preview| (preview.width, preview.height)).collect::<Vec<_>>(), vec![(3, 2), (2, 2), (2, 1)]);

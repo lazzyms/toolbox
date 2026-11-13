@@ -1580,21 +1580,10 @@ pub fn tiff_combine(request: &TiffRequest) -> JobOutcome {
     let Some(input) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one TIFF file.".to_string()); };
     let pages = if let Some(page_refs) = &request.pages {
         if page_refs.is_empty() { return failure(input, "Select at least one TIFF page.".to_string()); }
-        let mut selected = Vec::with_capacity(page_refs.len());
-        for page_ref in page_refs {
-            if !request.paths.iter().any(|path| path == &page_ref.path) {
-                return failure(page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string());
-            }
-            let decoded = match crate::kit::images::decode(&page_ref.path) {
-                Ok(decoded) => decoded.pages,
-                Err(error) => return failure(page_ref.path.clone(), format!("Could not process {}: {error}", page_ref.path.display())),
-            };
-            let Some(page) = decoded.get(page_ref.page) else {
-                return failure(page_ref.path.clone(), format!("TIFF page {} is outside the document.", page_ref.page + 1));
-            };
-            selected.push(page.clone());
+        match read_tiff_page_refs(&request.paths, page_refs) {
+            Ok(pages) => pages,
+            Err((path, error)) => return failure(path, error),
         }
-        selected
     } else {
         let mut pages = Vec::new();
         for path in &request.paths {
@@ -1605,7 +1594,13 @@ pub fn tiff_combine(request: &TiffRequest) -> JobOutcome {
         }
         pages
     };
-    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", "tiff") {
+    // A chosen name keeps its own .tif or .tiff; a proposed one uses .tif.
+    let extension = request.output_path.as_deref()
+        .and_then(|path| path.extension())
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| extension.eq_ignore_ascii_case("tif") || extension.eq_ignore_ascii_case("tiff"))
+        .unwrap_or("tif");
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &input, &request.output_location, "-combined", extension) {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
     };
@@ -1614,6 +1609,31 @@ pub fn tiff_combine(request: &TiffRequest) -> JobOutcome {
         Ok(path) => JobOutcome::succeeded(input, vec![path], "TIFF pages combined"),
         Err(error) => failure(input, format!("Could not publish combined TIFF: {error}")),
     }
+}
+
+/// Decodes only the referenced pages, in the order given, opening each file
+/// once. Every page is read before anything is written, so one bad page
+/// stops the combine and the error names its file and page.
+fn read_tiff_page_refs(paths: &[PathBuf], page_refs: &[TiffPageRef]) -> Result<Vec<DynamicImage>, (PathBuf, String)> {
+    let mut sources: BTreeMap<&Path, crate::kit::images::TiffPages> = BTreeMap::new();
+    let mut pages = Vec::with_capacity(page_refs.len());
+    for page_ref in page_refs {
+        let path = page_ref.path.as_path();
+        let named = |error: String| (page_ref.path.clone(), format!("Could not process {}: {error}", path.display()));
+        if !paths.iter().any(|selected| selected == path) {
+            return Err((page_ref.path.clone(), "The TIFF page selection contains an unselected file.".to_string()));
+        }
+        let source = match sources.entry(path) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(crate::kit::images::TiffPages::open(path).map_err(named)?),
+        };
+        if page_ref.page >= source.total() {
+            return Err(named(format!("TIFF page {} isn't in this file, which has {} page{}.", page_ref.page + 1, source.total(), if source.total() == 1 { "" } else { "s" })));
+        }
+        let (page, _) = source.read(page_ref.page).map_err(named)?;
+        pages.push(page);
+    }
+    Ok(pages)
 }
 
 fn write_tiff_pages(path: &std::path::Path, pages: &[DynamicImage]) -> Result<(), String> {
@@ -1760,7 +1780,7 @@ mod tests {
         write_gray_tiff(&single, &[&[10, 20], &[30, 40]]);
         let one = tiff_combine(&request(TiffMode::Combine, vec![single.clone()]));
         assert_eq!(one.output_paths().len(), 1, "one file in Combine mode makes one TIFF, not a split");
-        assert!(file_name(&one.output_paths()[0]).ends_with("-combined.tiff"));
+        assert!(file_name(&one.output_paths()[0]).ends_with("-combined.tif"));
         assert_eq!(read_pages(&one.output_paths()[0]).unwrap().len(), 2);
 
         let first = path("first.tiff");

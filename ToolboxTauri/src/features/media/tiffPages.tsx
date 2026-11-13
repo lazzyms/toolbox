@@ -1,9 +1,9 @@
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { exampleOutputName } from "../../components/RunDestination";
-import { TiffPageInspector, isCurrentTiffInspection, type TiffMode, type TiffPagesState } from "./TiffPageInspector";
+import { TiffPageInspector, canCombineTiffPages, initialTiffPagesState, tiffPagesInOrder, type TiffMode, type TiffPagesState } from "./TiffPageInspector";
 import type { MediaPanelProps, MediaTool } from "./types";
 
-const TiffPagesPanel = ({ utility, options, setOptions, files }: MediaPanelProps<TiffPagesState>) => (
+const TiffPagesPanel = ({ utility, options, setOptions, files, fileKeys, removeFile, browse, loading }: MediaPanelProps<TiffPagesState>) => (
   <>
     <ToggleGroup
       type="single"
@@ -24,7 +24,16 @@ const TiffPagesPanel = ({ utility, options, setOptions, files }: MediaPanelProps
         A TIFF with only 1 page is skipped.
       </p>
     ) : (
-      <TiffPageInspector files={files} supportsPreview={utility.capability.supportsPreview} state={options} setState={setOptions} />
+      <TiffPageInspector
+        files={files}
+        fileKeys={fileKeys}
+        removeFile={removeFile}
+        browse={browse}
+        supportsPreview={utility.capability.supportsPreview}
+        disabled={loading}
+        state={options}
+        setState={setOptions}
+      />
     )}
   </>
 );
@@ -32,29 +41,30 @@ const TiffPagesPanel = ({ utility, options, setOptions, files }: MediaPanelProps
 const count = (value: number, one: string, many: string) => `${value} ${value === 1 ? one : many}`;
 
 export const tiffPagesTool: MediaTool<TiffPagesState> = {
-  initialOptions: { mode: "split", inspection: { kind: "idle" }, selectedIndex: 0 },
+  initialOptions: initialTiffPagesState,
   Panel: TiffPagesPanel,
-  // Split runs each file on its own, so it never waits on the page inspector. Combine waits until the
-  // pages of the current files have been read.
-  canRun: ({ mode, inspection }, files) => mode === "split" || isCurrentTiffInspection(inspection, files),
-  runLabel: ({ mode }, files) => (mode === "split" ? `Split ${count(files.length, "TIFF", "TIFFs")}` : "Combine"),
+  // Split runs each file on its own, so it never waits on the page grid. Combine waits until the
+  // pages of the current files have been read, and needs at least one page.
+  canRun: (options, files, keys) => options.mode === "split" || canCombineTiffPages(options, files, keys),
+  runLabel: (options, files, keys) => options.mode === "split"
+    ? `Split ${count(files.length, "TIFF", "TIFFs")}`
+    : `Combine ${count(tiffPagesInOrder(options, files, keys).length, "page", "pages")}…`,
   // The inspector orders pages, so the shared file list does not.
   showFileOrdering: false,
   // The registry describes Combine. Split is a per-file batch: no save step, files fail alone, and failed
   // files can be retried.
   capability: ({ mode }, registered) =>
     mode === "split" ? { ...registered, inputCardinality: "multiple", manyToOne: false } : registered,
-  exampleName: ({ mode }, path) => exampleOutputName(path, "process_tiff_pages", mode === "split" ? "-page-01" : "-combined", mode === "split" ? "tif" : "tiff"),
-  buildRequest: ({ mode, inspection }, { paths, outputLocation, outputPath }) => ({
+  exampleName: ({ mode }, path) => exampleOutputName(path, "process_tiff_pages", mode === "split" ? "-page-01" : "-combined", "tif"),
+  // Combine sends each page that goes into the TIFF, in the order shown, as its file and its index in that file.
+  buildRequest: (options, { paths, keys, outputLocation, outputPath }) => ({
     command: "process_tiff_pages",
-    request: mode === "split"
-      ? { mode, paths, outputLocation }
+    request: options.mode === "split"
+      ? { mode: options.mode, paths, outputLocation }
       : {
-          mode,
+          mode: options.mode,
           paths,
-          pages: isCurrentTiffInspection(inspection, paths)
-            ? inspection.frames.map(({ path, page }) => ({ path, page }))
-            : [],
+          pages: tiffPagesInOrder(options, paths, keys).map(({ path, page }) => ({ path, page })),
           outputLocation,
           outputPath,
         },

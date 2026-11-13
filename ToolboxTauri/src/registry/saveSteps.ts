@@ -1,6 +1,8 @@
 export interface SaveDialog {
   title: string;
   extension: string;
+  /** Other spellings of the extension a typed name may already end with, such as tiff for tif. */
+  alsoAccepts?: readonly string[];
 }
 
 export interface ManyToOneSaveStep extends SaveDialog {
@@ -27,7 +29,7 @@ const manyToOneSaveSteps: Record<string, ManyToOneSaveStep> = {
   create_gif: { title: "Save the GIF", extension: "gif", runLabel: "Make GIF…", minimumInputs: 1, summary: (n) => `${count(n, "frame", "frames")}, in the order shown.` },
   // The registry describes Combine mode, which always makes one file, even from one TIFF. Split mode runs as a
   // per-file batch without this step.
-  process_tiff_pages: { title: "Save the combined TIFF", extension: "tiff", runLabel: "Make TIFF…", minimumInputs: 1, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },
+  process_tiff_pages: { title: "Save the combined TIFF", extension: "tif", alsoAccepts: ["tiff"], runLabel: "Make TIFF…", minimumInputs: 1, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },
 };
 
 export const saveStepFor = (tool: { command: string; capability: { manyToOne: boolean } }): ManyToOneSaveStep | null => {
