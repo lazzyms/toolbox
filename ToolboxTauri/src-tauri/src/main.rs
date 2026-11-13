@@ -148,7 +148,13 @@ async fn preview_pdf_scene_pages(request: scene::PreviewPagesRequest) -> Result<
 }
 
 #[tauri::command]
-async fn export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
+async fn export_pdf_scene(app: tauri::AppHandle, events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
+    let chosen = request.output_path.clone();
+    let outcomes = run_export_pdf_scene(events, request).await;
+    settings::remember_chosen_save(&app, chosen.as_deref(), outcomes)
+}
+
+async fn run_export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
     let request = Arc::new(request);
     BatchRunner::run(&events, "export_pdf_scene", request.paths.clone(), &request.output_location, &request, scene::export)
 }
@@ -2735,7 +2741,7 @@ mod command_tests {
         assert!(preview_width > 0 && preview_height > 0, "preview dimensions must be positive");
         assert!(preview_width > preview_height, "a 90-degree page should preview in landscape orientation");
         assert!(preview["dataUrl"].as_str().is_some_and(|value| value.starts_with("data:image/png;base64,")));
-        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }))));
+        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], position: Some("bottom-right".into()), pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_merge_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
@@ -3216,7 +3222,7 @@ mod command_tests {
             { "sourceIndex": null, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] },
             { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] }
         ] })).unwrap();
-        let (outcomes, events) = recorded(|events| export_pdf_scene(events, scene::ExportRequest { paths: vec![pdf.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }));
+        let (outcomes, events) = recorded(|events| run_export_pdf_scene(events, scene::ExportRequest { paths: vec![pdf.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }));
         assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
         let progress = events.iter().filter_map(|event| match event {
             FileEvent::Progress { index, completed, total } => Some((*index, *completed, *total)),
@@ -4664,7 +4670,7 @@ mod command_tests {
         let original = std::fs::read(&input).unwrap();
         let pages = [2, 0, 1].map(|index| serde_json::json!({ "sourceIndex": index, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] }));
         let scene = serde_json::from_value::<scene::PdfScene>(serde_json::json!({ "pages": pages })).unwrap();
-        let outputs = assert_success("scene alongside", export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, sections: Default::default() }));
+        let outputs = assert_success("scene alongside", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }));
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].parent(), Some(root.as_path()));
         assert!(outputs[0].exists(), "scene output must exist on disk");

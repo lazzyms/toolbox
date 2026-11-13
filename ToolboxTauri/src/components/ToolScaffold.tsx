@@ -21,7 +21,7 @@ import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveR
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
 import { chooseManyToOneSavePath } from './saveStep';
-import { saveStepAppliesTo, saveStepFor } from '../registry/saveSteps';
+import { saveStepAppliesTo, saveStepFor, type SaveDialog } from '../registry/saveSteps';
 import { ArrowDown, ArrowUp, FileIcon, FolderIcon, GripVertical, XIcon } from 'lucide-react';
 import {
     classifyIntake,
@@ -59,6 +59,9 @@ export const RunStateContext = createContext<((running: boolean) => void) | null
 export type RunContext = { outputPath: string | null; runId: string };
 
 export type RunHandler = (files: string[], outputLocation: OutputLocation, run: RunContext) => Promise<JobOutcome[]>;
+
+/** Save As for a tool that writes one file per input: the person names the file in the shared, never-replace save step. */
+export type SaveAs = { dialog: SaveDialog; suffix: string; summary: string };
 
 type PerFileRun = { handler: RunHandler; outputLocation: OutputLocation };
 
@@ -105,6 +108,7 @@ interface ToolScaffoldProps {
         outputLocation: OutputLocation;
         run: () => Promise<void>;
         runCombined: () => Promise<void>;
+        runSavingAs: (saveAs: SaveAs) => Promise<void>;
         loading: boolean;
         progress: Progress;
         selectedFileIndex: number;
@@ -219,21 +223,23 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         }
     };
 
-    const runWith = async (handler: RunHandler, location: OutputLocation = outputLocation) => {
+    const runWith = async (handler: RunHandler, location: OutputLocation = outputLocation, saveAs: SaveAs | null = null) => {
         const generation = ++runGeneration.current;
         setLoading(true);
         setResults([]);
         setCombinedInputs(null);
         setPerFileRun(null);
         try {
-            if (location !== 'alongsideInput') {
+            // Save As names its own folder in the save step, so the default destination isn't checked.
+            if (location !== 'alongsideInput' && !saveAs) {
                 const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
                 if (check !== 'ready') {
                     if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, handler });
                     return;
                 }
             }
-            if (!inputPolicy.manyToOne) setPerFileRun({ handler, outputLocation: location });
+            // A retry reruns without the save step, so a Save As run offers none rather than writing a different name.
+            if (!inputPolicy.manyToOne && !saveAs) setPerFileRun({ handler, outputLocation: location });
             const cardinalityError = inputPolicy.inputCardinality === 'single' && files.length > 1
                 ? `This action accepts one input file, but ${files.length} were selected.`
                 : null;
@@ -255,9 +261,12 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             const orderedSelectionRejected = inputPolicy.inputCardinality === 'ordered' && invalidPaths.size > 0;
             const runs = !orderedSelectionRejected && validPaths.length > 0;
             let outputPath: string | null = null;
-            if (runs && saveStepAppliesTo(saveStep, validPaths.length)) {
+            const chosenSave = saveAs ?? (saveStepAppliesTo(saveStep, validPaths.length)
+                ? { dialog: saveStep, suffix: inputPolicy.outputSuffix, summary: saveStep.summary(validPaths.length) }
+                : null);
+            if (runs && chosenSave) {
                 setLoading(false);
-                outputPath = await chooseManyToOneSavePath(saveStep, validPaths, location, inputPolicy.outputSuffix, saveStep.summary(validPaths.length));
+                outputPath = await chooseManyToOneSavePath(chosenSave.dialog, validPaths, location, chosenSave.suffix, chosenSave.summary);
                 if (!outputPath || generation !== runGeneration.current) return;
                 setLoading(true);
             }
@@ -285,6 +294,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     };
     const run = () => runWith(onRun);
     const runCombined = () => runWith(onRunCombined ?? onRun);
+    const runSavingAs = (saveAs: SaveAs) => runWith(onRun, outputLocation, saveAs);
 
     const chooseRunFolder = async () => {
         const picked = await open({ directory: true, multiple: false });
@@ -808,6 +818,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 outputLocation,
                 run,
                 runCombined,
+                runSavingAs,
                 loading,
                 progress,
                 selectedFileIndex,
