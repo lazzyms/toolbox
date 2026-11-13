@@ -32,7 +32,7 @@ import { RedactDisclosure, RedactInspector, listMarks, redactionFills, searchSta
 import type { ListedMark, TextMatch, TextSearch } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps, UsedSignature } from '../features/pdf-editor/SubToolInspectors';
-import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
+import { combinedSuffix, exportSuffix, exportSummary, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
 import { proposedSaveName } from '../components/saveStep';
 import type { SaveDialog } from '../registry/saveSteps';
 import { headerFooterOverlaps, headerFooterParts, isRangedKind, movePagesBefore, objectsOnPage, pageNumberRect, pageNumberTemplates, pageNumberText, pagesInRange, removePages, restorePages, rotatePages, sceneFromDocument, visibleBounds, interleaveDuplexScan, movePagesBy, movePagesTo, movePagesToGap, reversePages, resetPageRotation, mirrorPages } from '../features/pdf-editor/scene';
@@ -1635,7 +1635,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
               <section className="scene-inspector-section" aria-labelledby="scene-export-summary-title">
                 <h3 id="scene-export-summary-title" className="scene-inspector-heading">Export summary</h3>
                 {contributors.length ? <ol className="scene-export-summary" aria-label="Changes, applied in this fixed order">
-                  {contributors.map((item) => <li key={item.id}>{item.label}</li>)}
+                  {exportSummary(contributors).map((step) => <li key={step.stage} data-export-stage={step.stage}>
+                    <span className="scene-export-summary-label">{step.label}</span>
+                    {step.tools.length > 1 || step.tools[0] !== step.label ? <span className="scene-export-summary-detail">{step.tools.join(', ')}</span> : null}
+                  </li>)}
                 </ol> : <p className="scene-property-note">No changes to export yet.</p>}
               </section>
               {tool === 'select' && !selected && <p className="scene-property-note">Select an object on the page to move it or adjust its properties.</p>}

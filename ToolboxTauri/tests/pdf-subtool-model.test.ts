@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { sceneFromDocument, type PdfScene, type SceneObject } from "../src/features/pdf-editor/scene";
 import { substituteFamily, textOverflowWords } from "../src/features/pdf-editor/scene";
-import { exportSuffix, planSceneExport, sceneSections, subTools } from "../src/features/pdf-editor/subtools";
+import { exportStages, exportSuffix, exportSummary, planSceneExport, sceneSections, subTools } from "../src/features/pdf-editor/subtools";
 
 const baseline = sceneFromDocument({
   path: "/local/source.pdf",
@@ -108,6 +108,7 @@ test("an unchanged scene has no contributors and no suffix", () => {
   assert.deepEqual(plan(baseline), {
     request: { paths: ["/local/source.pdf"], scene: baseline, outputLocation: "alongsideInput" },
     contributors: [],
+    summary: [],
     suffix: null,
   });
   assert.deepEqual(plan(sceneFromDocument({ path: "/local/source.pdf", pages: [0, 1].map((index) => ({ index, width: 612, height: 792 })) })).contributors, []);
@@ -143,6 +144,33 @@ test("text edits travel as their own section beside the scene and contribute -ed
   assert.equal(JSON.stringify(result.request), JSON.stringify({ paths: ["/local/source.pdf"], scene: { pages: baseline.pages }, textEdits: [edit], outputLocation: "alongsideInput" }));
   assert.deepEqual(sceneSections({ ...baseline, textEdits: [] }), { scene: { pages: baseline.pages } });
   assert.deepEqual(plan({ ...withObjects(baseline, 0, "text"), textEdits: [edit] }).contributors, ["edit-text", "text"]);
+});
+
+test("every sub-tool feeds exactly one export stage, in the fixed order of the native export", () => {
+  assert.deepEqual(exportStages.map(({ id }) => id), ["fill-forms", "edit-text", "overlays", "flatten", "redact"]);
+  assert.deepEqual(exportStages.flatMap(({ tools }) => tools).sort(), subTools.map(({ id }) => id).sort());
+  assert.deepEqual(exportSummary([]), []);
+});
+
+test("a chained export carries every section in one request and summarises the stages in the fixed order", () => {
+  const edit = { pageIndex: 0, run: 0, original: "Rent £1,450", replacement: "Rent £1,475" };
+  const formValues = [{ name: "tenant", value: "Ada" }];
+  const scene: PdfScene = {
+    pages: [withObjects(baseline, 0, "watermark", "text").pages[0], { ...baseline.pages[1], redactions: [{ id: "r", rect: { x: 1, y: 2, width: 30, height: 10 }, color: "#000000" }] }],
+    textEdits: [edit],
+  };
+  const result = planSceneExport({ paths: ["/local/source.pdf"], scene, baseline, outputLocation: "alongsideInput", formValues, flatten: "both" });
+  assert.deepEqual(Object.keys(result.request), ["paths", "scene", "formValues", "textEdits", "flatten", "redactions", "outputLocation"]);
+  assert.deepEqual(result.contributors, ["form", "edit-text", "text", "watermark", "flatten", "redact"]);
+  assert.equal(result.suffix, "-edited");
+  assert.deepEqual(result.summary, [
+    { stage: "fill-forms", label: "Fill form", tools: ["Fill form"] },
+    { stage: "edit-text", label: "Edit text", tools: ["Edit text"] },
+    { stage: "overlays", label: "Add text, signatures and page marks", tools: ["Text", "Watermark"] },
+    { stage: "flatten", label: "Flatten", tools: ["Flatten"] },
+    { stage: "redact", label: "Redact", tools: ["Redact"] },
+  ]);
+  assert.deepEqual(plan(withObjects(baseline, 0, "signature")).summary, [{ stage: "overlays", label: "Add text, signatures and page marks", tools: ["Signature"] }]);
 });
 
 test("overflow counts the words that end past the original text length", () => {

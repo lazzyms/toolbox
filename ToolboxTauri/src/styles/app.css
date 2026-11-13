@@ -1706,6 +1706,7 @@ fieldset.scene-inspector-field { min-inline-size: 0; margin: 0; padding: 0; bord
 .scene-object-list-item { min-width: 0; gap: 8px; }
 .scene-object-list-page { flex: none; color: var(--muted-foreground); font-size: 10px; }
 .scene-export-summary { display: grid; gap: 2px; margin: 0; padding-left: 18px; font-size: 11px; }
+.scene-export-summary-detail { display: block; color: var(--muted-foreground); }
 .scene-bottom-bar { width: 100%; flex-wrap: wrap; border-top: 1px solid var(--border); border-bottom: 0; border-radius: 0; padding: 2px 6px; font-size: 10px; gap: 3px; }
 .scene-original-note { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
 .scene-empty { min-height: calc(100dvh - 275px); }
