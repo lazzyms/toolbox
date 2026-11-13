@@ -76,6 +76,9 @@ pub struct OcrLanguage {
 
 /// The tool whose language packs the catalog names with `ocrLanguage`.
 pub const OCR_TOOL_ID: &str = "pdf-ocr";
+/// The text recognition language built into the app, as its Tesseract code and name. Every other
+/// language comes from a pack.
+pub const BUILT_IN_OCR_LANGUAGE: (&str, &str) = ("eng", "English");
 
 /// `from` is inclusive and `before` is exclusive. No `before` means every later version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +169,27 @@ fn read_record(folder: &Path) -> Option<InstalledRecord> {
     serde_json::from_str(&std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()?).ok()
 }
 
+/// A language OCR reads, or can read once its pack is installed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrLanguageState {
+    /// The Tesseract code an OCR request names, as in `hin`.
+    pub code: String,
+    pub name: String,
+    /// The pack that adds the language. `None` for the language built into the app.
+    pub pack_id: Option<String>,
+    pub status: PackStatus,
+    /// The download its pack needs on this target, when the catalog offers one.
+    pub download_bytes: Option<u64>,
+}
+
+#[tauri::command]
+pub async fn ocr_languages(app: tauri::AppHandle) -> Result<Vec<OcrLanguageState>, String> {
+    let catalog = load_catalog()?;
+    let app_data = app_data(&app)?;
+    Ok(ocr_languages_in(&catalog, &app_data, &current_target(), &app.package_info().version.to_string()))
+}
+
 #[tauri::command]
 pub async fn list_packs(app: tauri::AppHandle) -> Result<PackList, String> {
     let catalog = load_catalog()?;
@@ -192,7 +216,7 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
         return Err(format!("The pack catalog format {} is not supported", catalog.format_version));
     }
     let mut ids = std::collections::BTreeSet::new();
-    let mut languages = std::collections::BTreeSet::from(["eng"]);
+    let mut languages = std::collections::BTreeSet::from([BUILT_IN_OCR_LANGUAGE.0]);
     for pack in &catalog.packs {
         let valid_id = !pack.id.is_empty() && pack.id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
         if !valid_id || !ids.insert(pack.id.as_str()) {
@@ -240,6 +264,21 @@ pub fn list_packs_in(catalog: &Catalog, app_data: &Path, target: &str, app_versi
         total_bytes: disk_usage(&packs_root),
         packs,
     }
+}
+
+/// The pack-state query behind the OCR language picker: the built-in language, then each language
+/// whose pack the catalog offers on `target` or is installed, with the pack's state. Read-only and
+/// local like [`list_packs_in`]; a run still checks the pack's files at first use.
+pub fn ocr_languages_in(catalog: &Catalog, app_data: &Path, target: &str, app_version: &str) -> Vec<OcrLanguageState> {
+    let (code, name) = BUILT_IN_OCR_LANGUAGE;
+    let built_in = OcrLanguageState { code: code.into(), name: name.into(), pack_id: None, status: PackStatus::Installed, download_bytes: None };
+    let packs_root = app_data.join(PACKS_DIR);
+    let packs = catalog.packs.iter().filter_map(|pack| {
+        let language = pack.ocr_language.as_ref()?;
+        let entry = entry_for(pack, &packs_root.join(&pack.id), target, app_version)?;
+        Some(OcrLanguageState { code: language.code.clone(), name: language.name.clone(), pack_id: Some(entry.id), status: entry.status, download_bytes: entry.download_bytes })
+    });
+    std::iter::once(built_in).chain(packs).collect()
 }
 
 fn entry_for(pack: &CatalogPack, folder: &Path, target: &str, app_version: &str) -> Option<PackEntry> {
@@ -551,6 +590,177 @@ mod tests {
         assert_eq!(compare_versions("1.0.14-beta.1", "1.0.14"), Some(Ordering::Equal));
         assert!(in_range("1.0.14", &VersionRange { from: "1.0.14".into(), before: Some("1.1".into()) }));
         assert!(!in_range("1.1.0", &VersionRange { from: "1.0".into(), before: Some("1.1".into()) }));
+    }
+
+    fn ocr_states(list: &[OcrLanguageState]) -> Vec<(&str, Option<&str>, PackStatus, Option<u64>)> {
+        list.iter().map(|language| (language.code.as_str(), language.pack_id.as_deref(), language.status, language.download_bytes)).collect()
+    }
+
+    #[test]
+    fn english_is_the_only_ocr_language_with_the_built_in_catalog_and_no_packs() {
+        let list = ocr_languages_in(&parse_catalog(BUILT_IN_CATALOG).unwrap(), &sandbox("ocr-built-in"), MAC, APP);
+        assert_eq!(list, [OcrLanguageState { code: "eng".into(), name: "English".into(), pack_id: None, status: PackStatus::Installed, download_bytes: None }]);
+    }
+
+    #[test]
+    fn the_ocr_language_query_reports_each_pack_state_from_the_catalog_and_the_pack_folder() {
+        let catalog = fixture();
+        let nothing_installed = ocr_languages_in(&catalog, &sandbox("ocr-none"), MAC, APP);
+        assert_eq!(ocr_states(&nothing_installed), [
+            ("eng", None, PackStatus::Installed, None),
+            ("deu", Some("ocr-german"), PackStatus::NotInstalled, Some(15728640)),
+            ("fra", Some("ocr-french"), PackStatus::NotInstalled, Some(14680064)),
+            ("jpn", Some("ocr-japanese"), PackStatus::NotInstalled, Some(20971520)),
+        ]);
+        assert_eq!(nothing_installed.iter().map(|language| language.name.as_str()).collect::<Vec<_>>(), ["English", "German", "French", "Japanese"]);
+
+        let app_data = sandbox("ocr-states");
+        install(&app_data, "ocr-german", "4.1", record("4.1"));
+        let french = install(&app_data, "ocr-french", "4.1", record("4.1"));
+        std::fs::write(french.join("4.1/data/payload.bin"), b"changed").unwrap();
+        install(&app_data, "ocr-japanese", "4.1", serde_json::json!({ "version": "4.1", "packFormat": 1, "appVersions": { "from": "0.1.0", "before": "1.0.0" } }));
+        assert_eq!(ocr_states(&ocr_languages_in(&catalog, &app_data, MAC, APP)), [
+            ("eng", None, PackStatus::Installed, None),
+            ("deu", Some("ocr-german"), PackStatus::Installed, Some(15728640)),
+            ("fra", Some("ocr-french"), PackStatus::Damaged, Some(14680064)),
+            ("jpn", Some("ocr-japanese"), PackStatus::Incompatible, Some(20971520)),
+        ]);
+        // A language whose pack this target can't install is left out, as in the pack list.
+        assert!(ocr_languages_in(&catalog, &sandbox("ocr-linux"), "linux-x86_64", APP).iter().all(|language| language.code != "jpn"));
+    }
+
+    const LAUNCH_OCR_LANGUAGES: &str = include_str!("../../shared/ocr-language-packs.json");
+    const MIB: u64 = 1024 * 1024;
+
+    /// A language offered at launch: English is bundled, every other one is a pack with a budget.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LaunchLanguage {
+        code: String,
+        name: String,
+        #[serde(default)]
+        bundled: bool,
+        pack_id: Option<String>,
+        download_budget_bytes: Option<u64>,
+        model: ModelPin,
+        fixture: FixtureResult,
+    }
+
+    /// The language's model file in the Model baseline, pinned to the upstream commit.
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ModelPin {
+        file: String,
+        bytes: u64,
+        git_blob_sha1: String,
+        sha256: Option<String>,
+    }
+
+    /// The generated fixture page's text and what recognition must read from it.
+    #[derive(Deserialize)]
+    struct FixtureResult {
+        text: String,
+        recognizes: String,
+    }
+
+    fn launch_languages() -> Vec<LaunchLanguage> {
+        let file: serde_json::Value = serde_json::from_str(LAUNCH_OCR_LANGUAGES).unwrap();
+        serde_json::from_value(file["languages"].clone()).unwrap()
+    }
+
+    /// The release check on a catalog's OCR language packs: each is a launch language with a Model
+    /// baseline entry, under its pack id, and no payload is over the language's download budget.
+    fn check_ocr_language_packs(catalog: &Catalog, launch: &[LaunchLanguage]) -> Result<(), String> {
+        for pack in &catalog.packs {
+            let Some(language) = &pack.ocr_language else { continue };
+            let baseline = launch.iter().find(|entry| entry.code == language.code && !entry.bundled)
+                .ok_or_else(|| format!("{} reads {:?}, which has no Model baseline entry", pack.id, language.code))?;
+            if baseline.pack_id.as_deref() != Some(pack.id.as_str()) {
+                return Err(format!("{} reads {:?}, which belongs to pack {:?}", pack.id, language.code, baseline.pack_id));
+            }
+            let budget = baseline.download_budget_bytes.ok_or_else(|| format!("{} has no download budget", pack.id))?;
+            if let Some(payload) = pack.payloads.iter().find(|payload| payload.download_bytes > budget) {
+                return Err(format!("{} for {} is {} bytes, over its {budget} byte budget", pack.id, payload.target, payload.download_bytes));
+            }
+        }
+        Ok(())
+    }
+
+    fn ocr_pack(id: &str, code: &str, download_bytes: u64) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "name": id, "description": "d", "toolIds": [OCR_TOOL_ID], "license": "Apache-2.0", "version": "1.0",
+            "minPackFormat": 1, "appVersions": { "from": "0.1" }, "ocrLanguage": { "code": code, "name": code },
+            "payloads": [{ "target": "all", "downloadBytes": download_bytes, "installedBytes": download_bytes, "sha256": "0".repeat(64), "path": format!("{id}.toolboxpack") }]
+        })
+    }
+
+    fn catalog_of(packs: Vec<serde_json::Value>) -> Catalog {
+        parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": packs }).to_string()).unwrap()
+    }
+
+    #[test]
+    fn launch_ocr_languages_have_a_pinned_model_a_fixture_result_and_a_budget() {
+        let launch = launch_languages();
+        let hex = |text: &str, length: usize| text.len() == length && text.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        let mut codes = std::collections::BTreeSet::new();
+        let mut pack_ids = std::collections::BTreeSet::new();
+        for language in &launch {
+            assert!(codes.insert(language.code.as_str()), "{} is listed once", language.code);
+            assert!(!language.name.trim().is_empty());
+            assert_eq!(language.model.file, format!("{}.traineddata", language.code));
+            assert!(language.model.bytes > 0 && hex(&language.model.git_blob_sha1, 40), "{} pins its model", language.code);
+            assert!(!language.fixture.recognizes.trim().is_empty() && language.fixture.text.contains(&language.fixture.recognizes), "{} has a fixture result", language.code);
+            if language.bundled {
+                assert_eq!((language.code.as_str(), language.name.as_str()), BUILT_IN_OCR_LANGUAGE);
+                assert_eq!((&language.pack_id, language.download_budget_bytes), (&None, None));
+                continue;
+            }
+            let pack_id = language.pack_id.as_deref().unwrap_or_else(|| panic!("{} names its pack", language.code));
+            assert!(pack_ids.insert(pack_id));
+            // Every language besides English checks a character only that language's model reads.
+            assert!(!language.fixture.recognizes.is_ascii(), "{} fixture reads a script-specific character", language.code);
+            // The model rounded up to a whole MiB, plus 1 MiB for the manifest, signature and archive.
+            assert_eq!(language.download_budget_bytes, Some(language.model.bytes.div_ceil(MIB) * MIB + MIB), "{} budget", language.code);
+        }
+        assert_eq!(launch.iter().filter(|language| language.bundled).count(), 1);
+        assert_eq!(launch.iter().filter(|language| !language.bundled).map(|language| language.code.as_str()).collect::<Vec<_>>(), ["deu", "fra", "spa", "hin", "guj", "tam"]);
+        assert!(launch.iter().all(|language| language.download_budget_bytes.is_none_or(|budget| budget <= 5 * MIB)));
+    }
+
+    #[test]
+    fn the_bundled_english_model_is_the_one_pinned_in_the_model_baseline() {
+        use sha1::Digest as _;
+        let english = launch_languages().into_iter().find(|language| language.bundled).unwrap();
+        let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/ocr/tessdata/eng.traineddata")).unwrap();
+        assert_eq!(bytes.len() as u64, english.model.bytes);
+        assert_eq!(english.model.sha256.as_deref(), Some(install::digest_hex(&bytes).as_str()));
+        // The upstream repository names files by their Git blob hash, so the pin can be checked there.
+        let mut blob = sha1::Sha1::new();
+        blob.update(format!("blob {}\0", bytes.len()));
+        blob.update(&bytes);
+        let blob: String = blob.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(blob, english.model.git_blob_sha1);
+    }
+
+    #[test]
+    fn every_ocr_language_pack_in_the_built_in_catalog_is_a_launch_language_within_its_budget() {
+        check_ocr_language_packs(&parse_catalog(BUILT_IN_CATALOG).unwrap(), &launch_languages()).unwrap();
+    }
+
+    #[test]
+    fn the_release_check_refuses_an_ocr_pack_over_budget_or_missing_from_the_model_baseline() {
+        let launch = launch_languages();
+        let at_budget = launch.iter().filter(|language| !language.bundled)
+            .map(|language| ocr_pack(language.pack_id.as_deref().unwrap(), &language.code, language.download_budget_bytes.unwrap()))
+            .collect();
+        check_ocr_language_packs(&catalog_of(at_budget), &launch).unwrap();
+
+        let over = check_ocr_language_packs(&catalog_of(vec![ocr_pack("ocr-hindi", "hin", 3 * MIB + 1)]), &launch).unwrap_err();
+        assert!(over.contains("over its 3145728 byte budget"), "{over}");
+        let unpinned = check_ocr_language_packs(&catalog_of(vec![ocr_pack("ocr-japanese", "jpn", MIB)]), &launch).unwrap_err();
+        assert!(unpinned.contains("no Model baseline entry"), "{unpinned}");
+        let renamed = check_ocr_language_packs(&catalog_of(vec![ocr_pack("ocr-hindi-2", "hin", MIB)]), &launch).unwrap_err();
+        assert!(renamed.contains("belongs to pack"), "{renamed}");
     }
 
     /// Listing must work offline: the module has no network code and reads only the filesystem.

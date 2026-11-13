@@ -144,7 +144,7 @@ const jpegColourText = ({ colour, pages, images }: { colour: JpegColour; pages: 
         : `${place} — ${images} inverted JPEGs, copied as they are. Some viewers show them in negative.`;
 };
 
-const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
+export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
 /** Notes tell what was approximated or what another tool can still do for a file; they don't say anything went wrong. */
 const isNote = (warning: OutcomeWarning) => warning.code === "approximateLayout" || warning.code === "pagesWithoutText";
 

@@ -654,6 +654,7 @@ fn main() {
             get_quick_actions,
             set_quick_actions,
             packs::list_packs,
+            packs::ocr_languages,
             packs::install::inspect_pack_file,
             packs::install::install_pack_file,
             packs::download::install_pack,
