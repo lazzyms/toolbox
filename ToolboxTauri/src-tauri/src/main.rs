@@ -1591,6 +1591,79 @@ mod command_tests {
     }
 
     #[test]
+    fn cropping_a_signed_pdf_removes_the_signature_and_warns_on_that_file_only() {
+        use crate::kit::contracts::{OutcomeWarning, WarningKind};
+        let root = sandbox("crop-signed");
+        let signed = root.join("vendor-nda.pdf");
+        let certified = root.join("certified.pdf");
+        let plain = root.join("lease.pdf");
+        for path in [&signed, &certified, &plain] {
+            make_pdf(path, 1);
+        }
+        let mut document = lopdf::Document::load(&signed).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed).unwrap();
+        let mut document = lopdf::Document::load(&certified).unwrap();
+        let signature = document.add_object(lopdf::dictionary! { "Type" => "Sig" });
+        document.catalog_mut().unwrap().set("Perms", lopdf::dictionary! { "DocMDP" => signature });
+        document.save(&certified).unwrap();
+        let inputs = vec![signed.clone(), certified.clone(), plain.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = inputs.iter().flat_map(|input| tauri::async_runtime::block_on(crop_pdf(RunEvents::silent(), CropPdfRequest {
+            paths: vec![input.clone()],
+            rectangle: PdfRect { x: 10.0, y: 10.0, width: 300.0, height: 400.0 },
+            scope: PageScope::All,
+            output_location: location(&root, "cropped"),
+        }))).collect::<Vec<_>>();
+
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        for outcome in &outcomes {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.output_paths().len(), 1);
+            let output = lopdf::Document::load(&outcome.output_paths()[0]).unwrap();
+            assert!(!crate::kit::pdf::has_signed_signature_field(&output));
+            let catalog = output.catalog().unwrap();
+            assert!(catalog.get(b"Perms").is_err() && catalog.get(b"AcroForm").is_err());
+            assert!(!output.objects.values().any(|object| object.as_dict().or_else(|_| object.as_stream().map(|stream| &stream.dict))
+                .is_ok_and(|dictionary| dictionary.has(b"ByteRange") || dictionary.get(b"Type").and_then(|value| value.as_name()).is_ok_and(|name| name == b"Sig") || dictionary.has(b"FT"))));
+            let page = output.get_dictionary(*output.get_pages().values().next().unwrap()).unwrap();
+            assert!(page.get(b"Annots").is_err());
+            assert_eq!(page.get(b"CropBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>(), [10.0, 10.0, 310.0, 410.0]);
+        }
+        assert_eq!(outcomes.iter().map(|outcome| outcome.warnings.clone()).collect::<Vec<_>>(), [removed.clone(), removed, vec![]]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tools_that_do_not_opt_in_still_reject_signed_pdfs_before_output() {
+        let root = sandbox("signed-not-opted-in");
+        let signed = root.join("vendor-nda.pdf");
+        make_pdf(&signed, 1);
+        let mut document = lopdf::Document::load(&signed).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed).unwrap();
+        let original = std::fs::read(&signed).unwrap();
+        let rectangle = PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 100.0 };
+        let paths = vec![signed.clone()];
+        let runs = [
+            ("sign", tauri::async_runtime::block_on(sign_pdf(RunEvents::silent(), SignPdfRequest { paths: paths.clone(), page: 0, text: "Signed".into(), signature_path: None, rectangle: rectangle.clone(), scope: PageScope::All, output_location: location(&root, "sign") }))),
+            ("edit", tauri::async_runtime::block_on(edit_pdf(RunEvents::silent(), EditPdfRequest { paths: paths.clone(), mode: "highlight".into(), text: String::new(), pages: None, rectangle, output_location: location(&root, "edit") }))),
+        ];
+        for (name, outcomes) in runs {
+            assert_eq!(outcomes.len(), 1, "{name}");
+            assert_eq!(outcomes[0].error().map(|error| error.message.as_str()), Some("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy"), "{name}");
+            assert!(outcomes[0].output_paths().is_empty() && outcomes[0].warnings.is_empty(), "{name}");
+            assert_eq!(std::fs::read_dir(root.join(name)).unwrap().count(), 0, "{name}");
+        }
+        assert_eq!(std::fs::read(&signed).unwrap(), original);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn locking_and_unlocking_a_signed_pdf_warns_that_the_signature_was_removed_on_that_file_only() {
         use crate::kit::contracts::{OutcomeWarning, WarningKind};
         let root = sandbox("signature-removed");

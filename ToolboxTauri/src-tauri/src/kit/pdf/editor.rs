@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 use super::metadata::{effective_crop_bounds, page_bounds, page_rotation};
-use super::{inherited, mutation_preflight, PdfMutationIntent, PdfMutationPreflight};
+use super::{inherited, mutation_preflight, note_signature_removed, remove_signatures, PdfMutationIntent, PdfMutationPreflight, SignedPdf};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -343,7 +343,7 @@ fn validate_operation_targets(operation: &PdfEditOperation, deleted_pages: &[usi
 }
 
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-cropped", PdfMutationIntent::General, |document, pages, preflight| {
+    transform_pdf(input, &request.output_location, "-cropped", PdfMutationIntent::General, SignedPdf::RemoveSignature, |document, pages, preflight| {
         validate_rect(&request.rectangle)?;
         let selected = scoped_indices(&request.scope, pages.len())?;
         reject_annotated_pages(preflight, pages, selected.iter().copied(), "cropped")?;
@@ -362,7 +362,7 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-signed", PdfMutationIntent::General, |document, pages, _preflight| {
+    transform_pdf(input, &request.output_location, "-signed", PdfMutationIntent::General, SignedPdf::Reject, |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
         if request.page >= pages.len() { return Err("Signature page is outside the document.".to_string()); }
         let targets = match &request.scope {
@@ -394,7 +394,7 @@ pub fn sign(request: &SignPdfRequest, input: PathBuf) -> JobOutcome {
 }
 
 pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
-    transform_pdf(input, &request.output_location, "-edited", PdfMutationIntent::General, |document, pages, _preflight| {
+    transform_pdf(input, &request.output_location, "-edited", PdfMutationIntent::General, SignedPdf::Reject, |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
         if request.mode != "shape" && request.text.trim().is_empty() { return Err("Text is required for this edit mode.".to_string()); }
         let targets = optional_indices(&request.pages, pages.len(), "edit pages")?;
@@ -420,7 +420,7 @@ pub fn edit(request: &EditPdfRequest, input: PathBuf) -> JobOutcome {
 /// Permanently removes everything under the rectangle: each target page is flattened to an image with
 /// the area painted black, and its original text, vectors, and annotations are dropped from the file.
 pub fn redact(request: &RedactPdfRequest, input: PathBuf) -> JobOutcome {
-    let mut outcome = transform_pdf(input, &request.output_location, "-redacted", PdfMutationIntent::General, |document, pages, _preflight| {
+    let mut outcome = transform_pdf(input, &request.output_location, "-redacted", PdfMutationIntent::General, SignedPdf::Reject, |document, pages, _preflight| {
         validate_rect(&request.rectangle)?;
         let targets = scoped_indices(&request.scope, pages.len())?;
         let renderer = super::remaining::pdftoppm().ok_or("The PDF renderer (pdftoppm) is required to redact but was not found.")?;
@@ -844,12 +844,16 @@ fn page_number_position(position: Option<&PdfOverlayPosition>, width: f32, heigh
     }
 }
 
-fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, edit: F) -> JobOutcome
+fn transform_pdf<F>(input: PathBuf, location: &OutputLocation, suffix: &str, intent: PdfMutationIntent, signed: SignedPdf, edit: F) -> JobOutcome
 where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Result<(), String> {
     let mut document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
     if document.is_encrypted() { return failure(input, "Unlock the PDF before editing".to_string()); }
     let pages: Vec<_> = document.get_pages().values().copied().collect();
     if pages.is_empty() { return failure(input, "PDF has no pages".to_string()); }
+    let signature_removed = match signed {
+        SignedPdf::Reject => false,
+        SignedPdf::RemoveSignature => match remove_signatures(&mut document) { Ok(removed) => removed, Err(error) => return failure(input, error) },
+    };
     let preflight = match mutation_preflight(&document, intent) {
         Ok(preflight) => preflight,
         Err(error) => return failure(input, error),
@@ -861,7 +865,7 @@ where F: FnOnce(&mut Document, &[lopdf::ObjectId], &PdfMutationPreflight) -> Res
     };
     match document.save(output.path()) {
         Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF saved"),
+            Ok(path) => note_signature_removed(JobOutcome::succeeded(input, vec![path], "PDF saved"), signature_removed),
             Err(error) => failure(input, format!("Could not publish PDF output: {error}")),
         },
         Err(error) => failure(input, format!("Save failed: {error}")),
