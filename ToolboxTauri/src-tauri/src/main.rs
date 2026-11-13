@@ -4346,6 +4346,32 @@ mod command_tests {
     }
 
     #[test]
+    fn a_pdf_image_over_the_recorded_decoded_size_is_reported_alone_and_the_rest_extracts() {
+        let root = sandbox("limit-pdf-image-decoded");
+        let offender = root.join("poster.pdf");
+        make_extract_pdf(&offender, &[(false, true)]);
+        let mut document = lopdf::Document::load(&offender).unwrap();
+        // 10,000 x 16,667 RGB declares 500,010,000 decoded bytes, just over the recorded 500,000,000.
+        // The stream is a few hundred bytes, so only the declared size can trip the limit.
+        let poster = document.add_object(lopdf::Stream::new(lopdf::dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 10_000, "Height" => 16_667, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "FlateDecode" }, crate::kit::common::limits::fixtures::zlib_of_zeros(30_000)));
+        let page = *document.get_pages().get(&1).unwrap();
+        let resources = document.get_object(page).unwrap().as_dict().unwrap().get(b"Resources").unwrap().as_dict().unwrap().get(b"XObject").unwrap().as_dict().unwrap().clone();
+        let mut xobjects = resources;
+        xobjects.set("Im1", poster);
+        document.get_object_mut(page).unwrap().as_dict_mut().unwrap().get_mut(b"Resources").unwrap().as_dict_mut().unwrap().set("XObject", xobjects);
+        document.save(&offender).unwrap();
+
+        let (_, outcomes) = extract_pair(&root, &offender, "out");
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_none()), "both PDFs must still succeed");
+        let limited = outcomes.iter().find(|outcome| outcome.input_path == offender).unwrap();
+        assert_eq!(limited.warnings, [crate::kit::contracts::OutcomeWarning { kind: crate::kit::contracts::WarningKind::ImageTooLarge { page: 1, image: 2, width: 10_000, height: 16_667 }, message: "Page 1, image 2 — Would be 10,000 × 16,667 px when decoded, over the size limit. Not saved.".into() }]);
+        assert_eq!(files_in(&limited.output_paths()[0]), ["page-1-image-1.jpg"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn an_image_decoding_past_the_recorded_size_fails_alone() {
         let root = sandbox("limit-image-expansion");
         let offender = root.join("huge.png");

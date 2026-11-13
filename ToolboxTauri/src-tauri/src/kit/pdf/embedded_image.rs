@@ -44,19 +44,30 @@ pub(crate) enum NotSaved {
 ///
 /// CMYK becomes RGB with the fixed formula R = round((M − C)(M − K) / M), G and B likewise with magenta and
 /// yellow, where M is 255 for 8-bit output and 65535 for 16-bit output. No colour profile is applied.
+///
+/// An image that is decoded to PNG is first held to `MAX_DECODED_BYTES` by its declared width, height, colour
+/// components, bit depth and alpha, before any of its filters run, so a small stream that would expand to an enormous
+/// image is reported as too large without being inflated or decoded.
 pub(crate) fn extract(document: &Document, image: &Stream) -> Result<Extracted, NotSaved> {
     let dict = &image.dict;
     let (width, height) = dimensions(dict)?;
+    let keeps_encoding = names(document, dict.get(b"Filter").ok())?.last().is_some_and(|filter| matches!(*filter, b"DCTDecode" | b"DCT" | b"JPXDecode"));
+    let layout = if keeps_encoding { None } else {
+        let layout = Layout::read(document, dict)?;
+        if layout.decoded_bytes((width, height)) > MAX_DECODED_BYTES { return Err(NotSaved::TooLarge { width, height }); }
+        Some(layout)
+    };
     let (data, encoded) = undo_filters(document, image, (width, height))?;
-    match encoded {
-        Some(Encoded::Jpeg) => {
+    match (encoded, layout) {
+        (Some(Encoded::Jpeg), _) => {
             let space = dict.get(b"ColorSpace").ok().map(|space| colour_space(document, space));
             let cmyk = matches!(space, Some(Ok(Space::Cmyk)));
             let inverted = numbers(document, dict.get(b"Decode").ok()).is_some_and(|decode| decode.len() >= 2 && decode[0] == 1.0 && decode[1] == 0.0);
             Ok(Extracted::Jpeg { data, cmyk, inverted })
         }
-        Some(Encoded::Jpeg2000) => Ok(Extracted::Jpeg2000(data)),
-        None => decode_pixels(document, dict, &data, (width, height)).and_then(encode_png).map(Extracted::Png),
+        (Some(Encoded::Jpeg2000), _) => Ok(Extracted::Jpeg2000(data)),
+        (None, Some(layout)) => decode_pixels(document, dict, &layout, &data, (width, height)).and_then(encode_png).map(Extracted::Png),
+        (None, None) => Err(NotSaved::Damaged),
     }
 }
 
@@ -508,22 +519,57 @@ fn gray_plane(document: &Document, mask: &Stream, (width, height): (u64, u64), m
     Ok(scaled)
 }
 
-fn decode_pixels(document: &Document, dict: &Dictionary, data: &[u8], (width, height): (u64, u64)) -> Result<Pixels, NotSaved> {
-    let stencil = dict.get(b"ImageMask").and_then(Object::as_bool).unwrap_or(false);
-    let space = if stencil { Space::Gray } else { colour_space(document, dict.get(b"ColorSpace").map_err(|_| NotSaved::Damaged)?)? };
-    let bits = bits_per_component(dict)?;
+/// How an image's samples are stored and what its decoded pixels hold, read from its dictionary alone.
+struct Layout {
+    stencil: bool,
+    space: Space,
+    bits: u8,
+    /// Whether the decoded pixels carry alpha: a stencil mask, a soft mask or a colour key or stencil `Mask`.
+    alpha: bool,
+}
+
+impl Layout {
+    fn read(document: &Document, dict: &Dictionary) -> Result<Self, NotSaved> {
+        let stencil = dict.get(b"ImageMask").and_then(Object::as_bool).unwrap_or(false);
+        let space = if stencil { Space::Gray } else { colour_space(document, dict.get(b"ColorSpace").map_err(|_| NotSaved::Damaged)?)? };
+        let alpha = stencil || dict.has(b"SMask") || dict.has(b"Mask");
+        Ok(Self { stencil, space, bits: bits_per_component(dict)?, alpha })
+    }
+
+    /// The largest value of one decoded channel: 16-bit images keep 16 bits, except indexed ones.
+    fn max(&self) -> u32 {
+        if self.bits == 16 && !matches!(self.space, Space::Indexed { .. }) { 65535 } else { 255 }
+    }
+
+    fn colour_channels(&self) -> usize {
+        match &self.space {
+            Space::Gray => 1,
+            Space::Indexed { base, .. } if **base == Space::Gray => 1,
+            _ => 3,
+        }
+    }
+
+    fn channels(&self) -> usize {
+        self.colour_channels() + usize::from(self.alpha)
+    }
+
+    /// The bytes the image takes once its filters are undone, or once its pixels are decoded, whichever is more.
+    fn decoded_bytes(&self, (width, height): (u64, u64)) -> u64 {
+        let samples = width.saturating_mul(self.space.components() as u64 * u64::from(self.bits)).div_ceil(8).saturating_mul(height);
+        let pixels = width.saturating_mul(height).saturating_mul(self.channels() as u64).saturating_mul(if self.max() == 255 { 1 } else { 2 });
+        samples.max(pixels)
+    }
+}
+
+fn decode_pixels(document: &Document, dict: &Dictionary, layout: &Layout, data: &[u8], (width, height): (u64, u64)) -> Result<Pixels, NotSaved> {
+    let Layout { stencil, ref space, bits, .. } = *layout;
     let samples = Samples::new(data, (width, height), space.components(), bits)?;
-    let max = if bits == 16 && !matches!(space, Space::Indexed { .. }) { 65535 } else { 255 };
-    let colour = match &space {
-        Space::Gray => 1,
-        Space::Indexed { base, .. } if **base == Space::Gray => 1,
-        _ => 3,
-    };
+    let max = layout.max();
+    let colour = layout.colour_channels();
     let alpha = if stencil { None } else { alpha_plane(document, dict, &samples, (width, height), max)? };
-    let channels = colour + usize::from(stencil || alpha.is_some());
+    let channels = layout.channels();
     let output_bytes = width.saturating_mul(height).saturating_mul(channels as u64).saturating_mul(if max == 255 { 1 } else { 2 });
-    if output_bytes > MAX_DECODED_BYTES { return Err(NotSaved::TooLarge { width, height }); }
-    let default = match &space { Space::Indexed { .. } => (0.0, f64::from(samples.top())), _ => (0.0, 1.0) };
+    let default = match space { Space::Indexed { .. } => (0.0, f64::from(samples.top())), _ => (0.0, 1.0) };
     let ranges = decode_ranges(document, dict, space.components(), default)?;
     let mut pixels = Pixels { width: width as u32, height: height as u32, channels, max, narrow: Vec::new(), wide: Vec::new() };
     if max == 255 { pixels.narrow.reserve(output_bytes as usize) } else { pixels.wide.reserve(output_bytes as usize / 2) }
@@ -535,7 +581,7 @@ fn decode_pixels(document: &Document, dict: &Dictionary, data: &[u8], (width, he
                 pixels.push(max - level(samples.get(x, y, 0), samples.top(), ranges[0], max));
                 continue;
             }
-            let rgb = match &space {
+            let rgb = match space {
                 Space::Indexed { base, high, lookup } => {
                     let (low, top) = ranges[0];
                     let index = (low + f64::from(samples.get(x, y, 0)) * (top - low) / f64::from(samples.top())).round().clamp(0.0, *high as f64) as usize;
