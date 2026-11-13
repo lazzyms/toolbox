@@ -1,5 +1,6 @@
 import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, SucceededJobOutcome, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
+import { formatBatchSaving, formatBytes, formatSizeChange } from "../shared/fileSize";
 
 export type RowTone = "ok" | "warn" | "skip" | "fail";
 
@@ -111,8 +112,12 @@ const renamedOutputsDetail = (inputPath: string, outputCount: number, outputNoun
     return `${outputCount} ${outputNoun}. ${renamed.length} renamed, because ${andList(chosen)} already existed. ${ending}`;
 };
 
+const sizeLine = (outcome: JobOutcome) =>
+    outcome.originalBytes === undefined || outcome.outputBytes === undefined ? "" : formatSizeChange(outcome.originalBytes, outcome.outputBytes);
+
 export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, outputNoun?: string): RowView => {
     const warnings = outcome.warnings.map(warningText);
+    const sizes = sizeLine(outcome);
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
         case "succeeded": {
@@ -139,7 +144,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 tone: warned ? "warn" : "ok",
                 stateLabel: resultVerb,
                 spokenState: warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
-                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput && !outputNoun ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
+                detailLines: nonEmpty(warned ? [sizes, ...warnings, outcome.detail] : [sizes, first && !byOutput && !outputNoun ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
                 pointer: null,
@@ -153,7 +158,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 tone: "skip",
                 stateLabel: "Skipped",
                 spokenState: "Skipped",
-                detailLines: nonEmpty([outcome.reason.message, ...warnings]),
+                detailLines: nonEmpty([sizes, outcome.reason.message, ...warnings]),
                 openOutput: null,
                 revealOutput: null,
                 pointer: pointerView(outcome.reason.pointer),
@@ -212,5 +217,25 @@ export const resultSummary = (results: JobOutcome[], resultVerb: string): Result
     return {
         headline: `${cancelled ? "Cancelled" : "Done"}. ${resultTally(results, resultVerb)}`,
         hints: hints.filter((hint): hint is string => hint !== null),
+    };
+};
+
+export interface BatchTotal {
+    savedLine: string;
+    totalLine: string;
+    note: string;
+}
+
+/** Sums only files that got a smaller copy. Skipped and failed files kept their size and got no copy. */
+export const batchTotal = (results: JobOutcome[], resultVerb: string): BatchTotal | null => {
+    const measured = results.filter((result) => result.state === "succeeded" && result.originalBytes !== undefined && result.outputBytes !== undefined);
+    if (measured.length === 0) return null;
+    const before = measured.reduce((sum, result) => sum + (result.originalBytes ?? 0), 0);
+    const after = measured.reduce((sum, result) => sum + (result.outputBytes ?? 0), 0);
+    const verb = resultVerb.toLowerCase();
+    return {
+        savedLine: formatBatchSaving(before, after),
+        totalLine: `${formatBytes(before)} → ${formatBytes(after)} across ${measured.length} ${verb} ${measured.length === 1 ? "file" : "files"}`,
+        note: `Counts only ${verb} files. Skipped and failed files kept their size and got no copy.`,
     };
 };

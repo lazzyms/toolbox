@@ -32,7 +32,7 @@ const designIconByToolId: Record<AtomicToolId, string> = {
   "pdf-remove-pages": "file-minus",
   "pdf-extract-pages": "extract-pages",
   "pdf-organize": "organize-pdf",
-  "pdf-compress": "compress-pdf",
+  "compress-files": "compress-pdf",
   "pdf-rotate": "rotate-pdf",
   "pdf-repair": "repair-pdf",
   "pdf-redact": "redact-pdf",

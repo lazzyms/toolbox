@@ -22,7 +22,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "pdf-remove-pages", title: "Remove PDF Pages", shortTitle: "Remove Pages", resultVerb: "Trimmed", runningVerb: "Trimming", blurb: "Delete selected pages while keeping the rest in order.", symbol: "file-minus", category: "PDF", command: "export_pdf_scene", verification: "pdf-remove-pages", view: "pdf-remove-pages" },
     { id: "pdf-extract-pages", title: "Extract PDF Pages", shortTitle: "Extract Pages", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Pull selected page ranges into a new PDF.", symbol: "file-search", category: "PDF", command: "extract_pdf_pages", verification: "pdf-extract-pages", view: "pdf-extract-pages" },
     { id: "pdf-organize", title: "Organize PDF", shortTitle: "Organize", resultVerb: "Organized", runningVerb: "Organizing", blurb: "Reorder, rotate, mirror and remove PDF pages and save an organized copy.", symbol: "layout-grid", category: "PDF", command: "export_pdf_scene", verification: "pdf-organize", view: "pdf-organize" },
-    { id: "pdf-compress", title: "Compress PDF", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Shrink PDF stream data without changing page geometry.", symbol: "file-download", category: "PDF", command: "compress_pdf", verification: "pdf-compress", view: "pdf-compress" },
+    { id: "compress-files", title: "Compress", shortTitle: "Compress", resultVerb: "Compressed", runningVerb: "Compressing", blurb: "Make PDFs smaller without losing anything.", symbol: "file-download", category: "PDF", command: "compress_files", verification: "compress-files", view: "compress-files" },
     { id: "pdf-rotate", title: "Rotate PDFs", shortTitle: "Rotate", resultVerb: "Rotated", runningVerb: "Rotating", blurb: "Turn all pages, or just the ones you pick.", symbol: "rotate", category: "PDF", command: "rotate_pdf", verification: "pdf-rotate", view: "pdf-rotate" },
     { id: "pdf-repair", title: "Repair PDF", shortTitle: "Repair", resultVerb: "Repaired", runningVerb: "Repairing", blurb: "Fix a damaged PDF that won't open properly.", symbol: "tool", category: "PDF", command: "repair_pdf", verification: "pdf-repair", view: "pdf-repair" },
     { id: "pdf-redact", title: "Redact PDF", shortTitle: "Redact", resultVerb: "Redacted", runningVerb: "Redacting", blurb: "Black out private details so they can't be recovered.", symbol: "eye-off", category: "PDF", command: "redact_pdf", verification: "pdf-redact", view: "pdf-redact" },
@@ -132,7 +132,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "compress-pdf",
         category: "PDF",
         categories: ["PDF", "Images"],
-        toolIds: ["pdf-compress", "compress"],
+        toolIds: ["compress-files", "compress"],
     },
     {
         id: "media-tools",

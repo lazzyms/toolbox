@@ -7,7 +7,7 @@ import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
 import { shortenHomePath, useHomeDir } from "../homePath";
 import type { CombinedResult } from "../registry/saveSteps";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { fileName, resultSummary, resultTally, rowView, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
+import { batchTotal, fileName, resultSummary, resultTally, rowView, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry";
@@ -395,6 +395,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     }
 
     const summary = resultSummary(results, resultVerb);
+    const total = batchTotal(results, resultVerb);
     const extraHint = resultsHint?.(results) ?? null;
     return (
         <div className="result-list">
@@ -402,6 +403,13 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                 <strong>{summary.headline}</strong>
                 {extraHint && <span className="result-summary-hint">{extraHint}</span>}
                 {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
+                {total && (
+                    <span className="result-summary-total">
+                        <span className="result-summary-saved">{total.savedLine}</span>
+                        <span className="result-summary-hint">{total.totalLine}</span>
+                        <span className="result-summary-hint">{total.note}</span>
+                    </span>
+                )}
             </div>
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">

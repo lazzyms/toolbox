@@ -467,15 +467,15 @@ test("search arrows navigate visible results and Enter opens the focused result"
 
     await search.fill("Compress");
     await expect(page.locator("button[data-command-result]")).toHaveCount(2);
-    const compressPdf = page.getByRole("button", { name: "Open Compress PDF", exact: true });
+    const compressFiles = page.getByRole("button", { name: "Open Compress", exact: true });
     const compressImages = page.getByRole("button", { name: "Open Compress Images", exact: true });
 
     await page.keyboard.press("ArrowDown");
-    await expect(compressPdf).toBeFocused();
+    await expect(compressFiles).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(compressImages).toBeFocused();
     await page.keyboard.press("ArrowUp");
-    await expect(compressPdf).toBeFocused();
+    await expect(compressFiles).toBeFocused();
     await page.keyboard.press("ArrowUp");
     await expect(search).toBeFocused();
     await page.keyboard.press("ArrowDown");
@@ -701,9 +701,9 @@ test("each view rail lists exactly its own tools and compression lives only in C
     }
 
     const compress = ToolWorkspaceRegistry.find(({ id }) => id === "compress-files")!;
-    expect(toolsForWorkspace(compress).map(({ title }) => title)).toEqual(["Compress PDF", "Compress Images"]);
+    expect(toolsForWorkspace(compress).map(({ title }) => title)).toEqual(["Compress", "Compress Images"]);
     for (const workspace of ToolWorkspaceRegistry.filter(({ id }) => id !== "compress-files")) {
-        expect(toolsForWorkspace(workspace).map(({ id }) => id)).not.toContain("pdf-compress");
+        expect(toolsForWorkspace(workspace).map(({ id }) => id)).not.toContain("compress-files");
         expect(toolsForWorkspace(workspace).map(({ id }) => id)).not.toContain("compress");
     }
 });
@@ -712,7 +712,8 @@ test("Compress Files keeps the open files across tool switches and runs each nat
     await page.goto("/");
     await page.getByRole("navigation", { name: "Views" }).getByRole("button", { name: "Compress Files", exact: true }).click();
     const rail = page.getByRole("toolbar", { name: "Compress Files tools" });
-    await expect(rail.getByRole("button", { name: "Compress PDF", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(rail.getByRole("button", { name: "Compress", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("slider", { name: "Compression quality" })).toHaveCount(0);
     await chooseFixture(page, pdfFixturePath);
 
     await rail.getByRole("button", { name: "Compress Images", exact: true }).click();
@@ -720,9 +721,9 @@ test("Compress Files keeps the open files across tool switches and runs each nat
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
     await expect(page.getByText(pdfFixtureName, { exact: true })).toBeVisible();
 
-    await rail.getByRole("button", { name: "Compress PDF", exact: true }).click();
+    await rail.getByRole("button", { name: "Compress", exact: true }).click();
     await expect(page.locator(".file-selection-count")).toHaveText("1 file");
-    await page.getByRole("button", { name: "Export Compress PDF", exact: true }).click();
+    await page.getByRole("button", { name: "Compress 1 file", exact: true }).click();
     await expect(page.getByText("Test output", { exact: true }).last()).toBeVisible();
 
     await rail.getByRole("button", { name: "Compress Images", exact: true }).click();
@@ -732,11 +733,51 @@ test("Compress Files keeps the open files across tool switches and runs each nat
     await expect.poll(() => invocationCount(page, "compress_images")).toBe(1);
 
     const requests = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
-        .filter(({ command }) => command === "compress_pdf" || command === "compress_images")
+        .filter(({ command }) => command === "compress_files" || command === "compress_images")
         .map(({ command, args }) => ({ command, request: (args as { request: unknown }).request })));
     expect(requests).toEqual([
-        { command: "compress_pdf", request: { paths: [pdfFixturePath], quality: 80, outputLocation: "alongsideInput" } },
+        { command: "compress_files", request: { paths: [pdfFixturePath], level: "medium", stripExif: false, outputLocation: "alongsideInput" } },
         { command: "compress_images", request: { paths: [fixturePath], quality: 80, lossless: true, outputLocation: "alongsideInput" } },
+    ]);
+});
+
+test("Compress defaults to Medium, describes each strength and sends the paths in order with the chosen strength and Strip EXIF", async ({ page }) => {
+    await page.goto("/");
+    await openFromHome(page, "Compress");
+    const strength = page.getByRole("radiogroup", { name: "Strength" });
+    await expect(strength.getByRole("radio")).toHaveCount(3);
+    await expect(strength.getByRole("radio", { name: /^Medium/ })).toHaveAttribute("aria-checked", "true");
+    await expect(strength.getByRole("radio", { name: "Low Least saving, detail stays" })).toBeVisible();
+    await expect(strength.getByRole("radio", { name: "Medium Good for sharing and email" })).toBeVisible();
+    await expect(strength.getByRole("radio", { name: "High Smallest, photos look softer" })).toBeVisible();
+    await expect(page.getByText("What Medium does", { exact: true })).toBeVisible();
+    await expect(page.getByText("Repacked without loss. Images untouched.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Text, transparency and colour profiles always stay.", { exact: true })).toBeVisible();
+    const exif = page.getByRole("switch", { name: "Strip EXIF" });
+    await expect(exif).not.toBeChecked();
+    await expect(exif).toHaveAccessibleDescription("Off: camera, date and GPS details stay in the copies.");
+    await expect(page.locator(".workspace-primary-action")).toHaveAccessibleName("Compress");
+
+    const paths = ["/local/zeta.pdf", "/local/alpha.pdf", "/local/mid.pdf"];
+    await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(page.locator(".file-selection-count")).toHaveText("3 files");
+    await page.getByRole("button", { name: "Compress 3 files", exact: true }).click();
+    await expect.poll(() => invocationCount(page, "compress_files")).toBe(1);
+
+    await strength.getByRole("radio", { name: /^High/ }).click();
+    await expect(page.getByText("What High does", { exact: true })).toBeVisible();
+    await exif.click();
+    await expect(exif).toHaveAccessibleDescription("On: removes camera, date and GPS details from JPEG, PNG and WebP. Photos stay upright. PDFs aren't changed.");
+    await page.getByRole("button", { name: "Compress 3 files", exact: true }).click();
+    await expect.poll(() => invocationCount(page, "compress_files")).toBe(2);
+
+    const requests = await page.evaluate(() => ((window as TestWindow).__toolboxInvocations ?? [])
+        .filter(({ command }) => command === "compress_files")
+        .map(({ args }) => (args as { request: unknown }).request));
+    expect(requests).toEqual([
+        { paths, level: "medium", stripExif: false, outputLocation: "alongsideInput" },
+        { paths, level: "high", stripExif: true, outputLocation: "alongsideInput" },
     ]);
 });
 
@@ -808,7 +849,7 @@ test("window shortcuts reach search and settings from every workspace view", asy
 
 const runShortcutCases = [
     { tool: "Lock & Unlock", file: pdfFixturePath, command: "remove_password", ready: (page: Page) => fillPasswords(page, "test-password") },
-    { tool: "Compress PDF", file: pdfFixturePath, command: "compress_pdf", ready: async () => undefined },
+    { tool: "Compress", file: pdfFixturePath, command: "compress_files", ready: async () => undefined },
     { tool: "Compress Images", file: fixturePath, command: "compress_images", ready: async () => undefined },
     { tool: "Image Metadata", file: fixturePath, command: "image_metadata", ready: async () => undefined },
 ];
@@ -873,7 +914,7 @@ for (const { platform, labels } of [
         const settings = page.getByRole("button", { name: "Settings", exact: true });
         await expect(settings).toContainText(labels.settings);
 
-        await openFromHome(page, "Compress PDF");
+        await openFromHome(page, "Compress");
         await expect(page.getByRole("button", { name: "Choose files to process" })).toContainText(labels.open);
         const run = page.locator(".workspace-primary-action");
         await expect(run).toContainText(labels.run);
@@ -1867,7 +1908,7 @@ test("shared workspace ignores a stale processing completion after action change
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.evaluate(() => { (window as TestWindow).__toolboxProcessingDelayMs = 150; });
     await page.getByRole("button", { name: "Export Compress Images" }).click();
-    await page.getByRole("toolbar", { name: "Compress Files tools" }).getByRole("button", { name: "Compress PDF" }).click();
+    await page.getByRole("toolbar", { name: "Compress Files tools" }).getByRole("button", { name: "Compress", exact: true }).click();
     await page.waitForTimeout(220);
     await expect(page.getByText("Test output", { exact: true })).toHaveCount(0);
 });
@@ -1962,6 +2003,57 @@ const fileActionInvocations = (page: Page) => page.evaluate(() =>
         command === "open_output_path" || command === "reveal_output_path"
     ),
 );
+
+test("Compress rows show sizes and the saving, skips keep both sizes without file actions, and the batch total counts only compressed files", async ({ page }) => {
+    await page.goto("/");
+    const paths = ["/local/site-survey-scan.pdf", "/local/board-minutes-q3.pdf", "/local/site-notes.pdf", "/local/tax-return-2025.pdf", "/local/hero.pdf"];
+    await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+        succeeded(paths[0], ["/local/site-survey-scan-compressed.pdf"], { detail: "PDF repacked without loss", originalBytes: 14_600_000, outputBytes: 3_800_000 }),
+        {
+            inputPath: paths[1],
+            outputPaths: [],
+            detail: "",
+            state: "skipped",
+            failure: null,
+            reason: { code: "noSavings", message: "No savings: already well compressed", pointer: null },
+            warnings: [],
+            originalBytes: 640_000,
+            outputBytes: 652_000,
+        },
+        failed(paths[2], "invalidInput", "Not a readable PDF. The file may be damaged or incomplete."),
+        failed(paths[3], "invalidInput", "This PDF is password-protected. Unlock it first, then compress the unlocked copy.", {
+            failure: { kind: "invalidInput", message: "This PDF is password-protected. Unlock it first, then compress the unlocked copy.", pointer: { kind: "tool", toolId: "lock-unlock" } },
+        }),
+        succeeded(paths[4], ["/local/hero-compressed.pdf"], { detail: "PDF repacked without loss", originalBytes: 10_800_000, outputBytes: 4_500_000 }),
+    ] satisfies MockOutcome[]);
+    await openFromHome(page, "Compress");
+    await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await page.getByRole("button", { name: "Compress 5 files", exact: true }).click();
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+    await expect(rows).toHaveText([/^site-survey-scan\.pdf/, /^board-minutes-q3\.pdf/, /^site-notes\.pdf/, /^tax-return-2025\.pdf/, /^hero\.pdf/]);
+    await expect(rows.nth(0)).toContainText("14.6 MB → 3.8 MB, 74% smaller");
+    await expect(rows.nth(0)).toContainText("site-survey-scan-compressed.pdf");
+    await expect(rows.nth(0).getByRole("button", { name: "Open site-survey-scan-compressed.pdf" })).toBeVisible();
+
+    const skipped = rows.nth(1);
+    await expect(skipped).toContainText("Skipped");
+    await expect(skipped).toContainText("640 KB → 652 KB, no savings");
+    await expect(skipped).toContainText("No savings: already well compressed");
+    await expect(skipped.getByRole("button")).toHaveCount(0);
+
+    await expect(rows.nth(2)).toContainText("Failed");
+    await expect(rows.nth(2)).not.toContainText("→");
+    await expect(rows.nth(3).getByRole("button", { name: "Open Lock & Unlock" })).toBeVisible();
+    await expect(rows.nth(4)).toContainText("10.8 MB → 4.5 MB, 58% smaller");
+
+    const summary = resultSummaryStatus(page);
+    await expect(summary.locator("strong")).toHaveText("Done. 2 compressed, 1 skipped, 2 failed");
+    await expect(summary).toContainText("Saved 17.1 MB, 67% smaller");
+    await expect(summary).toContainText("25.4 MB → 8.3 MB across 2 compressed files");
+    await expect(summary).toContainText("Counts only compressed files. Skipped and failed files kept their size and got no copy.");
+});
 
 test("every output exposes native file actions and keeps action errors inline", async ({ page }) => {
     const splitOutputs = ["a-01.pdf", "a-02.pdf", "a-12.pdf"].map((name) => `/local/out/${name}`);
@@ -2336,7 +2428,7 @@ test("single-input actions report every selected file instead of truncating the 
 
 for (const batch of [
     { title: "Compress Images", command: "compress_images", paths: ["/local/beach.png", "/local/forest.jpg"] },
-    { title: "Compress PDF", command: "compress_pdf", paths: ["/local/lease.pdf", "/local/invoice.pdf"] },
+    { title: "Compress", command: "compress_files", paths: ["/local/lease.pdf", "/local/invoice.pdf"] },
     { title: "Extract GIF Frames", command: "extract_gif_frames", paths: ["/local/wave.gif", "/local/spin.gif"] },
 ]) {
     test(`${batch.title} runs every selected file in one native batch`, async ({ page }) => {
@@ -2549,7 +2641,7 @@ test.describe("registered feature actions", () => {
 });
 
 test.describe("workspace runs send the stored output location", () => {
-    const representativeTools = ["lock-unlock", "pdf-edit", "pdf-to-images", "resize", "pdf-compress", "icon-set"] as const;
+    const representativeTools = ["lock-unlock", "pdf-edit", "pdf-to-images", "resize", "compress-files", "icon-set"] as const;
     const customFolder = { customFolder: "/fake/shell/output" };
 
     test("one representative tool covers every workspace view", () => {
