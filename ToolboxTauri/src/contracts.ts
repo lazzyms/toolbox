@@ -132,7 +132,7 @@ export type OutcomePointer =
 /** Why a file needs its pack: `PackNeed` in `src-tauri/src/kit/contracts.rs`. */
 export type PackNeed = "notInstalled" | "damaged" | "incompatible";
 
-export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "textLength";
+export type LimitKind = "fileSize" | "pageCount" | "time" | "decompression" | "textLength" | "dimensions";
 
 export type ToolError = { message: string; pointer: OutcomePointer | null } & (
   | { kind: "invalidInput" | "unavailable" | "processing" | "wrongPassword" | "cancelled" }

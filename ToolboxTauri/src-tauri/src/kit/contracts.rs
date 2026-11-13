@@ -146,6 +146,7 @@ pub enum LimitKind {
     Time,
     Decompression,
     TextLength,
+    Dimensions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

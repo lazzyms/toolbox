@@ -709,7 +709,7 @@ mod command_tests {
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::common::watermark::{WatermarkOptions, WatermarkPosition};
-    use crate::kit::contracts::{ErrorKind, LimitKind};
+    use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer};
     use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, RotateStep, TiffMode, TiffRequest, ToneRequest, ToneStep, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, PageScope, PdfRect, RangedPageScope, RedactPdfRequest};
@@ -2662,6 +2662,102 @@ mod command_tests {
         }));
         assert_eq!([std::fs::read(&offender).unwrap(), std::fs::read(&good).unwrap()], originals);
         assert_only_offender_limited(&outcomes, &offender, LimitKind::Decompression, "500 MB");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn rotate_stack(paths: Vec<PathBuf>, output_location: OutputLocation) -> Vec<JobOutcome> {
+        tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+            paths,
+            steps: ImageEditSteps { rotate: Some(RotateStep { degrees: 90, flip: "none".into() }), ..ImageEditSteps::default() },
+            format: None,
+            output_location,
+        }))
+    }
+
+    fn folder_entries(folder: &PathBuf) -> Vec<String> {
+        let mut names = std::fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_edit_stack_records_its_per_file_limits() {
+        let limits = crate::kit::common::limits::recorded("export_image_edit_stack").expect("the edit stack records limits");
+        assert_eq!(limits.max_bytes, 250_000_000, "input file size");
+        assert_eq!(limits.max_side, Some(16_384), "decoded side, the largest Resize can make");
+        assert_eq!(limits.max_expanded_bytes, 500_000_000, "decoded pixels and decompression");
+        assert_eq!(limits.max_pages, Some(1_000), "GIF frames");
+        assert_eq!(limits.max_duration, std::time::Duration::from_secs(300), "processing time per file");
+    }
+
+    #[test]
+    fn an_image_past_the_edit_side_limit_fails_alone_before_anything_is_reserved() {
+        let root = sandbox("limit-edit-side");
+        let offender = root.join("panorama.png");
+        std::fs::write(&offender, crate::kit::common::limits::fixtures::png_header(42_000, 9_000)).unwrap();
+        let good = root.join("good.png");
+        write_png(&good, 32, 9);
+        let originals = [Original::of(&offender), Original::of(&good)];
+        let outcomes = rotate_stack(vec![offender.clone(), good.clone()], location(&root, "out"));
+        for original in &originals { original.assert_untouched(); }
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::Dimensions, "16384 px");
+        let message = &outcomes[0].error().unwrap().message;
+        assert_eq!(message, "Too large to edit: 42000 × 9000. The limit is 16384 px on a side.");
+        assert_eq!(folder_entries(&root.join("out")), ["good-rotated.png"], "nothing is reserved for the over-limit file");
+
+        let just_over = root.join("strip.png");
+        std::fs::write(&just_over, crate::kit::common::limits::fixtures::png_header(10, 16_385)).unwrap();
+        let at_limit = root.join("tall.png");
+        image::RgbaImage::from_pixel(1, 16_384, Rgba([1, 2, 3, 255])).save(&at_limit).unwrap();
+        let outcomes = rotate_stack(vec![just_over.clone(), at_limit.clone()], location(&root, "edge"));
+        assert_only_offender_limited(&outcomes, &just_over, LimitKind::Dimensions, "10 × 16385");
+        assert_eq!(folder_entries(&root.join("edge")), ["tall-rotated.png"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_image_over_the_edit_size_or_expansion_limit_fails_alone() {
+        let root = sandbox("limit-edit-size");
+        let oversized = root.join("oversized.png");
+        std::fs::write(&oversized, crate::kit::common::limits::fixtures::png_header(64, 64)).unwrap();
+        std::fs::OpenOptions::new().write(true).open(&oversized).unwrap().set_len(250_000_001).unwrap();
+        let good = root.join("good.png");
+        write_png(&good, 32, 9);
+        let outcomes = rotate_stack(vec![oversized.clone(), good.clone()], location(&root, "size"));
+        assert_only_offender_limited(&outcomes, &oversized, LimitKind::FileSize, "250 MB");
+        assert_eq!(folder_entries(&root.join("size")), ["good-rotated.png"]);
+
+        let expanding = root.join("expanding.png");
+        std::fs::write(&expanding, crate::kit::common::limits::fixtures::png_header(11_200, 11_200)).unwrap();
+        let outcomes = rotate_stack(vec![expanding.clone(), good.clone()], location(&root, "expansion"));
+        assert_only_offender_limited(&outcomes, &expanding, LimitKind::Decompression, "500 MB");
+        assert_eq!(folder_entries(&root.join("expansion")), ["good-rotated.png"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_animated_gif_fails_alone_and_points_to_extract_gif_frames() {
+        let root = sandbox("edit-animated-gif");
+        let animated = root.join("walkthrough.gif");
+        std::fs::write(&animated, crate::kit::common::limits::fixtures::gif_with_frames(4, 4, 3)).unwrap();
+        let still = root.join("still.gif");
+        image::RgbaImage::from_fn(6, 4, |x, y| Rgba([x as u8 * 40, y as u8 * 60, 0, 255])).save(&still).unwrap();
+        let good = root.join("good.png");
+        write_png(&good, 32, 9);
+        let originals = [Original::of(&animated), Original::of(&still), Original::of(&good)];
+        let outcomes = rotate_stack(vec![animated.clone(), still.clone(), good.clone()], location(&root, "out"));
+        for original in &originals { original.assert_untouched(); }
+        let error = outcomes[0].error().expect("an animated GIF fails");
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert!(error.message.starts_with("Animated GIF.") && error.message.contains("Extract GIF Frames"), "{}", error.message);
+        assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "gif-extract".into() }));
+        assert!(outcomes[0].output_paths().is_empty());
+        for outcome in &outcomes[1..] {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+        }
+        let still_output = image::open(&outcomes[1].output_paths()[0]).unwrap();
+        assert_eq!((still_output.width(), still_output.height()), (4, 6), "a still GIF is edited like any image");
+        assert_eq!(folder_entries(&root.join("out")), ["good-rotated.png", "still-rotated.png"], "nothing is reserved for the animated GIF");
         let _ = std::fs::remove_dir_all(root);
     }
 
