@@ -1278,7 +1278,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     else if (key === 'y' && isWindows() && event.ctrlKey && !event.shiftKey) { event.preventDefault(); redo(); }
   }}>
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
-      {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
+      {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" className="px-[9px]" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
         onClick={() => chooseTool(item.id)} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
       <span className="scene-toolbar-divider" />
       <Button variant="ghost" size="icon-sm" aria-label={`Undo (${undoKey})`} title={`Undo (${undoKey})`} aria-keyshortcuts={isWindows() ? 'Control+Z' : 'Meta+Z'}
