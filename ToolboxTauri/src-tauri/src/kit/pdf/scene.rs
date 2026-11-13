@@ -712,6 +712,8 @@ fn watermark_centers(area: &Rect, (width, height): (f32, f32), position: Option<
         WatermarkPosition::Placement(WatermarkPlacement::BottomLeft) => vec![(left, bottom)],
         WatermarkPosition::Placement(WatermarkPlacement::BottomRight) => vec![(right, bottom)],
         WatermarkPosition::Offset { x, y } => vec![(area.x + x as f32 + box_w / 2., area.y + y as f32 + box_h / 2.)],
+        // 0 to 1 runs between the same margins the corner placements use.
+        WatermarkPosition::Anchor { anchor_x, anchor_y } => vec![(left + anchor_x * (right - left), top + anchor_y * (bottom - top))],
         WatermarkPosition::Placement(WatermarkPlacement::Tile) => {
             let gap = height.max(1.);
             let (step_x, step_y) = (box_w + gap, box_h + gap);
@@ -4426,6 +4428,11 @@ mod tests {
         let [(x, y)] = at(WatermarkPlacement::TopLeft, 90.)[..] else { panic!() };
         assert!((x - 44.).abs() < 0.001 && (y - 94.).abs() < 0.001, "a quarter turn swaps the corner box: {x} {y}");
         assert_eq!(watermark_centers(&area, (100., 20.), Some(WatermarkPosition::Offset { x: 5, y: 7 }), 0.).unwrap(), vec![(65., 37.)]);
+        // Anchors 0 and 1 land on the corner placements, and 0.5 on the centre.
+        let anchor = |anchor_x, anchor_y| watermark_centers(&area, (100., 20.), Some(WatermarkPosition::Anchor { anchor_x, anchor_y }), 0.).unwrap();
+        assert_eq!(anchor(0., 0.), at(WatermarkPlacement::TopLeft, 0.));
+        assert_eq!(anchor(1., 1.), at(WatermarkPlacement::BottomRight, 0.));
+        assert_eq!(anchor(0.5, 0.5), vec![(310., 420.)]);
         assert_eq!(watermark_centers(&area, (100., 20.), None, 0.).unwrap(), vec![(310., 420.)]);
 
         let tiles = at(WatermarkPlacement::Tile, -35.);

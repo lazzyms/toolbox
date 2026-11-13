@@ -216,7 +216,9 @@ export function watermarkMarks(area: SceneRect, object: SceneObject): { width: n
   const cx = area.x + area.width / 2, cy = area.y + area.height / 2;
   const position: WatermarkPosition = options?.position ?? 'center';
   let centers: ScenePoint[];
-  if (typeof position === 'object') centers = [{ x: area.x + position.x + boxW / 2, y: area.y + position.y + boxH / 2 }];
+  // An anchor runs from 0 to 1 between the same margins the corner placements use.
+  if (typeof position === 'object' && 'anchorX' in position) centers = [{ x: left + position.anchorX * (right - left), y: top + position.anchorY * (bottom - top) }];
+  else if (typeof position === 'object') centers = [{ x: area.x + position.x + boxW / 2, y: area.y + position.y + boxH / 2 }];
   else if (position === 'tile') {
     const gap = Math.max(height, 1), stepX = boxW + gap, stepY = boxH + gap;
     const columns = Math.ceil(area.width / 2 / stepX) + 1, rows = Math.ceil(area.height / 2 / stepY) + 1;

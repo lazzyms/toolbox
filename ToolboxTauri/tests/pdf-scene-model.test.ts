@@ -69,6 +69,10 @@ test("watermark marks follow the native placement geometry inside the visible ar
   assert.deepEqual(watermarkMarks(area, picture("bottom-right")).centers, [{ x: 550 - 20 - 100, y: 700 - 20 - 50 }]);
   assert.deepEqual(watermarkMarks(area, picture("top-right", 90)).centers, [{ x: 550 - 20 - 50, y: 100 + 20 + 100 }]);
   assert.deepEqual(watermarkMarks(area, picture({ x: 10, y: 20 })).centers, [{ x: 50 + 10 + 100, y: 100 + 20 + 50 }]);
+  // Anchors 0 and 1 land on the corner placements, and 0.5 on the centre.
+  assert.deepEqual(watermarkMarks(area, picture({ anchorX: 0, anchorY: 0 })).centers, watermarkMarks(area, picture("top-left")).centers);
+  assert.deepEqual(watermarkMarks(area, picture({ anchorX: 1, anchorY: 1 })).centers, watermarkMarks(area, picture("bottom-right")).centers);
+  assert.deepEqual(watermarkMarks(area, picture({ anchorX: 0.5, anchorY: 0.5 })).centers, [{ x: 300, y: 400 }]);
   const tiles = watermarkMarks(area, picture("tile")).centers;
   assert.ok(tiles.length > 4);
   assert.ok(tiles.some(({ x, y }) => x === 300 && y === 400));

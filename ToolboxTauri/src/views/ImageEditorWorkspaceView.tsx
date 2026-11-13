@@ -10,7 +10,6 @@ import type {
   OutputLocation,
   ToolDefinition,
   ToolResult,
-  WatermarkImagesRequest,
 } from "../contracts";
 import {
   commitImageEdit,
@@ -20,6 +19,7 @@ import {
   defaultImageResizeStep,
   defaultImageRotateStep,
   defaultImageToneStep,
+  defaultImageWatermarkStep,
   editedImageExtension,
   imageEditRequestPlan,
   imageEditStackExtension,
@@ -43,40 +43,21 @@ import {
   type ImageResizeStep,
   type ImageRotateStep,
   type ImageToneStep,
+  type ImageWatermarkStep,
 } from "../features/image-editor/session";
 import { ImageEditStackPanel, type StackMessage } from "./ImageEditStackPanel";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
-import { Slider } from "../components/ui/slider";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { shortcutTarget } from "../shortcuts";
 import { UtilityRegistry, workspaceById } from "../registry";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 
-type ImageEditorDraftValues = {
-  watermarkText: string;
-  watermarkOpacity: number;
-  watermarkX: number;
-  watermarkY: number;
-};
-
 // Tools that are steps in the shared edit stack, not drafts of the edit plan.
-const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate", "image-tone": "tone" };
-const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate", tone: "image-tone" };
-const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep, tone: defaultImageToneStep };
+const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate", "image-tone": "tone", "image-watermark": "watermark" };
+const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate", tone: "image-tone", watermark: "image-watermark" };
+const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep, tone: defaultImageToneStep, watermark: defaultImageWatermarkStep };
 
-const buildImageEditDraft = (id: string, values: ImageEditorDraftValues): ImageEditOperation | null => {
-  if (stackStepForTool[id]) return null;
-  if (id === "image-watermark") return {
-    kind: "watermark",
-    text: values.watermarkText,
-    opacity: values.watermarkOpacity,
-    position: { x: values.watermarkX, y: values.watermarkY },
-  };
-  return null;
-};
 
 const imageEditLabel = (edit: ImageEditOperation) => {
   if (edit.kind === "resize") return `Resize ${edit.width} × ${edit.height}`;
@@ -143,15 +124,10 @@ export const ImageEditorWorkspaceView = ({
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
 }) => {
   const [stackFormat, setStackFormat] = useState<ImageEditStackFormat>("original");
-  const [watermarkText, setWatermarkText] = useState("Toolbox");
-  const [watermarkOpacity, setWatermarkOpacity] = useState(20);
-  const [watermarkX, setWatermarkX] = useState(0);
-  const [watermarkY, setWatermarkY] = useState(0);
   const [history, setHistory] = useState<ImageEditHistory>(() => createImageEditHistory());
   const [committedDraftKey, setCommittedDraftKey] = useState<string | null>(null);
-  const draft = buildImageEditDraft(activeUtility.id, {
-    watermarkText, watermarkOpacity, watermarkX, watermarkY,
-  });
+  // Every Edit Image tool is now a stack step, so no tool drafts an edit-plan edit.
+  const draft: ImageEditOperation | null = null;
   const draftKey = JSON.stringify(draft);
   const liveDraft = draftKey === committedDraftKey ? null : draft;
   const previousLiveDraft = useRef<{ toolId: string; draft: ImageEditOperation | null } | null>(null);
@@ -222,17 +198,12 @@ export const ImageEditorWorkspaceView = ({
         ? exampleOutputName(path, activeUtility.command, imageEditStackSuffix(stack.present), imageEditStackExtension(stackFormat, path))
         : exampleOutputName(path, activeUtility.command, "-edited", editedImageExtension(editPlan, path))}
       onRun={(paths, outputLocation, { runId }) => {
-        if (stackStep) {
-          return invoke<ToolResult>("export_image_edit_stack", { runId, request: {
-            paths,
-            steps: imageEditStackRequestSteps(stack.present),
-            format: stackFormat === "original" ? null : stackFormat,
-            outputLocation,
-          } });
-        }
-        return invoke<ToolResult>("watermark_images", { runId,
-          request: { paths, opacity: watermarkOpacity, text: watermarkText, position: { x: watermarkX, y: watermarkY }, outputLocation } satisfies WatermarkImagesRequest,
-        });
+        return invoke<ToolResult>("export_image_edit_stack", { runId, request: {
+          paths,
+          steps: imageEditStackRequestSteps(stack.present),
+          format: stackFormat === "original" ? null : stackFormat,
+          outputLocation,
+        } });
       }}
       onRunCombined={(paths, outputLocation, { runId }) => invoke<ToolResult>("export_image_edit_plan", { runId,
         request: { paths, plan: imageEditRequestPlan(editPlan, outputLocation) },
@@ -256,6 +227,7 @@ export const ImageEditorWorkspaceView = ({
           onEditResize={(resize: ImageResizeStep, coalesceKey?: string) => changeStack((current) => ({ ...current, resize }), null, coalesceKey)}
           onEditRotate={(rotate: ImageRotateStep) => changeStack((current) => ({ ...current, rotate }), null)}
           onEditTone={(tone: ImageToneStep, coalesceKey?: string) => changeStack((current) => ({ ...current, tone }), null, coalesceKey)}
+          onEditWatermark={(watermark: ImageWatermarkStep, coalesceKey?: string) => changeStack((current) => ({ ...current, watermark }), null, coalesceKey)}
           onRemove={(step) => changeStack(
             (current) => current[step] ? { ...current, [step]: undefined } : null,
             { text: `${imageEditStepLabels[step]} removed. The other steps keep their settings.`, undo: true },
@@ -271,14 +243,6 @@ export const ImageEditorWorkspaceView = ({
           }}
         />
       ) : <ImageEditorControls {...props} utility={activeUtility} onSelectTool={onSelectTool} {...{
-        watermarkText,
-        setWatermarkText,
-        watermarkOpacity,
-        setWatermarkOpacity,
-        watermarkX,
-        setWatermarkX,
-        watermarkY,
-        setWatermarkY,
         plan: history.present,
         draft: liveDraft,
         canUndo: history.past.length > 0,
@@ -313,14 +277,6 @@ type ImageEditorControlsProps = {
   loading: boolean;
   utility: ToolDefinition;
   onSelectTool?: (id: AtomicToolId) => void;
-  watermarkText: string;
-  setWatermarkText: (value: string) => void;
-  watermarkOpacity: number;
-  setWatermarkOpacity: (value: number) => void;
-  watermarkX: number;
-  setWatermarkX: (value: number) => void;
-  watermarkY: number;
-  setWatermarkY: (value: number) => void;
   plan: ImageEditPlan;
   draft: ImageEditOperation | null;
   canUndo: boolean;
@@ -344,14 +300,6 @@ const ImageEditorControls = ({
   loading,
   utility,
   onSelectTool,
-  watermarkText,
-  setWatermarkText,
-  watermarkOpacity,
-  setWatermarkOpacity,
-  watermarkX,
-  setWatermarkX,
-  watermarkY,
-  setWatermarkY,
   plan,
   draft,
   canUndo,
@@ -368,30 +316,6 @@ const ImageEditorControls = ({
   const inputPath = files[0];
   const previewPlanKey = JSON.stringify({ plan, draft });
   const previousInputPath = useRef<string | undefined>(undefined);
-  const previewStageRef = useRef<HTMLDivElement>(null);
-  const dragOffset = useRef<{ x: number; y: number } | null>(null);
-  const activePointerId = useRef<number | null>(null);
-
-  const clearImageDrag = () => {
-    const pointerId = activePointerId.current;
-    activePointerId.current = null;
-    dragOffset.current = null;
-    const stage = previewStageRef.current;
-    if (pointerId !== null && stage?.hasPointerCapture(pointerId)) stage.releasePointerCapture(pointerId);
-  };
-
-  useEffect(() => {
-    const clear = () => clearImageDrag();
-    window.addEventListener("pointerup", clear);
-    window.addEventListener("pointercancel", clear);
-    window.addEventListener("blur", clear);
-    return () => {
-      window.removeEventListener("pointerup", clear);
-      window.removeEventListener("pointercancel", clear);
-      window.removeEventListener("blur", clear);
-      clearImageDrag();
-    };
-  }, []);
 
   useEffect(() => {
     if (previousInputPath.current !== undefined && previousInputPath.current !== inputPath) onReset();
@@ -464,38 +388,6 @@ const ImageEditorControls = ({
     window.addEventListener("toolbox:editor-command", onShellCommand);
     return () => window.removeEventListener("toolbox:editor-command", onShellCommand);
   }, [canRedo, canUndo, files.length, hasEdits, loading, onRedo, onUndo, previewIsValid, runCombined]);
-  const pointInPreview = (event: React.PointerEvent<HTMLDivElement>) => {
-    const bounds = previewStageRef.current?.getBoundingClientRect();
-    const interactionPreview = resultPreview ?? sourcePreview;
-    if (!bounds || !interactionPreview) return null;
-    return {
-      x: Math.min(Math.max((event.clientX - bounds.left) / bounds.width * interactionPreview.width, 0), interactionPreview.width),
-      y: Math.min(Math.max((event.clientY - bounds.top) / bounds.height * interactionPreview.height, 0), interactionPreview.height),
-    };
-  };
-  const beginImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    const interactionPreview = resultPreview ?? sourcePreview;
-    if (!interactionPreview || utility.id !== "image-watermark") return;
-    const point = pointInPreview(event);
-    if (!point) return;
-    dragOffset.current = { x: 0, y: 0 };
-    activePointerId.current = event.pointerId;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    event.preventDefault();
-  };
-  const moveImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    const interactionPreview = resultPreview ?? sourcePreview;
-    if (activePointerId.current !== event.pointerId || !dragOffset.current || !interactionPreview) return;
-    const point = pointInPreview(event);
-    if (!point) return;
-    setWatermarkX(Math.round(point.x));
-    setWatermarkY(Math.round(point.y));
-  };
-  const endImageDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (activePointerId.current === event.pointerId) clearImageDrag();
-  };
-  const interactionPreview = resultPreview ?? sourcePreview;
-  const watermarkOverlay = utility.id === "image-watermark" && interactionPreview ? { left: `${Math.min(watermarkX / interactionPreview.width * 100, 94)}%`, top: `${Math.min(watermarkY / interactionPreview.height * 100, 94)}%` } : null;
   const primaryPreview = resultPreview ?? sourcePreview;
   const primaryPreviewAlt = `Preview of ${inputPath?.split(/[\\/]/).pop() ?? "selected image"}`;
 
@@ -504,17 +396,8 @@ const ImageEditorControls = ({
       <Card className="image-editor-preview" role="region" aria-label="Image preview">
         <CardContent className="image-editor-preview-content grid min-h-[340px] place-items-center overflow-hidden p-0">
         {primaryPreview ? (
-          <div
-            ref={previewStageRef}
-            className={`image-editor-preview-stage ${utility.id === "image-watermark" ? "image-editor-preview-stage-interactive" : ""}`}
-            style={{ aspectRatio: `${primaryPreview.width} / ${primaryPreview.height}` }}
-            onPointerDown={beginImageDrag}
-            onPointerMove={moveImageDrag}
-            onPointerUp={endImageDrag}
-            onPointerCancel={endImageDrag}
-          >
+          <div className="image-editor-preview-stage" style={{ aspectRatio: `${primaryPreview.width} / ${primaryPreview.height}` }}>
             <img src={primaryPreview.dataUrl} alt={primaryPreviewAlt} />
-            {watermarkOverlay && <div className="image-editor-watermark-overlay" aria-label="Watermark preview" style={watermarkOverlay}>{watermarkText || "Watermark"}</div>}
           </div>
         ) : (
           <div className="image-editor-empty">
@@ -534,16 +417,6 @@ const ImageEditorControls = ({
           <h2 className="workspace-active-command">{utility.title}</h2>
           <p className="workspace-panel-copy">Change the outcome without leaving the image editor.</p>
         </div>
-        {utility.id === "image-watermark" && (
-          <>
-            <div className="workspace-field"><Label htmlFor="image-watermark-text">Watermark text</Label><Input id="image-watermark-text" aria-label="Watermark text" value={watermarkText} onChange={(event) => setWatermarkText(event.target.value)} /></div>
-            <div className="workspace-field"><div className="workspace-field-heading"><Label id="image-watermark-opacity-label">Opacity</Label><output>{watermarkOpacity}%</output></div><Slider aria-labelledby="image-watermark-opacity-label" min={1} max={100} value={[watermarkOpacity]} onValueChange={([value]) => value !== undefined && setWatermarkOpacity(value)} /></div>
-            <div className="workspace-field-grid">
-              <div className="workspace-field"><Label htmlFor="image-watermark-left">Watermark left</Label><Input id="image-watermark-left" aria-label="Watermark left" type="number" min="0" value={watermarkX} onChange={(event) => setWatermarkX(Number(event.target.value))} /></div>
-              <div className="workspace-field"><Label htmlFor="image-watermark-top">Watermark top</Label><Input id="image-watermark-top" aria-label="Watermark top" type="number" min="0" value={watermarkY} onChange={(event) => setWatermarkY(Number(event.target.value))} /></div>
-            </div>
-          </>
-        )}
         <Card role="region" className="image-editor-history py-0" aria-label="Image edit history">
           <CardContent className="image-editor-history-content py-4">
           <div className="workspace-panel-intro">

@@ -8,7 +8,7 @@ use std::io::{BufReader, Seek};
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::common::watermark::{WatermarkOptions, WatermarkPosition};
+use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
 use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::images::OutputFormat;
 
@@ -187,6 +187,7 @@ pub struct ImageEditSteps {
     #[serde(default)] pub resize: Option<ResizeStep>,
     #[serde(default)] pub rotate: Option<RotateStep>,
     #[serde(default)] pub tone: Option<ToneStep>,
+    #[serde(default)] pub watermark: Option<WatermarkOptions>,
 }
 
 const STACK_QUALITY: u8 = 90;
@@ -198,7 +199,7 @@ pub const ORIENTATION_APPLIED_FIRST: &str = "Camera orientation was applied firs
 impl ImageEditSteps {
     /// One step keeps its tool's suffix; any combination is named -edited.
     fn suffix(&self) -> Result<&'static str, String> {
-        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated"), self.tone.as_ref().map(|_| "-tone")];
+        let present = [self.crop.as_ref().map(|_| "-cropped"), self.resize.as_ref().map(|_| "-resized"), self.rotate.as_ref().map(|_| "-rotated"), self.tone.as_ref().map(|_| "-tone"), self.watermark.as_ref().map(|_| "-watermarked")];
         let mut suffixes = present.into_iter().flatten();
         match (suffixes.next(), suffixes.next()) {
             (None, _) => Err("Add a step to the stack before running.".to_string()),
@@ -209,7 +210,8 @@ impl ImageEditSteps {
 
     // The order is fixed here, never by the order the steps were added: crop runs first, so its
     // rectangle is always measured in source pixels, then resize scales what is left, then rotate and
-    // flip turn the result, and tone adjusts the colour of the pixels that are left.
+    // flip turn the result, tone adjusts the colour of the pixels that are left, and the watermark
+    // goes on last so it is never cropped, scaled, turned or tinted with the photo.
     fn apply(&self, mut image: DynamicImage) -> Result<DynamicImage, String> {
         if let Some(crop) = &self.crop {
             let (x, y, width, height) = crop_rect(image.width(), image.height(), crop)?;
@@ -224,17 +226,21 @@ impl ImageEditSteps {
         if let Some(tone) = &self.tone {
             image = tone.apply(image)?;
         }
+        if let Some(watermark) = &self.watermark {
+            image = apply_watermark(image, watermark)?;
+        }
         Ok(image)
     }
 
     /// Whether no step can change this image, measured at its upright size. A crop is neutral when
     /// it covers the whole image, a resize when its result is the source size, a rotate when it
     /// neither turns nor mirrors, and tone when all four values are 0. A step that cannot apply to
-    /// the image is never neutral, so it still fails as it would otherwise. Every step is named
-    /// here, so a new step (such as a watermark, which is never neutral) must say whether it can be.
+    /// the image is never neutral, so it still fails as it would otherwise. A watermark always adds a
+    /// mark, so it is never neutral. Every step is named here, so a new step must say whether it can be.
     fn is_neutral_for(&self, width: u32, height: u32) -> bool {
-        let Self { crop, resize, rotate, tone } = self;
-        crop.as_ref().is_none_or(|crop| crop_rect(width, height, crop).is_ok_and(|rect| rect == (0, 0, width, height)))
+        let Self { crop, resize, rotate, tone, watermark } = self;
+        watermark.is_none()
+            && crop.as_ref().is_none_or(|crop| crop_rect(width, height, crop).is_ok_and(|rect| rect == (0, 0, width, height)))
             && resize.as_ref().is_none_or(|resize| resize_dimensions(width, height, resize).is_ok_and(|size| size == (width, height)))
             && rotate.as_ref().is_none_or(RotateStep::is_neutral)
             && tone.as_ref().is_none_or(ToneStep::is_neutral)
@@ -725,20 +731,18 @@ pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
 
 fn apply_watermark(image: DynamicImage, options: &WatermarkOptions) -> Result<DynamicImage, String> {
     options.validate()?;
-    let (x, y) = match options.position {
-        Some(WatermarkPosition::Offset { x, y }) => (x, y),
-        _ => (16, 16),
-    };
     let mut image = image.to_rgba8();
+    let (width, height) = image.dimensions();
     let original_alpha = image.pixels().map(|pixel| pixel.0[3]).collect::<Vec<_>>();
-    let alpha = options.opacity as u16 * 255 / 100;
-    let mut watermark = image::RgbaImage::new(image.width(), image.height());
-    if let Some(text) = options.text() {
-        draw_text(&mut watermark, text, x, y, alpha as u8)?;
-    }
-    if let Some(path) = options.logo_path.as_ref() {
-        let logo = crate::kit::images::decode(path)?.into_first_page().to_rgba8();
-        image::imageops::overlay(&mut watermark, &logo, x as i64, y as i64);
+    let (mark, offset_x, offset_y) = watermark_mark(options, width)?;
+    let (mark, offset_x, offset_y) = rotate_mark(mark, offset_x, offset_y, options.rotation);
+    let mut watermark = image::RgbaImage::new(width, height);
+    match options.position {
+        Some(WatermarkPosition::Placement(WatermarkPlacement::Tile)) => tile_mark(&mut watermark, &mark),
+        position => {
+            let (x, y) = mark_origin(position, width, height, &mark, offset_x, offset_y);
+            image::imageops::replace(&mut watermark, &mark, x, y);
+        }
     }
     if watermark.pixels().all(|pixel| pixel.0[3] == 0) {
         return Err("Provide watermark text or a logo image.".to_string());
@@ -746,6 +750,153 @@ fn apply_watermark(image: DynamicImage, options: &WatermarkOptions) -> Result<Dy
     image::imageops::overlay(&mut image, &watermark, 0, 0);
     for (pixel, alpha) in image.pixels_mut().zip(original_alpha) { pixel.0[3] = alpha; }
     Ok(DynamicImage::ImageRgba8(image))
+}
+
+/// The mark itself, at its final size and opacity but not yet turned, with the offset of its
+/// top-left corner from the point the text pen and the logo start at.
+fn watermark_mark(options: &WatermarkOptions, target_width: u32) -> Result<(image::RgbaImage, i64, i64), String> {
+    let alpha = (options.opacity as u16 * 255 / 100) as u8;
+    let target = options.size.map(|size| (size * target_width as f32).max(1.0));
+    let text = match options.text() {
+        Some(text) => {
+            let color = watermark_color(options.color.as_deref());
+            let font_size = match target {
+                // Advance width grows in step with the font size, so one measurement finds the size.
+                Some(target) => {
+                    let (_, _, _, advance) = draw_text(text, 100.0, color, alpha)?;
+                    if advance > 0.0 { 100.0 * target / advance } else { WATERMARK_FONT_SIZE }
+                }
+                None => WATERMARK_FONT_SIZE,
+            };
+            Some(draw_text(text, font_size, color, alpha)?)
+        }
+        None => None,
+    };
+    let logo = match options.logo_path.as_ref() {
+        Some(path) => {
+            let mut logo = crate::kit::images::decode(path)?.into_first_page().to_rgba8();
+            if let Some(target) = target {
+                let width = target.round().max(1.0) as u32;
+                let height = ((logo.height() as f32 * width as f32 / logo.width().max(1) as f32).round() as u32).max(1);
+                logo = image::imageops::resize(&logo, width, height, image::imageops::FilterType::Triangle);
+            }
+            for pixel in logo.pixels_mut() { pixel.0[3] = ((u16::from(pixel.0[3]) * u16::from(alpha) + 127) / 255) as u8; }
+            Some(logo)
+        }
+        None => None,
+    };
+    Ok(match (text, logo) {
+        (Some((layer, x, y, _)), None) => (layer, x, y),
+        (None, Some(logo)) => (logo, 0, 0),
+        // Both start at the same point, with the logo over the text.
+        (Some((layer, x, y, _)), Some(logo)) => {
+            let (left, top) = (x.min(0), y.min(0));
+            let right = (x + layer.width() as i64).max(logo.width() as i64);
+            let bottom = (y + layer.height() as i64).max(logo.height() as i64);
+            let mut mark = image::RgbaImage::new((right - left) as u32, (bottom - top) as u32);
+            image::imageops::replace(&mut mark, &layer, x - left, y - top);
+            image::imageops::overlay(&mut mark, &logo, -left, -top);
+            (mark, left, top)
+        }
+        (None, None) => return Err("Provide watermark text or a logo image.".to_string()),
+    })
+}
+
+fn watermark_color(color: Option<&str>) -> [u8; 3] {
+    let channel = |hex: &str, index: usize| u8::from_str_radix(&hex[1 + index * 2..3 + index * 2], 16).unwrap_or(255);
+    color.map(|hex| [channel(hex, 0), channel(hex, 1), channel(hex, 2)]).unwrap_or([255, 255, 255])
+}
+
+/// Turns the mark about its centre. Positive degrees turn it clockwise as the image is seen, and
+/// negative degrees counter-clockwise, as CSS rotate does. Pixels are sampled with premultiplied
+/// alpha so the edges do not pick up a dark fringe.
+fn rotate_mark(mark: image::RgbaImage, offset_x: i64, offset_y: i64, degrees: f32) -> (image::RgbaImage, i64, i64) {
+    if degrees == 0.0 || mark.width() == 0 || mark.height() == 0 { return (mark, offset_x, offset_y); }
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let (width, height) = (mark.width() as f32, mark.height() as f32);
+    let rotated_width = (width * cos.abs() + height * sin.abs()).ceil().max(1.0) as u32;
+    let rotated_height = (width * sin.abs() + height * cos.abs()).ceil().max(1.0) as u32;
+    let mut rotated = image::RgbaImage::new(rotated_width, rotated_height);
+    let (center_x, center_y) = (width / 2.0, height / 2.0);
+    let (rotated_center_x, rotated_center_y) = (rotated_width as f32 / 2.0, rotated_height as f32 / 2.0);
+    let sample = |x: i64, y: i64| -> [f32; 4] {
+        if x < 0 || y < 0 || x >= mark.width() as i64 || y >= mark.height() as i64 { return [0.0; 4]; }
+        let [red, green, blue, alpha] = mark.get_pixel(x as u32, y as u32).0;
+        let alpha = alpha as f32 / 255.0;
+        [red as f32 * alpha, green as f32 * alpha, blue as f32 * alpha, alpha]
+    };
+    for (column, row, pixel) in rotated.enumerate_pixels_mut() {
+        let dx = column as f32 + 0.5 - rotated_center_x;
+        let dy = row as f32 + 0.5 - rotated_center_y;
+        let source_x = dx * cos + dy * sin + center_x - 0.5;
+        let source_y = -dx * sin + dy * cos + center_y - 0.5;
+        let (left, top) = (source_x.floor(), source_y.floor());
+        let (fraction_x, fraction_y) = (source_x - left, source_y - top);
+        let (left, top) = (left as i64, top as i64);
+        let mut value = [0.0_f32; 4];
+        for (x, y, weight) in [
+            (left, top, (1.0 - fraction_x) * (1.0 - fraction_y)),
+            (left + 1, top, fraction_x * (1.0 - fraction_y)),
+            (left, top + 1, (1.0 - fraction_x) * fraction_y),
+            (left + 1, top + 1, fraction_x * fraction_y),
+        ] {
+            let source = sample(x, y);
+            for channel in 0..4 { value[channel] += source[channel] * weight; }
+        }
+        if value[3] <= 0.0 { continue; }
+        pixel.0 = [
+            (value[0] / value[3]).round().clamp(0.0, 255.0) as u8,
+            (value[1] / value[3]).round().clamp(0.0, 255.0) as u8,
+            (value[2] / value[3]).round().clamp(0.0, 255.0) as u8,
+            (value[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+        ];
+    }
+    let shift_x = ((width - rotated_width as f32) / 2.0).round() as i64;
+    let shift_y = ((height - rotated_height as f32) / 2.0).round() as i64;
+    (rotated, offset_x + shift_x, offset_y + shift_y)
+}
+
+/// The share of the shorter side kept clear between an anchored mark and the edge.
+const WATERMARK_MARGIN: f32 = 0.03;
+
+/// Where the top-left corner of the (turned) mark goes on the target.
+fn mark_origin(position: Option<WatermarkPosition>, width: u32, height: u32, mark: &image::RgbaImage, offset_x: i64, offset_y: i64) -> (i64, i64) {
+    let anchor = match position {
+        // A pixel offset places the text pen and the logo, as the watermark tool always has.
+        None => return (16 + offset_x, 16 + offset_y),
+        Some(WatermarkPosition::Offset { x, y }) => return (x as i64 + offset_x, y as i64 + offset_y),
+        Some(WatermarkPosition::Anchor { anchor_x, anchor_y }) => (anchor_x, anchor_y),
+        Some(WatermarkPosition::Placement(placement)) => match placement {
+            WatermarkPlacement::TopLeft => (0.0, 0.0),
+            WatermarkPlacement::TopRight => (1.0, 0.0),
+            WatermarkPlacement::BottomLeft => (0.0, 1.0),
+            WatermarkPlacement::BottomRight => (1.0, 1.0),
+            WatermarkPlacement::Center | WatermarkPlacement::Tile => (0.5, 0.5),
+        },
+    };
+    let margin = (width.min(height) as f32 * WATERMARK_MARGIN).round();
+    let along = |anchor: f32, space: u32, size: u32| (margin + anchor * (space as f32 - size as f32 - 2.0 * margin)).round() as i64;
+    (along(anchor.0, width, mark.width()), along(anchor.1, height, mark.height()))
+}
+
+/// Repeats the mark across the whole target in staggered rows, starting half a mark past the
+/// top-left corner so the edges are covered too.
+fn tile_mark(canvas: &mut image::RgbaImage, mark: &image::RgbaImage) {
+    let (mark_width, mark_height) = (mark.width() as i64, mark.height() as i64);
+    if mark_width == 0 || mark_height == 0 { return; }
+    let gap = (mark_width.max(mark_height) / 2).max(1);
+    let (step_x, step_y) = (mark_width + gap, mark_height + gap);
+    let mut row = 0;
+    let mut y = -mark_height / 2;
+    while y < canvas.height() as i64 {
+        let mut x = -mark_width / 2 - if row % 2 == 1 { step_x / 2 } else { 0 };
+        while x < canvas.width() as i64 {
+            image::imageops::overlay(canvas, mark, x, y);
+            x += step_x;
+        }
+        y += step_y;
+        row += 1;
+    }
 }
 
 const WATERMARK_FONT_RESOURCE: &str = "watermarkFont";
@@ -769,13 +920,15 @@ fn watermark_font_bytes() -> Result<Vec<u8>, String> {
     Ok(INCLUDED_WATERMARK_FONT.to_vec())
 }
 
-fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u8) -> Result<(), String> {
+/// Draws the text into a layer just big enough for its glyphs. Returns the layer, the offset of its
+/// top-left corner from the pen's starting point, and how far the pen advanced.
+fn draw_text(text: &str, font_size: f32, color: [u8; 3], alpha: u8) -> Result<(image::RgbaImage, i64, i64, f32), String> {
     let bytes = watermark_font_bytes()?;
     let font = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default())
         .map_err(|error| format!("Could not parse bundled watermark font: {error}"))?;
     let mut face = rustybuzz::Face::from_slice(&bytes, 0)
         .ok_or_else(|| "Could not parse bundled watermark font for shaping.".to_string())?;
-    face.set_pixels_per_em(Some((WATERMARK_FONT_SIZE as u16, WATERMARK_FONT_SIZE as u16)));
+    face.set_pixels_per_em(Some((font_size.round().clamp(1.0, f32::from(u16::MAX)) as u16, font_size.round().clamp(1.0, f32::from(u16::MAX)) as u16)));
 
     let unsupported = text
         .chars()
@@ -808,64 +961,73 @@ fn draw_text(canvas: &mut image::RgbaImage, text: &str, x: u32, y: u32, alpha: u
         return Err("Unsupported watermark text: shaping produced a missing glyph.".to_string());
     }
 
-    let scale = WATERMARK_FONT_SIZE / face.units_per_em() as f32;
+    let scale = font_size / face.units_per_em() as f32;
     let ascent = font
-        .horizontal_line_metrics(WATERMARK_FONT_SIZE)
+        .horizontal_line_metrics(font_size)
         .map(|metrics| metrics.ascent)
-        .unwrap_or(WATERMARK_FONT_SIZE * 0.8);
-    let baseline_y = y as f32 + ascent;
+        .unwrap_or(font_size * 0.8);
+    let mut glyphs = Vec::new();
     let mut pen_x = 0.0_f32;
     for (info, position) in glyph_buffer.glyph_infos().iter().zip(glyph_buffer.glyph_positions()) {
-        let glyph_id = info.glyph_id as u16;
-        let (metrics, bitmap) = font.rasterize_indexed(glyph_id, WATERMARK_FONT_SIZE);
-        let glyph_x = (x as f32
-            + (pen_x + position.x_offset as f32) * scale
-            + metrics.bounds.xmin)
-            .floor() as i64;
-        let glyph_y = (baseline_y
-            - position.y_offset as f32 * scale
-            - metrics.bounds.height
-            - metrics.bounds.ymin)
-            .floor() as i64;
+        let (metrics, bitmap) = font.rasterize_indexed(info.glyph_id as u16, font_size);
+        let glyph_x = ((pen_x + position.x_offset as f32) * scale + metrics.bounds.xmin).floor() as i64;
+        let glyph_y = (ascent - position.y_offset as f32 * scale - metrics.bounds.height - metrics.bounds.ymin).floor() as i64;
+        if metrics.width > 0 && metrics.height > 0 { glyphs.push((glyph_x, glyph_y, metrics, bitmap)); }
+        pen_x += position.x_advance as f32;
+    }
+    let advance = pen_x * scale;
+    let left = glyphs.iter().map(|glyph| glyph.0).min().unwrap_or(0);
+    let top = glyphs.iter().map(|glyph| glyph.1).min().unwrap_or(0);
+    let right = glyphs.iter().map(|glyph| glyph.0 + glyph.2.width as i64).max().unwrap_or(0);
+    let bottom = glyphs.iter().map(|glyph| glyph.1 + glyph.2.height as i64).max().unwrap_or(0);
+    let mut layer = image::RgbaImage::new((right - left).max(0) as u32, (bottom - top).max(0) as u32);
+    for (glyph_x, glyph_y, metrics, bitmap) in glyphs {
         for row in 0..metrics.height {
             for column in 0..metrics.width {
                 let coverage = bitmap[row * metrics.width + column];
                 let glyph_alpha = ((u16::from(coverage) * u16::from(alpha) + 127) / 255) as u8;
                 if glyph_alpha == 0 { continue; }
-                let px = glyph_x + column as i64;
-                let py = glyph_y + row as i64;
-                if px < 0 || py < 0 || px >= canvas.width() as i64 || py >= canvas.height() as i64 { continue; }
-                blend_watermark_pixel(canvas.get_pixel_mut(px as u32, py as u32), glyph_alpha);
+                let pixel = layer.get_pixel_mut((glyph_x - left) as u32 + column as u32, (glyph_y - top) as u32 + row as u32);
+                blend_watermark_pixel(pixel, color, glyph_alpha);
             }
         }
-        pen_x += position.x_advance as f32;
     }
-    Ok(())
+    Ok((layer, left, top, advance))
 }
 
-fn blend_watermark_pixel(pixel: &mut Rgba<u8>, source_alpha: u8) {
+fn blend_watermark_pixel(pixel: &mut Rgba<u8>, color: [u8; 3], source_alpha: u8) {
     let source_alpha = u16::from(source_alpha);
     let destination_alpha = u16::from(pixel.0[3]);
     let output_alpha = source_alpha + ((destination_alpha * (255 - source_alpha) + 127) / 255);
-    pixel.0 = [255, 255, 255, output_alpha.min(255) as u8];
+    pixel.0 = [color[0], color[1], color[2], output_alpha.min(255) as u8];
 }
 
+/// Controls, spaces, private-use characters and noncharacters, which have no glyph to quote.
+fn shows_nothing(character: char) -> bool {
+    let code = character as u32;
+    character.is_control()
+        || character.is_whitespace()
+        || (0xE000..=0xF8FF).contains(&code)
+        || code >= 0xF0000
+        || (0xFDD0..=0xFDEF).contains(&code)
+        || code & 0xFFFE == 0xFFFE
+}
+
+/// The board's wording: each character the bundled font has no glyph for, quoted, or by its code
+/// point when it would not show.
 fn unsupported_watermark_characters(characters: impl IntoIterator<Item = char>) -> String {
     let details = characters
         .into_iter()
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(|character| {
-            let codepoint = format!("U+{:04X}", character as u32);
-            if character.is_control() || character.is_whitespace() {
-                format!("{codepoint} ({character:?})")
-            } else {
-                format!("{codepoint} ({character})")
-            }
+        .map(|character| if shows_nothing(character) {
+            format!("U+{:04X}", character as u32)
+        } else {
+            format!("\u{201c}{character}\u{201d}")
         })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("Unsupported watermark characters: {details}.")
+    format!("The watermark font can't draw {details}.")
 }
 pub fn icon_set(request: &IconSetRequest, input: PathBuf) -> JobOutcome {
     let source = match crate::kit::images::load_upright_image(&input) { Ok(source) => source, Err(error) => return failure(input, format!("Could not read image: {error}")) };
@@ -1386,13 +1548,11 @@ mod tests {
 
     #[test]
     fn text_watermark_supports_ascii_latin_combining_and_non_latin_text() {
-        let mut canvas = image::RgbaImage::new(640, 96);
-        draw_text(&mut canvas, "ASCII Café e\u{301} Ж", 4, 4, 200).unwrap();
+        let (canvas, _, _, _) = draw_text("ASCII Café e\u{301} Ж", WATERMARK_FONT_SIZE, [255, 255, 255], 200).unwrap();
         assert!(canvas.pixels().any(|pixel| pixel.0[3] > 0));
 
         for text in ["Watermark", "Café", "e\u{301}", "Ж"] {
-            let mut sample = image::RgbaImage::new(160, 64);
-            draw_text(&mut sample, text, 4, 4, 255).unwrap();
+            let (sample, _, _, _) = draw_text(text, WATERMARK_FONT_SIZE, [255, 255, 255], 255).unwrap();
             assert!(sample.pixels().any(|pixel| pixel.0[3] > 0), "{text:?} did not rasterize");
         }
     }
@@ -1414,8 +1574,7 @@ mod tests {
         let result = watermark(&text_watermark(&input, "Café Ж \u{10FFFF}", 80, 4), input.clone());
 
         let error = result.error().expect("unsupported text must fail");
-        assert!(error.message.contains("Unsupported watermark characters"));
-        assert!(error.message.contains("U+10FFFF"));
+        assert_eq!(error.message, "The watermark font can't draw U+10FFFF.");
         assert!(result.output_paths().is_empty());
         assert_eq!(std::fs::read(&input).unwrap(), source_bytes);
         assert_eq!(std::fs::read(&output).unwrap(), existing_bytes);
@@ -1429,12 +1588,27 @@ mod tests {
     #[test]
     fn repeated_text_watermark_rendering_is_deterministic() {
         fn digest(text: &str) -> [u8; 32] {
-            let mut canvas = image::RgbaImage::new(320, 96);
-            draw_text(&mut canvas, text, 8, 8, 173).unwrap();
+            let (canvas, _, _, _) = draw_text(text, WATERMARK_FONT_SIZE, [255, 255, 255], 173).unwrap();
             Sha256::digest(canvas.as_raw()).into()
         }
 
         assert_eq!(digest("Café e\u{301} Ж"), digest("Café e\u{301} Ж"));
+    }
+
+    #[test]
+    fn tiled_turned_text_and_picture_marks_render_the_same_every_time() {
+        let logo = path("watermark-digest-logo.png");
+        image::RgbaImage::from_fn(24, 12, |x, y| Rgba([(x * 10) as u8, (y * 20) as u8, 200, 255])).save(&logo).unwrap();
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(160, 90, Rgba([90, 90, 90, 255])));
+        let text = WatermarkOptions { text: Some("Café Ж".to_string()), logo_path: None, size: Some(0.2), opacity: 60, color: Some("#336699".to_string()), position: Some(WatermarkPosition::Placement(WatermarkPlacement::Tile)), rotation: -30.0 };
+        let picture = WatermarkOptions { text: None, logo_path: Some(logo.clone()), color: None, rotation: 45.0, ..text.clone() };
+        let anchored = WatermarkOptions { position: Some(WatermarkPosition::Anchor { anchor_x: 0.25, anchor_y: 0.75 }), ..picture.clone() };
+        let digest = |options: &WatermarkOptions| -> [u8; 32] { Sha256::digest(apply_watermark(source.clone(), options).unwrap().to_rgba8().as_raw()).into() };
+        for options in [&text, &picture, &anchored] {
+            assert_eq!(digest(options), digest(options));
+        }
+        assert_ne!(digest(&picture), digest(&anchored));
+        let _ = std::fs::remove_file(logo);
     }
 
     #[test]
