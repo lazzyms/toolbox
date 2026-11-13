@@ -5,6 +5,7 @@ type ConvertWindow = Window & {
     __invocations: Array<{ command: string; args: unknown }>;
     __drop: (paths: string[]) => void;
     __finish: (outcomes: unknown[]) => void;
+    __lastSaveFolder?: string;
 };
 
 const textFonts = [{ requestedFamily: "Courier New", requestedStyle: "regular", fontUsed: "Liberation Mono", styleUsed: "regular", source: "bundled fallback" }];
@@ -41,6 +42,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "inspect_intake_paths") return (args as { paths: string[] }).paths.map((path) => ({ path, kind: "file" }));
                 if (command === "get_output_settings") return { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
                 if (command === "check_output_folder") return "ready";
+                if (command === "get_last_save_folder") return win.__lastSaveFolder ?? "/Users/test/Documents";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:") || command === "shell_ready" || command === "open_output_path" || command === "reveal_output_path") return null;
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
@@ -553,4 +555,118 @@ test("a presentation run carries the notes and hidden slide choices, and its row
     const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
     await expect(rows.filter({ hasText: "launch-deck.pptx" })).toContainText(note);
     await expect(rows.filter({ hasText: "review.odp" })).toContainText("It's password-protected.");
+});
+
+const invocation = (page: Page, name: string) => page.evaluate((name) =>
+    ((window as unknown as ConvertWindow).__invocations.find(({ command }) => command === name)?.args as { request: unknown } | undefined)?.request, name);
+
+const resultRows = (page: Page) => page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+
+const springMenu = `<html><head><title>Spring menu</title><link rel="stylesheet" href="menu.css"><script>document.title = "ran"</script></head>
+<body><h1>Spring menu</h1><img src="https://images.example/hero.jpg" alt="Hero"><img src="//images.example/side.jpg"><img src="dish.png"></body></html>`;
+
+const pasteMarkup = async (page: Page, markup: string) => {
+    await page.getByRole("button", { name: "Paste HTML…" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Paste HTML" });
+    await expect(dialog).toHaveAccessibleDescription("The markup joins the list as one item and becomes its own PDF. Images and fonts from the internet aren't loaded.");
+    await dialog.getByLabel("Markup").fill(markup);
+    return dialog;
+};
+
+test("the Web pages section appears only while an HTML file is listed, and a run carries its options and shows the left-out note", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/notes.txt"]);
+    await expect(page.getByRole("region", { name: "Web pages options" })).toHaveCount(0);
+
+    await drop(page, ["/local/menu.html"]);
+    const web = page.getByRole("region", { name: "Web pages options" });
+    await expect(web).toContainText("Applies to menu.html");
+    await expect(web.getByLabel("Page size")).toHaveValue("a4");
+    await expect(web.getByLabel("Margins")).toHaveValue("normal");
+    await expect(web.getByRole("checkbox", { name: "Print background colors" })).toBeChecked();
+    await expect(fileRow(page, "menu.html")).not.toContainText("later update");
+
+    await fileRow(page, "menu.html").getByRole("button", { name: /Remove/ }).click();
+    await expect(page.getByRole("region", { name: "Web pages options" })).toHaveCount(0);
+
+    await drop(page, ["/local/menu.htm"]);
+    await web.getByLabel("Page size").selectOption("letter");
+    await web.getByRole("checkbox", { name: "Print background colors" }).click();
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/notes.txt", "/local/menu.htm"],
+        outputLocation: "alongsideInput",
+        plainText: { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true },
+        webPages: { pageSize: "letter", margins: "normal", backgroundGraphics: false },
+    });
+
+    const note = "1 page. Remote content left out: 1 image and 1 stylesheet from the internet weren't loaded.";
+    await page.evaluate((note) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/notes.txt", outputPaths: ["/local/notes.pdf"], detail: "1 page.", state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+        { inputPath: "/local/menu.htm", outputPaths: ["/local/menu.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+    ]), note);
+    await expect(resultRows(page).filter({ hasText: "menu.htm" })).toContainText(note);
+});
+
+test("pasted markup joins the list, asks where to save in Documents, and sends the markup and chosen path", async ({ page }) => {
+    await openConvert(page);
+    const dialog = await pasteMarkup(page, springMenu);
+    await expect(dialog.getByLabel("Name in the list")).toHaveValue("Spring menu");
+    await expect(dialog.getByLabel("Markup")).toHaveAccessibleDescription(/B\. 2 remote images will be left out\.$/);
+    await dialog.getByRole("button", { name: "Add to list" }).click();
+    await expect(dialog).toHaveCount(0);
+
+    const row = fileRow(page, "Spring menu");
+    await expect(row).toContainText(/Pasted HTML, \d+ B\. 2 remote images will be left out/);
+    await expect(page.getByRole("region", { name: "Web pages options" })).toContainText("Applies to Spring menu.html");
+    await expect(page.getByText("Pasted HTML has no original, so it asks where to save when you start.", { exact: true })).toBeVisible();
+    await expect(page.locator(".workspace-primary-action")).toContainText("…");
+
+    await page.locator(".workspace-primary-action").click();
+    const save = page.getByRole("dialog", { name: "Save the pasted HTML as a PDF" });
+    await expect(save.getByLabel("File name")).toHaveValue("Spring menu.pdf");
+    await expect(save.getByTestId("save-folder")).toHaveText("~/Documents");
+    await save.getByRole("button", { name: "Save" }).click();
+
+    await expect.poll(() => invocation(page, "convert_pasted_html")).toEqual({
+        markup: springMenu,
+        outputPath: "/Users/test/Documents/Spring menu.pdf",
+        webPages: { pageSize: "a4", margins: "normal", backgroundGraphics: true },
+    });
+    const note = "1 page. Remote content left out: 2 images from the internet weren't loaded. 1 local image couldn't be read and was left out.";
+    await page.evaluate((note) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/Users/test/Documents/Spring menu.pdf", outputPaths: ["/Users/test/Documents/Spring menu-1.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+    ]), note);
+    const saved = resultRows(page).filter({ hasText: note });
+    await expect(saved).toHaveCount(1);
+    await expect(saved.getByRole("button", { name: "Open Spring menu-1.pdf" })).toBeVisible();
+    expect(await invocation(page, "convert_to_pdf")).toBeUndefined();
+});
+
+test("the pasted save step opens in the last-used folder, and cancelling it converts nothing", async ({ page }) => {
+    await openConvert(page);
+    await page.evaluate(() => { (window as unknown as ConvertWindow).__lastSaveFolder = "/Users/test/Menus"; });
+    await drop(page, ["/local/notes.txt"]);
+    const dialog = await pasteMarkup(page, "<p>Soup of the day</p>");
+    await expect(dialog.getByLabel("Name in the list")).toHaveValue("");
+    await expect(dialog.getByRole("button", { name: "Add to list" })).toBeDisabled();
+    await dialog.getByLabel("Name in the list").fill("Specials");
+    await dialog.getByRole("button", { name: "Add to list" }).click();
+
+    await page.locator(".workspace-primary-action").click();
+    const save = page.getByRole("dialog", { name: "Save the pasted HTML as a PDF" });
+    await expect(save.getByTestId("save-folder")).toHaveText("~/Menus");
+    await expect(save).toContainText("The other file saves next to each original. Cancel goes back to the list without converting.");
+    await save.getByRole("button", { name: "Cancel" }).click();
+    await expect(save).toHaveCount(0);
+    expect(await invocation(page, "convert_pasted_html")).toBeUndefined();
+    expect(await invocation(page, "convert_to_pdf")).toBeUndefined();
+
+    await page.locator(".workspace-primary-action").click();
+    await save.getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => invocation(page, "convert_pasted_html")).toEqual({
+        markup: "<p>Soup of the day</p>",
+        outputPath: "/Users/test/Menus/Specials.pdf",
+        webPages: { pageSize: "a4", margins: "normal", backgroundGraphics: true },
+    });
 });

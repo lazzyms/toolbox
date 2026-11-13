@@ -20,7 +20,9 @@ import { rowView, type OutputGrouping } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
-import { chooseManyToOneSavePath } from './saveStep';
+import { chooseCreatedDocumentSavePath, chooseManyToOneSavePath } from './saveStep';
+import { PasteHtmlDialog } from './PasteHtmlDialog';
+import { addPastedHtml, choosePastedOutput, isPastedHtml, pastedHtml, pastedRowDetail } from './pastedHtml';
 import { saveStepAppliesTo, saveStepFor, type SaveDialog } from '../registry/saveSteps';
 import { ArrowDown, ArrowUp, FileIcon, FolderIcon, GripVertical, XIcon } from 'lucide-react';
 import {
@@ -109,6 +111,8 @@ interface ToolScaffoldProps {
     confirmDiscard?: DiscardGuard;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string | readonly string[];
+    /** Offers Paste HTML: pasted markup joins the list and asks where to save when the run starts. */
+    pasteHtml?: boolean;
     exampleHint?: string;
     /** Sorts an ordered list offers. The list keeps the order a sort leaves, so later drags start from it. */
     sortOptions?: readonly EntrySortOption[];
@@ -153,7 +157,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, intakeRedirect, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, intakeRedirect, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, pasteHtml = false, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (items: readonly (string | InspectedPath)[]): IntakeEntry[] => items.map((item) => typeof item === 'string'
         ? { key: `entry-${++nextEntryKey.current}`, path: item }
@@ -174,6 +178,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [live, setLive] = useState<LiveRun | null>(null);
     const [perFileRun, setPerFileRun] = useState<PerFileRun | null>(null);
     const [retrying, setRetrying] = useState(false);
+    const [pasting, setPasting] = useState(false);
     const defaultLocation = useOutputLocation();
     const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
     const [blocked, setBlocked] = useState<(BlockedDestination & { retry: (location: OutputLocation) => void }) | null>(null);
@@ -297,6 +302,23 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 if (!outputPath || generation !== runGeneration.current) return;
                 setLoading(true);
             }
+            const pastedPaths = runs ? validPaths.filter(isPastedHtml) : [];
+            if (pastedPaths.length > 0) {
+                setLoading(false);
+                const others = validPaths.length - pastedPaths.length;
+                const elsewhere = others === 0 ? '' : `The other ${others === 1 ? 'file saves' : `${others} files save`} ${location === 'alongsideInput' ? 'next to each original' : 'in the folder chosen for this run'}. `;
+                for (const path of pastedPaths) {
+                    const item = pastedHtml(path);
+                    const chosen = item && await chooseCreatedDocumentSavePath(
+                        { title: 'Save the pasted HTML as a PDF', extension: 'pdf' },
+                        `${item.name}.pdf`,
+                        `Opens in the folder you last saved to, or Documents. ${elsewhere}Cancel goes back to the list without converting.`,
+                    );
+                    if (!chosen || generation !== runGeneration.current) return;
+                    choosePastedOutput(path, chosen);
+                }
+                setLoading(true);
+            }
             const processed = runs ? await runStreamed(handler, validPaths, location, outputPath, generation) : [];
             const processedByPath = new Map(processed.map((result) => [result.inputPath, result]));
             const nextResults = orderedSelectionRejected
@@ -408,6 +430,21 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setSelection(new Set(key ? [key] : []));
         setAnchor(key);
     };
+
+    const addPasted = (name: string, markup: string) => {
+        setPasting(false);
+        const [entry] = newEntries([addPastedHtml(name, markup)]);
+        setNotAdded([]);
+        setEntries((current) => [...current, entry]);
+        selectOnly(entry.key);
+    };
+
+    const pasteButton = pasteHtml && (
+        <Button variant="outline" size="sm" disabled={loading} onClick={() => setPasting(true)}>
+            Paste HTML…
+        </Button>
+    );
+    const hasPasted = entries.some((entry) => isPastedHtml(entry.path));
 
     const intake = (incoming: InspectedPath[], replaceSingle = false) => {
         const policy = { ...intakePolicyFor(workspace?.title ?? utility.title, intakeTools, utility), notAcceptedMessage: intakeCopy?.notAccepted, keepsUnsupported: intakeCopy?.keepsUnsupported, redirect: intakeRedirect };
@@ -699,7 +736,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         onKeyDown={listKeyDown}
                     >
                         {statuses.map(({ entry, occurrence, flag }, index) => {
-                            const name = fileName(entry.path);
+                            const pasted = pastedHtml(entry.path);
+                            const name = pasted?.name ?? fileName(entry.path);
                             const isSelected = selection.has(entry.key);
                             const facts = describesEntries ? entryFacts?.(entry.path) : undefined;
                             const pages = facts?.pageCount != null ? pageCountLabel(facts.pageCount) : null;
@@ -763,7 +801,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                         }}
                                     >
                                         <span className="file-selection-name">{name}</span>
-                                        <span className="file-selection-detail" data-tone={warning ? 'warning' : undefined}>{flag?.message ?? warning ?? detail}</span>
+                                        <span className="file-selection-detail" data-tone={warning ? 'warning' : undefined}>{flag?.message ?? warning ?? (pasted ? pastedRowDetail(pasted) : detail)}</span>
                                     </Button>
                                     {describesEntries && copies > 1 && <Badge variant="secondary" className="file-selection-badge">Copy {occurrence} of {copies}</Badge>}
                                     {pages && <span className="file-selection-fact">{pages}</span>}
@@ -833,6 +871,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                     {entries.length ? inputPolicy.inputCardinality === 'single' ? 'Replace file' : 'Add files' : 'Open files'}
                     <ShortcutHint id="open" />
                 </Button>
+                {pasteButton}
                 {entries.length > 0 && <Button variant="ghost" size="sm" className="workspace-source-clear" disabled={loading} onClick={clearFiles}>Clear list</Button>}
             </div>
             {entries.length > 0 && fileSelection}
@@ -861,6 +900,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             <TablerIcon name="folder-open" /> Browse files
                             <ShortcutHint id="open" />
                         </Button>
+                        {pasteButton}
                     </div>
 
                     {entries.length > 0 && fileSelection}
@@ -882,6 +922,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 selectedFileIndex,
                 selectFile,
                 destination: (
+                    <>
                     <RunDestination
                         location={outputLocation}
                         defaultLocation={defaultLocation}
@@ -895,6 +936,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
                     />
+                    {hasPasted && <p className="workspace-note">Pasted HTML has no original, so it asks where to save when you start.</p>}
+                    </>
                 ),
                 runDestination: {
                     location: outputLocation,
@@ -904,7 +947,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                     reset: () => setRunOverride(null),
                 },
                 live,
-                runLabel: savesOneFile ? saveStep.runLabel : null,
+                runLabel: savesOneFile ? saveStep.runLabel : hasPasted ? `Export ${utility.shortTitle}…` : null,
                 failedFiles,
                 retryFailed,
                 retrying,
@@ -939,6 +982,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 outputGroup={outputGroup}
                 resultsHint={resultsHint}
             />}
+
+            {pasteHtml && <PasteHtmlDialog open={pasting} onAdd={addPasted} onClose={() => setPasting(false)} />}
 
             <BlockedDestinationDialog
                 blocked={blocked}

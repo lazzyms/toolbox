@@ -43,6 +43,8 @@ export interface ConversionTool<Options = unknown> {
   /** Options to start from when another tool hands its files over. */
   handoffOptions?: Options;
   inspectsPdf: boolean;
+  /** Offers Paste HTML, so pasted markup can join the list. */
+  pastesHtml?: boolean;
   /**
    * One typed range applies to every file in the batch and is shortened to each file's
    * length natively. Thumbnails are offered only for a single PDF, picking writes the

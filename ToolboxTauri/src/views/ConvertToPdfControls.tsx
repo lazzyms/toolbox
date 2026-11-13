@@ -44,6 +44,10 @@ export type PresentationOptions = { speakerNotes: boolean; hiddenSlides: boolean
 
 export const defaultPresentationOptions: PresentationOptions = { speakerNotes: false, hiddenSlides: false };
 
+export type WebPageOptions = { pageSize: "a4" | "letter" | "legal"; margins: "narrow" | "normal" | "wide"; backgroundGraphics: boolean };
+
+export const defaultWebPageOptions: WebPageOptions = { pageSize: "a4", margins: "normal", backgroundGraphics: true };
+
 export const isPlainText = (path: string) => extensionOf(path) === ".txt";
 
 export const isMarkdown = (path: string) => [".md", ".markdown"].includes(extensionOf(path));
@@ -54,9 +58,12 @@ export const isSpreadsheet = (path: string) => [".xlsx", ".ods"].includes(extens
 
 export const isPresentation = (path: string) => [".pptx", ".odp"].includes(extensionOf(path));
 
-export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions; presentations: PresentationOptions };
+/** HTML files and pasted markup, which stands in the list as an .html item. */
+export const isWebPage = (path: string) => [".html", ".htm"].includes(extensionOf(path));
 
-export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions, spreadsheets: defaultSpreadsheetOptions, presentations: defaultPresentationOptions };
+export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions; presentations: PresentationOptions; webPages: WebPageOptions };
+
+export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions, spreadsheets: defaultSpreadsheetOptions, presentations: defaultPresentationOptions, webPages: defaultWebPageOptions };
 
 export const convertToPdfRequest = (paths: string[], outputLocation: unknown, options: ConvertToPdfOptions) => ({
   paths,
@@ -66,6 +73,7 @@ export const convertToPdfRequest = (paths: string[], outputLocation: unknown, op
   ...(paths.some(isTable) ? { tables: options.tables } : {}),
   ...(paths.some(isSpreadsheet) ? { spreadsheets: options.spreadsheets } : {}),
   ...(paths.some(isPresentation) ? { presentations: options.presentations } : {}),
+  ...(paths.some(isWebPage) ? { webPages: options.webPages } : {}),
 });
 
 const unavailableFamily = (tool: ToolDefinition, path: string) =>
@@ -93,7 +101,7 @@ const appliesTo = (files: string[], plural: string) => `Applies to ${files.lengt
 type PanelProps<T> = { files: string[]; options: T; onChange: (options: T) => void; disabled: boolean };
 
 export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<ConvertToPdfOptions>) => {
-  if (![isSpreadsheet, isPresentation, isPlainText, isMarkdown, isTable].some((matches) => files.some(matches))) {
+  if (![isSpreadsheet, isPresentation, isPlainText, isMarkdown, isWebPage, isTable].some((matches) => files.some(matches))) {
     return <p className="workspace-note">Options for each format appear here when a file of that format is in the list.</p>;
   }
   return (
@@ -101,6 +109,7 @@ export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }:
       <SpreadsheetOptionsPanel files={files} options={options.spreadsheets} onChange={(spreadsheets) => onChange({ ...options, spreadsheets })} disabled={disabled} />
       <PresentationOptionsPanel files={files} options={options.presentations} onChange={(presentations) => onChange({ ...options, presentations })} disabled={disabled} />
       <MarkdownOptionsPanel files={files} options={options.markdown} onChange={(markdown) => onChange({ ...options, markdown })} disabled={disabled} />
+      <WebPageOptionsPanel files={files} options={options.webPages} onChange={(webPages) => onChange({ ...options, webPages })} disabled={disabled} />
       <PlainTextOptionsPanel files={files} options={options.plainText} onChange={(plainText) => onChange({ ...options, plainText })} disabled={disabled} />
       <TablesOptionsPanel files={files} options={options.tables} onChange={(tables) => onChange({ ...options, tables })} disabled={disabled} />
     </>
@@ -225,6 +234,45 @@ const MarkdownOptionsPanel = ({ files, options, onChange, disabled }: PanelProps
           Add a table of contents
         </Label>
         <p id="markdown-table-of-contents-hint" className="workspace-note">Built from the headings, with links to each section.</p>
+      </div>
+    </fieldset>
+  );
+};
+
+const WebPageOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<WebPageOptions>) => {
+  const pages = files.filter(isWebPage);
+  if (pages.length === 0) return null;
+  const set = <K extends keyof WebPageOptions>(key: K, value: WebPageOptions[K]) => onChange({ ...options, [key]: value });
+  return (
+    <fieldset role="region" aria-label="Web pages options" className="grid gap-3" disabled={disabled}>
+      <div className="workspace-panel-intro">
+        <p className="workspace-panel-label">Web pages</p>
+        <p className="workspace-panel-copy">{appliesTo(pages, "web pages")}</p>
+      </div>
+      <div className="workspace-field-grid">
+        <div className="workspace-field">
+          <Label htmlFor="web-pages-page-size">Page size</Label>
+          <NativeSelect id="web-pages-page-size" value={options.pageSize} onChange={(event) => set("pageSize", event.target.value as WebPageOptions["pageSize"])}>
+            <option value="a4">A4 (default)</option>
+            <option value="letter">Letter</option>
+            <option value="legal">Legal</option>
+          </NativeSelect>
+        </div>
+        <div className="workspace-field">
+          <Label htmlFor="web-pages-margins">Margins</Label>
+          <NativeSelect id="web-pages-margins" value={options.margins} onChange={(event) => set("margins", event.target.value as WebPageOptions["margins"])}>
+            <option value="normal">Default</option>
+            <option value="narrow">Narrow</option>
+            <option value="wide">Wide</option>
+          </NativeSelect>
+        </div>
+      </div>
+      <div className="grid gap-1">
+        <Label htmlFor="web-pages-background" className="cursor-pointer">
+          <Checkbox id="web-pages-background" aria-describedby="web-pages-background-hint" checked={options.backgroundGraphics} onCheckedChange={(checked) => set("backgroundGraphics", checked === true)} />
+          Print background colors
+        </Label>
+        <p id="web-pages-background-hint" className="workspace-note">Scripts never run, and nothing is loaded from the internet. Stylesheets and images next to the file are used.</p>
       </div>
     </fieldset>
   );

@@ -8,16 +8,18 @@ use lopdf::Document;
 use serde::Deserialize;
 
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
-use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
+use crate::kit::common::{note_renamed, JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::common::limits;
-use crate::kit::contracts::{native_capabilities, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
+use crate::kit::contracts::{native_capabilities, LimitKind, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::office;
-use crate::kit::pdf::font_resolver::{FontResolver, FontSource, FontStyle, SystemFontLookup};
+use crate::kit::pdf::font_resolver::{FontReport, FontResolver, FontSource, FontStyle, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, expand_tabs, Align, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Paragraph, Span, Style, Theme};
 use crate::kit::pdf::presentation::Include;
-use crate::kit::pdf::{delimited, docx, markdown, odp, ods, odt, pptx, rtf, xlsx};
+use crate::kit::pdf::{delimited, docx, html, markdown, odp, ods, odt, pptx, rtf, xlsx};
 
 pub const COMMAND: &str = "convert_to_pdf";
+/// Pasted markup is held in memory, so it stays well under the file limit.
+const MAX_PASTED_HTML_BYTES: usize = 50_000_000;
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
 const FONT_SIZE: f32 = 10.;
 const LEADING: f32 = 13.;
@@ -183,6 +185,28 @@ pub struct PresentationOptions {
     pub hidden_slides: bool,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebPageOptions {
+    #[serde(default)] pub page_size: Option<PageSize>,
+    #[serde(default)] pub margins: Option<Margins>,
+    pub background_graphics: bool,
+}
+
+impl Default for WebPageOptions {
+    fn default() -> Self { Self { page_size: None, margins: None, background_graphics: true } }
+}
+
+/// Pasted markup has no source file, so the person picks where the PDF goes; an existing name gets the next numbered one.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PastedHtmlRequest {
+    pub markup: String,
+    pub output_path: PathBuf,
+    #[serde(default)] pub page_defaults: PageDefaults,
+    #[serde(default)] pub web_pages: Option<WebPageOptions>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConvertToPdfRequest {
@@ -194,6 +218,7 @@ pub struct ConvertToPdfRequest {
     #[serde(default)] pub tables: Option<TableOptions>,
     #[serde(default)] pub spreadsheets: Option<SpreadsheetOptions>,
     #[serde(default)] pub presentations: Option<PresentationOptions>,
+    #[serde(default)] pub web_pages: Option<WebPageOptions>,
 }
 
 pub struct ConvertJob<S: SystemFontLookup> {
@@ -253,6 +278,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
     let result = match extension.as_str() {
         "pdf" => return JobOutcome::skipped(input, SkipReason::new(SkipCode::AlreadyInTargetFormat, ALREADY_PDF)),
         "md" | "markdown" => markdown_file(job, &job.request.markdown.unwrap_or_default(), &input),
+        "html" | "htm" => html_file(job, &job.request.web_pages.unwrap_or_default(), &input),
         "rtf" => rich_text(job, &input),
         "docx" | "odt" => word_file(job, &input, &extension),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
@@ -359,6 +385,89 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
         count => detail.push_str(&format!(" {count} local images couldn't be read and were left out.")),
     }
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
+}
+
+fn html_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &WebPageOptions, input: &Path) -> Result<JobOutcome, ToolError> {
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    let (markup, _) = decode(&bytes, TextEncoding::Detect)?;
+    let page = web_page(&job.fonts, &job.request.page_defaults, options, &markup, Some(input.parent().unwrap_or(Path::new("."))))?;
+    let path = save(&job.request.output_location, input, page.document)?;
+    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], page.detail).with_fonts(page.fonts))
+}
+
+pub fn pasted_html(request: PastedHtmlRequest) -> JobOutcome {
+    let output_path = request.output_path.clone();
+    let outcome = match FontResolver::installed() {
+        Ok(fonts) => pasted_html_with(&request, &fonts),
+        Err(error) => JobOutcome::failure(output_path.clone(), error),
+    };
+    note_renamed(outcome, Some(&output_path))
+}
+
+fn pasted_html_with<S: SystemFontLookup>(request: &PastedHtmlRequest, fonts: &FontResolver<S>) -> JobOutcome {
+    let result = (|| {
+        if request.markup.trim().is_empty() { return Err(ToolError::invalid_input("There's no HTML to convert. Paste some markup and try again.")); }
+        if request.markup.len() > MAX_PASTED_HTML_BYTES {
+            return Err(ToolError::limit_exceeded(LimitKind::FileSize, "The pasted HTML is larger than the 50 MB limit. Save it as a file and convert that instead."));
+        }
+        let page = web_page(fonts, &request.page_defaults, &request.web_pages.unwrap_or_default(), &request.markup, None)?;
+        let mut document = page.document;
+        let output = OutputNaming::reserve_single_output(Some(&request.output_path), &request.output_path, &OutputLocation::AlongsideInput, "", "pdf")
+            .map_err(|error| ToolError::invalid_input(format!("Could not save the PDF there: {error}")))?;
+        document.save(output.path()).map_err(|error| ToolError::processing(format!("Could not write the PDF: {error}")))?;
+        let path = output.publish().map_err(|error| ToolError::processing(format!("Could not save the PDF: {error}")))?;
+        Ok(JobOutcome::succeeded(request.output_path.clone(), vec![path], page.detail).with_fonts(page.fonts))
+    })();
+    result.unwrap_or_else(|error| JobOutcome::failure(request.output_path.clone(), error))
+}
+
+struct WebPage { document: Document, detail: String, fonts: Vec<FontReport> }
+
+/// Lays out a page of HTML; `base` is the folder its local stylesheets and images sit in, or `None` for pasted markup.
+fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, defaults: &PageDefaults, options: &WebPageOptions, markup: &str, base: Option<&Path>) -> Result<WebPage, ToolError> {
+    let parsed = html::parse(markup, base);
+    let size = options.page_size.unwrap_or(defaults.page_size).points();
+    let geometry = Geometry::uniform(size.0, size.1, options.margins.unwrap_or(defaults.margins).points());
+    let mut theme = Theme::new(RTF_FAMILY, CODE_FAMILY, html::BODY_SIZE, false);
+    theme.families = parsed.families.clone();
+
+    let mut book = FontBook::new(fonts);
+    let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
+    flow.blocks(&parsed.blocks)?;
+    let mut laid = flow.finish();
+    if let (true, Some(rgb)) = (options.background_graphics, parsed.background) {
+        let [red, green, blue] = rgb.map(|channel| f32::from(channel) / 255.);
+        for page in &mut laid.pages {
+            let (width, height) = page.size.unwrap_or(size);
+            page.content.insert_str(0, &format!("q {red} {green} {blue} rg 0 0 {width} {height} re f Q\n"));
+        }
+    }
+    let count = laid.pages.len();
+    let document = assemble(&book, Assembly { size, pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: None })?;
+
+    let mut detail = format!("{}.", page_count(count));
+    let remote = &parsed.remote;
+    let left_out = [
+        counted(remote.images.len(), "image", "images"),
+        counted(remote.stylesheets.len(), "stylesheet", "stylesheets"),
+        counted(remote.fonts.len(), "font", "fonts"),
+        counted(remote.embeds.len(), "embedded item", "embedded items"),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    let total = remote.images.len() + remote.stylesheets.len() + remote.fonts.len() + remote.embeds.len();
+    if total > 0 {
+        let verb = if total == 1 { "wasn't" } else { "weren't" };
+        detail.push_str(&format!(" Remote content left out: {} from the internet {verb} loaded.", listed(&left_out)));
+    }
+    let unreadable = [
+        counted(parsed.unreadable_images, "local image", "local images"),
+        counted(parsed.unreadable_stylesheets, "local stylesheet", "local stylesheets"),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    let total = parsed.unreadable_images + parsed.unreadable_stylesheets;
+    if total > 0 {
+        let verb = if total == 1 { "was" } else { "were" };
+        detail.push_str(&format!(" {} couldn't be read and {verb} left out.", listed(&unreadable)));
+    }
+    Ok(WebPage { document, detail, fonts: book.reports() })
 }
 
 fn page_geometry(page: PageSetup, defaults: &PageDefaults) -> Geometry {
@@ -926,8 +1035,8 @@ mod tests {
         let outcomes = convert_paths(&[&input], json!({ "ebooks": {} }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
         assert_eq!(outcomes[0].error().unwrap().message, "Ebooks options come in a later update.");
-        let outcomes = convert_paths(&[&input], json!({ "webPages": {} }));
-        assert_eq!(outcomes[0].error().unwrap().message, "Web pages options come in a later update.");
+        let outcomes = convert_paths(&[&input], json!({ "webPages": { "backgroundGraphics": true, "runScripts": true } }));
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput, "web pages take no option to run scripts");
         let mobi = root.join("book.mobi");
         fs::write(&mobi, "mobi").unwrap();
         let outcomes = convert_paths(&[&mobi, &input], plain(true));
@@ -982,6 +1091,111 @@ mod tests {
     fn page_of(document: &Document, destination: &Object) -> u32 {
         let target = destination.as_array().unwrap()[0].as_reference().unwrap();
         *document.get_pages().iter().find(|(_, id)| **id == target).unwrap().0
+    }
+
+    fn html_options(background_graphics: bool) -> serde_json::Value {
+        json!({ "webPages": { "pageSize": "letter", "margins": "narrow", "backgroundGraphics": background_graphics } })
+    }
+
+    #[test]
+    fn html_uses_local_stylesheets_and_images_never_runs_scripts_and_never_fetches_remote_resources() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let root = sandbox("html");
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::write(root.join("assets/site.css"), "@import url(\"print.css\");\nbody { background: #ffeecc }\np.note { color: #ff0000 }\n").unwrap();
+        fs::write(root.join("assets/print.css"), "h2 { color: #0000ff }").unwrap();
+        fs::write(root.join("assets/logo.png"), png(10, 4, [20, 120, 220])).unwrap();
+        let input = root.join("menu.html");
+        let source = format!(r#"<!doctype html><html><head><title>Spring menu</title>
+<link rel="stylesheet" href="assets/site.css">
+<link rel="stylesheet" href="http://127.0.0.1:{port}/remote.css">
+<script>document.write('<p>SCRIPT RAN</p>'); document.title = 'Changed';</script>
+</head><body>
+<h1>Spring menu</h1>
+<p class="note">Styled by the local stylesheet</p>
+<h2>Mains</h2>
+<img src="assets/logo.png" alt="Logo">
+<img src="http://127.0.0.1:{port}/photo.png" alt="Remote photo">
+<img src="assets/missing.png" alt="Missing photo">
+<table><tr><th>Dish</th><th>Price</th></tr><tr><td>Soup</td><td>4</td></tr></table>
+<p><a href="https://example.com/order">Order online</a></p>
+</body></html>"#);
+        fs::write(&input, &source).unwrap();
+
+        let outcomes = convert_paths(&[&input], html_options(true));
+        let outcome = &outcomes[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "1 page. Remote content left out: 1 image and 1 stylesheet from the internet weren't loaded. 1 local image couldn't be read and was left out.");
+        assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock), "a remote resource was requested");
+
+        let output = root.join("menu.pdf");
+        let document = Document::load(&output).unwrap();
+        let text = document.extract_text(&[1]).unwrap();
+        for expected in ["Spring menu", "Styled by the local stylesheet", "Mains", "Remote photo", "Missing photo", "Dish", "Soup", "Order online"] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        assert!(!text.contains("SCRIPT RAN"), "the script ran");
+        let content = page_content(&document, 1);
+        assert!(content.contains("1 0 0 rg"), "the local stylesheet colours the note red");
+        assert!(content.contains("0 0 1 rg"), "the stylesheet imported by the local stylesheet colours the heading blue");
+        assert!(content.starts_with("q 1 0.93333334 0.8 rg 0 0 612 792 re f Q"), "the page background prints on a Letter page: {}", &content[..80.min(content.len())]);
+        assert_eq!(page_images(&document, 1), 1, "the local image is embedded");
+        assert!(links(&document).iter().any(|link| link.get(b"A").and_then(Object::as_dict).and_then(|action| action.get(b"URI")).and_then(Object::as_str).ok() == Some(b"https://example.com/order".as_slice())));
+        let info = document.trailer.get(b"Info").and_then(Object::as_reference).unwrap();
+        assert_eq!(document.get_dictionary(info).unwrap().get(b"Title").unwrap().as_str().unwrap(), b"Spring menu");
+        assert_eq!(fs::read_to_string(&input).unwrap(), source);
+        let first_bytes = fs::read(&output).unwrap();
+
+        let outcomes = convert_paths(&[&input], html_options(false));
+        assert!(succeeded(&outcomes[0]), "{:?}", outcomes[0]);
+        assert_eq!(outcomes[0].output_paths(), [root.join("menu-1.pdf")]);
+        let plain = Document::load(root.join("menu-1.pdf")).unwrap();
+        assert!(!page_content(&plain, 1).contains("1 0.93333334 0.8 rg"), "background graphics are off");
+        assert_eq!(fs::read(&output).unwrap(), first_bytes, "the first PDF is never replaced");
+        assert_eq!(names(&root), ["assets", "menu-1.pdf", "menu.html", "menu.pdf"]);
+    }
+
+    fn pasted(markup: &str, output_path: &Path) -> JobOutcome {
+        let request = PastedHtmlRequest { markup: markup.into(), output_path: output_path.to_path_buf(), page_defaults: PageDefaults::default(), web_pages: None };
+        note_renamed(pasted_html_with(&request, &fonts().unwrap()), Some(output_path))
+    }
+
+    #[test]
+    fn pasted_html_writes_to_the_chosen_path_and_never_replaces_an_existing_file() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let root = sandbox("pasted-html");
+        let chosen = root.join("Receipt.pdf");
+        let markup = format!(r#"<style>@import "https://cdn.example.com/x.css"; em {{ color: rgb(0, 128, 0) }}</style><h1>Receipt</h1><p>Paid <em>in full</em></p><img src="https://127.0.0.1:{port}/stamp.png"><iframe src="http://127.0.0.1:{port}/frame"></iframe><script>document.write("SCRIPT RAN")</script>"#);
+
+        let first = pasted(&markup, &chosen);
+        assert!(succeeded(&first), "{first:?}");
+        assert_eq!(first.output_paths(), [chosen.clone()]);
+        assert_eq!(first.input_path, chosen);
+        assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+        assert_eq!(first.detail, "1 page. Remote content left out: 1 image, 1 stylesheet and 1 embedded item from the internet weren't loaded.");
+        assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock), "a remote resource was requested");
+        let document = Document::load(&chosen).unwrap();
+        let text = document.extract_text(&[1]).unwrap();
+        assert!(text.contains("Receipt") && text.contains("in full") && !text.contains("SCRIPT RAN"), "{text}");
+        assert!(page_content(&document, 1).contains("0 0.5019608 0 rg"));
+        let existing = fs::read(&chosen).unwrap();
+
+        let second = pasted("<p>Second</p>", &chosen);
+        assert!(succeeded(&second), "{second:?}");
+        assert_eq!(second.output_paths(), [root.join("Receipt-1.pdf")]);
+        assert_eq!(second.warnings.iter().map(|warning| warning.kind.clone()).collect::<Vec<_>>(), [WarningKind::RenamedToAvoidReplacing { chosen_name: "Receipt.pdf".into(), final_name: "Receipt-1.pdf".into() }]);
+        assert_eq!(fs::read(&chosen).unwrap(), existing, "the existing file is untouched");
+        assert!(Document::load(root.join("Receipt-1.pdf")).unwrap().extract_text(&[1]).unwrap().contains("Second"));
+
+        let empty = pasted("  \n ", &root.join("Empty.pdf"));
+        assert_eq!(empty.error().unwrap().kind, ErrorKind::InvalidInput);
+        let nowhere = pasted("<p>Lost</p>", &root.join("missing-folder/Lost.pdf"));
+        assert_eq!(nowhere.error().unwrap().kind, ErrorKind::InvalidInput);
+        assert_eq!(names(&root), ["Receipt-1.pdf", "Receipt.pdf"]);
     }
 
     #[test]

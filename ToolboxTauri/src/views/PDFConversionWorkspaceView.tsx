@@ -91,6 +91,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
         return count > 1 && <Badge variant="outline" className="file-selection-badge">TIFF, {count} pages</Badge>;
       } : undefined}
       listHint={describesFiles && listedPaths.length === 1 ? "Add at least one more PDF. You can add the same file again to repeat it." : undefined}
+      pasteHtml={tool.pastesHtml === true}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
       exampleHint={exampleHint}
       onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange, picks })}
