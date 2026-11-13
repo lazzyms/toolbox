@@ -572,6 +572,10 @@ body {
   gap: 8px;
   padding: 4px 0 8px 24px;
 }
+.icon-platform-containers {
+  display: grid;
+  gap: 6px;
+}
 .icon-platform-note {
   display: grid;
   justify-items: start;
