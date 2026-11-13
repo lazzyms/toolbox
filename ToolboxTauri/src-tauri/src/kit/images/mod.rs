@@ -12,7 +12,7 @@ use crate::kit::contracts::{OutcomeWarning, SkipCode, SkipReason, TiffCompressio
 
 pub(crate) mod source;
 pub(crate) use source::decode;
-pub(crate) use source::{DecodedImage, ImageFamily};
+pub(crate) use source::{DecodedImage, ImageFamily, TiffPages};
 
 pub(crate) const DEFAULT_QUALITY: u8 = 90;
 

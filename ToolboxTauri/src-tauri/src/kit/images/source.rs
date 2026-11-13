@@ -126,8 +126,8 @@ fn read_tiff_pages(path: &Path) -> Result<(Vec<DynamicImage>, Option<Orientation
     Ok((pages, orientation))
 }
 
-/// Reads a TIFF one page at a time, so a tool can save each page before the
-/// next one is decoded.
+/// Reads a TIFF one page at a time, so a tool can check or use each page
+/// before the next one is decoded.
 pub(crate) struct TiffPages {
     decoder: tiff::decoder::Decoder<File>,
     total: usize,
@@ -142,6 +142,15 @@ impl TiffPages {
 
     pub(crate) fn total(&self) -> usize {
         self.total
+    }
+
+    /// Reads the width and height of the page at `index` from its header,
+    /// without decoding its pixels.
+    pub(crate) fn dimensions(&mut self, index: usize) -> Result<(u32, u32), String> {
+        let total = self.total;
+        self.decoder.seek_to_image(index)
+            .and_then(|_| self.decoder.dimensions())
+            .map_err(|error| format!("TIFF page {} of {total} can't be read. {error}", index + 1))
     }
 
     /// Decodes the page at `index` with its own orientation tag.

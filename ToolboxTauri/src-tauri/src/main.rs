@@ -2819,9 +2819,12 @@ mod command_tests {
     }
 
     /// The image a one-page PDF draws, with its decoded samples, and the page's MediaBox.
-    fn drawn_image(path: &PathBuf) -> (lopdf::Dictionary, Vec<u8>, Vec<u8>, Vec<f32>) {
+    fn drawn_image(path: &PathBuf) -> (lopdf::Dictionary, Vec<u8>, Vec<u8>, Vec<f32>) { drawn_image_on(path, 1) }
+
+    /// The /Im0 image a page draws: its dictionary, raw and decoded samples, and the page's MediaBox.
+    fn drawn_image_on(path: &PathBuf, number: u32) -> (lopdf::Dictionary, Vec<u8>, Vec<u8>, Vec<f32>) {
         let document = lopdf::Document::load(path).unwrap();
-        let page = *document.get_pages().get(&1).unwrap();
+        let page = *document.get_pages().get(&number).unwrap();
         let page = document.get_dictionary(page).unwrap();
         let media_box = page.get(b"MediaBox").unwrap().as_array().unwrap().iter().map(|value| match value {
             lopdf::Object::Integer(value) => *value as f32,
@@ -3019,6 +3022,222 @@ mod command_tests {
         let OutcomeState::Skipped { reason } = &ranged[0].state else { panic!("a range past its one page skips the image: {:?}", ranged[0]) };
         assert_eq!(reason.message, "No pages left in 2-. It has 1 page, so nothing was made.");
         assert_eq!(ranged_written, 0);
+        assert_eq!(after, originals);
+    }
+
+    /// A Group 4 fax TIFF of `raster`, inked where a pixel is darker than mid gray.
+    /// Returns the file's bytes and the black and white pixels it holds.
+    fn group_four_tiff(raster: &image::GrayImage) -> (Vec<u8>, Vec<u8>) {
+        use fax::{encoder::Encoder, Color, VecWriter};
+        let (width, height) = raster.dimensions();
+        let mut encoder = Encoder::new(VecWriter::new());
+        for y in 0..height {
+            encoder.encode_line((0..width).map(|x| if raster.get_pixel(x, y)[0] < 128 { Color::Black } else { Color::White }), width as u16).unwrap();
+        }
+        let bilevel = raster.pixels().map(|pixel| if pixel[0] < 128 { 0 } else { 255 }).collect();
+        (fax::tiff::wrap(&encoder.finish().unwrap().finish(), width, height), bilevel)
+    }
+
+    /// A one-page TIFF holding a JPEG of `image` as its one strip (compression 7, YCbCr).
+    fn jpeg_tiff(image: &image::RgbImage) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode_image(image).unwrap();
+        raw_tiff(&[(image.width(), image.height(), vec![(258, vec![8, 8, 8]), (259, vec![7]), (262, vec![6]), (277, vec![3]), (530, vec![1, 1])], jpeg)])
+    }
+
+    #[test]
+    fn ocr_reads_a_multi_page_tiff_frame_by_frame_into_text_and_one_searchable_page_per_frame() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-tiff-pages");
+        let frames: [&[&str]; 3] = [&["Quarterly invoice summary"], &["Northwind shipping ledger"], &["Closing remarks attached"]];
+        let rasters = frames.map(|lines| scanned_page(lines).0);
+        let colour = image::DynamicImage::ImageLuma8(rasters[1].clone()).to_rgb8();
+        let input = root.join("flatbed-scan.tiff");
+        write_tiff(&input, &[image::DynamicImage::ImageLuma8(rasters[0].clone()), image::DynamicImage::ImageRgb8(colour.clone()), image::DynamicImage::ImageLuma8(rasters[2].clone())]);
+        let original = std::fs::read(&input).unwrap();
+
+        let text = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], location(&root, "text")), no_packs()));
+        let pdf = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], location(&root, "pdf")), no_packs()));
+        for outcome in text.iter().chain(&pdf) { assert!(outcome.error().is_none(), "{:?}", outcome.error()); }
+        let words = std::fs::read_to_string(&text[0].output_paths()[0]).unwrap();
+        let output = pdf[0].output_paths()[0].clone();
+        let page_count = lopdf::Document::load(&output).unwrap().get_pages().len();
+        let pages = (1..=3).map(|number| drawn_image_on(&output, number)).collect::<Vec<_>>();
+        let searchable = extracted_text(&root, &output, "extracted");
+        let after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(text[0].output_paths()[0].file_name().unwrap(), "flatbed-scan-ocr.txt");
+        assert_eq!(output.file_name().unwrap(), "flatbed-scan-ocr.pdf");
+        assert_eq!(text[0].detail, "3 TIFF pages recognized.");
+        assert_eq!(pdf[0].detail, "3 TIFF pages recognized, saved as one 3-page PDF.");
+        let parts = words.split('\u{c}').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3, "a form feed separates each frame: {words:?}");
+        let expected = [["Quarterly", "invoice"], ["Northwind", "ledger"], ["Closing", "remarks"]];
+        for (index, part) in parts.iter().enumerate() {
+            for (other, frame_words) in expected.iter().enumerate() {
+                for word in frame_words { assert_eq!(part.contains(word), index == other, "frame {} and {word}: {part:?}", index + 1); }
+            }
+        }
+        assert_eq!(page_count, 3, "one PDF page per frame");
+        for (index, (dictionary, _, samples, media_box)) in pages.iter().enumerate() {
+            assert_eq!(dictionary.get(b"Filter").unwrap().as_name().unwrap(), b"FlateDecode", "frame {} is stored losslessly", index + 1);
+            assert_eq!(media_box, &[0., 0., 1275., 1650.]);
+            let frame: &[u8] = if index == 1 { colour.as_raw() } else { rasters[index].as_raw() };
+            assert!(samples == frame, "frame {}'s pixels are kept exactly", index + 1);
+        }
+        assert_eq!(pages[1].0.get(b"ColorSpace").unwrap().as_name().unwrap(), b"DeviceRGB");
+        let found = ["Quarterly", "Northwind", "Closing"].map(|word| searchable.find(word));
+        assert!(found.iter().all(Option::is_some) && found.windows(2).all(|pair| pair[0] < pair[1]), "the searchable PDF keeps frame order: {searchable:?}");
+        assert_eq!(after, original, "the TIFF is never changed");
+    }
+
+    #[test]
+    fn ocr_recognises_group_four_fax_and_jpeg_compressed_tiff_scans() {
+        let _guard = crate::kit::lock_process_env();
+        let Some(_engine) = real_ocr_engine() else { return };
+        let root = sandbox("ocr-tiff-compressions");
+        let (raster, _) = scanned_page(&["Quarterly invoice summary", "Northwind shipping ledger"]);
+        let (fax_bytes, bilevel) = group_four_tiff(&raster);
+        let fax = root.join("fax.tif");
+        let photo = root.join("photo.tif");
+        std::fs::write(&fax, fax_bytes).unwrap();
+        std::fs::write(&photo, jpeg_tiff(&image::DynamicImage::ImageLuma8(raster.clone()).to_rgb8())).unwrap();
+        let paths = vec![fax.clone(), photo.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let texts = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "text")), no_packs()));
+        let pdfs = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(paths.clone(), location(&root, "pdf")), no_packs()));
+        for outcome in texts.iter().chain(&pdfs) { assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error()); }
+        let words = texts.iter().map(|outcome| std::fs::read_to_string(&outcome.output_paths()[0]).unwrap()).collect::<Vec<_>>();
+        let searchable = pdfs.iter().map(|outcome| extracted_text(&root, &outcome.output_paths()[0], "extracted")).collect::<Vec<_>>();
+        let (fax_image, _, fax_samples, _) = drawn_image(&pdfs[0].output_paths()[0]);
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(texts.iter().map(|outcome| outcome.detail.as_str()).collect::<Vec<_>>(), ["1 TIFF page recognized.", "1 TIFF page recognized."]);
+        for text in words.iter().chain(&searchable) {
+            for word in ["Quarterly", "invoice", "Northwind", "ledger"] { assert!(text.contains(word), "{word} is missing from {text:?}"); }
+        }
+        assert_eq!(fax_image.get(b"ColorSpace").unwrap().as_name().unwrap(), b"DeviceGray");
+        assert!(fax_samples == bilevel, "the fax page keeps every black and white pixel");
+        assert_eq!(after, originals, "originals are never changed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_keeps_group_three_fax_tiff_pages_pixel_for_pixel_in_the_searchable_pdf() {
+        const WHITE: [&str; 9] = ["00110101", "000111", "0111", "1000", "1011", "1100", "1110", "1111", "10011"];
+        const BLACK: [&str; 9] = ["0000110111", "010", "11", "10", "011", "0011", "0010", "00011", "000101"];
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-tiff-g3");
+        let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+        let rows: [&[usize]; 5] = [&[8], &[2, 3, 3], &[0, 8], &[1, 1, 1, 1, 1, 1, 1, 1], &[5, 2, 1]];
+        let mut bits = String::new();
+        let mut white = Vec::new();
+        for runs in rows {
+            bits.push_str("000000000001");
+            for (index, run) in runs.iter().enumerate() {
+                bits.push_str(if index % 2 == 0 { WHITE[*run] } else { BLACK[*run] });
+                white.extend(std::iter::repeat_n(index % 2 == 0, *run));
+            }
+        }
+        while bits.len() % 8 != 0 { bits.push('0'); }
+        let data = bits.as_bytes().chunks(8).map(|byte| u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 2).unwrap()).collect::<Vec<_>>();
+        let page = |photometric: u32, fill_order: u32, strip: Vec<u8>| -> RawTiffPage {
+            (8, rows.len() as u32, vec![(258, vec![1]), (259, vec![3]), (262, vec![photometric]), (266, vec![fill_order]), (277, vec![1]), (292, vec![0])], strip)
+        };
+        let input = root.join("fax.tiff");
+        std::fs::write(&input, raw_tiff(&[page(0, 1, data.clone()), page(1, 2, data.iter().map(|byte| byte.reverse_bits()).collect())])).unwrap();
+        let original = std::fs::read(&input).unwrap();
+
+        let output = assert_success("ocr group 3 fax", run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(vec![input.clone()], location(&root, "pdf")), no_packs()));
+        let pages = [1, 2].map(|number| drawn_image_on(&output[0], number).2);
+        let searchable = extracted_text(&root, &output[0], "extracted").split_whitespace().collect::<Vec<_>>().join(" ");
+        let after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(pages[0], white.iter().map(|white| if *white { 255 } else { 0 }).collect::<Vec<u8>>(), "WhiteIsZero Group 3 runs keep their pixels");
+        assert_eq!(pages[1], white.iter().map(|white| if *white { 0 } else { 255 }).collect::<Vec<u8>>(), "BlackIsZero and reversed bit order are honoured");
+        assert_eq!(searchable, "Searchable words Searchable words");
+        assert_eq!(after, original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_applies_the_page_range_to_tiff_frames_in_order_and_skips_a_tiff_it_leaves_empty() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-tiff-range");
+        let input = root.join("flatbed-scan.tiff");
+        // Each frame is a different width, so the PDF shows which frames it holds.
+        std::fs::write(&input, raw_tiff(&[10, 20, 30].map(|width| gray_tiff_page(width, 4, 1, vec![200; width as usize * 4])))).unwrap();
+        let original = std::fs::read(&input).unwrap();
+        let ranged = |range: &str, request: vision::OcrRequest| tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), vision::OcrRequest { page_range: Some(range.into()), ..request }, no_packs()));
+
+        let env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
+        let pdf = ranged("2-", searchable_pdf_request(vec![input.clone()], location(&root, "pdf")));
+        drop(env);
+        let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let text = ranged("3, 2", ocr_text_request(vec![input.clone()], location(&root, "text")));
+        let clamped = ranged("1, 9", ocr_text_request(vec![input.clone()], location(&root, "clamped")));
+        let skipped = ranged("4-", ocr_text_request(vec![input.clone()], location(&root, "skipped")));
+        for outcome in pdf.iter().chain(&text).chain(&clamped) { assert!(outcome.error().is_none(), "{:?}", outcome.error()); }
+        let pdf_output = pdf[0].output_paths()[0].clone();
+        let page_widths = lopdf::Document::load(&pdf_output).unwrap().get_pages().len();
+        let widths = (1..=2).map(|number| drawn_image_on(&pdf_output, number).3[2]).collect::<Vec<_>>();
+        let words = std::fs::read_to_string(&text[0].output_paths()[0]).unwrap();
+        let clamped_words = std::fs::read_to_string(&clamped[0].output_paths()[0]).unwrap();
+        let skipped_written = std::fs::read_dir(root.join("skipped")).map(|entries| entries.count()).unwrap_or(0);
+        let after = std::fs::read(&input).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(page_widths, 2);
+        assert_eq!(widths, [20., 30.], "frames 2 and 3, in document order");
+        assert_eq!(pdf[0].detail, "TIFF pages 2 and 3 recognized, saved as one 2-page PDF.");
+        assert_eq!(words, "recognized words\n\u{c}recognized words\n");
+        assert_eq!(text[0].detail, "TIFF pages 2 and 3 recognized.");
+        assert_eq!(clamped_words, "recognized words\n", "a range past the TIFF's end is clamped to its pages");
+        assert_eq!(clamped[0].detail, "TIFF page 1 recognized.");
+        let OutcomeState::Skipped { reason } = &skipped[0].state else { panic!("a range past every frame skips the TIFF: {:?}", skipped[0]) };
+        assert_eq!(reason.message, "No pages left in 4-. It has 3 pages, so nothing was made.");
+        assert_eq!(skipped_written, 0);
+        assert_eq!(after, original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_holds_each_tiff_page_and_all_its_pages_together_to_the_pixel_limits_on_their_own() {
+        let _guard = crate::kit::lock_process_env();
+        let root = sandbox("ocr-tiff-limits");
+        let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let [first, big_page, many_pages, last] = ["first.tiff", "big-page.tiff", "many-pages.tif", "last.png"].map(|name| root.join(name));
+        let small = || gray_tiff_page(8, 4, 1, vec![200; 32]);
+        std::fs::write(&first, raw_tiff(&[small(), small()])).unwrap();
+        // Only the headers are read before the limits apply, so the strips can be short.
+        std::fs::write(&big_page, raw_tiff(&[small(), gray_tiff_page(8000, 6000, 1, vec![0; 16])])).unwrap();
+        std::fs::write(&many_pages, raw_tiff(&[(); 4].map(|_| gray_tiff_page(6000, 6000, 1, vec![0; 16])))).unwrap();
+        write_png(&last, 32, 20);
+        let paths = vec![first, big_page, many_pages, last];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "ocr")), no_packs()));
+        let mut written = std::fs::read_dir(root.join("ocr")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        written.sort();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        for index in [0, 3] { assert!(outcomes[index].error().is_none(), "{} still runs: {:?}", paths[index].display(), outcomes[index].error()); }
+        let page = outcomes[1].error().expect("a TIFF page over the pixel limit fails its file");
+        assert_eq!(page.kind, ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert_eq!(page.message, "TIFF page 2 has more than 40 million pixels, which is over the OCR limit. Use a smaller image and try again.");
+        let total = outcomes[2].error().expect("TIFF pages over the total pixel limit fail their file");
+        assert_eq!(total.kind, ErrorKind::LimitExceeded { limit: LimitKind::Decompression });
+        assert_eq!(total.message, "The TIFF pages in scope have more than 120 million pixels together, which is over the OCR limit. Choose a page range or split the TIFF, then try again.");
+        assert_eq!(written, ["first-ocr.txt", "last-ocr.txt"]);
         assert_eq!(after, originals);
     }
 

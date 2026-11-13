@@ -1249,6 +1249,25 @@ test("OCR takes a mixed drop of PDFs and images, refuses other files, and notes 
     for (const index of [0, 2, 3, 4]) await expect(results.nth(index)).toHaveAttribute("data-tone", "ok");
 });
 
+test("OCR takes TIFF scans in a mixed drop and sends their paths unchanged", async ({ page }) => {
+    const files = ["/local/scan.pdf", "/local/flatbed-scan.tiff", "/local/fax.TIF", "/local/page.png"];
+    await open(page, "OCR PDF");
+
+    // A Word file stays in the list for Convert to PDF, so a GIF stands in for a file no PDF tool takes.
+    await drop(page, [...files, "/local/clip.gif"]);
+
+    await expect(rows(page)).toHaveText([/^scan\.pdf/, /^flatbed-scan\.tiff/, /^fax\.TIF/, /^page\.png/]);
+    for (const row of await rows(page).all()) await expect(row).not.toContainText("Won't run");
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded.getByRole("listitem")).toHaveText([/clip\.gif.*only takes .*files\./]);
+    // A multi-page TIFF is not a PDF, so the list asks for no thumbnails.
+    expect(await requestFor(page, "inspect_pdf")).toEqual([]);
+
+    await page.locator(".workspace-primary-action").click();
+    await expect(page.getByText(/^Done\./)).toBeVisible();
+    expect((await requestFor(page, "ocr_pdf")).map((request) => request.paths)).toEqual([files]);
+});
+
 test("OCR with one image in the list asks for no thumbnails and can run", async ({ page }) => {
     await open(page, "OCR PDF");
     await drop(page, ["/local/receipt.jpg"]);
