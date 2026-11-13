@@ -47,6 +47,7 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                 }
                 if (command === "inspect_tiff_pages") {
                     const { path } = (args as { request: { path: string } }).request;
+                    if (path.includes("unreadable")) throw "This TIFF can't be read.";
                     return Array.from({ length: path.endsWith("two-page.tiff") ? 2 : 1 }, () => ({ width: 640, height: 480, dataUrl: blankImage }));
                 }
                 if (command.startsWith("plugin:")) return null;
@@ -872,50 +873,188 @@ test.describe("Media requests", () => {
 
     const tiffMode = (page: Page) => page.getByRole("radiogroup", { name: "TIFF Pages mode" });
 
-    test("TIFF Pages in Combine mode sends the mode, every inspected page in the displayed order and the saved path", async ({ page }) => {
-        await start(page, customFolder);
+    const combineTiff = async (page: Page, files: string[]) => {
         await openToolBySearch(page, "Split and Combine TIFF");
         await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
-        await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
+        await choose(page, files);
+        return page.getByRole("listbox", { name: "Pages, in order" });
+    };
+    const pageNames = (grid: ReturnType<Page["getByRole"]>) =>
+        grid.getByRole("option").evaluateAll((options) => options.map((option) => option.getAttribute("aria-label")));
 
-        const inspector = page.getByRole("region", { name: "Frame order" });
-        const pages = inspector.locator(".media-frame-list button");
-        await expect(pages).toHaveCount(3);
-        await expect(pages.nth(1)).toContainText("two-page.tiff · page 2");
-        await expect(inspector.locator(".media-frame-preview")).toHaveCount(3);
+    test("TIFF Combine shows every file's pages together and sends ordered page refs after drag and keyboard reorder", async ({ page }) => {
+        await start(page, customFolder);
+        const grid = await combineTiff(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
+        const region = page.getByRole("region", { name: "Pages" });
+        const status = page.getByRole("status").filter({ hasText: /^(Position|Dragging) / });
+
+        await expect(grid.getByRole("option")).toHaveCount(3);
+        expect(await pageNames(grid)).toEqual([
+            "Position 1, two-page.tiff page 1",
+            "Position 2, two-page.tiff page 2",
+            "Position 3, one-page.tiff page 1",
+        ]);
+        await expect(grid.locator("img")).toHaveCount(3);
+        await expect(region).toContainText("3 of 3 pages, from 2 TIFFs");
+        const sources = region.getByRole("list", { name: "Source files" }).getByRole("listitem");
+        await expect(sources).toHaveText([/^A\s*two-page\.tiff\s*2 pages/, /^B\s*one-page\.tiff\s*1 page/]);
+        await expect(grid.getByRole("option").nth(2)).toContainText("Bp1");
+        await expect(page.getByText("Pages are joined in this order. Drag a page, or select it and press ⌘+Arrow to move it.", { exact: false })).toBeVisible();
+        await expect(page.locator(".workspace-primary-action")).toContainText("Combine 3 pages…");
         expect(await invocationsOf(page, "inspect_tiff_pages")).toEqual([
             { request: { path: "/local/tiff/two-page.tiff" } },
             { request: { path: "/local/tiff/one-page.tiff" } },
         ]);
         expect(await invocationsOf(page, "inspect_image_preview")).toEqual([]);
 
-        await pages.nth(2).click();
-        await page.getByRole("button", { name: "Move selected TIFF page up" }).click();
-        await expect(pages.nth(1)).toHaveAttribute("aria-pressed", "true");
-        await expect(pages.nth(1)).toContainText("one-page.tiff · page 1");
-
-        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tiff")).toEqual({ runId, request: {
+        // Drag one-page.tiff's page onto the first tile: it lands at position 1.
+        await grid.getByRole("button", { name: "Position 3, one-page.tiff page 1" }).hover();
+        await page.mouse.down();
+        await grid.getByRole("button", { name: "Position 1, two-page.tiff page 1" }).hover();
+        await expect(status).toHaveText("Dragging one-page.tiff, page 1. Drop it at position 1.");
+        await expect(grid.getByRole("option").nth(0)).toHaveAttribute("data-drop-target", "before");
+        await page.mouse.up();
+        expect(await pageNames(grid)).toEqual([
+            "Position 1, one-page.tiff page 1",
+            "Position 2, two-page.tiff page 1",
+            "Position 3, two-page.tiff page 2",
+        ]);
+        await expect(status).toHaveText("Position 1 of 3 selected: one-page.tiff, page 1.");
+        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tif")).toEqual({ runId, request: {
             mode: "combine",
             paths: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"],
             pages: [
-                { path: "/local/tiff/two-page.tiff", page: 0 },
                 { path: "/local/tiff/one-page.tiff", page: 0 },
+                { path: "/local/tiff/two-page.tiff", page: 0 },
                 { path: "/local/tiff/two-page.tiff", page: 1 },
             ],
             outputLocation: { customFolder: "/Users/test/Media out" },
-            outputPath: "/Users/test/Media out/two-page-combined.tiff",
+            outputPath: "/Users/test/Media out/two-page-combined.tif",
+        } });
+
+        // The keyboard moves the selected page to the front, keeping focus on it.
+        await grid.getByRole("button", { name: "Position 3, two-page.tiff page 2" }).click();
+        await page.keyboard.press("Meta+ArrowLeft");
+        await page.keyboard.press("Meta+ArrowUp");
+        expect(await pageNames(grid)).toEqual([
+            "Position 1, two-page.tiff page 2",
+            "Position 2, one-page.tiff page 1",
+            "Position 3, two-page.tiff page 1",
+        ]);
+        await expect(grid.getByRole("button", { name: "Position 1, two-page.tiff page 2" })).toBeFocused();
+        await page.keyboard.press("ArrowRight");
+        await expect(grid.getByRole("button", { name: "Position 2, one-page.tiff page 1" })).toBeFocused();
+        await expect(status).toHaveText("Position 2 of 3 selected: one-page.tiff, page 1.");
+        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tif")).toMatchObject({ request: { pages: [
+            { path: "/local/tiff/two-page.tiff", page: 1 },
+            { path: "/local/tiff/one-page.tiff", page: 0 },
+            { path: "/local/tiff/two-page.tiff", page: 0 },
+        ] } });
+    });
+
+    test("TIFF Combine leaves pages out without touching the files, and Reset pages brings them back", async ({ page }) => {
+        await start(page);
+        const grid = await combineTiff(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
+        const region = page.getByRole("region", { name: "Pages" });
+        const status = page.getByRole("status").filter({ hasText: /^Position / });
+        await expect(grid.getByRole("option")).toHaveCount(3);
+
+        // Delete leaves the selected page out and selects the next one.
+        await grid.getByRole("button", { name: "Position 1, two-page.tiff page 1" }).click();
+        await page.keyboard.press("Delete");
+        expect(await pageNames(grid)).toEqual(["Position 1, two-page.tiff page 2", "Position 2, one-page.tiff page 1"]);
+        await expect(grid.getByRole("button", { name: "Position 1, two-page.tiff page 2" })).toBeFocused();
+        await expect(status).toHaveText("Position 1 of 2 selected: two-page.tiff, page 2. Left out: two-page.tiff, page 1.");
+        await expect(region).toContainText("2 of 3 pages, from 2 TIFFs");
+        await expect(page.locator(".workspace-primary-action")).toContainText("Combine 2 pages…");
+
+        // Leave page out does the same from the toolbar.
+        await grid.getByRole("button", { name: "Position 2, one-page.tiff page 1" }).click();
+        await region.getByRole("button", { name: "Leave page out" }).click();
+        expect(await pageNames(grid)).toEqual(["Position 1, two-page.tiff page 2"]);
+        await expect(page.locator(".workspace-primary-action")).toContainText("Combine 1 page…");
+        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tif")).toEqual({ runId, request: {
+            mode: "combine",
+            paths: ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"],
+            pages: [{ path: "/local/tiff/two-page.tiff", page: 1 }],
+            outputLocation: "alongsideInput",
+            outputPath: "/local/tiff/two-page-combined.tif",
+        } });
+
+        // With every page left out there is nothing to combine.
+        await grid.getByRole("button", { name: "Position 1, two-page.tiff page 2" }).click();
+        await page.keyboard.press("Delete");
+        await expect(grid).toHaveCount(0);
+        await expect(region).toContainText("Every page is left out. Reset pages brings them back.");
+        await expect(page.locator(".workspace-primary-action")).toBeDisabled();
+
+        await region.getByRole("button", { name: "Reset pages" }).click();
+        expect(await pageNames(grid)).toEqual([
+            "Position 1, two-page.tiff page 1",
+            "Position 2, two-page.tiff page 2",
+            "Position 3, one-page.tiff page 1",
+        ]);
+        await expect(region.getByRole("button", { name: "Reset pages" })).toBeDisabled();
+    });
+
+    test("TIFF Combine removes a source file's pages from its chip, and Add TIFFs adds more", async ({ page }) => {
+        await start(page);
+        const grid = await combineTiff(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
+        const region = page.getByRole("region", { name: "Pages" });
+        await expect(grid.getByRole("option")).toHaveCount(3);
+
+        await region.getByRole("button", { name: "Remove two-page.tiff" }).click();
+        expect(await pageNames(grid)).toEqual(["Position 1, one-page.tiff page 1"]);
+        await expect(region).toContainText("1 of 1 page, from 1 TIFF");
+
+        await page.evaluate(() => { (window as unknown as MediaWindow).__dialogResults.push(["/local/tiff/scan-two-page.tiff"]); });
+        await region.getByRole("button", { name: /^Add TIFFs/ }).click();
+        expect(await pageNames(grid)).toEqual([
+            "Position 1, one-page.tiff page 1",
+            "Position 2, scan-two-page.tiff page 1",
+            "Position 3, scan-two-page.tiff page 2",
+        ]);
+        expect(await runOnce(page, "process_tiff_pages", "one-page-combined.tif")).toMatchObject({ request: {
+            paths: ["/local/tiff/one-page.tiff", "/local/tiff/scan-two-page.tiff"],
+            pages: [
+                { path: "/local/tiff/one-page.tiff", page: 0 },
+                { path: "/local/tiff/scan-two-page.tiff", page: 0 },
+                { path: "/local/tiff/scan-two-page.tiff", page: 1 },
+            ],
         } });
     });
 
-    test("TIFF Pages in Combine mode combines one file through the save step", async ({ page }) => {
-        await start(page);
-        await openToolBySearch(page, "Split and Combine TIFF");
-        await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
-        await choose(page, "/local/tiff/two-page.tiff");
-        await expect(page.locator(".media-frame-list button")).toHaveCount(2);
-        await expect(page.locator(".workspace-primary-action")).toContainText("Make TIFF…");
+    test("TIFF Combine proposes the first file's name in the resolved folder, and cancelling sends nothing", async ({ page }) => {
+        await start(page, customFolder);
+        const grid = await combineTiff(page, ["/local/tiff/scan-0043.tiff", "/local/tiff/two-page.tiff"]);
+        await expect(grid.getByRole("option")).toHaveCount(3);
 
-        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tiff")).toEqual({ runId, request: {
+        await page.locator(".workspace-primary-action").click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByLabel("File name")).toHaveValue("scan-0043-combined.tif");
+        await expect(dialog.getByTestId("save-folder")).toHaveText("~/Media out");
+        await dialog.getByRole("button", { name: "Cancel" }).click();
+        await expect(dialog).toHaveCount(0);
+        expect(await invocationsOf(page, "process_tiff_pages")).toEqual([]);
+
+        // A name already ending in .tiff keeps it; the save path goes in the request.
+        await page.locator(".workspace-primary-action").click();
+        await dialog.getByLabel("File name").fill("Statement.tiff");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        await expect.poll(async () => (await invocationsOf(page, "process_tiff_pages")).length).toBe(1);
+        expect((await invocationsOf(page, "process_tiff_pages"))[0]).toMatchObject({ request: {
+            outputLocation: { customFolder: "/Users/test/Media out" },
+            outputPath: "/Users/test/Media out/Statement.tiff",
+        } });
+    });
+
+    test("TIFF Combine with one file still opens the save step", async ({ page }) => {
+        await start(page);
+        const grid = await combineTiff(page, ["/local/tiff/two-page.tiff"]);
+        await expect(grid.getByRole("option")).toHaveCount(2);
+        await expect(page.locator(".workspace-primary-action")).toContainText("Combine 2 pages…");
+
+        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tif")).toEqual({ runId, request: {
             mode: "combine",
             paths: ["/local/tiff/two-page.tiff"],
             pages: [
@@ -923,8 +1062,66 @@ test.describe("Media requests", () => {
                 { path: "/local/tiff/two-page.tiff", page: 1 },
             ],
             outputLocation: "alongsideInput",
-            outputPath: "/local/tiff/two-page-combined.tiff",
+            outputPath: "/local/tiff/two-page-combined.tif",
         } });
+    });
+
+    test("TIFF Combine waits for a file it can't read, and says which one", async ({ page }) => {
+        await start(page);
+        const grid = await combineTiff(page, ["/local/tiff/two-page.tiff", "/local/tiff/unreadable.tiff"]);
+        const region = page.getByRole("region", { name: "Pages" });
+        await expect(grid.getByRole("option")).toHaveCount(2);
+        await expect(region.getByRole("alert")).toContainText("The pages of unreadable.tiff could not be read.");
+        await expect(region.getByRole("list", { name: "Source files" }).getByRole("listitem").nth(1)).toContainText("Can't read");
+        await expect(page.locator(".workspace-primary-action")).toBeDisabled();
+
+        await region.getByRole("button", { name: "Remove unreadable.tiff" }).click();
+        await expect(region.getByRole("alert")).toHaveCount(0);
+        await expect(page.locator(".workspace-primary-action")).toBeEnabled();
+    });
+
+    test("TIFF Combine shows the renamed TIFF with both names", async ({ page }) => {
+        await start(page, customFolder);
+        await page.evaluate(() => {
+            (window as unknown as MediaWindow).__outcomes = { process_tiff_pages: [{
+                inputPath: "/local/tiff/two-page.tiff",
+                outputPaths: ["/Users/test/Media out/two-page-combined-1.tif"],
+                detail: "TIFF saved",
+                state: "succeeded",
+                failure: null,
+                reason: null,
+                warnings: [{ code: "renamedToAvoidReplacing", message: "native wording", details: { chosenName: "two-page-combined.tif", finalName: "two-page-combined-1.tif" } }],
+            }] };
+        });
+        await combineTiff(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
+        await runOnce(page, "process_tiff_pages", "two-page-combined.tif");
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveCount(1);
+        await expect(rows.first()).toHaveAttribute("data-tone", "warn");
+        await expect(rows.first().locator(".result-row-name")).toHaveText("two-page-combined-1.tif");
+        await expect(rows.first()).toContainText("Saved as two-page-combined-1.tif. Renamed to avoid replacing an existing file.");
+    });
+
+    test("TIFF Combine names the file and page it can't read and says nothing was saved", async ({ page }) => {
+        await start(page);
+        const message = "Could not process /local/tiff/one-page.tiff: TIFF page 1 of 1 can't be read. The TIFF uses a compression this app can't decode.";
+        await page.evaluate((message) => {
+            const failed = (inputPath: string, text: string) => ({ inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: text, pointer: null }, reason: null, warnings: [] });
+            (window as unknown as MediaWindow).__outcomes = { process_tiff_pages: [
+                failed("/local/tiff/two-page.tiff", "Aggregate operation stopped because /local/tiff/one-page.tiff failed: " + message),
+                failed("/local/tiff/one-page.tiff", message),
+            ] };
+        }, message);
+        await combineTiff(page, ["/local/tiff/two-page.tiff", "/local/tiff/one-page.tiff"]);
+        await runOnce(page, "process_tiff_pages", "two-page-combined.tif");
+
+        const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(rows).toHaveCount(2);
+        const failedFile = rows.filter({ has: page.locator(".result-row-name", { hasText: /^one-page\.tiff$/ }) });
+        await expect(failedFile).toHaveAttribute("data-tone", "fail");
+        await expect(failedFile).toContainText("TIFF page 1 of 1 can't be read.");
+        await expect(page.getByRole("list", { name: "Results" })).not.toContainText("combined");
     });
 
     test("TIFF Pages splits several files as a batch in the chosen Split mode without a save step", async ({ page }) => {
@@ -932,7 +1129,7 @@ test.describe("Media requests", () => {
         await openToolBySearch(page, "Split and Combine TIFF");
         await expect(tiffMode(page).getByRole("radio", { name: "Split pages" })).toBeChecked();
         await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/scan-0043.tiff"]);
-        await expect(page.getByRole("region", { name: "Frame order" })).toHaveCount(0);
+        await expect(page.getByRole("region", { name: "Pages" })).toHaveCount(0);
         await expect(page.locator(".workspace-primary-action")).toContainText("Split 2 TIFFs");
         await expect(page.getByTestId("run-destination-example")).toContainText("two-page-page-01.tif");
 

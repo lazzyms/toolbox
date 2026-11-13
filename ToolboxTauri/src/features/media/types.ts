@@ -32,6 +32,8 @@ export interface MediaPanelProps<Options> {
   moveFile: (index: number, toIndex: number) => void;
   /** Removes a file from the shared list, never from disk. */
   removeFile: (index: number) => void;
+  /** Opens the file dialog, as the workspace's own open button does. */
+  browse: () => void;
 }
 
 /**
@@ -44,8 +46,8 @@ export interface MediaTool<Options> {
   buildRequest: (options: Options, input: MediaRunInput) => MediaRequest;
   /** Whether the options allow a run, beyond having files and not running. */
   canRun?: (options: Options, files: string[], keys: string[]) => boolean;
-  /** The run button's label when the shared run has none; defaults to the tool's short title. */
-  runLabel?: string | ((options: Options, files: string[]) => string);
+  /** The run button's label, ahead of the shared run's own, such as a save step's; defaults to the tool's short title. */
+  runLabel?: string | ((options: Options, files: string[], keys: string[]) => string);
   /** Whether the shared file list offers reordering; defaults to true. */
   showFileOrdering?: boolean;
   /** How the shared run treats the inputs under these options; defaults to the registered capability. */
