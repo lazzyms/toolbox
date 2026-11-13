@@ -2111,6 +2111,7 @@ test.describe("Extract from PDF", () => {
         await expect(textOptions(page)).toBeVisible();
         await expect(imageOptions(page)).toBeVisible();
         await expect(page.getByRole("textbox", { name: "Page range for every PDF" })).toHaveCount(0);
+        await expect(page.getByRole("region", { name: "Destination" }).getByTestId("run-destination-path")).toHaveText("Next to each original");
         await page.getByRole("button", { name: "Extract from 2 PDFs", exact: true }).click();
 
         const request = await extractRequest(page);
@@ -2122,6 +2123,40 @@ test.describe("Extract from PDF", () => {
             preserveLayout: false,
         });
         expect(request).not.toHaveProperty("minImageSize");
+    });
+
+    test("saves to the folder chosen in Settings, and a per-run folder reaches the request without changing Settings", async ({ page }) => {
+        const saved: OutputSettings = { mode: "customFolder", folder: "/Users/test/Extracted" };
+        const locations = () => page.evaluate(() =>
+            ((window as TestWindow).__toolboxInvocations ?? [])
+                .filter(({ command }) => command === "extract_from_pdf")
+                .map(({ args }) => (args as { request: { outputLocation: unknown } }).request.outputLocation),
+        );
+        const run = page.getByRole("button", { name: "Extract from 2 PDFs", exact: true });
+        await storeOutputSettings(page, saved);
+        await openWithPdfs(page);
+        const destination = page.getByRole("region", { name: "Destination" });
+        await expect(destination.getByText("Save to", { exact: true })).toBeVisible();
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Extracted");
+        await expect(destination.getByText("This run only")).toHaveCount(0);
+        await run.click();
+        await expect.poll(locations).toEqual([{ customFolder: "/Users/test/Extracted" }]);
+
+        await page.evaluate(() => { (window as TestWindow).__toolboxDialogResults = ["/Users/test/Desktop/Extracted"]; });
+        await destination.getByRole("button", { name: "Change for this run" }).click();
+        await expect(destination.getByText("This run only")).toBeVisible();
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Desktop/Extracted");
+        await expect(destination.getByText("Your default is ~/Extracted. This change ends when you leave Extract from PDF, and your setting stays as it is.", { exact: true })).toBeVisible();
+        await run.click();
+        await expect.poll(locations).toEqual([{ customFolder: "/Users/test/Extracted" }, { customFolder: "/Users/test/Desktop/Extracted" }]);
+        expect(await outputSettingsWrites(page)).toEqual([]);
+        expect(await page.evaluate(() => (window as TestWindow).__toolboxOutputSettings)).toEqual(saved);
+
+        await page.getByRole("button", { name: "← All tools" }).click();
+        await openFromHome(page, "Extract from PDF");
+        await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Extracted");
+        await expect(destination.getByText("This run only")).toHaveCount(0);
+        expect(await outputSettingsWrites(page)).toEqual([]);
     });
 
     test("Text shows only the text options and sends the layout choice and page range", async ({ page }) => {

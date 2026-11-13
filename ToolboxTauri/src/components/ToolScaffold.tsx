@@ -131,6 +131,8 @@ interface ToolScaffoldProps {
     renderReport?: (results: JobOutcome[], run: ReportRun) => React.ReactNode;
     /** Replaces the destination's label and example for a tool whose saves are not its run. */
     destinationCopy?: (files: string[]) => { label: string; note: string };
+    /** Says in the per-run destination hint that the saved setting stays as it is. */
+    destinationMentionsSettingKept?: boolean;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -157,7 +159,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, intakeRedirect, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, pasteHtml = false, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, fileWarning, retryWithPassword, intakeCopy, intakeRedirect, emptyHint = 'Drop files here or browse from this device.', initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, pasteHtml = false, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, destinationMentionsSettingKept = false, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (items: readonly (string | InspectedPath)[]): IntakeEntry[] => items.map((item) => typeof item === 'string'
         ? { key: `entry-${++nextEntryKey.current}`, path: item }
@@ -936,6 +938,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         exampleName={destinationCopy ? null : files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
                         exampleHint={exampleHint}
                         savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
+                        mentionsSettingKept={destinationMentionsSettingKept}
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
                     />
