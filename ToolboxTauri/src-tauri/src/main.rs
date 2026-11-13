@@ -6787,6 +6787,55 @@ mod command_tests {
     }
 
     #[test]
+    fn split_pdf_every_n_requests_from_the_view_write_page_named_parts_or_reject_invalid_n() {
+        let root = sandbox("split-every-n");
+        let pdf = root.join("statement.pdf");
+        make_pdf(&pdf, 5);
+        let original = std::fs::read(&pdf).unwrap();
+        let request = |pages: serde_json::Value, folder: &PathBuf| serde_json::from_value::<SplitPdfRequest>(serde_json::json!({
+            "paths": [pdf],
+            "mode": { "kind": "everyN", "pages": pages },
+            "outputLocation": { "customFolder": folder },
+        })).unwrap();
+        let page_texts = |path: &PathBuf| {
+            let document = lopdf::Document::load(path).unwrap();
+            document.get_pages().values().map(|page| String::from_utf8_lossy(&document.get_page_content(*page)).into_owned()).collect::<Vec<_>>()
+        };
+        let names = |outcomes: &[JobOutcome]| outcomes[0].output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+
+        for (pages, folder) in [(serde_json::json!(0), "zero"), (serde_json::json!(null), "missing"), (serde_json::json!(-1), "negative")] {
+            let folder = root.join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            let rejected = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), request(pages.clone(), &folder)));
+            assert_eq!(rejected.len(), 1);
+            assert!(matches!(rejected[0].error().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)), "{pages}: {:?}", rejected[0].error());
+            assert!(rejected[0].output_paths().is_empty(), "{pages}");
+            assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "{pages} wrote an output");
+        }
+
+        let folder = root.join("every-two");
+        std::fs::create_dir_all(&folder).unwrap();
+        let split = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), request(serde_json::json!(2), &folder)));
+        assert!(split[0].error().is_none(), "split failed: {:?}", split[0].error());
+        assert_eq!(names(&split), ["statement-pages-1-2.pdf", "statement-pages-3-4.pdf", "statement-page-5.pdf"]);
+        let contents = split[0].output_paths().iter().map(page_texts).collect::<Vec<_>>();
+        for (part, pages) in contents.iter().zip([vec![1, 2], vec![3, 4], vec![5]]) {
+            assert_eq!(part.len(), pages.len());
+            for (text, page) in part.iter().zip(pages) {
+                assert!(text.contains(&format!("(Toolbox page {page})")), "expected page {page}: {text}");
+            }
+        }
+
+        let again = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), request(serde_json::json!(1), &folder)));
+        assert!(again[0].error().is_none(), "split failed: {:?}", again[0].error());
+        assert_eq!(names(&again), ["statement-page-1.pdf", "statement-page-2.pdf", "statement-page-3.pdf", "statement-page-4.pdf", "statement-page-5-1.pdf"]);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 8);
+        assert_eq!(std::fs::read(&pdf).unwrap(), original, "split modified the original PDF");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn collision_safe_outputs_preserve_existing_files() {
         let root = sandbox("collision");
         let image = root.join("image.png");

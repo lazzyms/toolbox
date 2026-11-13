@@ -441,22 +441,19 @@ impl SplitPlan {
             Self::Ranges(ranges) => {
                 let beyond = ranges.iter().filter(|(_, range)| range.start > page_count || range.end.is_some_and(|end| end > page_count)).map(|(token, _)| format!("{token} goes past the last page ({page_count}).")).collect::<Vec<_>>();
                 if !beyond.is_empty() { return Err(beyond.join(" ")); }
-                Ok(ranges.iter().map(|(_, range)| {
-                    let (first, last) = (range.start, range.end.unwrap_or(page_count));
-                    let suffix = if first == last { format!("-page-{first}") } else { format!("-pages-{first}-{last}") };
-                    SplitSpan { suffix, first, last }
-                }).collect())
+                Ok(ranges.iter().map(|(_, range)| SplitSpan::pages(range.start, range.end.unwrap_or(page_count))).collect())
             }
-            // Every-N names stay on the shipped -split family until #541 settles them.
-            Self::EveryN(size) => {
-                let (size, width) = (*size, page_count.to_string().len());
-                Ok((1..=page_count).step_by(size).map(|first| {
-                    let last = (first + size - 1).min(page_count);
-                    let suffix = if size == 1 { format!("-split-page-{first:0width$}") } else { format!("-split-{first:0width$}-{last:0width$}") };
-                    SplitSpan { suffix, first, last }
-                }).collect())
-            }
+            // Consecutive parts of `size` pages; the last part keeps whatever is left.
+            Self::EveryN(size) => Ok((1..=page_count).step_by(*size).map(|first| SplitSpan::pages(first, (first + size - 1).min(page_count))).collect()),
         }
+    }
+}
+
+impl SplitSpan {
+    /// Names a part by the one-based pages it holds: `-page-5` or `-pages-1-3`.
+    fn pages(first: usize, last: usize) -> Self {
+        let suffix = if first == last { format!("-page-{first}") } else { format!("-pages-{first}-{last}") };
+        Self { suffix, first, last }
     }
 }
 
@@ -2832,10 +2829,12 @@ pub(crate) mod tests {
         let suffixes = |mode: SplitMode, pages: usize| SplitPlan::new(&mode).unwrap().spans(pages).unwrap().into_iter().map(|span| (span.suffix, span.first, span.last)).collect::<Vec<_>>();
         let span = |suffix: &str, first: usize, last: usize| (suffix.to_string(), first, last);
 
-        assert_eq!(suffixes(SplitMode::EveryN { pages: 1 }, 3), vec![span("-split-page-1", 1, 1), span("-split-page-2", 2, 2), span("-split-page-3", 3, 3)]);
-        assert_eq!(suffixes(SplitMode::EveryN { pages: 1 }, 12)[..2], [span("-split-page-01", 1, 1), span("-split-page-02", 2, 2)]);
-        assert_eq!(suffixes(SplitMode::EveryN { pages: 2 }, 3), vec![span("-split-1-2", 1, 2), span("-split-3-3", 3, 3)]);
-        assert_eq!(suffixes(SplitMode::EveryN { pages: 5 }, 12), vec![span("-split-01-05", 1, 5), span("-split-06-10", 6, 10), span("-split-11-12", 11, 12)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 1 }, 3), vec![span("-page-1", 1, 1), span("-page-2", 2, 2), span("-page-3", 3, 3)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 1 }, 12)[9..], [span("-page-10", 10, 10), span("-page-11", 11, 11), span("-page-12", 12, 12)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 2 }, 3), vec![span("-pages-1-2", 1, 2), span("-page-3", 3, 3)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 5 }, 12), vec![span("-pages-1-5", 1, 5), span("-pages-6-10", 6, 10), span("-pages-11-12", 11, 12)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 4 }, 14), vec![span("-pages-1-4", 1, 4), span("-pages-5-8", 5, 8), span("-pages-9-12", 9, 12), span("-pages-13-14", 13, 14)]);
+        assert_eq!(suffixes(SplitMode::EveryN { pages: 3 }, 9), vec![span("-pages-1-3", 1, 3), span("-pages-4-6", 4, 6), span("-pages-7-9", 7, 9)]);
         assert_eq!(suffixes(ranges("3, 1-2, 2-"), 3), vec![span("-page-3", 3, 3), span("-pages-1-2", 1, 2), span("-pages-2-3", 2, 3)]);
         assert_eq!(suffixes(ranges("1-3, 5, 8-"), 10), vec![span("-pages-1-3", 1, 3), span("-page-5", 5, 5), span("-pages-8-10", 8, 10)]);
         assert_eq!(suffixes(ranges("4-4,10-"), 10), vec![span("-page-4", 4, 4), span("-page-10", 10, 10)]);
@@ -2934,12 +2933,12 @@ pub(crate) mod tests {
 
     #[test]
     fn page_split_does_not_overwrite_existing_outputs() {
-        run_split_with_sentinel("pages", SplitMode::EveryN { pages: 1 }, "document-split-page-1.pdf", 3);
+        run_split_with_sentinel("pages", SplitMode::EveryN { pages: 1 }, "document-page-1.pdf", 3);
     }
 
     #[test]
     fn chunk_split_does_not_overwrite_existing_outputs() {
-        run_split_with_sentinel("chunks", SplitMode::EveryN { pages: 2 }, "document-split-1-2.pdf", 2);
+        run_split_with_sentinel("chunks", SplitMode::EveryN { pages: 2 }, "document-pages-1-2.pdf", 2);
     }
 
     #[test]
@@ -3022,6 +3021,71 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn every_n_split_writes_page_named_parts_with_a_short_last_part_and_numbers_a_second_run() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let fixture = RangeSplitFixture::new("every-n", 10);
+        let temp_before = split_temp_entries();
+
+        let first = fixture.split(SplitMode::EveryN { pages: 4 });
+        assert!(first.error().is_none(), "split failed: {:?}", first.error());
+        assert_eq!(split_output_names(&first), ["document-pages-1-4.pdf", "document-pages-5-8.pdf", "document-pages-9-10.pdf"]);
+        let contents = first.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>();
+        assert_eq!(contents, [labels(&[1, 2, 3, 4]), labels(&[5, 6, 7, 8]), labels(&[9, 10])]);
+        let first_bytes = first.output_paths().iter().map(|path| fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let second = fixture.split(SplitMode::EveryN { pages: 4 });
+        assert!(second.error().is_none(), "second split failed: {:?}", second.error());
+        assert_eq!(split_output_names(&second), ["document-pages-1-4-1.pdf", "document-pages-5-8-1.pdf", "document-pages-9-10-1.pdf"]);
+        assert_eq!(second.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), contents);
+        assert_eq!(first.output_paths().iter().map(|path| fs::read(path).unwrap()).collect::<Vec<_>>(), first_bytes, "a second split replaced an earlier output");
+        assert_eq!(fixture.output_count(), 6);
+        assert_eq!(split_temp_entries(), temp_before, "split temporary directories were not cleaned");
+    }
+
+    #[test]
+    fn every_one_page_split_writes_one_page_named_file_per_page_and_numbers_a_second_run() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let fixture = RangeSplitFixture::new("every-one", 3);
+
+        let first = fixture.split(SplitMode::EveryN { pages: 1 });
+        assert!(first.error().is_none(), "split failed: {:?}", first.error());
+        assert_eq!(split_output_names(&first), ["document-page-1.pdf", "document-page-2.pdf", "document-page-3.pdf"]);
+        assert_eq!(first.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), [labels(&[1]), labels(&[2]), labels(&[3])]);
+
+        let second = fixture.split(SplitMode::EveryN { pages: 1 });
+        assert!(second.error().is_none(), "second split failed: {:?}", second.error());
+        assert_eq!(split_output_names(&second), ["document-page-1-1.pdf", "document-page-2-1.pdf", "document-page-3-1.pdf"]);
+        assert_eq!(second.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>(), [labels(&[1]), labels(&[2]), labels(&[3])]);
+        assert_eq!(fixture.output_count(), 6);
+    }
+
+    #[test]
+    fn every_n_below_one_or_missing_is_invalid_input_without_output() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        let fixture = RangeSplitFixture::new("every-n-invalid", 4);
+        let temp_before = split_temp_entries();
+        let mode = |json: &str| serde_json::from_str::<RequestedSplitMode>(json).unwrap();
+        for requested in [
+            SplitMode::EveryN { pages: 0 }.into(),
+            mode(r#"{"kind":"everyN","pages":0}"#),
+            mode(r#"{"kind":"everyN","pages":-2}"#),
+            mode(r#"{"kind":"everyN","pages":null}"#),
+            mode(r#"{"kind":"everyN","pages":"4"}"#),
+            mode(r#"{"kind":"everyN"}"#),
+        ] {
+            let described = format!("{requested:?}");
+            let outcome = fixture.split(requested);
+            assert!(matches!(outcome.error().map(|error| &error.kind), Some(crate::kit::contracts::ErrorKind::InvalidInput)), "{described}: {:?}", outcome.error());
+            assert!(outcome.output_paths().is_empty(), "{described}");
+            assert_eq!(fixture.output_count(), 0, "{described} wrote an output");
+        }
+        assert_eq!(fixture.split(SplitMode::EveryN { pages: 0 }).error().unwrap().message, "Pages per file must be at least 1.");
+        assert_eq!(split_temp_entries(), temp_before, "a rejected split left a temporary directory");
+    }
+
+    #[test]
     fn overlapping_ranges_each_get_their_own_pages() {
         let _lock = SPLIT_TEST_LOCK.lock().unwrap();
         if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
@@ -3080,7 +3144,7 @@ pub(crate) mod tests {
         let output_folder = root.join("outputs");
         fs::create_dir_all(&output_folder).unwrap();
         fs::write(&input, b"not a PDF").unwrap();
-        let sentinel = output_folder.join("document-split-page-1.pdf");
+        let sentinel = output_folder.join("document-page-1.pdf");
         fs::write(&sentinel, b"sentinel").unwrap();
         let temp_before = split_temp_entries();
 

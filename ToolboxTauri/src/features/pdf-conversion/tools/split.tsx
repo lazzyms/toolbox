@@ -12,17 +12,30 @@ type Options = { mode: SplitMode; ranges: string; pagesPerFile: string };
 
 const pagesPerFileIssue = (value: string) => /^\d+$/.test(value.trim()) && Number(value) >= 1 ? null : "Enter 1 or more pages per file.";
 const splitIssue = ({ mode, ranges, pagesPerFile }: Options) => mode === "ranges" ? splitRangesIssue(ranges) : pagesPerFileIssue(pagesPerFile);
-const splitStem = (files: string[]) => (files[0]?.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "") || "document";
+const stemOf = (path: string) => (path.split(/[\\/]/).pop() ?? path).replace(/\.[^.]+$/, "");
+const splitStem = (files: string[]) => (files[0] ? stemOf(files[0]) : "") || "document";
+
+/** Split parts are named by the one-based pages they hold, the same way in both modes. */
+const splitPartName = (stem: string, first: number, last: number) => `${stem}-${first === last ? `page-${first}` : `pages-${first}-${last}`}.pdf`;
+
+/** Example part names for the File names note: two ranges, or the first two every-N parts. */
+const splitExampleNames = (stem: string, mode: SplitMode, pagesPerFile: string): string[] => {
+  if (mode === "ranges") return [splitPartName(stem, 1, 3), splitPartName(stem, 5, 5)];
+  if (pagesPerFileIssue(pagesPerFile)) return [];
+  const size = Number(pagesPerFile);
+  return [splitPartName(stem, 1, size), splitPartName(stem, size + 1, size * 2)];
+};
 
 export const split: ConversionTool<Options> = {
   initialOptions: { mode: "ranges", ranges: "", pagesPerFile: "1" },
   inspectsPdf: false,
   outputPreview: () => "Output preview unavailable. Export creates one PDF for each range, or for every N pages.",
   exportBlocked: (options) => splitIssue(options) !== null,
+  exampleName: (inputPath, _utility, { mode, pagesPerFile }) => splitExampleNames(stemOf(inputPath), mode, pagesPerFile)[0] ?? splitPartName(stemOf(inputPath), 1, 1),
   OptionsPanel: ({ options, setOptions, files }) => {
     const { mode, ranges, pagesPerFile } = options;
     const issue = splitIssue(options);
-    const stem = splitStem(files);
+    const names = splitExampleNames(splitStem(files), mode, pagesPerFile);
     return (
       <div className="grid gap-4">
         <span id="split-by-label" className="text-sm leading-none font-medium">Split by</span>
@@ -80,11 +93,10 @@ export const split: ConversionTool<Options> = {
             <span>{issue}</span>
           </p>
         )}
-        {mode === "ranges" && (
+        {names.length > 0 && (
           <div className="workspace-field" role="group" aria-labelledby="split-names-label">
             <span id="split-names-label" className="text-sm leading-none font-medium">File names</span>
-            <p className="workspace-note">{stem}-pages-1-3.pdf</p>
-            <p className="workspace-note">{stem}-page-5.pdf</p>
+            {names.map((name) => <p key={name} className="workspace-note">{name}</p>)}
           </div>
         )}
       </div>

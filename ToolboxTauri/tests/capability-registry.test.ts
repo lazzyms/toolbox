@@ -148,6 +148,7 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-page");
   assert.equal(suffixes.get("convert_to_pdf"), "");
+  assert.equal(suffixes.get("split_pdf"), "-page");
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
