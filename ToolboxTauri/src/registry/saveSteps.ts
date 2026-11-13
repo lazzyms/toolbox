@@ -10,6 +10,13 @@ export interface ManyToOneSaveStep extends SaveDialog {
   minimumInputs: number;
   summary: (inputCount: number) => string;
   combined?: CombinedResult;
+  /** Shows before the run where the save dialog will open, naming what it saves and the input it opens next to. */
+  dialogPlace?: SaveDialogPlace;
+}
+
+export interface SaveDialogPlace {
+  noun: string;
+  nextTo: string;
 }
 
 /** How a one-file result names its output and every input that went into it. */
@@ -26,10 +33,10 @@ const manyToOneSaveSteps: Record<string, ManyToOneSaveStep> = {
   images_to_pdf: { title: "Save the combined PDF", extension: "pdf", runLabel: "Make PDF…", minimumInputs: 1, summary: (n) => `${count(n, "image", "images")}, one per page.`, combined: { output: "PDF", input: ["image", "images"], part: (position) => `Page ${position}` } },
   // A comparison reads exactly two PDFs and writes one text report.
   compare_pdfs: { title: "Save the comparison report", extension: "txt", runLabel: "Compare…", minimumInputs: 2, summary: () => "2 PDFs, compared line by line." },
-  create_gif: { title: "Save the GIF", extension: "gif", runLabel: "Make GIF…", minimumInputs: 1, summary: (n) => `${count(n, "frame", "frames")}, in the order shown.` },
+  create_gif: { title: "Save the GIF", extension: "gif", runLabel: "Make GIF…", minimumInputs: 1, summary: (n) => `${count(n, "frame", "frames")}, in the order shown.`, dialogPlace: { noun: "GIF", nextTo: "first frame" } },
   // The registry describes Combine mode, which always makes one file, even from one TIFF. Split mode runs as a
   // per-file batch without this step.
-  process_tiff_pages: { title: "Save the combined TIFF", extension: "tif", alsoAccepts: ["tiff"], runLabel: "Make TIFF…", minimumInputs: 1, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.` },
+  process_tiff_pages: { title: "Save the combined TIFF", extension: "tif", alsoAccepts: ["tiff"], runLabel: "Make TIFF…", minimumInputs: 1, summary: (n) => `${count(n, "TIFF file", "TIFF files")}, combined in the order shown.`, dialogPlace: { noun: "TIFF", nextTo: "first file" } },
 };
 
 export const saveStepFor = (tool: { command: string; capability: { manyToOne: boolean } }): ManyToOneSaveStep | null => {

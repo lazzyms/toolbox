@@ -150,6 +150,8 @@ pub enum LimitKind {
     Decompression,
     TextLength,
     Dimensions,
+    /// What a run would make is too large, such as a GIF whose frames hold more image data than the limit.
+    OutputSize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,8 +4,7 @@
 use image::codecs::gif::GifDecoder;
 use image::codecs::png::PngEncoder;
 use image::{AnimationDecoder, ExtendedColorType, ImageEncoder};
-use std::fs::File;
-use std::io::BufReader;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use super::tools::GifExtractRequest;
@@ -72,8 +71,10 @@ pub fn extract(request: &GifExtractRequest, input: PathBuf) -> JobOutcome {
 }
 
 fn decode(input: &Path) -> Result<(u32, u32, Vec<DecodedFrame>), ToolError> {
-    let file = File::open(input).map_err(|error| ToolError::processing(format!("Could not open this GIF: {error}")))?;
-    let decoder = GifDecoder::new(BufReader::new(file))
+    let bytes = std::fs::read(input).map_err(|error| ToolError::processing(format!("Could not open this GIF: {error}")))?;
+    // Counting the frames first stops a GIF whose frames would be too large before any frame is decoded.
+    crate::kit::common::limits::MADE_IMAGES.check_gif_frames(&bytes)?;
+    let decoder = GifDecoder::new(Cursor::new(bytes))
         .map_err(|_| ToolError::invalid_input(format!("This file can't be read as a GIF. {NOTHING_SAVED}")))?;
     let (width, height) = image::ImageDecoder::dimensions(&decoder);
     let mut frames = Vec::new();

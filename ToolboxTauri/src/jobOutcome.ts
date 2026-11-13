@@ -27,7 +27,7 @@ const fontStyles: readonly FontStyle[] = ["regular", "bold", "italic", "boldItal
 
 const fontSources: readonly FontSource[] = ["embedded", "system", "bundled fallback", "bundled default"];
 
-const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "textLength", "dimensions"];
+const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "textLength", "dimensions", "outputSize"];
 
 const skipCodes: readonly SkipCode[] = [
   "notProtected",
