@@ -52,8 +52,11 @@ impl DecodedImage {
     }
 }
 
+/// Decodes by what the file holds, not what its extension claims: a JPEG saved
+/// as `.heic` decodes as a JPEG, and a file that isn't an image at all is
+/// refused with a plain reason before any decoder sees it.
 pub(crate) fn decode(path: &Path) -> Result<DecodedImage, String> {
-    let family = ImageFamily::of(path);
+    let family = content_family(path)?;
     let (pages, orientation, source_bits) = match family {
         ImageFamily::Tiff => {
             let (pages, orientation) = read_tiff_pages(path)?;
@@ -85,10 +88,69 @@ pub(crate) fn decode(path: &Path) -> Result<DecodedImage, String> {
     Ok(DecodedImage { pages, family, bits_per_channel, orientation, baseline_jpeg })
 }
 
+/// Enough of the file to hold any format signature and an ISO-BMFF `ftyp` box with its brands.
+const SNIFF_BYTES: u64 = 512;
+
+/// HEIF brands libheif decodes, as listed in ISO/IEC 23008-12.
+const HEIF_BRANDS: [&[u8; 4]; 10] = [b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"];
+
+/// The image family the file's first bytes show. A file with a format signature decodes by it, whatever its
+/// extension; a file without one is refused when its extension names a format, and is otherwise left to the
+/// image crate to read by extension.
+fn content_family(path: &Path) -> Result<ImageFamily, String> {
+    use std::io::Read;
+    let claimed = ImageFamily::of(path);
+    let mut header = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(SNIFF_BYTES).read_to_end(&mut header))
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => "This file can't be found. It may have been moved or deleted.".to_string(),
+            _ => format!("Could not read the file: {error}"),
+        })?;
+    let name = format_name(path);
+    if header.starts_with(b"bplist") {
+        return Err(format!("This file isn't a {name} image. It looks like an Apple property list, not a photo. Export the original from Photos and try again."));
+    }
+    if is_heif(&header) { return Ok(ImageFamily::Heif); }
+    match image::guess_format(&header) {
+        Ok(image::ImageFormat::Jpeg) => Ok(ImageFamily::Jpeg),
+        Ok(image::ImageFormat::Png) => Ok(ImageFamily::Png),
+        Ok(image::ImageFormat::WebP) => Ok(ImageFamily::WebP),
+        Ok(image::ImageFormat::Tiff) => Ok(ImageFamily::Tiff),
+        Ok(_) => Ok(ImageFamily::Other),
+        Err(_) if claimed == ImageFamily::Other => Ok(ImageFamily::Other),
+        Err(_) => Err(format!("This file isn't a valid {name} image.")),
+    }
+}
+
+/// An ISO-BMFF file whose `ftyp` box lists a HEIF brand, as its major brand or a compatible one.
+fn is_heif(header: &[u8]) -> bool {
+    let Some(size) = header.get(0..4).map(|size| u32::from_be_bytes([size[0], size[1], size[2], size[3]]) as usize) else { return false };
+    if header.get(4..8) != Some(b"ftyp") || size < 16 { return false; }
+    let ftyp = &header[..size.min(header.len())];
+    // The major brand, then the minor version, then the compatible brands to the end of the box.
+    std::iter::once(&ftyp[8..ftyp.len().min(12)])
+        .chain(ftyp.get(16..).unwrap_or_default().chunks_exact(4))
+        .any(|brand| HEIF_BRANDS.iter().any(|heif| brand == heif.as_slice()))
+}
+
+/// The format a file's extension claims, as the refusal names it.
+fn format_name(path: &Path) -> String {
+    match lower_ext(path).as_deref() {
+        Some("heic") => "HEIC".to_string(),
+        Some("heif") => "HEIF".to_string(),
+        Some("jpg" | "jpeg") => "JPEG".to_string(),
+        Some("webp") => "WebP".to_string(),
+        Some("tif" | "tiff") => "TIFF".to_string(),
+        Some(other) => other.to_ascii_uppercase(),
+        None => "readable".to_string(),
+    }
+}
+
 // Same steps as image::open, keeping the decoder long enough to read its
 // orientation tag.
 fn read_single_image(path: &Path) -> image::ImageResult<(DynamicImage, Option<Orientation>)> {
-    let mut decoder = ImageReader::open(path)?.into_decoder()?;
+    let mut decoder = ImageReader::open(path)?.with_guessed_format()?.into_decoder()?;
     let mut limits = image::Limits::default();
     limits.reserve(decoder.total_bytes())?;
     decoder.set_limits(limits)?;
