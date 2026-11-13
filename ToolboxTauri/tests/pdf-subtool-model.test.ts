@@ -28,6 +28,7 @@ test("every Edit PDF sub-tool is declared once with a group and a suffix", () =>
     ["pageNumbers", "overlay", "-edited"],
     ["crop", "document", "-edited"],
     ["organize", "document", "-edited"],
+    ["flatten", "document", "-flattened"],
     ["redact", "document", "-redacted"],
   ]);
 });
@@ -85,6 +86,21 @@ test("form values join the request only when present and fill first", () => {
   const empty = planSceneExport({ paths: ["/local/source.pdf"], scene: baseline, baseline, outputLocation: "alongsideInput", formValues: [] });
   assert.equal("formValues" in empty.request, false);
   assert.equal(empty.suffix, null);
+});
+
+test("flatten joins the request only when chosen, alone or after filling", () => {
+  const formValues = [{ name: "agree", value: true }];
+  const flattened = planSceneExport({ paths: ["/local/source.pdf"], scene: baseline, baseline, outputLocation: "alongsideInput", flatten: "annotations" });
+  assert.deepEqual(Object.keys(flattened.request), ["paths", "scene", "flatten", "outputLocation"]);
+  assert.equal(flattened.request.flatten, "annotations");
+  assert.deepEqual(flattened.contributors, ["flatten"]);
+  assert.equal(flattened.suffix, "-flattened");
+  const locked = planSceneExport({ paths: ["/local/source.pdf"], scene: baseline, baseline, outputLocation: "alongsideInput", formValues, flatten: "both" });
+  assert.deepEqual(Object.keys(locked.request), ["paths", "scene", "formValues", "flatten", "outputLocation"]);
+  assert.deepEqual(locked.contributors, ["form", "flatten"]);
+  assert.equal(locked.suffix, "-edited");
+  const off = planSceneExport({ paths: ["/local/source.pdf"], scene: baseline, baseline, outputLocation: "alongsideInput", formValues, flatten: null });
+  assert.equal("flatten" in off.request, false);
 });
 
 test("an unchanged scene has no contributors and no suffix", () => {

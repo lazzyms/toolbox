@@ -18,7 +18,7 @@ import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
 import { Label } from '../components/ui/label';
 import { Slider } from '../components/ui/slider';
-import type { PdfDocument, PdfEditRun, PdfFormEntry, PdfFormField, PdfFormInspection, PdfFormValue, PdfPage, PdfTextEdit, PdfTextRun } from '../features/pdf-editor/contracts';
+import type { PdfDocument, PdfEditRun, PdfFlattenChoice, PdfFormEntry, PdfFormField, PdfFormInspection, PdfFormValue, PdfPage, PdfTextEdit, PdfTextRun } from '../features/pdf-editor/contracts';
 import { formEntryFlag, isFormEntryEmpty } from '../features/pdf-editor/form-checks';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
@@ -168,8 +168,8 @@ const PDFSceneEditor = ({
   onLeaveGuard,
 }: PDFEditorWorkspaceProps) => {
   const availability = useToolAvailability();
-  const session = useRef<{ path: string; scene: PdfScene; baseline: PdfScene; formValues: PdfFormValue[] } | null>(null);
-  const [exported, setExported] = useState<{ path: string; scene: PdfScene; formValues: PdfFormValue[] } | null>(null);
+  const session = useRef<{ path: string; scene: PdfScene; baseline: PdfScene; formValues: PdfFormValue[]; flatten: PdfFlattenChoice | null } | null>(null);
+  const [exported, setExported] = useState<{ path: string; scene: PdfScene; formValues: PdfFormValue[]; flatten: PdfFlattenChoice | null } | null>(null);
   const [changes, setChanges] = useState(0);
   const pending = useRef(0);
   const reportChanges = useCallback((count: number) => { pending.current = count; setChanges(count); }, []);
@@ -200,10 +200,10 @@ const PDFSceneEditor = ({
     onRun={async (paths, outputLocation, { runId, outputPath }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      const { scene, formValues } = session.current;
-      const { request } = planSceneExport({ paths, scene, baseline: session.current.baseline, outputLocation, outputPath, formValues });
+      const { scene, formValues, flatten } = session.current;
+      const { request } = planSceneExport({ paths, scene, baseline: session.current.baseline, outputLocation, outputPath, formValues, flatten });
       const results = await invoke<ToolResult>('export_pdf_scene', { runId, request });
-      if (results.length && results.every((result) => result.state === 'succeeded')) setExported({ path: inputPath, scene, formValues });
+      if (results.length && results.every((result) => result.state === 'succeeded')) setExported({ path: inputPath, scene, formValues, flatten });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, runSavingAs, loading, runDestination, live, browse, replaceFiles }) => <PDFSceneFiles files={files} title={utility.shortTitle ?? utility.title} replaceFiles={replaceFiles} onNavigate={onNavigate}>
@@ -211,9 +211,9 @@ const PDFSceneEditor = ({
         exporting={loading} exportStep={live?.steps[0]} destination={runDestination} onExport={run} exported={exported} onChanges={reportChanges}
         onExportAs={() => runSavingAs({ dialog: exportAsDialog, suffix: suffix ?? combinedSuffix, summary: exportAsSummary })} onBrowse={browse}
         onNavigate={onNavigate}
-        onScene={(path, scene, baseline, formValues) => {
-          session.current = path && scene && baseline ? { path, scene, baseline, formValues } : null;
-          setSuffix(scene && baseline ? exportSuffix(sceneContributors(scene, baseline, formValues)) : null);
+        onScene={(path, scene, baseline, formValues, flatten) => {
+          session.current = path && scene && baseline ? { path, scene, baseline, formValues, flatten } : null;
+          setSuffix(scene && baseline ? exportSuffix(sceneContributors(scene, baseline, formValues, flatten)) : null);
         }} />}
     </PDFSceneFiles>}
   </ToolScaffold>
@@ -283,15 +283,15 @@ function PDFSceneFiles({ files, title, replaceFiles, onNavigate, children }: {
 function PDFSceneSession({ path, initialTool, exporting, exportStep, destination, onExport, onExportAs, onBrowse, exported, onChanges, onNavigate, onScene }: {
   path: string | null; initialTool: EditorTool | null; exporting: boolean; exportStep: FileProgress | undefined;
   destination: RunDestinationControl; onExport: () => Promise<void>; onExportAs: () => Promise<void>;
-  onBrowse: () => Promise<void>; exported: { path: string; scene: PdfScene; formValues: PdfFormValue[] } | null; onChanges: (count: number) => void;
+  onBrowse: () => Promise<void>; exported: { path: string; scene: PdfScene; formValues: PdfFormValue[]; flatten: PdfFlattenChoice | null } | null; onChanges: (count: number) => void;
   onNavigate?: PdfEditorNavigation;
-  onScene: (path: string | null, scene: PdfScene | null, baseline: PdfScene | null, formValues: PdfFormValue[]) => void;
+  onScene: (path: string | null, scene: PdfScene | null, baseline: PdfScene | null, formValues: PdfFormValue[], flatten: PdfFlattenChoice | null) => void;
 }) {
   const availability = useToolAvailability();
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [signatureNoticeDismissedFor, setSignatureNoticeDismissedFor] = useState<string | null>(null);
   const [history, setHistory] = useState<History>({ past: [], present: { pages: [] }, future: [] });
-  const [saved, setSaved] = useState<{ scene: PdfScene; formValues: PdfFormValue[]; index: number } | null>(null);
+  const [saved, setSaved] = useState<{ scene: PdfScene; formValues: PdfFormValue[]; flatten: PdfFlattenChoice | null; index: number } | null>(null);
   const [tool, setTool] = useState<EditorTool | null>(initialTool);
   const [thumbnailSize, setThumbnailSize] = useState<ThumbnailSize>('medium');
   const [visiblePages, setVisiblePages] = useState<number[]>([]);
@@ -325,12 +325,13 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [previewRedactions, setPreviewRedactions] = useState(true);
   const [disclosure, setDisclosure] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Form entries live outside the scene history: Reset clears them, Undo does not.
+  // Form entries and the flatten choice live outside the scene history: Reset clears them, Undo does not.
   const [form, setForm] = useState<PdfFormInspection | null>(null);
   const [formEntries, setFormEntries] = useState<Record<string, PdfFormEntry>>({});
   const [formLeft, setFormLeft] = useState<ReadonlySet<string>>(new Set());
   const [formFocus, setFormFocus] = useState<string | null>(null);
   const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [flatten, setFlatten] = useState<PdfFlattenChoice | null>(null);
   const formRequested = useRef(false);
   const [loading, setLoading] = useState(Boolean(path));
   const [rendering, setRendering] = useState(false);
@@ -368,15 +369,15 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     if (tool !== 'form' || !path || formRequested.current) return;
     formRequested.current = true;
     invoke<PdfFormInspection | null>('inspect_pdf_form', { request: { path } })
-      .then((value) => setForm(value ?? { fields: [], unsupported: null }))
-      .catch(() => setForm({ fields: [], unsupported: "This form can't be filled here. Toolbox couldn't read its fields." }));
+      .then((value) => setForm(value ?? { fields: [], unsupported: null, comments: 0 }))
+      .catch(() => setForm({ fields: [], unsupported: "This form can't be filled here. Toolbox couldn't read its fields.", comments: 0 }));
   }, [tool, path]);
   const formValue = (field: PdfFormField) => formEntries[field.name] ?? field.value;
   const formValues = useMemo<PdfFormValue[]>(() => (form?.fields ?? [])
     .filter((field) => field.name in formEntries && JSON.stringify(formEntries[field.name]) !== JSON.stringify(field.value))
     .map((field) => ({ name: field.name, value: formEntries[field.name] })), [form, formEntries]);
   const baseline = document ? sceneFromDocument(document) : null;
-  const contributors = baseline ? sceneContributors(scene, baseline, formValues) : [];
+  const contributors = baseline ? sceneContributors(scene, baseline, formValues, flatten) : [];
   const dirty = contributors.length > 0;
   const canExport = Boolean(page) && dirty && !exporting && !renderError && !rendering && Boolean(exactPreview);
   // Why Export is off, said next to it: a copy with no changes would match the original, and a stale preview can't be verified.
@@ -402,7 +403,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
 
   useEffect(() => {
     let active = true;
-    if (!path) { onScene(null, null, null, []); return; }
+    if (!path) { onScene(null, null, null, [], null); return; }
     invoke<PdfDocument>('inspect_pdf_scene', { request: { path } }).then((value) => {
       if (!active) return;
       if (!value.pages.length) throw new Error('The PDF has no pages.');
@@ -448,7 +449,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     const flag = formEntryFlag(field, formValue(field));
     setFormNotice(flag ? `${formLabel(field)}: ${flag.toLowerCase()}.` : field.required && isFormEntryEmpty(formValue(field)) ? `${formLabel(field)} is required.` : null);
   };
-  useEffect(() => { onScene(path, document ? scene : null, document ? sceneFromDocument(document) : null, formValues); }, [path, scene, document, formValues]);
+  useEffect(() => { onScene(path, document ? scene : null, document ? sceneFromDocument(document) : null, formValues, flatten); }, [path, scene, document, formValues, flatten]);
   useLayoutEffect(() => {
     if (selectedSignature) setSignatureTextDraft(selectedSignature.text);
   }, [selectedSignature?.id, selectedSignature?.text]);
@@ -567,7 +568,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     past: [...value.past, value.present], present: value.future[0], future: value.future.slice(1),
   } : value); };
   const endGroup = () => { group.current = null; };
-  const reset = () => { if (document) commit(sceneFromDocument(document)); setFormEntries({}); setFormLeft(new Set()); setFormNotice(null); setSelectedId(null); setSelectedRun(null); };
+  // An unchanged scene keeps its preview, so Export works again after resetting only form entries or Flatten.
+  const reset = () => { if (document && !same(scene, sceneFromDocument(document))) commit(sceneFromDocument(document)); setFormEntries({}); setFlatten(null); setFormLeft(new Set()); setFormNotice(null); setSelectedId(null); setSelectedRun(null); };
   useEffect(() => {
     const onShellCommand = (event: Event) => {
       const command = (event as CustomEvent<string>).detail;
@@ -721,12 +723,13 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   };
   const savedScene = saved?.scene ?? baseline;
   const sceneChanges = !savedScene || same(scene, savedScene) ? 0 : Math.max(1, Math.abs(history.past.length - (saved?.index ?? 0)));
-  const changes = sceneChanges + formChanges(formValues, saved?.formValues ?? []);
+  // The flatten choice is one change against the last export, like the form entries.
+  const changes = sceneChanges + formChanges(formValues, saved?.formValues ?? []) + (flatten === (saved?.flatten ?? null) ? 0 : 1);
   useEffect(() => {
     if (!exported || exported.path !== path) return;
     const states = [...history.past, history.present].map((item) => JSON.stringify(item));
     const index = states.lastIndexOf(JSON.stringify(exported.scene));
-    setSaved({ scene: exported.scene, formValues: exported.formValues, index: index >= 0 ? index : history.past.length });
+    setSaved({ scene: exported.scene, formValues: exported.formValues, flatten: exported.flatten, index: index >= 0 ? index : history.past.length });
   }, [exported]);
   useEffect(() => onChanges(changes), [changes, onChanges]);
   useEffect(() => () => onChanges(0), [onChanges]);
@@ -801,7 +804,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     signatureTextDraft, setSignatureTextDraft, signatureColor, setSignatureColor, signatureError, chooseSignatureImage,
     usedSignatures: reusable, reuseSignature, clearUsedSignatures,
     pageCount: scene.pages.length, addWatermark, chooseWatermarkPicture, watermarkPictureError, addPageNumbers,
-    form, formValue, formFlag, goToField, goToNextRequired, switchToAddText: () => { endGroup(); setTool('text'); setSelectedId(null); },
+    form, formValue, formFlag, goToField, goToNextRequired, flatten, setFlatten, switchToAddText: () => { endGroup(); setTool('text'); setSelectedId(null); },
     selectedRun: editRuns.find((run) => run.index === selectedRun), textEdits,
     pageNumberOf: (sourceIndex) => scene.pages.findIndex((item) => item.sourceIndex === sourceIndex) + 1, showEdit, revertEdit, chooseTool,
   } : null;

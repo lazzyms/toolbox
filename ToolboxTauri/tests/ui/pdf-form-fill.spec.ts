@@ -250,3 +250,84 @@ test('max length is enforced while typing and invalid or empty required fields a
     { name: 'phone', value: '555 123 4567' },
   ]);
 });
+
+const exportRequest = async (page: Page) => {
+  await page.getByRole('button', { name: 'Export PDF', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').length)).toBe(1);
+  return page.evaluate(() => (window as any).calls.find((call: any) => call.command === 'export_pdf_scene').args.request);
+};
+
+test('Flatten asks before turning on and exports exactly the chosen kind', async ({ page }) => {
+  await openForm(page, { ...fillable, comments: 2 });
+  const panel = inspector(page);
+  await expect(panel.getByText("Turns the fields into plain page content in the exported copy, so they can't be changed later.")).toBeVisible();
+  const choice = panel.getByRole('radiogroup', { name: 'What to flatten' });
+  await expect(choice.getByRole('radio', { name: 'Fields and comments' })).toBeChecked();
+  const flatten = panel.getByRole('checkbox', { name: 'Flatten fields when exporting' });
+
+  await flatten.click();
+  const dialog = page.getByRole('alertdialog', { name: 'Flatten fields and comments in the copy?' });
+  await expect(dialog).toHaveAccessibleDescription('All 4 fields and 2 comments become part of the page in the exported copy. Nobody will be able to change them there. 2 required fields are still empty. You can turn this off before exporting.');
+  await dialog.getByRole('button', { name: 'Keep fields editable' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(flatten).not.toBeChecked();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+
+  await choice.getByRole('radio', { name: 'Comments only' }).click();
+  await flatten.click();
+  const comments = page.getByRole('alertdialog', { name: 'Flatten comments in the copy?' });
+  await expect(comments).toHaveAccessibleDescription('All 2 comments become part of the page in the exported copy. Nobody will be able to change them there. You can turn this off before exporting.');
+  await comments.getByRole('button', { name: 'Flatten when exporting' }).click();
+  await expect(flatten).toBeChecked();
+  await expect(choice.getByRole('radio', { name: 'Fields only' })).toBeDisabled();
+
+  // Turning it off needs no confirmation, and Reset turns it off too.
+  await flatten.click();
+  await expect(flatten).not.toBeChecked();
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+  await flatten.click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Flatten when exporting' }).click();
+  await page.getByRole('button', { name: 'Reset edits' }).click();
+  await expect(flatten).not.toBeChecked();
+  await flatten.click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Flatten when exporting' }).click();
+
+  const request = await exportRequest(page);
+  expect(request.flatten).toBe('annotations');
+  expect('formValues' in request).toBe(false);
+});
+
+test('filling and flattening export the values and the flatten choice together', async ({ page }) => {
+  await openForm(page, { ...fillable, comments: 0 });
+  const panel = inspector(page);
+  await expect(panel.getByRole('radiogroup', { name: 'What to flatten' })).toHaveCount(0);
+  await canvas(page).getByRole('textbox', { name: 'Full name' }).fill('Ada Lovelace');
+  await panel.getByRole('checkbox', { name: 'Flatten fields when exporting' }).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Flatten fields in the copy?' });
+  await expect(dialog).toHaveAccessibleDescription('All 4 fields become part of the page in the exported copy. Nobody will be able to change them there. 1 required field is still empty. You can turn this off before exporting.');
+  await dialog.getByRole('button', { name: 'Flatten when exporting' }).click();
+
+  const request = await exportRequest(page);
+  expect(request.formValues).toEqual([{ name: 'applicant.name', value: 'Ada Lovelace' }]);
+  expect(request.flatten).toBe('forms');
+});
+
+test('Flatten is unavailable with its reason when there is nothing to flatten', async ({ page }) => {
+  await openForm(page, { fields: [], unsupported: null, comments: 0 });
+  const panel = inspector(page);
+  await expect(panel.getByText('Flatten is unavailable. This PDF has no form fields or comments to flatten.')).toBeVisible();
+  await expect(panel.getByRole('checkbox', { name: 'Flatten fields when exporting' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+});
+
+test('a PDF with comments but no fields can flatten its comments', async ({ page }) => {
+  await openForm(page, { fields: [], unsupported: null, comments: 1 });
+  const panel = inspector(page);
+  await expect(panel.getByText("Turns the comments into plain page content in the exported copy, so they can't be changed later.")).toBeVisible();
+  await panel.getByRole('checkbox', { name: 'Flatten comments when exporting' }).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Flatten comments in the copy?' });
+  await expect(dialog).toHaveAccessibleDescription('The 1 comment becomes part of the page in the exported copy. Nobody will be able to change it there. You can turn this off before exporting.');
+  await dialog.getByRole('button', { name: 'Flatten when exporting' }).click();
+  const request = await exportRequest(page);
+  expect(request.flatten).toBe('annotations');
+});

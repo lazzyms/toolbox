@@ -68,7 +68,7 @@ pub struct FormField {
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FormInspection { pub fields: Vec<FormField>, pub unsupported: Option<String> }
+pub struct FormInspection { pub fields: Vec<FormField>, pub unsupported: Option<String>, pub comments: usize }
 
 #[derive(Clone)]
 struct Inherited {
@@ -78,7 +78,10 @@ struct Inherited {
 
 struct Terminal { id: ObjectId, inherited: Inherited, label: Option<String>, widgets: Vec<ObjectId> }
 
-pub fn inspect_form(path: &std::path::Path) -> Result<FormInspection, String> { read(&load(path)?) }
+pub fn inspect_form(path: &std::path::Path) -> Result<FormInspection, String> {
+    let doc = load(path)?;
+    Ok(FormInspection { comments: super::flatten::count(&doc, super::flatten::FlattenChoice::Annotations)?, ..read(&doc)? })
+}
 
 fn text(doc: &Document, value: Option<&Object>) -> Option<String> {
     value.and_then(|value| resolve(doc, value).ok()).and_then(|value| lopdf::decode_text_string(value).ok())
@@ -339,7 +342,7 @@ fn read(doc: &Document) -> Result<FormInspection, String> {
     let Some(acro_form) = catalog.get(b"AcroForm").ok() else { return Ok(FormInspection::default()) };
     let acro_form = resolve(doc, acro_form)?.as_dict().map_err(err)?;
     if acro_form.has(b"XFA") || catalog.has(b"NeedsRendering") {
-        return Ok(FormInspection { fields: Vec::new(), unsupported: Some(XFA_UNSUPPORTED.into()) });
+        return Ok(FormInspection { unsupported: Some(XFA_UNSUPPORTED.into()), ..FormInspection::default() });
     }
     let root = Inherited {
         name: String::new(), kind: None, flags: 0, appearance: text(doc, acro_form.get(b"DA").ok()),
@@ -443,9 +446,9 @@ fn read(doc: &Document) -> Result<FormInspection, String> {
             align: match quadding { Some(1) => TextAlign::Center, Some(2) => TextAlign::Right, _ => TextAlign::Left },
         }));
     }
-    if scripted { return Ok(FormInspection { fields: Vec::new(), unsupported: Some(SCRIPTED_UNSUPPORTED.into()) }); }
+    if scripted { return Ok(FormInspection { unsupported: Some(SCRIPTED_UNSUPPORTED.into()), ..FormInspection::default() }); }
     fields.sort_by_key(|(page, order, _)| (*page, *order));
-    Ok(FormInspection { fields: fields.into_iter().map(|(_, _, field)| field).collect(), unsupported: None })
+    Ok(FormInspection { fields: fields.into_iter().map(|(_, _, field)| field).collect(), ..FormInspection::default() })
 }
 
 enum Fill { Text { value: Object, red: bool }, Button(Vec<u8>), List(Vec<usize>) }
@@ -521,7 +524,11 @@ pub(super) fn preflight(doc: &Document, values: &[serde_json::Value]) -> Result<
     let inspection = read(doc).map_err(ToolError::processing)?;
     if let Some(message) = inspection.unsupported { return Err(ToolError::invalid_input(message)); }
     if inspection.fields.is_empty() { return Err(ToolError::invalid_input("This PDF has no form fields to fill. Use Add text to type onto the page instead.")); }
-    let mut fields: HashMap<String, FormField> = inspection.fields.into_iter().map(|field| (field.name.clone(), field)).collect();
+    plan(doc, inspection.fields, values)
+}
+
+fn plan(doc: &Document, fields: Vec<FormField>, values: &[serde_json::Value]) -> Result<FormPlan, ToolError> {
+    let mut fields: HashMap<String, FormField> = fields.into_iter().map(|field| (field.name.clone(), field)).collect();
     let mut plan = FormPlan { fills: Vec::new(), objects: HashMap::new(), layouts: HashMap::new() };
     for entry in values {
         let (Some(name), Some(value)) = (entry.get("name").and_then(|name| name.as_str()), entry.get("value")) else {
@@ -605,6 +612,26 @@ fn text_appearance(doc: &mut Document, plan: &FormPlan, fonts: &HashMap<&'static
     let resources = dictionary! { "Font" => dictionary! { FONT_RESOURCE => *font_id } };
     let appearance = form_xobject(doc, width, height, resources, &content)?;
     doc.get_dictionary_mut(id).map_err(err)?.set("AP", dictionary! { "N" => appearance });
+    Ok(())
+}
+
+fn has_appearance(doc: &Document, widget: ObjectId) -> bool {
+    doc.get_dictionary(widget).ok().and_then(|widget| widget.get(b"AP").ok()).and_then(|ap| resolve(doc, ap).ok())
+        .and_then(|ap| ap.as_dict().ok()).is_some_and(|ap| ap.has(b"N"))
+}
+
+/// Draws fields that hold a value but have no appearance, so flattening keeps what a viewer shows.
+/// A stored value the field can't draw is left as it is.
+pub(super) fn complete_appearances(doc: &mut Document) -> Result<(), String> {
+    let Ok(FormInspection { fields, unsupported: None, .. }) = read(doc) else { return Ok(()) };
+    for mut field in fields {
+        let blank = matches!(&field.value, serde_json::Value::String(text) if text.is_empty()) || field.value == serde_json::Value::Bool(false)
+            || matches!(&field.value, serde_json::Value::Array(items) if items.is_empty());
+        if blank || field.widget_ids.iter().all(|id| has_appearance(doc, *id)) { continue; }
+        let value = serde_json::json!({ "name": field.name, "value": field.value });
+        field.read_only = false;
+        if let Ok(plan) = plan(doc, vec![field], &[value]) { apply(doc, plan)?; }
+    }
     Ok(())
 }
 
@@ -991,5 +1018,129 @@ mod tests {
             assert_eq!(fs::read(input).unwrap(), original);
         }
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 5);
+    }
+
+    /// A drawn comment with its pop-up note, a hidden note and a link, beside the form.
+    fn with_comments(d: &mut Document, _: ObjectId, city: ObjectId) {
+        let page = d.get_dictionary(city).unwrap().get(b"P").unwrap().as_reference().unwrap();
+        let box_ap = d.add_object(Stream::new(dictionary! { "BBox" => rect([0., 0., 100., 50.]) }, b"1 0 0 RG 4 w 2 2 96 46 re S".to_vec()));
+        let square = d.new_object_id();
+        let popup = d.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Popup", "Parent" => square, "Rect" => rect([420., 300., 560., 380.]) });
+        d.objects.insert(square, Object::Dictionary(dictionary! { "Type" => "Annot", "Subtype" => "Square", "Rect" => rect([340., 300., 440., 350.]),
+            "Contents" => Object::string_literal("Check this"), "AP" => dictionary! { "N" => box_ap }, "Popup" => popup, "P" => page }));
+        let hidden_ap = d.add_object(Stream::new(dictionary! { "BBox" => rect([0., 0., 20., 20.]) }, b"0 g 0 0 20 20 re f".to_vec()));
+        let hidden = d.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Text", "F" => 2, "Rect" => rect([340., 200., 360., 220.]), "AP" => dictionary! { "N" => hidden_ap }, "P" => page });
+        let link = d.add_object(dictionary! { "Type" => "Annot", "Subtype" => "Link", "Rect" => rect([72., 100., 200., 120.]), "Border" => vec![0.into(), 0.into(), 0.into()],
+            "A" => dictionary! { "S" => "URI", "URI" => Object::string_literal("https://example.com") } });
+        d.get_dictionary_mut(page).unwrap().get_mut(b"Annots").unwrap().as_array_mut().unwrap().extend([square, popup, hidden, link].map(Object::Reference));
+    }
+
+    fn export_sections(input: &Path, sections: serde_json::Value) -> crate::kit::contracts::JobOutcome {
+        let sections = serde_json::from_value(sections).unwrap();
+        export(&ExportRequest { paths: vec![input.to_path_buf()], scene: identity_scene(), output_location: OutputLocation::AlongsideInput, output_path: None, sections }, input.to_path_buf())
+    }
+
+    fn subtypes(path: &Path) -> Vec<Vec<u8>> {
+        let doc = Document::load(path).unwrap();
+        let page = doc.get_pages()[&1];
+        let Ok(annots) = doc.get_dictionary(page).unwrap().get(b"Annots") else { return Vec::new() };
+        annots.as_array().unwrap().iter().map(|entry| doc.get_dictionary(entry.as_reference().unwrap()).unwrap().get(b"Subtype").unwrap().as_name().unwrap().to_vec()).collect()
+    }
+
+    /// Checks the output is valid and returns its page text and rendering, or None when the Poppler helpers are missing.
+    fn check(path: &Path, temp: &TempDir) -> Option<(String, String)> {
+        if let Ok(check) = Command::new("qpdf").arg("--check").arg(path).output() {
+            assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stdout));
+        }
+        let (Some(extractor), Ok(renderer)) = (text_extractor(), super::super::renderer()) else {
+            if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("pdftotext or pdftoppm is unavailable") }
+            eprintln!("pdftotext or pdftoppm unavailable"); return None;
+        };
+        let text = String::from_utf8(Command::new(extractor).args(["-enc", "UTF-8"]).arg(path).arg("-").output().unwrap().stdout).unwrap();
+        Some((text, super::super::render(path, 0, &renderer, temp).unwrap().data_url))
+    }
+
+    #[test]
+    fn flattening_draws_the_chosen_kind_into_the_page_and_removes_it() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("form.pdf"); form_fixture(&input, with_comments);
+        assert_eq!(inspect_form(&input).unwrap().comments, 2);
+        let filled = fill(&input, identity_scene(), values());
+        let filled = filled.output_paths()[0].clone();
+        let original = fs::read(&filled).unwrap();
+        let before = check(&filled, &temp);
+        let cases: [(&str, &[&[u8]], bool); 3] = [
+            ("forms", &[b"Square", b"Popup", b"Text", b"Link"], false),
+            ("annotations", &[b"Widget", b"Widget", b"Widget", b"Widget", b"Link"], true),
+            ("both", &[b"Link"], false),
+        ];
+        for (index, (choice, remaining, interactive)) in cases.into_iter().enumerate() {
+            let outcome = export_sections(&filled, serde_json::json!({ "flatten": choice }));
+            assert!(outcome.error().is_none(), "{:?}", outcome.error());
+            let suffix = if index == 0 { String::new() } else { format!("-{index}") };
+            assert_eq!(outcome.output_paths(), [temp.0.join(format!("form-filled-flattened{suffix}.pdf"))]);
+            let output = &outcome.output_paths()[0];
+            assert_eq!(subtypes(output), remaining.iter().map(|subtype| subtype.to_vec()).collect::<Vec<_>>(), "{choice}");
+            assert_eq!(Document::load(output).unwrap().catalog().unwrap().has(b"AcroForm"), interactive, "{choice}");
+            assert_eq!(inspect_form(output).unwrap().fields.is_empty(), !interactive, "{choice}");
+            if let (Some((text, render)), Some((_, expected))) = (check(output, &temp), &before) {
+                assert!(text.contains("Application") && text.contains("Ada Lovelace") && text.contains("Zürich"), "{text}");
+                assert!(&render == expected, "{choice} renders differently after flattening");
+            }
+        }
+        assert_eq!(fs::read(&filled).unwrap(), original);
+    }
+
+    #[test]
+    fn filling_and_flattening_together_lock_the_values_into_page_content() {
+        let temp = TempDir::new().unwrap(); let input = temp.0.join("form.pdf");
+        // A stored value without an appearance is drawn before flattening, so it isn't lost.
+        form_fixture(&input, |d, _, city| { d.get_dictionary_mut(city).unwrap().set("V", Object::string_literal("Bern")); });
+        let original = fs::read(&input).unwrap();
+        let filled_only = fill(&input, identity_scene(), serde_json::json!([{ "name": "name", "value": "Ada Lovelace" }, { "name": "agree", "value": true }]));
+        let outcome = export_sections(&input, serde_json::json!({ "formValues": [{ "name": "name", "value": "Ada Lovelace" }, { "name": "agree", "value": true }], "flatten": "forms" }));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let output = &outcome.output_paths()[0];
+        assert_eq!(output, &temp.0.join("form-edited.pdf"));
+        assert!(subtypes(output).is_empty());
+        assert!(!Document::load(output).unwrap().catalog().unwrap().has(b"AcroForm"));
+        assert_eq!(fs::read(&input).unwrap(), original);
+        if let Some((text, render)) = check(output, &temp) {
+            assert!(text.contains("Ada Lovelace") && text.contains("Bern"), "{text}");
+            let (_, interactive) = check(&filled_only.output_paths()[0], &temp).unwrap();
+            assert_eq!(subtypes(&filled_only.output_paths()[0]).len(), 4);
+            // The interactive copy has no drawing for the stored city, so only the flattened copy shows it.
+            assert!(render != interactive);
+        }
+    }
+
+    #[test]
+    fn nothing_to_flatten_is_refused_before_output() {
+        let temp = TempDir::new().unwrap();
+        let plain = temp.0.join("plain.pdf");
+        form_fixture(&plain, |d, _, city| {
+            let page = d.get_dictionary(city).unwrap().get(b"P").unwrap().as_reference().unwrap();
+            d.catalog_mut().unwrap().remove(b"AcroForm");
+            d.get_dictionary_mut(page).unwrap().remove(b"Annots");
+        });
+        let form = temp.0.join("form.pdf");
+        form_fixture(&form, |_, _, _| {});
+        let xfa = temp.0.join("xfa.pdf");
+        form_fixture(&xfa, |d, acro_form, _| { let packet = d.add_object(Stream::new(dictionary! {}, b"<xdp:xdp/>".to_vec())); d.get_dictionary_mut(acro_form).unwrap().set("XFA", packet); });
+        assert_eq!(inspect_form(&form).unwrap().comments, 0);
+        let cases = [
+            (&plain, "forms", "This PDF has no form fields to flatten."),
+            (&plain, "both", "This PDF has no form fields or comments to flatten."),
+            (&form, "annotations", "This PDF has no comments or markup to flatten."),
+            (&xfa, "forms", super::super::flatten::XFA_UNSUPPORTED),
+        ];
+        for (input, choice, message) in cases {
+            let original = fs::read(input).unwrap();
+            let outcome = export_sections(input, serde_json::json!({ "flatten": choice }));
+            let error = outcome.error().unwrap();
+            assert_eq!((error.kind.clone(), error.message.as_str()), (ErrorKind::InvalidInput, message));
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(fs::read(input).unwrap(), original);
+        }
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 3);
     }
 }

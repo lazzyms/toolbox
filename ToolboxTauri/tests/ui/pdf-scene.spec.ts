@@ -853,7 +853,7 @@ test('scene export sends only the scene sections and the invoke boundary accepts
   const request = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
   expect(Object.keys(request).sort()).toEqual(['outputLocation', 'paths', 'scene']);
 
-  const staged = { ...request, formValues: [], textEdits: [], flatten: false, redactions: [] };
+  const staged = { ...request, formValues: [], textEdits: [], flatten: 'both', redactions: [] };
   const results = await page.evaluate((staged) => (window as any).__TAURI_INTERNALS__.invoke('export_pdf_scene', { request: staged }), staged);
   expect(results[0].state).toBe('succeeded');
   const accepted = await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').at(-1).args.request);
