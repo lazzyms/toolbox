@@ -480,6 +480,16 @@ fn map_source_rect(mut rect: (u32, u32, u32, u32), geometry: &[ImageGeometryStep
 fn scale_floor(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64) / from as u64) as u32 }
 fn scale_ceil(value: u32, from: u32, to: u32) -> u32 { ((value as u64 * to as u64 + from as u64 - 1) / from as u64) as u32 }
 
+/// Convert Image Format's target: the editor's formats plus TIFF, whose
+/// compression is accepted only with a TIFF target and defaults to LZW.
+pub(crate) fn parse_convert_target(format: &str, tiff_compression: Option<crate::kit::contracts::TiffCompression>) -> Result<crate::kit::images::OutputFormat, String> {
+    match (format.to_ascii_lowercase().as_str(), tiff_compression) {
+        ("tif" | "tiff", compression) => Ok(crate::kit::images::OutputFormat::Tiff(compression.unwrap_or_default())),
+        (_, Some(_)) => Err("TIFF compression applies only to a TIFF target.".to_string()),
+        (_, None) => parse_output_format(format),
+    }
+}
+
 pub(crate) fn parse_output_format(format: &str) -> Result<crate::kit::images::OutputFormat, String> {
     match format.to_ascii_lowercase().as_str() {
         "jpg" | "jpeg" => Ok(crate::kit::images::OutputFormat::Jpeg),

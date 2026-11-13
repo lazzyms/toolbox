@@ -1303,6 +1303,40 @@ test("Convert Image Format accepts .tif and .tiff files and sends them with the 
     await expect(results(page)).toHaveCount(3);
 });
 
+test("Convert Image Format offers TIFF with a compression choice that defaults to LZW and is sent only for a TIFF target", async ({ page }) => {
+    const paths = ["/local/a.png", "/local/scan-16bit.png"];
+    await open(page, "Convert Image Format");
+    await drop(page, paths);
+    const target = page.getByRole("radiogroup", { name: "Convert to" });
+    await expect(target.getByRole("radio")).toHaveText(["JPEG", "PNG", "WebP", "HEIC", "TIFF"]);
+    const compression = page.getByRole("radiogroup", { name: "TIFF compression" });
+    await expect(compression).toHaveCount(0);
+
+    await target.getByRole("radio", { name: "TIFF", exact: true }).click();
+    await expect(page.getByText("Lossless. Transparency is kept.")).toBeVisible();
+    await expect(compression.getByRole("radio")).toHaveText(["LZW", "None", "Deflate"]);
+    await expect(compression.getByRole("radio", { name: "LZW", exact: true })).toBeChecked();
+    await expect(compression).toHaveAccessibleDescription("All three are lossless. LZW is the default. 16-bit sources stay 16-bit, and 8-bit sources stay 8-bit.");
+    await run(page).click();
+    await expect(results(page)).toHaveCount(2);
+
+    await compression.getByRole("radio", { name: "Deflate", exact: true }).click();
+    await expect(compression.getByRole("radio", { name: "Deflate", exact: true })).toBeChecked();
+    await run(page).click();
+    await expect.poll(async () => (await requestFor(page, "convert_images")).length).toBe(2);
+
+    await target.getByRole("radio", { name: "PNG", exact: true }).click();
+    await expect(compression).toHaveCount(0);
+    await run(page).click();
+    await expect.poll(async () => (await requestFor(page, "convert_images")).length).toBe(3);
+
+    const requests = await requestFor(page, "convert_images");
+    expect(requests[0]).toMatchObject({ paths, format: "tiff", tiffCompression: "lzw" });
+    expect(requests[1]).toMatchObject({ paths, format: "tiff", tiffCompression: "deflate" });
+    expect(requests[2]).toMatchObject({ paths, format: "png" });
+    expect(requests[2]).not.toHaveProperty("tiffCompression");
+});
+
 test("Convert Image Format lists every page output of a multi-page TIFF on its one row, each with Open and Reveal", async ({ page }) => {
     const pages = ["/local/scan-0042-converted-p1.png", "/local/scan-0042-converted-p2.png", "/local/scan-0042-converted-p3.png"];
     await open(page, "Convert Image Format");
