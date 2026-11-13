@@ -20,8 +20,11 @@ const PAGE_ONE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAf
 const PAGE_TWO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGM4oaHxHwAE7AIY0raoogAAAABJRU5ErkJggg==";
 const fakePreview = (pages: string[], pageCount = pages.length) => ({ pageCount, pages: pages.map((dataUrl) => ({ dataUrl, width: 566, height: 800 })), missingImages: [] });
 
+/** Where the faked app keeps the one draft. */
+const DRAFT_KEY = "toolbox-test-formatted-draft";
+
 test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => {
+    await page.addInitScript((DRAFT_KEY) => {
         const win = window as unknown as FormattedWindow;
         let finish: ((outcomes: unknown) => void) | null = null;
         const callbacks = new Map<number, (event: unknown) => void>();
@@ -50,6 +53,21 @@ test.beforeEach(async ({ page }) => {
                 if (command === "create_formatted_pdf") return new Promise((resolve) => { finish = resolve; });
                 if (command === "preview_formatted_pdf") return win.__holdPreview ? new Promise((resolve) => { win.__heldPreviews.push(resolve); }) : win.__preview;
                 if (command === "list_formatted_pdf_fonts") return win.__fonts;
+                // The draft lives in session storage, so it survives a reload as the app-data file survives a restart.
+                if (command === "load_formatted_draft") {
+                    const stored = sessionStorage.getItem(DRAFT_KEY);
+                    if (stored === "damaged") {
+                        sessionStorage.removeItem(DRAFT_KEY);
+                        return { draft: null, problem: "Your saved draft was damaged, so it was cleared." };
+                    }
+                    return { draft: stored ? JSON.parse(stored) : null, problem: null };
+                }
+                if (command === "save_formatted_draft") {
+                    const draft = { document: (args as { document: unknown }).document, savedAt: Date.now() };
+                    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+                    return draft;
+                }
+                if (command === "clear_formatted_draft") { sessionStorage.removeItem(DRAFT_KEY); return null; }
                 if (command === "plugin:dialog|open") return win.__dialogResults.shift() ?? null;
                 if (command === "plugin:event|listen") {
                     const { event, handler } = args as { event: string; handler: number };
@@ -68,7 +86,7 @@ test.beforeEach(async ({ page }) => {
             unregisterCallback: (id: number) => callbacks.delete(id),
         };
         window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => undefined };
-    });
+    }, DRAFT_KEY);
 });
 
 const openFormatted = async (page: Page) => {
@@ -112,7 +130,10 @@ const defaultPage = { pageSize: "a4", orientation: "portrait", margins: "normal"
 
 /** Opens a fresh document, applies one page-setting change, saves and returns the page settings create_formatted_pdf received. */
 const pageSentAfter = async (page: Page, change: (page: Page) => Promise<void>) => {
-    await openFormatted(page);
+    // The save is never finished here, so the last case's draft is still stored; each case starts from a new document.
+    await page.goto("/");
+    await page.evaluate((key) => sessionStorage.removeItem(key), DRAFT_KEY);
+    await openToolBySearch(page, "Formatted PDF");
     await block(page, "Block 1, Paragraph").fill("Dear neighbour,");
     await change(page);
     await saveButton(page).click();
@@ -824,4 +845,141 @@ test("Formatted PDF names the bundled font that stood in for a missing one and w
 
     await page.getByRole("button", { name: "New document" }).click();
     await expect(page.getByRole("group", { name: "Font" })).toContainText("Liberation Serif, 11 pt");
+});
+
+const storedDraft = (page: Page) => page.evaluate((key) => {
+    const stored = sessionStorage.getItem(key);
+    return stored ? (JSON.parse(stored) as { document: { title: string; blocks: unknown[] } }) : null;
+}, DRAFT_KEY);
+
+const draftStatus = (page: Page) => page.getByRole("status").filter({ hasText: /draft/i }).first();
+
+const leaveAndReopen = async (page: Page) => {
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await openToolBySearch(page, "Lock & Unlock");
+    await page.getByRole("button", { name: "← All tools" }).click();
+    await openToolBySearch(page, "Formatted PDF");
+};
+
+const expectChecklist = async (page: Page) => {
+    await expect(block(page, "Block 1, Heading 1")).toHaveText("Move-out checklist");
+    await expect(block(page, "Block 2, Paragraph")).toHaveText("Return the keys.\nRead the meters.");
+};
+
+test("the draft is autosaved on this device and restored after leaving the tool and after a reload", async ({ page }) => {
+    await openFormatted(page);
+    await expect(draftStatus(page)).toHaveText("No draft yet");
+    await writeChecklist(page);
+    await page.getByLabel("Page numbers at the bottom").check();
+    await expect(draftStatus(page)).toHaveText("Draft saved on this device");
+    await expect.poll(async () => (await storedDraft(page))?.document.blocks.length).toBe(2);
+
+    // Leaving straight after typing still keeps what was typed.
+    await page.getByLabel("Title", { exact: true }).fill("  Move-out checklist ");
+    await leaveAndReopen(page);
+    await expectChecklist(page);
+    await expect(page.getByLabel("Title", { exact: true })).toHaveValue("  Move-out checklist ");
+    await expect(page.getByLabel("Page numbers at the bottom")).toBeChecked();
+    const restored = page.getByRole("status").filter({ hasText: "Restored your draft from" });
+    await expect(restored).toContainText(/Restored your draft from today at \d\d:\d\d/);
+    await expect(restored).toContainText("It stays on this device until you save the PDF or discard it. Nothing is sent anywhere.");
+    await expect(draftStatus(page)).toHaveText("Draft saved on this device");
+    await restored.getByRole("button", { name: "Dismiss restored-draft note" }).click();
+    await expect(restored).toHaveCount(0);
+
+    await page.reload();
+    await openToolBySearch(page, "Formatted PDF");
+    await expectChecklist(page);
+    await expect(page.getByLabel("Title", { exact: true })).toHaveValue("  Move-out checklist ");
+    await expect(page.getByRole("status").filter({ hasText: "Restored your draft from" })).toBeVisible();
+    // Reading the draft back writes nothing.
+    expect(await page.evaluate(() => (window as unknown as FormattedWindow).__invocations.filter(({ command }) => command === "save_formatted_draft").length)).toBe(0);
+});
+
+test("discarding the draft asks first, keeps it when cancelled and clears it when confirmed", async ({ page }) => {
+    await openFormatted(page);
+    await writeChecklist(page);
+    await expect(draftStatus(page)).toHaveText("Draft saved on this device");
+
+    const discard = page.locator(".formatted-pdf-footer").getByRole("button", { name: "Discard draft…" });
+    const dialog = page.getByRole("alertdialog", { name: "Discard this draft?" });
+    await discard.click();
+    await expect(dialog).toContainText("This draft has 2 blocks and was last saved a moment ago. It will be removed from this device and can't be brought back. Files on your disk aren't touched.");
+    await expect(dialog.getByRole("button", { name: /^Keep editing/ })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await discard.click();
+    await dialog.getByRole("button", { name: /^Keep editing/ }).click();
+    await expect(dialog).toHaveCount(0);
+    await expectChecklist(page);
+    expect(await storedDraft(page)).not.toBeNull();
+    expect(await page.evaluate(() => (window as unknown as FormattedWindow).__invocations.some(({ command }) => command === "clear_formatted_draft"))).toBe(false);
+
+    await discard.click();
+    await dialog.getByRole("button", { name: "Discard draft", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("");
+    await expect(page.getByRole("listitem").filter({ has: page.getByRole("textbox", { name: "Block 2, Paragraph" }) })).toHaveCount(0);
+    await expect(draftStatus(page)).toHaveText("No draft yet");
+    await expect.poll(() => storedDraft(page)).toBeNull();
+    await expect(discard).toHaveCount(0);
+
+    await leaveAndReopen(page);
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("");
+    await expect(page.getByRole("status").filter({ hasText: "Restored your draft from" })).toHaveCount(0);
+});
+
+test("the restored note's discard clears the restored draft", async ({ page }) => {
+    await openFormatted(page);
+    await writeChecklist(page);
+    await expect.poll(async () => (await storedDraft(page))?.document.blocks.length).toBe(2);
+    await page.reload();
+    await openToolBySearch(page, "Formatted PDF");
+    await page.getByRole("status").filter({ hasText: "Restored your draft from" }).getByRole("button", { name: "Discard draft…" }).click();
+    await page.getByRole("alertdialog", { name: "Discard this draft?" }).getByRole("button", { name: "Discard draft", exact: true }).click();
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("");
+    await expect.poll(() => storedDraft(page)).toBeNull();
+});
+
+test("a saved PDF clears the draft, and a failed save keeps it", async ({ page }) => {
+    await openFormatted(page);
+    await writeChecklist(page);
+    await expect(draftStatus(page)).toHaveText("Draft saved on this device");
+
+    await savedBlocks(page);
+    await page.evaluate(() => (window as unknown as FormattedWindow).__finish([{
+        inputPath: "/Users/test/Documents/Untitled.pdf", outputPaths: [], detail: null,
+        state: "failed", failure: { kind: "processing", message: "The disk is full." }, reason: null, warnings: [], fonts: [],
+    }]));
+    await expect(resultRows(page)).toHaveCount(1);
+    expect(await storedDraft(page)).not.toBeNull();
+    await expect(draftStatus(page)).toHaveText("Draft saved on this device");
+
+    await savedBlocks(page);
+    await page.evaluate(() => (window as unknown as FormattedWindow).__finish([{
+        inputPath: "/Users/test/Documents/Untitled.pdf", outputPaths: ["/Users/test/Documents/Untitled.pdf"], detail: "1 page, A4.",
+        state: "succeeded", failure: null, reason: null, warnings: [], fonts: [],
+    }]));
+    await expect(draftStatus(page)).toHaveText("Draft cleared");
+    await expect.poll(() => storedDraft(page)).toBeNull();
+    const cleared = page.getByRole("region", { name: "Draft" });
+    await expect(cleared).toContainText("The draft was cleared from this device now that the PDF is saved. The PDF is the copy to keep.");
+    await expect(page.locator(".formatted-pdf-footer").getByRole("button", { name: "Discard draft…" })).toHaveCount(0);
+
+    await leaveAndReopen(page);
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("");
+    await expect(draftStatus(page)).toHaveText("No draft yet");
+});
+
+test("a damaged draft is reported and the tool opens on a new document", async ({ page }) => {
+    await page.goto("/");
+    await page.evaluate((key) => sessionStorage.setItem(key, "damaged"), DRAFT_KEY);
+    await openToolBySearch(page, "Formatted PDF");
+    const alert = page.getByRole("alert").filter({ hasText: "Your saved draft was damaged, so it was cleared." });
+    await expect(alert).toBeVisible();
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("");
+    await expect(draftStatus(page)).toHaveText("No draft yet");
+    await alert.getByRole("button", { name: "Dismiss draft problem" }).click();
+    await expect(alert).toHaveCount(0);
+    expect(await storedDraft(page)).toBeNull();
 });

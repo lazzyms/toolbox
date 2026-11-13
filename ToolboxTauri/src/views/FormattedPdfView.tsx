@@ -1,11 +1,12 @@
 import { useContext, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ArrowDown, ArrowUp, CircleX, Image as ImageIcon, ImageOff, List, ListOrdered, Plus, SeparatorHorizontal, Table, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, CircleX, History, Image as ImageIcon, ImageOff, List, ListOrdered, LoaderCircle, Minus, Plus, SeparatorHorizontal, Table, Trash2 } from "lucide-react";
 import type { JobOutcome, ToolDefinition } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -161,6 +162,77 @@ const requestBlocks = (blocks: readonly Block[]) => blocks.flatMap((block): Requ
   return block.kind === "paragraph" ? [{ kind: block.kind, runs: normalizeRuns(block.runs) }] : [{ kind: block.kind, text: runsText(block.runs) }];
 });
 
+/**
+ * The draft keeps every block as the editor holds it, blank ones too, so restoring it gives back the same document.
+ * It uses the request's block shapes, so it is checked as saving the PDF checks it (`formatted_draft.rs`).
+ */
+const draftBlocks = (blocks: readonly Block[]) => blocks.map((block): RequestBlock => {
+  if (block.kind === "pageBreak") return { kind: "pageBreak" };
+  if (block.kind === "image") return { kind: "image", path: block.path };
+  if (isTable(block)) return { kind: "table", headerRow: block.headerRow, rows: block.rows.map((row) => row.map((cell) => runsText(cell.runs))) };
+  if (isList(block)) return { kind: block.kind, items: block.items.map((entry) => ({ runs: entry.runs })) };
+  return block.kind === "paragraph" ? { kind: "paragraph", runs: block.runs } : { kind: block.kind, text: runsText(block.runs) };
+});
+
+const editorBlocks = (blocks: readonly RequestBlock[]): Block[] => {
+  const restored = blocks.map((block): Block => {
+    if (block.kind === "pageBreak") return pageBreak();
+    if (block.kind === "image") return imageBlock(block.path);
+    if (block.kind === "table") return { id: nextId(), kind: "table", headerRow: block.headerRow, rows: block.rows.map((row) => row.map((cell) => item(plainRuns(cell)))) };
+    if ("items" in block) {
+      return { id: nextId(), kind: block.kind, items: block.items.length > 0 ? block.items.map((entry) => item(entry.runs)) : [item()] };
+    }
+    return block.kind === "paragraph" ? textBlock("paragraph", block.runs) : textBlock(block.kind, plainRuns(block.text));
+  });
+  return restored.length > 0 ? restored : [textBlock()];
+};
+
+type DraftDocument = { title: string; author: string; blocks: RequestBlock[]; page: PageSettings; font: DocumentFont };
+type FormattedDraft = { document: DraftDocument; savedAt: number };
+type DraftLoad = { draft: FormattedDraft | null; problem: string | null };
+/** How long typing pauses before the draft is written. */
+const DRAFT_DELAY_MS = 500;
+const draftOf = (title: string, author: string, blocks: readonly Block[], page: PageSettings, font: DocumentFont): DraftDocument =>
+  ({ title, author, blocks: draftBlocks(blocks), page, font });
+const blankDraftKey = JSON.stringify(draftOf("", "", [textBlock()], defaultPage, defaultFont));
+/**
+ * Draft reads and writes go one at a time, across visits to the tool: the draft written as the tool closes lands
+ * before the next visit reads it back.
+ */
+let draftQueue: Promise<unknown> = Promise.resolve();
+const queueDraft = <T,>(work: () => Promise<T>): Promise<T> => {
+  const next = draftQueue.then(work, work);
+  draftQueue = next.catch(() => undefined);
+  return next;
+};
+
+/**
+ * Loading reports a damaged draft once, as it clears it, so a view that mounts again while a load is under way (as
+ * React's development checks do) shares that load instead of starting one that finds nothing.
+ */
+let draftLoad: Promise<DraftLoad | null> | null = null;
+const loadDraft = () => {
+  if (!draftLoad) {
+    const loading = queueDraft(() => invoke<DraftLoad | null>("load_formatted_draft"));
+    draftLoad = loading;
+    void loading.catch(() => undefined).finally(() => { if (draftLoad === loading) draftLoad = null; });
+  }
+  return draftLoad;
+};
+
+const clockTime = (date: Date) => date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+/** When a draft was saved, as the board words it: "today at 18:42", "yesterday at 18:42", or the date. */
+const savedWhen = (savedAt: number, now = new Date()) => {
+  const saved = new Date(savedAt);
+  const day = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((day(now) - day(saved)) / 86_400_000);
+  if (days === 0) return `today at ${clockTime(saved)}`;
+  if (days === 1) return `yesterday at ${clockTime(saved)}`;
+  return `${saved.toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" })} at ${clockTime(saved)}`;
+};
+const lastSaved = (savedAt: number | null) =>
+  savedAt === null || Date.now() - savedAt < 60_000 ? "a moment ago" : savedWhen(savedAt);
+
 /** Pasted text with blank lines between paragraphs becomes one block (or list item) for each. */
 const pastedParts = (text: string, lines: boolean) =>
   text.replace(/\r\n?/g, "\n").split(lines ? /\n+/ : /\n[ \t]*\n+/).map((part) => part.trim()).filter(Boolean);
@@ -197,6 +269,19 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const [savedPage, setSavedPage] = useState<PageSettings>(defaultPage);
   /** The path of an image the last save couldn't find; it stays flagged while a block still points there. */
   const [missing, setMissing] = useState<string | null>(null);
+  /** Whether the stored draft has been read; nothing is written over it before then. */
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftState, setDraftState] = useState<"saving" | "saved" | "failed" | "cleared">("saved");
+  /** When the restored draft was saved, while its note shows. */
+  const [restoredAt, setRestoredAt] = useState<number | null>(null);
+  const [draftProblem, setDraftProblem] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+  /** The document the stored draft holds (or, once cleared, the one it was cleared for), as its JSON. */
+  const writtenKey = useRef(blankDraftKey);
+  const draftSavedAt = useRef<number | null>(null);
+  /** Writes the draft now instead of after the pause, as the tool closes. */
+  const flushDraft = useRef<(() => void) | null>(null);
+  const mounted = useRef(true);
   const list = useRef<HTMLOListElement>(null);
   const focusNext = useRef<Selection | null>(null);
   const lastSelection = useRef<Selection | null>(null);
@@ -527,6 +612,85 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     ? `${preview.pageCount === 1 ? "1 page" : `${preview.pageCount} pages`}, ${pageSizes[page.pageSize].name}${page.orientation === "landscape" ? " landscape" : ""}`
     : null;
 
+  const draft = draftOf(title, author, blocks, page, font);
+  const draftKey = JSON.stringify(draft);
+
+  /** Stores `document` as the draft, or clears the draft when nothing has been written. */
+  const writeDraft = (key: string, document: DraftDocument, blankDocument: boolean) => {
+    flushDraft.current = null;
+    if (writtenKey.current === key) return;
+    writtenKey.current = key;
+    void queueDraft(async () => {
+      try {
+        if (blankDocument) await invoke("clear_formatted_draft");
+        else draftSavedAt.current = (await invoke<FormattedDraft | null>("save_formatted_draft", { document }))?.savedAt ?? Date.now();
+        if (mounted.current && writtenKey.current === key) setDraftState("saved");
+      } catch {
+        if (writtenKey.current === key) writtenKey.current = "";
+        if (mounted.current) setDraftState("failed");
+      }
+    });
+  };
+
+  const clearDraft = (key: string) => {
+    flushDraft.current = null;
+    writtenKey.current = key;
+    void queueDraft(() => invoke("clear_formatted_draft")).catch(() => undefined);
+  };
+
+  useEffect(() => {
+    mounted.current = true;
+    let live = true;
+    void loadDraft()
+      .then((loaded) => {
+        if (!live) return;
+        const stored = loaded?.draft;
+        if (stored) {
+          const { title: storedTitle, author: storedAuthor, page: storedPage, font: storedFont } = stored.document;
+          const restored = editorBlocks(stored.document.blocks);
+          setBlocks(restored);
+          setTitle(storedTitle);
+          setAuthor(storedAuthor);
+          setPage(storedPage);
+          setFont(storedFont);
+          setRestoredAt(stored.savedAt);
+          draftSavedAt.current = stored.savedAt;
+          writtenKey.current = JSON.stringify(draftOf(storedTitle, storedAuthor, restored, storedPage, storedFont));
+        }
+        setDraftProblem(loaded?.problem ?? null);
+      })
+      .catch((error: unknown) => { if (live) setDraftProblem(`Your draft couldn't be read: ${error instanceof Error ? error.message : String(error)}`); })
+      .finally(() => { if (live) setDraftReady(true); });
+    // Leaving the tool writes the draft at once instead of after the pause.
+    const flush = () => flushDraft.current?.();
+    window.addEventListener("pagehide", flush);
+    return () => {
+      live = false;
+      flush();
+      mounted.current = false;
+      window.removeEventListener("pagehide", flush);
+    };
+  }, []);
+
+  // Autosave: the draft is written once typing pauses.
+  useEffect(() => {
+    if (!draftReady || saving || draftKey === writtenKey.current) return;
+    const blankDocument = empty;
+    setDraftState("saving");
+    const write = () => writeDraft(draftKey, draft, blankDocument);
+    flushDraft.current = write;
+    const timer = window.setTimeout(write, DRAFT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [draftKey, draftReady, saving]);
+
+  const discardDraft = () => {
+    clearDraft(blankDraftKey);
+    setDiscarding(false);
+    setRestoredAt(null);
+    setDraftState("saved");
+    startOver();
+  };
+
   const save = async () => {
     if (empty || saving) return;
     const name = `${title.trim() || "Untitled"}.pdf`;
@@ -543,6 +707,12 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
       setMissing(lost);
       setSaved(lost ? null : outcomes);
       setSavedPage(page);
+      // The PDF is the copy to keep once it is saved, so the draft is cleared from this device.
+      if (outcomes.some((outcome) => outcome.state === "succeeded")) {
+        clearDraft(draftKey);
+        setRestoredAt(null);
+        setDraftState("cleared");
+      }
     } catch (error) {
       setSaved([failedOutcome(outputPath, "processing", error instanceof Error ? error.message : String(error))]);
     } finally {
@@ -565,6 +735,20 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     focusNext.current = { key: String(first.id), start: 0, end: 0 };
   };
 
+  const draftStatus = draftState === "cleared"
+    ? { icon: <Minus aria-hidden="true" />, text: "Draft cleared" }
+    : empty
+      ? { icon: <Minus aria-hidden="true" />, text: "No draft yet" }
+      : draftState === "saving"
+        ? { icon: <LoaderCircle aria-hidden="true" className="animate-spin" />, text: "Saving draft…" }
+        : draftState === "failed"
+          ? { icon: <CircleX aria-hidden="true" className="text-destructive" />, text: "Draft not saved on this device" }
+          : { icon: <Check aria-hidden="true" />, text: "Draft saved on this device" };
+  const draftImage = blocks.find((block): block is Extract<Block, { kind: "image" }> => block.kind === "image");
+  const discardConsequences = `${title.trim() || "This draft"} has ${typed.blocks.length} ${typed.blocks.length === 1 ? "block" : "blocks"} and was last saved ${lastSaved(draftSavedAt.current)}. `
+    + "It will be removed from this device and can't be brought back. "
+    + (draftImage ? `${fileName(draftImage.path)} and other files on your disk aren't touched.` : "Files on your disk aren't touched.");
+  const canDiscard = !empty && draftState !== "cleared";
   const richOff = saving || (current.kind !== "paragraph" && !isList(current));
   const fixedKind = isFixed(current) || isTable(current);
   const missingBlock = missing === null ? null : blocks.find((block) => block.kind === "image" && block.path === missing) ?? null;
@@ -602,10 +786,38 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     <div className="formatted-pdf">
       <Card className="workspace-control-panel py-0">
         <CardContent className="workspace-control-panel-content grid gap-4 p-4">
-          <div>
-            <h2 className="workspace-active-command">{utility.title}</h2>
-            <p className="workspace-panel-copy">{utility.blurb}</p>
+          <div className="formatted-pdf-header">
+            <div>
+              <h2 className="workspace-active-command">{utility.title}</h2>
+              <p className="workspace-panel-copy">{utility.blurb}</p>
+            </div>
+            {draftReady && <p className="formatted-pdf-draft-status workspace-note" role="status" aria-live="polite">{draftStatus.icon}{draftStatus.text}</p>}
           </div>
+          {restoredAt !== null && (
+            <Card className="formatted-pdf-alert py-0" role="status">
+              <CardContent className="formatted-pdf-alert-content">
+                <History aria-hidden="true" />
+                <p>
+                  <strong>Restored your draft from {savedWhen(restoredAt)}</strong>
+                  <span>It stays on this device until you save the PDF or discard it. Nothing is sent anywhere.</span>
+                </p>
+                <Button variant="outline" size="sm" disabled={saving} onClick={() => setDiscarding(true)}>Discard draft…</Button>
+                <Button variant="ghost" size="sm" aria-label="Dismiss restored-draft note" onClick={() => setRestoredAt(null)}>Dismiss</Button>
+              </CardContent>
+            </Card>
+          )}
+          {draftProblem && (
+            <Card className="formatted-pdf-alert border-destructive py-0" role="alert">
+              <CardContent className="formatted-pdf-alert-content">
+                <CircleX aria-hidden="true" className="text-destructive" />
+                <p>
+                  <strong>{draftProblem}</strong>
+                  <span>You can start a new document. Nothing was sent anywhere.</span>
+                </p>
+                <Button variant="ghost" size="sm" aria-label="Dismiss draft problem" onClick={() => setDraftProblem(null)}>Dismiss</Button>
+              </CardContent>
+            </Card>
+          )}
           <div className="formatted-pdf-layout">
             <section className="formatted-pdf-editor" aria-label="Document">
               <TooltipProvider>
@@ -838,6 +1050,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
             </aside>
           </div>
           <footer className="formatted-pdf-footer">
+            {canDiscard && <Button variant="ghost" disabled={saving} onClick={() => setDiscarding(true)}>Discard draft…</Button>}
             {empty && <p id="formatted-pdf-blocker" className="workspace-note">Empty document. Add some text to save a PDF.</p>}
             {!empty && !missingBlock && estimate && (
               <p id="formatted-pdf-estimate" className="formatted-pdf-status">
@@ -878,7 +1091,25 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
         />
       )}
       {saved && !saving && saved[0] && <FontsUsed outcome={saved[0]} band={savedPage} />}
+      {saved && !saving && draftState === "cleared" && (
+        <section className="formatted-pdf-draft-cleared" aria-labelledby="formatted-pdf-draft-cleared-label">
+          <h3 id="formatted-pdf-draft-cleared-label" className="workspace-panel-label">Draft</h3>
+          <p className="workspace-note">The draft was cleared from this device now that the PDF is saved. The PDF is the copy to keep.</p>
+        </section>
+      )}
       {saved && !saving && <Button variant="outline" className="formatted-pdf-new" onClick={startOver}>New document</Button>}
+      <Dialog open={discarding} onOpenChange={setDiscarding}>
+        <DialogContent role="alertdialog" showCloseButton={false} className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Discard this draft?</DialogTitle>
+            <DialogDescription>{discardConsequences}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscarding(false)}>Keep editing<kbd className="opacity-70">Esc</kbd></Button>
+            <Button variant="outline" className="text-destructive" onClick={discardDraft}>Discard draft</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

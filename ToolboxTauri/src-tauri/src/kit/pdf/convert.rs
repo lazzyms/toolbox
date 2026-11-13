@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
 use lopdf::Document;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::{note_renamed, JobOutcome, OutputLocation, OutputNaming};
@@ -40,7 +40,7 @@ const NOTES_MARGIN: f32 = 36.;
 /// Text size range for eBooks, as a percentage of the book's own sizes.
 const EBOOK_SCALES: std::ops::RangeInclusive<u16> = 50..=200;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum PageSize { #[default] A4, Letter, Legal }
 
@@ -54,7 +54,7 @@ impl PageSize {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum Margins { Narrow, #[default] Normal, Wide }
 
@@ -141,7 +141,7 @@ impl Delimiter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum Orientation { Portrait, #[default] Landscape }
 

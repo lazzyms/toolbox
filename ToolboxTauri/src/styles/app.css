@@ -2717,5 +2717,11 @@ ol.formatted-pdf-items { list-style: decimal; }
 .formatted-pdf-segments > * { flex: 1; }
 .formatted-pdf-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .formatted-pdf-footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.formatted-pdf-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 14px; }
+.formatted-pdf-draft-status { display: inline-flex; align-items: center; gap: 6px; margin: 0; white-space: nowrap; }
+.formatted-pdf-draft-status > svg { width: 14px; height: 14px; flex: none; }
+.formatted-pdf-alert-content > p { flex: 1; }
+.formatted-pdf-draft-cleared { display: grid; gap: 6px; padding-top: 14px; border-top: 1px solid var(--border); }
+.formatted-pdf-draft-cleared h3 { margin: 0; }
 .formatted-pdf-new { justify-self: start; }
 @media (max-width: 900px) { .formatted-pdf-layout { grid-template-columns: minmax(0, 1fr); } }
