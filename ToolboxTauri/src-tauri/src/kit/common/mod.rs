@@ -65,6 +65,132 @@ impl Drop for FolderReservation {
     }
 }
 
+/// A folder output built privately and published whole. The caller writes files
+/// and subfolders into `path()`, a hidden staging folder beside the destination,
+/// then `publish` moves it to `destination_path()` in one rename that never
+/// replaces anything. Discarding or dropping it unpublished removes the staging
+/// folder and the name claim, so nothing appears in the destination.
+pub struct StagedFolderReservation {
+    path: PathBuf,
+    staging_path: PathBuf,
+    claim_path: PathBuf,
+    published: bool,
+}
+
+impl StagedFolderReservation {
+    pub fn path(&self) -> &Path {
+        &self.staging_path
+    }
+
+    pub fn destination_path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn publish(mut self) -> io::Result<PathBuf> {
+        limits::publish_within_time(|| {
+            OutputNaming::retry_while_busy(|| rename_no_replace(&self.staging_path, &self.path))?;
+            self.published = true;
+            Ok(self.path.clone())
+        })
+    }
+
+    pub fn discard(self) {}
+}
+
+impl Drop for StagedFolderReservation {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = std::fs::remove_dir_all(&self.staging_path);
+        }
+        let _ = std::fs::remove_file(&self.claim_path);
+    }
+}
+
+/// Moves `from` to `to` in one step and fails with `AlreadyExists` (or another
+/// error) rather than replacing whatever is at `to`, including an empty folder.
+#[cfg(target_os = "macos")]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::{c_char, c_int, c_uint, CString};
+    use std::os::unix::ffi::OsStrExt;
+
+    extern "C" {
+        fn renamex_np(from: *const c_char, to: *const c_char, flags: c_uint) -> c_int;
+    }
+    const RENAME_EXCL: c_uint = 0x0000_0004;
+
+    let (source, target) = (CString::new(from.as_os_str().as_bytes())?, CString::new(to.as_os_str().as_bytes())?);
+    if unsafe { renamex_np(source.as_ptr(), target.as_ptr(), RENAME_EXCL) } == 0 {
+        return Ok(());
+    }
+    unsupported_exclusive_rename_fallback(io::Error::last_os_error(), from, to)
+}
+
+#[cfg(target_os = "linux")]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::{c_char, c_int, c_uint, CString};
+    use std::os::unix::ffi::OsStrExt;
+
+    extern "C" {
+        fn renameat2(old_dir: c_int, old_path: *const c_char, new_dir: c_int, new_path: *const c_char, flags: c_uint) -> c_int;
+    }
+    const AT_FDCWD: c_int = -100;
+    const RENAME_NOREPLACE: c_uint = 1;
+
+    let (source, target) = (CString::new(from.as_os_str().as_bytes())?, CString::new(to.as_os_str().as_bytes())?);
+    if unsafe { renameat2(AT_FDCWD, source.as_ptr(), AT_FDCWD, target.as_ptr(), RENAME_NOREPLACE) } == 0 {
+        return Ok(());
+    }
+    unsupported_exclusive_rename_fallback(io::Error::last_os_error(), from, to)
+}
+
+/// A volume that cannot do an exclusive rename (some network and FUSE file
+/// systems) still gets a plain rename, which on POSIX refuses a file or a
+/// non-empty folder at `to`; only an empty folder created in the instant between
+/// the check and the rename could be replaced there.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn unsupported_exclusive_rename_fallback(error: io::Error, from: &Path, to: &Path) -> io::Result<()> {
+    const ENOSYS: i32 = if cfg!(target_os = "macos") { 78 } else { 38 };
+    const EINVAL: i32 = 22;
+    const ENOTSUP: i32 = if cfg!(target_os = "macos") { 45 } else { 95 };
+    match error.raw_os_error() {
+        Some(code) if code == EINVAL || code == ENOTSUP || code == ENOSYS => checked_rename(from, to),
+        _ => Err(error),
+    }
+}
+
+#[cfg(windows)]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+
+    let wide = |path: &Path| path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let (source, target) = (wide(from), wide(to));
+    // No MOVEFILE_REPLACE_EXISTING, so an existing file or folder fails the move,
+    // and no MOVEFILE_COPY_ALLOWED, so it is a rename and never a partial copy.
+    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), 0) } != 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    checked_rename(from, to)
+}
+
+#[cfg(not(windows))]
+fn checked_rename(from: &Path, to: &Path) -> io::Result<()> {
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} already exists", to.display())));
+    }
+    std::fs::rename(from, to)
+}
+
 impl OutputNaming {
     pub fn reserve_destination(
         input_path: &Path,
@@ -83,6 +209,14 @@ impl OutputNaming {
         suffix: &str,
     ) -> io::Result<FolderReservation> {
         Self::allocate(input_path, location, suffix, None, Self::reserve_folder_candidate)
+    }
+
+    pub fn reserve_staged_folder(
+        input_path: &Path,
+        location: &OutputLocation,
+        suffix: &str,
+    ) -> io::Result<StagedFolderReservation> {
+        Self::allocate(input_path, location, suffix, None, Self::reserve_staged_folder_candidate)
     }
 
     pub fn create_destination(
@@ -226,6 +360,52 @@ impl OutputNaming {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    /// Claims the name like a file output and keeps the claim until publish or
+    /// drop, so parallel reservations skip it while its contents are still being
+    /// written in a hidden staging folder in the same directory (same volume, so
+    /// publishing is one rename).
+    fn reserve_staged_folder_candidate(path: &Path) -> io::Result<Option<StagedFolderReservation>> {
+        if std::fs::symlink_metadata(path).is_ok() {
+            return Ok(None);
+        }
+        let claim_path = Self::claim_path(path);
+        match Self::retry_while_busy(|| OpenOptions::new().write(true).create_new(true).open(&claim_path)) {
+            Ok(claim) => drop(claim),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        if std::fs::symlink_metadata(path).is_ok() {
+            let _ = std::fs::remove_file(&claim_path);
+            return Ok(None);
+        }
+        match Self::create_staging_folder(path) {
+            Ok(staging_path) => Ok(Some(StagedFolderReservation {
+                path: path.to_path_buf(),
+                staging_path,
+                claim_path,
+                published: false,
+            })),
+            Err(error) => {
+                let _ = std::fs::remove_file(&claim_path);
+                Err(error)
+            }
+        }
+    }
+
+    fn create_staging_folder(path: &Path) -> io::Result<PathBuf> {
+        let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("output");
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        for attempt in 0..100 {
+            let staging_path = path.with_file_name(format!(".{name}.toolbox-staging-{timestamp}-{attempt}"));
+            match Self::retry_while_busy(|| std::fs::create_dir(&staging_path)) {
+                Ok(()) => return Ok(staging_path),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(io::ErrorKind::AlreadyExists, "could not allocate a unique staging folder"))
     }
 
     /// Windows reports "access denied" while another reservation's claim file or
@@ -475,6 +655,216 @@ mod tests {
         });
         assert_eq!(other.unwrap_err().kind(), io::ErrorKind::NotFound);
         assert_eq!(calls, 1);
+    }
+
+    fn entry_names(directory: &Path) -> std::collections::BTreeSet<String> {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect()
+    }
+
+    fn names(values: &[&str]) -> std::collections::BTreeSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn generated_bytes(seed: u8) -> Vec<u8> {
+        (0..4096u32).map(|index| (index as u8).wrapping_mul(31).wrapping_add(seed)).collect()
+    }
+
+    fn write_icon_set(reservation: &StagedFolderReservation) {
+        let staging = reservation.path();
+        std::fs::write(staging.join("Contents.json"), b"{\"images\":[]}").unwrap();
+        std::fs::create_dir_all(staging.join("AppIcon.appiconset/nested")).unwrap();
+        std::fs::write(staging.join("AppIcon.appiconset/icon-16.png"), generated_bytes(1)).unwrap();
+        std::fs::write(staging.join("AppIcon.appiconset/nested/icon-32.png"), generated_bytes(2)).unwrap();
+    }
+
+    fn assert_icon_set(folder: &Path) {
+        assert_eq!(std::fs::read(folder.join("Contents.json")).unwrap(), b"{\"images\":[]}");
+        assert_eq!(std::fs::read(folder.join("AppIcon.appiconset/icon-16.png")).unwrap(), generated_bytes(1));
+        assert_eq!(std::fs::read(folder.join("AppIcon.appiconset/nested/icon-32.png")).unwrap(), generated_bytes(2));
+        assert_eq!(entry_names(folder), names(&["AppIcon.appiconset", "Contents.json"]));
+        assert_eq!(entry_names(&folder.join("AppIcon.appiconset")), names(&["icon-16.png", "nested"]));
+    }
+
+    fn staged_root(name: &str) -> (PathBuf, PathBuf, Vec<u8>) {
+        let root = std::env::temp_dir().join(format!("toolbox_staged_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("logo.png");
+        let original = generated_bytes(7);
+        std::fs::write(&input, &original).unwrap();
+        (root, input, original)
+    }
+
+    #[test]
+    fn staged_folder_publishes_nested_contents_in_one_step_beside_the_input() {
+        let (root, input, original) = staged_root("publish");
+        let reservation = OutputNaming::reserve_staged_folder(&input, &OutputLocation::AlongsideInput, "-icons").unwrap();
+        let destination = reservation.destination_path().to_path_buf();
+        let staging = reservation.path().to_path_buf();
+        assert_eq!(destination, root.join("logo-icons"));
+        assert_eq!(staging.parent(), Some(root.as_path()), "staging sits in the destination folder, on the same volume");
+        assert!(staging.file_name().unwrap().to_string_lossy().starts_with('.'), "staging is hidden");
+
+        write_icon_set(&reservation);
+        assert!(!destination.exists(), "nothing is visible before publish");
+
+        assert_eq!(reservation.publish().unwrap(), destination);
+        assert_icon_set(&destination);
+        assert!(!staging.exists());
+        assert_eq!(entry_names(&root), names(&["logo-icons", "logo.png"]), "no staging or claim leftovers");
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staged_folder_publishes_into_a_chosen_folder_with_numbering() {
+        let (root, input, original) = staged_root("custom");
+        let custom = root.join("exports");
+        std::fs::create_dir(&custom).unwrap();
+        std::fs::create_dir(custom.join("logo-icons")).unwrap();
+        let location = OutputLocation::CustomFolder(custom.clone());
+
+        let reservation = OutputNaming::reserve_staged_folder(&input, &location, "-icons").unwrap();
+        assert_eq!(reservation.path().parent(), Some(custom.as_path()));
+        write_icon_set(&reservation);
+        let published = reservation.publish().unwrap();
+
+        assert_eq!(published, custom.join("logo-icons-1"));
+        assert_icon_set(&published);
+        assert_eq!(entry_names(&custom), names(&["logo-icons", "logo-icons-1"]));
+        assert_eq!(entry_names(&custom.join("logo-icons")).len(), 0, "the existing folder is untouched");
+        assert_eq!(entry_names(&root), names(&["exports", "logo.png"]));
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staged_folder_numbering_skips_existing_folders_files_and_pending_claims() {
+        let (root, input, original) = staged_root("numbering");
+        std::fs::create_dir(root.join("logo-icons")).unwrap();
+        std::fs::write(root.join("logo-icons/keep.txt"), b"earlier run").unwrap();
+        std::fs::write(root.join("logo-icons-1"), b"a file, not a folder").unwrap();
+        let pending = OutputNaming::reserve_staged_folder(&input, &OutputLocation::AlongsideInput, "-icons").unwrap();
+        assert_eq!(pending.destination_path(), root.join("logo-icons-2"));
+
+        let reservation = OutputNaming::reserve_staged_folder(&input, &OutputLocation::AlongsideInput, "-icons").unwrap();
+        assert_eq!(reservation.destination_path(), root.join("logo-icons-3"), "a pending staged reservation keeps its name");
+        write_icon_set(&reservation);
+        let published = reservation.publish().unwrap();
+        assert_eq!(published, root.join("logo-icons-3"));
+        drop(pending);
+
+        assert_icon_set(&published);
+        assert_eq!(std::fs::read(root.join("logo-icons/keep.txt")).unwrap(), b"earlier run");
+        assert_eq!(std::fs::read(root.join("logo-icons-1")).unwrap(), b"a file, not a folder");
+        assert_eq!(entry_names(&root), names(&["logo-icons", "logo-icons-1", "logo-icons-3", "logo.png"]));
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn discarded_or_dropped_staged_folders_leave_nothing_behind() {
+        for location_name in ["alongside", "custom"] {
+            let (root, input, original) = staged_root(&format!("discard_{location_name}"));
+            let location = if location_name == "custom" {
+                std::fs::create_dir(root.join("exports")).unwrap();
+                OutputLocation::CustomFolder(root.join("exports"))
+            } else {
+                OutputLocation::AlongsideInput
+            };
+            let directory = location.directory_for(&input).to_path_buf();
+            let before = entry_names(&directory);
+
+            let discarded = OutputNaming::reserve_staged_folder(&input, &location, "-icons").unwrap();
+            write_icon_set(&discarded);
+            let (destination, staging) = (discarded.destination_path().to_path_buf(), discarded.path().to_path_buf());
+            discarded.discard();
+            assert!(!destination.exists() && !staging.exists());
+            assert_eq!(entry_names(&directory), before);
+
+            let failed = || -> io::Result<PathBuf> {
+                let reservation = OutputNaming::reserve_staged_folder(&input, &location, "-icons")?;
+                write_icon_set(&reservation);
+                Err(io::Error::other("one size could not be rendered"))?;
+                reservation.publish()
+            };
+            assert!(failed().is_err());
+            assert_eq!(entry_names(&directory), before, "a failure before publish leaves no folder and no staging");
+
+            assert_eq!(std::fs::read(&input).unwrap(), original);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn staged_publish_never_replaces_a_concurrently_created_folder_or_file() {
+        let (root, input, original) = staged_root("concurrent");
+        let cases: [(&str, fn(&Path)); 3] = [
+            ("empty folder", |path| std::fs::create_dir(path).unwrap()),
+            ("folder with contents", |path| {
+                std::fs::create_dir(path).unwrap();
+                std::fs::write(path.join("theirs.txt"), b"theirs").unwrap();
+            }),
+            ("file", |path| std::fs::write(path, b"theirs").unwrap()),
+        ];
+        for (label, create_competitor) in cases {
+            let reservation = OutputNaming::reserve_staged_folder(&input, &OutputLocation::AlongsideInput, "-icons").unwrap();
+            let destination = reservation.destination_path().to_path_buf();
+            write_icon_set(&reservation);
+            // Another program ignores the claim and creates the same name before publish.
+            create_competitor(&destination);
+            let before = entry_names(&root);
+
+            let error = reservation.publish().expect_err(label);
+            assert_ne!(error.kind(), io::ErrorKind::NotFound, "{label}: {error}");
+            if destination.is_dir() {
+                let expected: &[&str] = if label == "empty folder" { &[] } else { &["theirs.txt"] };
+                assert_eq!(entry_names(&destination), names(expected), "{label} kept its own contents");
+            } else {
+                assert_eq!(std::fs::read(&destination).unwrap(), b"theirs", "{label} kept its bytes");
+            }
+            let mut after = before.clone();
+            after.retain(|name| !name.contains(".toolbox-"));
+            assert_eq!(entry_names(&root), after, "{label}: staging and claim removed");
+
+            if destination.is_dir() { std::fs::remove_dir_all(&destination).unwrap() } else { std::fs::remove_file(&destination).unwrap() }
+        }
+        assert_eq!(entry_names(&root), names(&["logo.png"]));
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parallel_staged_folders_publish_to_distinct_names() {
+        let (root, input, _) = staged_root("parallel");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles = (0..8)
+            .map(|_| {
+                let (input, barrier) = (input.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let reservation = OutputNaming::reserve_staged_folder(&input, &OutputLocation::AlongsideInput, "-icons").unwrap();
+                    write_icon_set(&reservation);
+                    reservation.publish().unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let folders = handles.into_iter().map(|handle| handle.join().unwrap()).collect::<std::collections::BTreeSet<_>>();
+
+        let mut expected = vec![root.join("logo-icons")];
+        expected.extend((1..8).map(|counter| root.join(format!("logo-icons-{counter}"))));
+        assert_eq!(folders, expected.into_iter().collect());
+        folders.iter().for_each(|folder| assert_icon_set(folder));
+        assert!(entry_names(&root).iter().all(|name| !name.contains(".toolbox-")));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
