@@ -47,6 +47,32 @@ pub struct Book {
     pub unreadable_stylesheets: usize,
 }
 
+impl Book {
+    /// Adds a parsed chapter at the end: its pictures, fonts and left-out content join the book's, its
+    /// heading anchors become `{path}#{id}` (and are added to `anchors`), and `scale` multiplies its text sizes.
+    pub(super) fn absorb(&mut self, path: String, mut parsed: html::Parsed, scale: f32, anchors: &mut HashSet<String>) {
+        let (offset, families) = (self.pictures.len(), merged(&mut self.families, &parsed.families));
+        visit(&mut parsed.blocks, &mut |block| match block {
+            Block::Heading { anchor, .. } => { *anchor = format!("{path}#{anchor}"); anchors.insert(anchor.clone()); }
+            Block::Image(index) => *index += offset,
+            Block::Float(float) => if let Some(index) = &mut float.picture { *index += offset },
+            Block::Formatted(paragraph) => { paragraph.size *= scale; paragraph.before *= scale; paragraph.after *= scale; }
+            _ => {}
+        }, &mut |span| {
+            if span.style.family > 0 { span.style.family = families[span.style.family as usize - 1]; }
+            if span.style.half_points > 0 { span.style.half_points = (f32::from(span.style.half_points) * scale).round().clamp(1., f32::from(u16::MAX)) as u16; }
+        });
+        self.pictures.append(&mut parsed.pictures);
+        self.remote.images.append(&mut parsed.remote.images);
+        self.remote.stylesheets.append(&mut parsed.remote.stylesheets);
+        self.remote.fonts.append(&mut parsed.remote.fonts);
+        self.remote.embeds.append(&mut parsed.remote.embeds);
+        self.unreadable_images += parsed.unreadable_images;
+        self.unreadable_stylesheets += parsed.unreadable_stylesheets;
+        self.chapters.push(Chapter { path, blocks: parsed.blocks });
+    }
+}
+
 struct Item { path: String, media: String, properties: String }
 
 /// Reads an EPUB. `budget` caps the bytes expanded across every part read and going over returns
@@ -86,27 +112,9 @@ pub fn parse(bytes: &[u8], budget: u64, exceeded: ToolError, scale: f32) -> Resu
     for path in &paths {
         let markup = store.part(path)?.ok_or_else(damaged)?;
         let base = PathBuf::from(folder_of(path));
-        let mut parsed = html::parse_with(&String::from_utf8_lossy(&markup), Some(&base), &mut store);
+        let parsed = html::parse_with(&String::from_utf8_lossy(&markup), Some(&base), &mut store);
         if let Some(error) = store.error.take() { return Err(error); }
-        let (offset, families) = (book.pictures.len(), merged(&mut book.families, &parsed.families));
-        visit(&mut parsed.blocks, &mut |block| match block {
-            Block::Heading { anchor, .. } => { *anchor = format!("{path}#{anchor}"); anchors.insert(anchor.clone()); }
-            Block::Image(index) => *index += offset,
-            Block::Float(float) => if let Some(index) = &mut float.picture { *index += offset },
-            Block::Formatted(paragraph) => { paragraph.size *= scale; paragraph.before *= scale; paragraph.after *= scale; }
-            _ => {}
-        }, &mut |span| {
-            if span.style.family > 0 { span.style.family = families[span.style.family as usize - 1]; }
-            if span.style.half_points > 0 { span.style.half_points = (f32::from(span.style.half_points) * scale).round().clamp(1., f32::from(u16::MAX)) as u16; }
-        });
-        book.pictures.append(&mut parsed.pictures);
-        book.remote.images.append(&mut parsed.remote.images);
-        book.remote.stylesheets.append(&mut parsed.remote.stylesheets);
-        book.remote.fonts.append(&mut parsed.remote.fonts);
-        book.remote.embeds.append(&mut parsed.remote.embeds);
-        book.unreadable_images += parsed.unreadable_images;
-        book.unreadable_stylesheets += parsed.unreadable_stylesheets;
-        book.chapters.push(Chapter { path: path.clone(), blocks: parsed.blocks });
+        book.absorb(path.clone(), parsed, scale, &mut anchors);
     }
 
     let chapters = paths.iter().cloned().collect::<HashSet<_>>();
@@ -147,7 +155,7 @@ fn folder_of(path: &str) -> &str { path.rsplit_once('/').map(|(folder, _)| folde
 fn file_of(path: &str) -> &str { path.rsplit_once('/').map(|(_, file)| file).unwrap_or(path) }
 
 /// Links that leave the book are kept only for the web and mail.
-fn web(href: &str) -> bool {
+pub(super) fn web(href: &str) -> bool {
     let lower = href.to_ascii_lowercase();
     ["http://", "https://", "mailto:"].iter().any(|scheme| lower.starts_with(scheme))
 }
@@ -185,7 +193,7 @@ fn merged(book: &mut Vec<String>, chapter: &[String]) -> Vec<u16> {
 }
 
 /// Calls `each_block` on every block, nested ones included, and `each_span` on every span of text.
-fn visit(blocks: &mut [Block], each_block: &mut dyn FnMut(&mut Block), each_span: &mut dyn FnMut(&mut Span)) {
+pub(super) fn visit(blocks: &mut [Block], each_block: &mut dyn FnMut(&mut Block), each_span: &mut dyn FnMut(&mut Span)) {
     for block in blocks {
         each_block(block);
         match block {

@@ -64,7 +64,7 @@ pub fn convert_to_pdf(input: &Path) -> ToolLimits {
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
     match extension.as_str() {
         "pdf" => PDF,
-        "docx" | "odt" | "xlsx" | "ods" | "pptx" | "odp" | "epub" | "doc" | "xls" | "ppt" => PACKAGED_DOCUMENT,
+        "docx" | "odt" | "xlsx" | "ods" | "pptx" | "odp" | "epub" | "mobi" | "doc" | "xls" | "ppt" => PACKAGED_DOCUMENT,
         _ => TEXT_DOCUMENT,
     }
 }
@@ -702,7 +702,7 @@ mod tests {
         for name in ["notes.txt", "notes.log", "README.MD", "notes.markdown", "page.html", "page.htm", "letter.rtf", "table.csv", "table.tsv"] {
             assert_eq!(convert_to_pdf(Path::new(name)), text, "{name}");
         }
-        for name in ["report.docx", "report.odt", "sheet.xlsx", "sheet.ods", "deck.pptx", "deck.odp", "book.EPUB", "old.doc", "old.XLS", "old.ppt"] {
+        for name in ["report.docx", "report.odt", "sheet.xlsx", "sheet.ods", "deck.pptx", "deck.odp", "book.EPUB", "book.mobi", "old.doc", "old.XLS", "old.ppt"] {
             assert_eq!(convert_to_pdf(Path::new(name)), packaged, "{name}");
         }
         assert_eq!(convert_to_pdf(Path::new("already.pdf")), recorded("convert_to_pdf").unwrap());
