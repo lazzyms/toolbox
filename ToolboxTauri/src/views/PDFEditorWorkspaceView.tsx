@@ -26,6 +26,8 @@ import type { PdfDocument, PdfEditRun, PdfFlattenChoice, PdfFormEntry, PdfFormFi
 import { formEntryFlag, isFormEntryEmpty } from '../features/pdf-editor/form-checks';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
+import { ScriptPackPrompt, useScriptPacks } from '../features/pdf-editor/ScriptPackPrompt';
+import { scriptPackNeed } from '../features/pdf-editor/scriptPacks';
 import { RedactDisclosure, RedactInspector, listMarks, redactionFills } from '../features/pdf-editor/RedactInspector';
 import type { ListedMark } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
@@ -449,6 +451,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [preview, setPreview] = useState<{ key: string; value: ScenePreview } | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, { key: string; value: ScenePreview }>>({});
   const [renderError, setRenderError] = useState<string | null>(null);
+  const [editedText, setEditedText] = useState<{ id: string; text: string } | null>(null);
+  const scriptPacks = useScriptPacks();
   const group = useRef<string | null>(null);
   const focusMark = useRef(false);
   const draggedPage = useRef<string | null>(null);
@@ -498,6 +502,9 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       : !exactPreview || rendering ? { title: 'Updating the preview', detail: 'Export turns on once the preview shows your latest edits.' }
         : null;
   const selectedSignature = selected?.kind === 'signature' ? selected : null;
+  // Text in a script whose pack isn't installed can't be exported, so the inspector says so while it is typed.
+  const selectedText = selected?.kind === 'text' ? (editedText?.id === selected.id ? editedText.text : selected.text) : null;
+  const scriptNeed = selectedText ? scriptPackNeed(selectedText, scriptPacks.states) : null;
   const marks = listMarks(scene);
   // Export and Export As both pause on the redaction disclosure; the chosen action runs once the marks are confirmed.
   const pendingExport = useRef(onExport);
@@ -572,7 +579,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     setThumbnails({});
     setRenderError(null);
     setRendering(false);
-  }, [path, serializedScene]);
+    // A pack installed or removed changes what the preview can draw, so it renders again.
+  }, [path, serializedScene, scriptPacks.changes]);
   useEffect(() => {
     const requestGeneration = ++previewGeneration.current.current;
     const serializedScene = JSON.stringify(scene);
@@ -619,7 +627,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
         () => setRendering(false));
     }, 200) : undefined;
     return () => { if (timer !== undefined) window.clearTimeout(timer); previewGeneration.current.current += 1; };
-  }, [path, currentIndex, serializedScene]);
+  }, [path, currentIndex, serializedScene, scriptPacks.changes]);
 
   // The organize grid asks for thumbnails of the pages on or near the screen as the person scrolls.
   const pageOrderKey = scene.pages.map((item) => item.id).join(',');
@@ -1543,7 +1551,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
           <SceneCanvas page={page} sourcePreview={page.sourceIndex === null ? null : document?.pages[page.sourceIndex]?.preview ?? null}
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
             renderedPreview={exactPreview} tool={tool ?? 'select'} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
-            onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject}
+            onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject} onEditText={setEditedText}
             redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions}
             formFields={form?.unsupported ? [] : form?.fields} formValue={formValue}
             onFormValue={(field, value) => { if (availability.allows('pdf-edit') && !field.readOnly) setFormEntries((entries) => ({ ...entries, [field.name]: value })); }}
@@ -1558,6 +1566,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
               <CardDescription>{selected?.kind === 'pageNumbers' ? 'Numbers each page you choose.' : selected?.kind === 'headerFooter' || (!selected && tool === 'headerFooter') ? 'Text at the top and bottom of each page you choose.' : selected ? 'Adjust the selected item.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool === 'edit-text' ? toolGuidance['edit-text'] : tool === 'redact' ? 'Drag over anything you want removed. Marks are only previews until you export.' : tool === 'form' ? 'Fill in the fields this PDF already has.' : tool === 'pageNumbers' ? 'Numbers each page you choose.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
+              {scriptNeed && <ScriptPackPrompt need={scriptNeed} job={scriptPacks.job} installError={scriptPacks.installError} onInstall={(packId) => void scriptPacks.install(packId)} />}
               {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill}
                 onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks} />}
               {Fields && inspector && <Fields {...inspector} />}

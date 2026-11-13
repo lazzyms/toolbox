@@ -91,6 +91,8 @@ export interface SceneCanvasProps {
   onSelect: (id: string | null) => void;
   onCommit: (page: ScenePage) => void;
   makeObject: (kind: SceneObject['kind'], rect: SceneRect) => SceneObject;
+  /** The text of the box being edited in place, as it is typed, or `null` when no box is. */
+  onEditText?: (edit: { id: string; text: string } | null) => void;
   // Form fields on this page, in Tab order; shown only while filling the form.
   formFields?: PdfFormField[];
   formValue?: (field: PdfFormField) => PdfFormEntry;
