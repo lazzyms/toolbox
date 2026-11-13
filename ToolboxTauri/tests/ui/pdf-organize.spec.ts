@@ -613,13 +613,13 @@ test('dragging selected pages moves them together, shows the count and the drop 
   await expect(page.locator('.scene-organize-insertion')).toHaveAttribute('data-side', 'after');
   await expect(grid(page).locator('[data-moving]')).toHaveCount(2);
   await page.mouse.up();
-  expect(await order(page)).toEqual([2, 4, 5, 1, 3]);
+  await expect.poll(() => order(page)).toEqual([2, 4, 5, 1, 3]);
   await expect(liveStatus(page)).toHaveText('Pages 1 and 3 moved to position 4');
   // The drop does not change the selection, and it is one undo step.
   expect(await selectedPositions(page)).toEqual([4, 5]);
   await expect(page.locator('.scene-organize-ghost')).toHaveCount(0);
   await undoButton(page).click();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(undoButton(page)).toBeDisabled();
   await page.getByRole('button', { name: /^Redo \(/ }).click();
   expect(await exportedOrder(page)).toEqual([2, 4, 5, 1, 3]);
@@ -635,7 +635,7 @@ test('dragging an unselected page moves only that page, and a drop between pages
   await page.mouse.move(end.x, end.y, { steps: 8 });
   await expect(liveStatus(page)).toHaveText('Moving 1 page. Drop to place it before position 2. Press Esc to cancel.');
   await page.mouse.up();
-  expect(await order(page)).toEqual([1, 4, 2, 3, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 4, 2, 3, 5]);
   await expect(liveStatus(page)).toHaveText('Page 4 moved to position 2');
   expect(await selectedPositions(page)).toEqual([2]);
 });
@@ -651,7 +651,7 @@ test('Escape cancels a drag before release: nothing moves and there is nothing t
   await page.keyboard.press('Escape');
   await expect(liveStatus(page)).toHaveText('Move cancelled. Nothing moved');
   await page.mouse.up();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   expect(await selectedPositions(page)).toEqual([1, 2]);
   await expect(undoButton(page)).toBeDisabled();
   await expect(grid(page)).toBeVisible();
@@ -663,23 +663,23 @@ for (const [platform, modifier, startKey, endKey] of [['MacIntel', 'Meta', 'Meta
     await openReport(page);
     await selectRun(page, 2, 3);
     await page.keyboard.press(`${modifier}+ArrowRight`);
-    expect(await order(page)).toEqual([1, 4, 2, 3, 5]);
+    await expect.poll(() => order(page)).toEqual([1, 4, 2, 3, 5]);
     await expect(liveStatus(page)).toHaveText('Pages 2 and 3 moved to position 3');
     // Focus and selection follow the moved pages.
     await expect(grid(page).getByRole('option', { name: 'Position 4, original page 3, selected' })).toBeFocused();
     await page.keyboard.press(endKey);
-    expect(await order(page)).toEqual([1, 4, 5, 2, 3]);
+    await expect.poll(() => order(page)).toEqual([1, 4, 5, 2, 3]);
     await page.keyboard.press(`${modifier}+ArrowRight`);
     await expect(liveStatus(page)).toHaveText('Pages 4 and 5 are already last');
     await page.keyboard.press(startKey);
-    expect(await order(page)).toEqual([2, 3, 1, 4, 5]);
+    await expect.poll(() => order(page)).toEqual([2, 3, 1, 4, 5]);
     await expect(liveStatus(page)).toHaveText('Pages 4 and 5 moved to position 1');
     await page.keyboard.press(`${modifier}+ArrowLeft`);
     await expect(liveStatus(page)).toHaveText('Pages 1 and 2 are already first');
     await expect(pageActions(page).getByRole('button', { name: `Move earlier (${platform === 'Win32' ? 'Ctrl' : '⌘'}+←)` })).toBeEnabled();
     // Three moves, three undo steps.
     for (let step = 0; step < 3; step += 1) await undoButton(page).click();
-    expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+    await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
     await expect(undoButton(page)).toBeDisabled();
   });
 }
@@ -693,10 +693,10 @@ test('scattered pages gather into one block when stepped, and toolbar Move butto
   await option(page, 4).click({ modifiers: ['Meta'] });
   await pageActions(page).getByRole('button', { name: 'Move later (⌘+→)' }).click();
   // Later gathers the block after the last selected page; earlier then steps the whole block back one.
-  expect(await order(page)).toEqual([2, 3, 5, 1, 4]);
+  await expect.poll(() => order(page)).toEqual([2, 3, 5, 1, 4]);
   await expect(liveStatus(page)).toHaveText('Pages 1 and 4 moved to position 4');
   await pageActions(page).getByRole('button', { name: 'Move earlier (⌘+←)' }).click();
-  expect(await order(page)).toEqual([2, 3, 1, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([2, 3, 1, 4, 5]);
   await expect(pageActions(page).getByRole('button', { name: 'Move earlier (⌘+←)' })).toHaveAttribute('aria-keyshortcuts', 'Meta+ArrowLeft');
 });
 
@@ -714,18 +714,18 @@ test('M opens Move to for the selection, a bad position explains itself, and Ent
   await field.press('Enter');
   await expect(popup.getByRole('alert')).toHaveText('Type a position from 1 to 5.');
   await expect(field).toHaveAttribute('aria-invalid', 'true');
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await field.fill('2');
   await field.press('Enter');
   await expect(popup).toHaveCount(0);
-  expect(await order(page)).toEqual([1, 4, 5, 2, 3]);
+  await expect.poll(() => order(page)).toEqual([1, 4, 5, 2, 3]);
   await expect(liveStatus(page)).toHaveText('Pages 4 and 5 moved to position 2');
   // Focus returns to the grid, on the same page.
   await expect(grid(page).getByRole('option', { name: 'Position 3, original page 5, selected' })).toBeFocused();
   // Start and End in the popup send the block to either end.
   await pageActions(page).getByRole('button', { name: 'Move to…' }).click();
   await page.getByRole('dialog', { name: 'Move 2 pages to a position' }).getByRole('button', { name: /^End/ }).click();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(liveStatus(page)).toHaveText('Pages 2 and 3 moved to position 4');
   // Escape closes the popup without moving anything, and focus goes back to the grid.
   await grid(page).getByRole('option', { name: 'Position 5, original page 5, selected' }).focus();
@@ -734,7 +734,7 @@ test('M opens Move to for the selection, a bad position explains itself, and Ent
   await page.keyboard.press('Escape');
   await expect(grid(page).getByRole('option', { name: 'Position 5, original page 5, selected' })).toBeFocused();
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
 });
 
 test('Page order reverses the selection or the whole document, each as one undo step', async ({ page }) => {
@@ -746,14 +746,14 @@ test('Page order reverses the selection or the whole document, each as one undo 
   await selectRun(page, 2, 4);
   await pageActions(page).getByRole('button', { name: 'Page order' }).click();
   await page.getByRole('menuitem', { name: 'Reverse the 3 selected pages' }).click();
-  expect(await order(page)).toEqual([1, 4, 3, 2, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 4, 3, 2, 5]);
   await expect(liveStatus(page)).toHaveText('Pages 2 to 4 reversed');
   await pageActions(page).getByRole('button', { name: 'Page order' }).click();
   await page.getByRole('menuitem', { name: 'Reverse the whole document' }).click();
-  expect(await order(page)).toEqual([5, 2, 3, 4, 1]);
+  await expect.poll(() => order(page)).toEqual([5, 2, 3, 4, 1]);
   await expect(liveStatus(page)).toHaveText('All 5 pages reversed');
   await undoButton(page).click();
-  expect(await order(page)).toEqual([1, 4, 3, 2, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 4, 3, 2, 5]);
   await page.getByRole('button', { name: /^Redo \(/ }).click();
   expect(await exportedOrder(page)).toEqual([5, 2, 3, 4, 1]);
 });
@@ -763,7 +763,7 @@ test('Page order interleaves a two-sided scan into reading order', async ({ page
   await pageActions(page).getByRole('button', { name: 'Page order' }).click();
   await expect(page.getByRole('menuitem', { name: /Interleave a two-sided scan/ })).toContainText('For fronts scanned first, then backs scanned in reverse. Puts the pages in reading order: 1, 5, 2, 4…');
   await page.getByRole('menuitem', { name: /Interleave a two-sided scan/ }).click();
-  expect(await order(page)).toEqual([1, 5, 2, 4, 3]);
+  await expect.poll(() => order(page)).toEqual([1, 5, 2, 4, 3]);
   await expect(liveStatus(page)).toHaveText('Pages put in reading order: 1, 5, 2, 4…');
   expect(await exportedOrder(page)).toEqual([1, 5, 2, 4, 3]);
 });
@@ -781,7 +781,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await openReport(page);
     await option(page, 1).click();
     await page.keyboard.press('Meta+ArrowRight');
-    expect(await order(page)).toEqual([2, 1, 3, 4, 5]);
+    await expect.poll(() => order(page)).toEqual([2, 1, 3, 4, 5]);
     const animations = await page.evaluate(() => (window as any).animations);
     if (reducedMotion === 'reduce') expect(animations).toBe(0);
     else expect(animations).toBeGreaterThan(0);
@@ -834,7 +834,7 @@ test('dragging into the band at the grid edge scrolls the grid and says which pa
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await expect(band).toHaveCount(0);
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
 });
 
 // Orientation. Turns add to each selected page's rotation; thumbnails turn in CSS and export sends the turn.
@@ -939,7 +939,7 @@ test('Reset orientation turns only the selected pages back and keeps the new ord
   await selectRun(page, 1, 3);
   await page.keyboard.press('Meta+R');
   await pageActions(page).getByRole('button', { name: 'Move later (⌘+→)' }).click();
-  expect(await order(page)).toEqual([4, 1, 2, 3, 5]);
+  await expect.poll(() => order(page)).toEqual([4, 1, 2, 3, 5]);
   await option(page, 2).click();
   await option(page, 3).click({ modifiers: ['Meta'] });
   await orientationMenu(page, /^Reset orientation of 2 pages/);
@@ -948,7 +948,7 @@ test('Reset orientation turns only the selected pages back and keeps the new ord
   await expect(liveStatus(page)).toHaveText('Pages 2 and 3 are already as in the original');
   // The reset is one undo step; the reset that changed nothing is none.
   await undoButton(page).click();
-  expect(await order(page)).toEqual([4, 1, 2, 3, 5]);
+  await expect.poll(() => order(page)).toEqual([4, 1, 2, 3, 5]);
   await expect(option(page, 2)).toHaveAccessibleName(/rotated 90° right/);
   await page.getByRole('button', { name: /^Redo \(/ }).click();
   expect(await exportedRotations(page)).toEqual([[4, 0], [1, 0], [2, 0], [3, 90], [5, 0]]);
@@ -1129,26 +1129,26 @@ test('Backspace and Delete remove the selected pages, each as one undo step, and
   await openReport(page);
   await option(page, 2).click();
   await page.keyboard.press('Backspace');
-  expect(await order(page)).toEqual([1, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 3, 4, 5]);
   await expect(liveStatus(page)).toHaveText('Page 2 removed');
   await expect(count(page)).toHaveText('No pages selected');
   await expect(option(page, 2)).toBeFocused();
   await expect(page.getByText('4 pages. 1 change not exported')).toBeVisible();
   await page.keyboard.press('Meta+z');
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
 
   await selectRun(page, 3, 4);
   await page.keyboard.press('Delete');
-  expect(await order(page)).toEqual([1, 2, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 5]);
   await expect(liveStatus(page)).toHaveText('Pages 3 and 4 removed');
   await expect(option(page, 3)).toBeFocused();
   // Without a selection the keys do nothing: the focused page alone is never removed by accident.
   await page.keyboard.press('Backspace');
-  expect(await order(page)).toEqual([1, 2, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 5]);
   await undoButton(page).click();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await page.keyboard.press('Meta+Shift+z');
-  expect(await order(page)).toEqual([1, 2, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 5]);
 
   expect(await exportedOrder(page)).toEqual([1, 2, 5]);
   const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem');
@@ -1171,11 +1171,11 @@ test('the Delete button names the count, needs a selection, and removes a typed 
   await range.press('Enter');
   await expect(deleteButton(page)).toHaveText('Delete 3 pages');
   await deleteButton(page).click();
-  expect(await order(page)).toEqual([3, 5]);
+  await expect.poll(() => order(page)).toEqual([3, 5]);
   await expect(liveStatus(page)).toHaveText('Pages 1, 2 and 4 removed');
   await expect(deleteButton(page)).toHaveText('Delete');
   await undoButton(page).click();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(undoButton(page)).toBeDisabled();
   await page.keyboard.press('Meta+Shift+z');
   expect(await exportedOrder(page)).toEqual([3, 5]);
@@ -1197,18 +1197,18 @@ test('the last page is protected: with every page selected, Delete is off and sa
   await expect(page.getByRole('alert')).toHaveText(lastPageNotice);
   await expect(deleteButton(page)).toHaveAccessibleDescription(lastPageNotice);
   for (const key of ['Backspace', 'Delete']) await page.keyboard.press(key);
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(undoButton(page)).toBeDisabled();
 
   await option(page, 3).click({ modifiers: ['Meta'] });
   await expect(page.getByRole('alert')).toHaveCount(0);
   await deleteButton(page).click();
-  expect(await order(page)).toEqual([3]);
+  await expect.poll(() => order(page)).toEqual([3]);
   await option(page, 1).click();
   await expect(deleteButton(page)).toBeDisabled();
   await expect(page.getByRole('alert')).toHaveText(lastPageNotice);
   await page.keyboard.press('Backspace');
-  expect(await order(page)).toEqual([3]);
+  await expect.poll(() => order(page)).toEqual([3]);
 });
 
 test('export explains each refused removal, writes nothing, and can restore the pages it needs', async ({ page }) => {
@@ -1227,7 +1227,7 @@ test('export explains each refused removal, writes nothing, and can restore the 
   await openReport(page);
   await selectRun(page, 4, 5);
   await page.keyboard.press('Backspace');
-  expect(await order(page)).toEqual([1, 2, 3]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3]);
 
   const refusals = [
     { message: 'Page 4 can’t be removed.\nBookmark “Schedule 2” points to page 4.', title: 'Page 4 can’t be removed', reasons: ['Bookmark “Schedule 2” points to page 4.'], pages: 'page 4' },
@@ -1250,7 +1250,7 @@ test('export explains each refused removal, writes nothing, and can restore the 
     if (index < refusals.length - 1) {
       await dialog.getByRole('button', { name: 'Keep editing' }).click();
       await expect(dialog).toHaveCount(0);
-      expect(await order(page)).toEqual([1, 2, 3]);
+      await expect.poll(() => order(page)).toEqual([1, 2, 3]);
     }
   }
   await dialog.getByRole('button', { name: 'Restore pages 4 and 5' }).click();
@@ -1258,11 +1258,11 @@ test('export explains each refused removal, writes nothing, and can restore the 
   const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem');
   await expect(row).toHaveAttribute('data-state', 'failed');
   await expect(row).toContainText('Pages 4 and 5 can’t be removed.');
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(liveStatus(page)).toHaveText('Pages 4 and 5 restored');
   await expect(exportButton(page)).toBeDisabled();
   await undoButton(page).click();
-  expect(await order(page)).toEqual([1, 2, 3]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3]);
 });
 
 // Blank pages. A faked native classification picks the pages; the action only selects them, so nothing is removed and
@@ -1290,18 +1290,18 @@ test('Blank pages selects the pages the native check reports, says so, and remov
   await expect(option(page, 2)).toContainText('2 · blank');
   await expect(option(page, 1)).toHaveAccessibleName('Position 1, original page 1');
   await expect(count(page)).toHaveText('2 pages selected');
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(undoButton(page)).toBeDisabled();
   expect(await blankRequests(page)).toEqual([{ path: '/local/report.pdf', pageIndices: [0, 1, 2, 3, 4] }]);
 
   // Delete then removes exactly those pages as one undo step.
   await expect(deleteButton(page)).toHaveText('Delete 2 pages');
   await deleteButton(page).click();
-  expect(await order(page)).toEqual([1, 3, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 3, 5]);
   await expect(liveStatus(page)).toHaveText('Pages 2 and 4 removed');
   await expect(blankButton(page)).toHaveText('Blank pages');
   await undoButton(page).click();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(undoButton(page)).toBeDisabled();
   await page.keyboard.press('Meta+Shift+z');
   expect(await exportedOrder(page)).toEqual([1, 3, 5]);
@@ -1318,7 +1318,7 @@ test('Blank pages says when none were found, clears the selection, and reuses ea
   expect(await selectedPositions(page)).toEqual([]);
   await expect(blankButton(page)).toHaveText('Blank pages');
   await expect(undoButton(page)).toBeDisabled();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await blankButton(page).click();
   await expect(liveStatus(page)).toHaveText('No blank pages found. Nothing was removed.');
   expect(await blankRequests(page)).toHaveLength(1);
@@ -1330,7 +1330,7 @@ test('Blank pages follows the current order, names pages it could not check, and
   await page.getByRole('button', { name: 'Open in page view', exact: true }).click();
   await page.getByRole('button', { name: 'Move page later', exact: true }).click();
   await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Organize', exact: true }).click();
-  expect(await order(page)).toEqual([2, 1, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([2, 1, 3, 4, 5]);
   await setBlankPages(page, [0, 4], [2]);
   await blankButton(page).click();
   expect(await selectedPositions(page)).toEqual([2, 5]);
@@ -1424,7 +1424,7 @@ test('drag, move, Move to, rotate, mirror and delete each undo and redo as one s
   // Six undos go back to the file as it was opened.
   for (let step = 0; step < 6; step += 1) await undoButton(page).click();
   await expect(undoButton(page)).toBeDisabled();
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(page.getByText('5 pages. No changes')).toBeVisible();
 });
 
@@ -1442,7 +1442,7 @@ test('Windows redoes with Ctrl+Y or Ctrl+Shift+Z and names Ctrl in the toolbar',
   const mirrored = await pageStates(page);
   await page.keyboard.press('Control+z');
   await page.keyboard.press('Control+z');
-  expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([1, 2, 3, 4, 5]);
   await expect(option(page, 2)).toHaveAccessibleName(/^Position 2, original page 2(, selected)?$/);
   // One Ctrl+Y is one redo.
   await page.keyboard.press('Control+y');
@@ -1671,16 +1671,16 @@ test('every Organize action is reachable from the keyboard alone', async ({ page
   expect(await selectedPositions(page)).toEqual([1, 2]);
   // Move, rotate, mirror and delete.
   await page.keyboard.press('Meta+ArrowRight');
-  expect(await order(page)).toEqual([3, 1, 2, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([3, 1, 2, 4, 5]);
   await page.keyboard.press('Meta+R');
   await expect(option(page, 2)).toHaveAccessibleName(/rotated 90° right/);
   await page.keyboard.press('h');
   await expect(option(page, 2)).toHaveAccessibleName(/mirrored left to right/);
   await page.keyboard.press('Backspace');
-  expect(await order(page)).toEqual([3, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([3, 4, 5]);
   // Undo.
   await page.keyboard.press('Meta+z');
-  expect(await order(page)).toEqual([3, 1, 2, 4, 5]);
+  await expect.poll(() => order(page)).toEqual([3, 1, 2, 4, 5]);
 
   // Blank pages selects them from the toolbar.
   await setBlankPages(page, [4]);
