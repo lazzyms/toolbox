@@ -20,6 +20,7 @@ export const PdfEditorBatchSurface = ({ utility, tool, initialPaths, onFilesChan
     initialPaths={initialPaths}
     onFilesChange={onFilesChange}
     onRun={(paths, outputLocation, { runId }) => invoke<ToolResult>(utility.command, { runId, request: tool.request(paths, outputLocation) })}
+    renderReport={tool.report?.render}
   >
     {({ files, run, loading, destination, runLabel }) => (
       <Card className="workspace-control-panel py-0">
@@ -28,16 +29,16 @@ export const PdfEditorBatchSurface = ({ utility, tool, initialPaths, onFilesChan
             <h2 className="workspace-active-command">{utility.title}</h2>
             <p className="workspace-panel-copy">{tool.description}</p>
           </div>
-          {destination}
+          {tool.report ? <p className="workspace-note">{tool.report.note}</p> : destination}
           <Button
             variant="default"
             disabled={loading || files.length === 0 || utility.capability.nativeAvailability !== "available"}
             onClick={run}
             className="workspace-primary-action"
-            aria-label={`Export ${utility.title}`}
+            aria-label={tool.report ? undefined : `Export ${utility.title}`}
             {...shortcutTarget("run")}
           >
-            {runLabel ?? `Export ${utility.shortTitle}`}
+            {tool.report?.runLabel(files.length) ?? runLabel ?? `Export ${utility.shortTitle}`}
             <ShortcutHint id="run" />
           </Button>
         </CardContent>

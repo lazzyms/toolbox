@@ -1053,6 +1053,11 @@ mod tests {
         assert_eq!((ocr.input_cardinality, ocr.output_suffix.as_str()), (InputCardinality::Multiple, "-ocr"));
         assert!(!native_capability("blur_faces").unwrap().native_available);
         assert!(!native_capability("remove_image_background").unwrap().native_available);
+        let privacy = native_capability("inspect_pdf_privacy").unwrap();
+        assert_eq!(privacy.accepted_extensions, [".pdf"]);
+        assert_eq!(privacy.input_cardinality, InputCardinality::Multiple);
+        assert!(privacy.native_available && !privacy.many_to_one && !privacy.supports_page_selection && !privacy.supports_preview);
+        assert_eq!(privacy.output_suffix, "", "privacy inspection only reads, so it names no output");
     }
 
     fn capability_samples() -> serde_json::Value {

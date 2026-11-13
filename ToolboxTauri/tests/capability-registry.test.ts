@@ -78,6 +78,17 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("create_gif")?.inputCardinality, "ordered");
   assert.equal(capabilitiesByCommand.get("create_gif")?.supportsPreview, true);
   assert.equal(capabilitiesByCommand.get("extract_gif_frames")?.supportsPreview, false);
+  assert.deepEqual(capabilitiesByCommand.get("inspect_pdf_privacy"), {
+    command: "inspect_pdf_privacy",
+    acceptedExtensions: [".pdf"],
+    inputCardinality: "multiple",
+    supportsPageSelection: false,
+    supportsPreview: false,
+    nativeAvailability: "available",
+    outputSuffix: "",
+    manyToOne: false,
+  });
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-privacy")?.command, "inspect_pdf_privacy");
   for (const command of ["generate_icon_set", "create_gif"]) {
     assert.deepEqual(capabilitiesByCommand.get(command)?.acceptedExtensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"], command);
   }
@@ -89,8 +100,11 @@ test("UI capabilities are the shared native contract facts", () => {
 });
 
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
+  // Read-only tools write no file, so they declare an empty suffix.
+  const readOnly = new Set(["inspect_pdf_privacy"]);
   for (const capability of SharedCapabilityRegistry) {
-    assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
+    if (readOnly.has(capability.command)) assert.equal(capability.outputSuffix, "", capability.command);
+    else assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.equal(
       capability.manyToOne,
       capability.inputCardinality === "ordered",
@@ -204,16 +218,17 @@ test("workspace membership covers every registered utility exactly once", () => 
   );
 });
 
-test("workspace entries group editor tools into one entry and list More tools last", () => {
+test("workspace entries group editor tools into one entry and list labelled groups after the main tools", () => {
   const entryIds = (workspaceId: string, options?: { groupEditor?: boolean }) => {
     const workspace = ToolWorkspaceRegistry.find(({ id }) => id === workspaceId)!;
     return workspaceEntries(workspace, toolsForWorkspace(workspace), options)
-      .map((entry) => `${entry.more ? "more:" : ""}${entry.tools.map(({ id }) => id).join("+")}`);
+      .map((entry) => `${entry.group ? `${entry.group.toLowerCase()}:` : ""}${entry.tools.map(({ id }) => id).join("+")}`);
   };
 
   assert.deepEqual(entryIds("pdf-editor"), [
     "pdf-edit+pdf-watermark+pdf-sign+pdf-remove-pages",
     "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
+    "details:pdf-privacy",
     "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
   ]);
   assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);

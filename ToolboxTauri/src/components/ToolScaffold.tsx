@@ -102,6 +102,11 @@ interface ToolScaffoldProps {
     entryFacts?: (path: string) => EntryFacts | undefined;
     /** Replaces the list's default hint, for example when the view needs more files. */
     listHint?: string;
+    /**
+     * Marks a read-only tool that saves nothing: the run skips the output-folder check
+     * and the finished results show through this instead of the result list.
+     */
+    renderReport?: (results: JobOutcome[]) => React.ReactNode;
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -128,7 +133,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -230,8 +235,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         setCombinedInputs(null);
         setPerFileRun(null);
         try {
-            // Save As names its own folder in the save step, so the default destination isn't checked.
-            if (location !== 'alongsideInput' && !saveAs) {
+            // Save As names its own folder in the save step, and a report saves nothing, so the default destination isn't checked.
+            if (!renderReport && location !== 'alongsideInput' && !saveAs) {
                 const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
                 if (check !== 'ready') {
                     if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, handler });
@@ -767,7 +772,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             <div className="workspace-source-copy">
                 <span className="workspace-source-kicker">Source</span>
                 <strong>{entries.length ? `${entries.length} ${entries.length === 1 ? 'file' : 'files'} open` : 'Open a file to begin'}</strong>
-                <span>{entries.length ? 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
+                <span>{entries.length ? renderReport ? 'Nothing is changed or saved. Your original stays unchanged.' : 'Export saves a new copy. Your original stays unchanged.' : 'Drop files here or browse from this device.'}</span>
             </div>
             <div className="workspace-source-actions">
                 <Button variant="default" size="sm" className="workspace-source-open" aria-label="Choose files to process" disabled={loading} {...shortcutTarget('open')} onClick={() => void browse()}>
@@ -855,7 +860,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
             {loading && live && !inputPolicy.manyToOne && <CancelRun key={live.runId} run={live} lockedNote={utility.lockedNote} />}
 
-            <ResultList
+            {renderReport && !loading && results.length > 0 ? renderReport(results) : <ResultList
                 results={results}
                 progress={progress}
                 loading={loading}
@@ -870,7 +875,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
                 outputGroup={outputGroup}
                 resultsHint={resultsHint}
-            />
+            />}
 
             <BlockedDestinationDialog
                 blocked={blocked}

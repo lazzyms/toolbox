@@ -23,6 +23,7 @@ export type AtomicToolId =
   | "pdf-repair"
   | "pdf-redact"
   | "pdf-compare"
+  | "pdf-privacy"
   | "heic-convert"
   | "compress"
   | "resize"
@@ -96,6 +97,7 @@ export type ToolCommand =
   | "compress_files"
   | "rotate_pdf"
   | "repair_pdf"
+  | "inspect_pdf_privacy"
   | "redact_pdf"
   | "compare_pdfs"
   | "extract_pdf_pages"
@@ -254,6 +256,7 @@ export interface ToolDefinition {
     | "pdf-repair"
     | "pdf-redact"
     | "pdf-compare"
+    | "pdf-privacy"
     | "pdf-remove-pages"
     | "pdf-extract-pages"
     | "pdf-merge"
@@ -290,8 +293,8 @@ export interface ToolWorkspaceDefinition {
   toolIds: AtomicToolId[];
   /** Tools shown as one entry whose tabs or modes are those tools. The entry opens the first one. */
   editor?: { title: string; blurb: string; symbol: string; toolIds: AtomicToolId[] };
-  /** Tools listed after the main tools, under More. */
-  moreToolIds?: AtomicToolId[];
+  /** Labelled groups listed after the main tools, in this order, such as Details and More. */
+  groups?: { label: string; toolIds: AtomicToolId[] }[];
 }
 
 export interface ToolRequest {
