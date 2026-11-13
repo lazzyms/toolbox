@@ -27,6 +27,7 @@ test("UI capabilities are the shared native contract facts", () => {
     assert.ok(shared, `Missing shared capability for ${utility.command}`);
     assert.deepEqual(utility.capability, {
       acceptedExtensions: shared.acceptedExtensions,
+      skippedExtensions: shared.skippedExtensions,
       inputCardinality: shared.inputCardinality,
       supportsPageSelection: shared.supportsPageSelection,
       supportsPreview: shared.supportsPreview,
@@ -68,6 +69,9 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.deepEqual(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions, [
     ".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff",
   ]);
+  assert.deepEqual(capabilitiesByCommand.get("compress_files")?.acceptedExtensions, [".pdf", ".jpg", ".jpeg", ".png", ".webp"]);
+  assert.deepEqual(capabilitiesByCommand.get("compress_files")?.skippedExtensions, [".heic", ".heif"]);
+  assert.ok(SharedCapabilityRegistry.filter(({ command }) => command !== "compress_files").every(({ skippedExtensions }) => skippedExtensions.length === 0));
   assert.equal(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions.includes(".tif"), true);
   assert.equal(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions.includes(".tiff"), true);
   assert.equal(capabilitiesByCommand.get("images_to_pdf")?.acceptedExtensions.includes(".gif"), false);
@@ -93,6 +97,7 @@ test("UI capabilities are the shared native contract facts", () => {
     nativeAvailability: "available",
     outputSuffix: "",
     manyToOne: false,
+    skippedExtensions: [],
   });
   assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-privacy")?.command, "inspect_pdf_privacy");
   assert.deepEqual(capabilitiesByCommand.get("edit_pdf_properties"), {
@@ -104,6 +109,7 @@ test("UI capabilities are the shared native contract facts", () => {
     nativeAvailability: "available",
     outputSuffix: "-edited",
     manyToOne: false,
+    skippedExtensions: [],
   });
   assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-properties")?.command, "edit_pdf_properties");
   for (const command of ["generate_icon_set", "create_gif"]) {
@@ -299,6 +305,11 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     () => parseCapabilityRegistry([{ ...valid, manyToOne: "yes" }]),
     /invalid many-to-one flag/,
   );
+  const { skippedExtensions: _skipped, ...withoutSkips } = valid;
+  assert.deepEqual(parseCapabilityRegistry([withoutSkips])[0].skippedExtensions, []);
+  for (const skippedExtensions of [[".HEIC"], ["heic"], valid.acceptedExtensions.slice(0, 1), ".heic"]) {
+    assert.throws(() => parseCapabilityRegistry([{ ...valid, skippedExtensions }]), /invalid accepted extensions/);
+  }
 });
 
 test("shared capability parsing reads optional output formats, including WebP for PDF to Images", () => {

@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ToolScaffold } from "../components/ToolScaffold";
 import type { CompressFilesRequest, CompressImagesRequest, CompressLevel, ToolDefinition, ToolResult } from "../contracts";
+import { extensionOf, type IntakeCopy } from "../components/intake";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -22,6 +23,29 @@ const exifHint = (on: boolean) => on
   ? "On: removes camera, date and GPS details from JPEG, PNG and WebP. Photos stay upright. PDFs aren't changed."
   : "Off: camera, date and GPS details stay in the copies.";
 
+const NOT_COMPRESSIBLE = "Not a PDF or image. Compress takes PDF, JPEG, PNG and WebP.";
+const otherImages = new Set([".gif", ".tif", ".tiff", ".bmp", ".avif"]);
+const formatName = (path: string) => {
+  const extension = extensionOf(path);
+  return extension === ".webp" ? "WebP" : extension.slice(1).toUpperCase();
+};
+const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
+
+// Every file stays in the list. HEIC is sent and comes back Skipped with a pointer to Convert Image
+// Format; other types and animated images are flagged and kept out of the run.
+const compressIntakeCopy: IntakeCopy = {
+  notAccepted: NOT_COMPRESSIBLE,
+  keepsUnsupported: true,
+  unsupported: (path) => otherImages.has(extensionOf(path)) ? `${formatName(path)} isn't supported. Compress takes PDF, JPEG, PNG and WebP.` : NOT_COMPRESSIBLE,
+  willSkip: (path) => `${formatName(path)} isn't compressed, so it will be skipped. Convert it to JPEG first.`,
+  animated: (path) => `Animated ${formatName(path)}. Only still images can be compressed.`,
+  flaggedNotice: (count, skipped) => {
+    const parts = [skipped > 0 ? `${skipped} will be skipped` : null, count > skipped ? `${count - skipped} would fail` : null];
+    return `${fileCount(count)} won't be compressed: ${parts.filter(Boolean).join(", ")}.`;
+  },
+  countHint: (flagged) => flagged > 0 ? `${flagged} won't be compressed` : "",
+};
+
 const runLabelFor = (count: number) => count === 0 ? "Compress" : `Compress ${count} ${count === 1 ? "file" : "files"}`;
 
 export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinition }) => {
@@ -38,6 +62,7 @@ export const CompressFilesWorkspaceView = ({ utility }: { utility: ToolDefinitio
       sessionKey="compress-files"
       utility={utility}
       emptyHint={isCompress ? "PDF, JPEG, PNG and WebP. Mix them in one batch." : undefined}
+      intakeCopy={isCompress ? compressIntakeCopy : undefined}
       onRun={(paths, outputLocation, { runId }) => isCompress
         ? invoke<ToolResult>("compress_files", { runId, request: { paths, level, stripExif, outputLocation } satisfies CompressFilesRequest })
         : invoke<ToolResult>("compress_images", { runId,
