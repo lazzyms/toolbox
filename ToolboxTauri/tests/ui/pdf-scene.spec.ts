@@ -10,11 +10,22 @@ test.beforeEach(async ({ page }) => {
     w.sceneTextDelays = {};
     w.sceneTextResponses = {};
     w.dialogNext = null;
+    w.scriptPacks = [];
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const listeners = new Map<number, { event: string; handler: number }>();
+    let nextId = 1;
+    w.__emit = (event: string, payload: unknown) => {
+      for (const [id, listener] of listeners) if (listener.event === event) callbacks.get(listener.handler)?.({ event, id, payload });
+    };
     w.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } },
-      transformCallback: () => 1, unregisterCallback: () => {},
+      transformCallback: (callback: (event: unknown) => void) => { const id = nextId++; callbacks.set(id, callback); return id; },
+      unregisterCallback: (id: number) => { callbacks.delete(id); },
       invoke: async (command: string, args: any) => {
         w.calls.push({ command, args });
+        if (command === 'plugin:event|listen') { const id = nextId++; listeners.set(id, { event: args.event, handler: args.handler }); return id; }
+        if (command === 'plugin:event|unlisten') { listeners.delete(args.eventId); return null; }
+        if (command === 'script_packs') return w.scriptPacks;
         // Mirror the native scene contract: kit/pdf/scene.rs rejects any object color that is not #RRGGBB.
         for (const page of args?.request?.scene?.pages ?? []) for (const object of page.objects) {
           if (!/^#[0-9a-fA-F]{6}$/.test(object.color)) throw new Error('Color must be #RRGGBB');
@@ -679,6 +690,97 @@ test('text in a script that needs a pack offers the pack install instead of an e
   await row.getByRole('button', { name: 'Install Unicode scripts pack for scene-fixture.pdf', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'install_pack').map((call: any) => call.args.packId))).toEqual(['unicode-scripts']);
 });
+
+const MB = 1024 * 1024;
+const scriptPacks = (status: string) => ['Arabic', 'Devanagari', 'Han'].map(script => ({ script, packId: 'unicode-scripts', packName: 'Unicode scripts', status, downloadBytes: 38 * MB }));
+const emit = (page: Page, event: string, payload: unknown) => page.evaluate(([event, payload]) => (window as any).__emit(event, payload), [event, payload] as const);
+async function editText(page: Page, text: string) {
+  await draw(page, 'Text', .2);
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
+  const editor = page.getByRole('textbox', { name: 'Text box text' });
+  await editor.fill(text);
+  return editor;
+}
+const scriptPrompt = (page: Page) => page.getByRole('complementary', { name: 'PDF editor inspector' }).getByRole('status').filter({ hasText: "can't be shown yet" });
+
+test('text in a script whose pack is not installed shows the install prompt, which clears once the pack is installed', async ({ page }) => {
+  await page.addInitScript((states) => { (window as any).scriptPacks = states; }, scriptPacks('notInstalled'));
+  await openEditor(page);
+  const editor = await editText(page, 'Received from आशा');
+  // The prompt follows the text while it is typed, before export.
+  const prompt = scriptPrompt(page);
+  await expect(prompt).toContainText("“आशा” can't be shown yet. Devanagari needs the Unicode scripts pack. Until it's installed, this box can't be exported.");
+  await expect(prompt).toContainText('38 MB download');
+  await editor.press('ControlOrMeta+Enter');
+  await expect(editor).toHaveCount(0);
+  await expect(prompt).toBeVisible();
+
+  await prompt.getByRole('button', { name: 'Install script pack', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'install_pack').map((call: any) => call.args.packId))).toEqual(['unicode-scripts']);
+
+  // The native install announces the pack; the query then reports it installed.
+  await page.evaluate((states) => { (window as any).scriptPacks = states; }, scriptPacks('installed'));
+  const previews = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages').length);
+  await emit(page, 'pack-changed', { packId: 'unicode-scripts' });
+  await expect(prompt).toHaveCount(0);
+  // The preview renders again with the pack, so a preview that failed for it doesn't block export.
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'preview_pdf_scene_pages').length)).toBeGreaterThan(previews);
+  const scene = await exported(page);
+  expect(scene.pages[0].objects[0].text).toBe('Received from आशा');
+});
+
+test('text in Latin, Cyrillic and Greek needs no script pack', async ({ page }) => {
+  await page.addInitScript((states) => { (window as any).scriptPacks = states; }, scriptPacks('notInstalled'));
+  await openEditor(page);
+  const editor = await editText(page, 'Hello Привет Γειά σου 2026 — “ok”');
+  await expect(editor).toBeVisible();
+  await expect(scriptPrompt(page)).toHaveCount(0);
+  await editor.press('ControlOrMeta+Enter');
+  await expect(editor).toHaveCount(0);
+  await expect(scriptPrompt(page)).toHaveCount(0);
+  // Script text whose pack is installed needs nothing either.
+  await page.evaluate((states) => { (window as any).scriptPacks = states; }, scriptPacks('installed'));
+  await emit(page, 'pack-changed', { packId: 'unicode-scripts' });
+  await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
+  await page.getByRole('textbox', { name: 'Text box text' }).fill('مرحبا 你好');
+  await expect(scriptPrompt(page)).toHaveCount(0);
+});
+
+test('an export that still needs the script pack after the prompt offers the install on its result row', async ({ page }) => {
+  await page.addInitScript((states) => {
+    (window as any).scriptPacks = states;
+    (window as any).exportOutcomes = [{ inputPath: '/local/scene-fixture.pdf', outputPaths: [], state: 'failed', detail: '', reason: null, warnings: [],
+      failure: { kind: 'unavailable', message: "Devanagari text needs the Unicode scripts pack, which isn't installed. Nothing was saved.", pointer: { kind: 'pack', packId: 'unicode-scripts', name: 'Unicode scripts', reason: 'notInstalled' } } }];
+  }, scriptPacks('installed'));
+  await openEditor(page);
+  const editor = await editText(page, 'Received from आशा');
+  await editor.press('ControlOrMeta+Enter');
+  await expect(scriptPrompt(page)).toHaveCount(0);
+  await exported(page);
+  const row = page.locator('[data-tone="fail"]').filter({ hasText: 'scene-fixture.pdf' });
+  await row.getByRole('button', { name: 'Install Unicode scripts pack for scene-fixture.pdf', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'install_pack').map((call: any) => call.args.packId))).toEqual(['unicode-scripts']);
+});
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`the script-pack prompt renders in the ${theme} theme`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.addInitScript(({ theme, states }) => { localStorage.setItem('toolbox-theme', theme); (window as any).scriptPacks = states; }, { theme, states: scriptPacks('notInstalled') });
+    await openEditor(page);
+    await editText(page, 'Received from आशा');
+    await expect(page.locator('body')).toHaveAttribute('data-theme', theme);
+    const prompt = scriptPrompt(page);
+    await expect(prompt).toBeVisible();
+    const inspector = (await page.getByRole('region', { name: 'Properties' }).boundingBox())!;
+    for (const part of [prompt, prompt.getByRole('button', { name: 'Install script pack' }), prompt.getByText('38 MB download')]) {
+      const box = (await part.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(inspector.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(inspector.x + inspector.width - 16);
+    }
+    await page.screenshot({ path: testInfo.outputPath(`script-pack-prompt-${theme}.png`), animations: 'disabled' });
+  });
+}
 
 const hitX = (page: Page, index = 0) => page.locator('.scene-object-hit').nth(index).evaluate((rect) => Number(rect.getAttribute('x')));
 const summary = (page: Page) => page.getByRole('list', { name: 'Changes, applied in this fixed order' }).getByRole('listitem');

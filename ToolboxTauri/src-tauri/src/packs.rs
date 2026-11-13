@@ -189,6 +189,27 @@ pub struct OcrLanguageState {
     pub download_bytes: Option<u64>,
 }
 
+/// A script Edit PDF writes with a font from a pack, as in Devanagari, with that pack's state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptPackState {
+    /// The Unicode script's full name, as in `Devanagari`.
+    pub script: String,
+    pub pack_id: String,
+    /// How the pack is named, as in "Unicode scripts".
+    pub pack_name: String,
+    pub status: PackStatus,
+    /// The download the pack needs on this target, when the catalog offers one.
+    pub download_bytes: Option<u64>,
+}
+
+#[tauri::command]
+pub async fn script_packs(app: tauri::AppHandle) -> Result<Vec<ScriptPackState>, String> {
+    let catalog = load_catalog()?;
+    let app_data = app_data(&app)?;
+    Ok(script_packs_in(&catalog, &app_data, &current_target(), &app.package_info().version.to_string()))
+}
+
 #[tauri::command]
 pub async fn ocr_languages(app: tauri::AppHandle) -> Result<Vec<OcrLanguageState>, String> {
     let catalog = load_catalog()?;
@@ -302,6 +323,16 @@ pub fn ocr_languages_in(catalog: &Catalog, app_data: &Path, target: &str, app_ve
         Some(OcrLanguageState { code: language.code.clone(), name: language.name.clone(), pack_id: Some(entry.id), status: entry.status, download_bytes: entry.download_bytes })
     });
     std::iter::once(built_in).chain(packs).collect()
+}
+
+/// The pack-state query behind the Edit PDF text inspector: each script a pack's font writes, for
+/// packs the catalog offers on `target` or that are installed. Read-only and local like
+/// [`list_packs_in`]; an export still checks the pack at its run.
+pub fn script_packs_in(catalog: &Catalog, app_data: &Path, target: &str, app_version: &str) -> Vec<ScriptPackState> {
+    let packs_root = app_data.join(PACKS_DIR);
+    catalog.packs.iter().filter(|pack| !pack.script_fonts.is_empty()).filter_map(|pack| Some((pack, entry_for(pack, &packs_root.join(&pack.id), target, app_version)?))).flat_map(|(pack, entry)| {
+        pack.script_fonts.keys().map(move |script| ScriptPackState { script: script.clone(), pack_id: entry.id.clone(), pack_name: entry.name.clone(), status: entry.status, download_bytes: entry.download_bytes })
+    }).collect()
 }
 
 fn entry_for(pack: &CatalogPack, folder: &Path, target: &str, app_version: &str) -> Option<PackEntry> {
@@ -920,6 +951,25 @@ mod tests {
             script_pack("unicode-scripts-cjk", "CJK", serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }), MIB),
         ] }).to_string()).unwrap_err();
         assert!(twice.contains("more than one pack for script \"Arabic\""), "{twice}");
+    }
+
+    #[test]
+    fn the_script_pack_query_reflects_install_and_uninstall_without_a_restart() {
+        let fonts = serde_json::json!({ "Arabic": "fonts/Arabic.ttf", "Devanagari": "fonts/Devanagari.ttf" });
+        let catalog = catalog_of(vec![script_pack("unicode-scripts", "Unicode scripts", fonts, 30 * MIB), ocr_pack("ocr-hindi", "hin", MIB)]);
+        let app_data = sandbox("script-packs");
+        let states = |app_data: &Path| script_packs_in(&catalog, app_data, MAC, APP).into_iter().map(|state| (state.script, state.pack_id, state.status)).collect::<Vec<_>>();
+        let all = |status: PackStatus| vec![("Arabic".to_string(), "unicode-scripts".to_string(), status), ("Devanagari".to_string(), "unicode-scripts".to_string(), status)];
+
+        let before = script_packs_in(&catalog, &app_data, MAC, APP);
+        assert_eq!(before[0], ScriptPackState { script: "Arabic".into(), pack_id: "unicode-scripts".into(), pack_name: "Unicode scripts".into(), status: PackStatus::NotInstalled, download_bytes: Some(30 * MIB) });
+        assert_eq!(states(&app_data), all(PackStatus::NotInstalled));
+        install(&app_data, "unicode-scripts", "1.0", record("1.0"));
+        assert_eq!(states(&app_data), all(PackStatus::Installed));
+        uninstall::uninstall(&app_data, "unicode-scripts").unwrap();
+        assert_eq!(states(&app_data), all(PackStatus::NotInstalled));
+        // The built-in catalog has no script packs yet, so nothing asks for one.
+        assert!(script_packs_in(&parse_catalog(BUILT_IN_CATALOG).unwrap(), &app_data, MAC, APP).is_empty());
     }
 
     /// Listing must work offline: the module has no network code and reads only the filesystem.

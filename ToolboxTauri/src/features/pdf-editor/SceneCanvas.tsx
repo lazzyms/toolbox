@@ -136,7 +136,7 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
 }
 
 export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, formFields = [], formValue, onFormValue, formFlag, onFormFocus, onFormLeave,
-  redactionFill = '#000000', redactionPreview = false, editRuns, textEdits, selectedRun, onSelectRun, onEditRun, rangedObjects = [], onRangedChange }: SceneCanvasProps) {
+  redactionFill = '#000000', redactionPreview = false, editRuns, textEdits, selectedRun, onSelectRun, onEditRun, rangedObjects = [], onRangedChange, onEditText }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -149,6 +149,7 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
   const [size, setSize] = useState({ width: 600, height: 600 });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
+  useEffect(() => { onEditText?.(editingId ? { id: editingId, text: editingText } : null); }, [editingId, editingText]);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [panning, setPanning] = useState(false);
   const [editingRun, setEditingRun] = useState<{ index: number; text: string } | null>(null);
