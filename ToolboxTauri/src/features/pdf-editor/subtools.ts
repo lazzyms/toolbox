@@ -21,7 +21,7 @@ const overlay = (id: SceneObject['kind'], label: string): SubTool => ({
   id, label, group: 'overlay', suffix: '-edited',
   contributes: (scene) => scene.pages.some((page) => page.objects.some((object) => object.kind === id)),
 });
-const pageLayout = (scene: PdfScene) => JSON.stringify(scene.pages.map((page) => [page.id, page.rotation]));
+const pageLayout = (scene: PdfScene) => JSON.stringify(scene.pages.map((page) => [page.id, page.rotation, Boolean(page.mirrored)]));
 
 export const subTools: readonly SubTool[] = [
   { id: 'form', label: 'Fill form', group: 'document', suffix: '-filled',
