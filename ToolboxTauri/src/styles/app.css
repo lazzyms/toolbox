@@ -2682,6 +2682,16 @@ ol.formatted-pdf-items { list-style: decimal; }
 .formatted-pdf-alert-content strong { color: var(--foreground); font-weight: 600; }
 .formatted-pdf-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0 auto 0 0; font-size: 12px; }
 .formatted-pdf-status strong { font-weight: 600; }
+/* The board's "Script pack needed" state: the block, the preview's note and the footer in the warning colour. */
+.formatted-pdf-block[data-script-pack] { outline: 1px solid var(--warning); outline-offset: 2px; border-radius: 6px; }
+.formatted-pdf-block-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.formatted-pdf-pack-hint { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--warning); font-size: 12px; }
+.formatted-pdf-pack-hint > svg { flex: none; width: 14px; height: 14px; }
+.formatted-pdf-pack-note { width: 100%; border-color: var(--warning); }
+.formatted-pdf-pack-note .formatted-pdf-alert-content > svg { color: var(--warning); }
+.formatted-pdf-pack-note .formatted-pdf-alert-content p { gap: 6px; }
+.formatted-pdf-pack-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.formatted-pdf-status .formatted-pdf-status-warning { color: var(--warning); }
 .formatted-pdf-table { display: grid; gap: 4px; min-width: 0; overflow-x: auto; }
 .formatted-pdf-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .formatted-pdf-table th, .formatted-pdf-table td { border: 1px solid var(--border); padding: 0; text-align: left; vertical-align: top; }

@@ -83,9 +83,9 @@ pub const OCR_TOOL_ID: &str = "pdf-ocr";
 /// The text recognition language built into the app, as its Tesseract code and name. Every other
 /// language comes from a pack.
 pub const BUILT_IN_OCR_LANGUAGE: (&str, &str) = ("eng", "English");
-/// The tools that write text with the fonts a pack names with `scriptFonts`: Edit PDF and
-/// Convert to PDF.
-pub const SCRIPT_FONT_TOOL_IDS: [&str; 2] = ["pdf-edit", "convert-to-pdf"];
+/// The tools that write text with the fonts a pack names with `scriptFonts`: Edit PDF, Convert to
+/// PDF and Formatted PDF.
+pub const SCRIPT_FONT_TOOL_IDS: [&str; 3] = ["pdf-edit", "convert-to-pdf", "formatted-pdf"];
 
 /// `from` is inclusive and `before` is exclusive. No `before` means every later version.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -950,6 +950,9 @@ mod tests {
         let mut edit_only = pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }));
         edit_only["toolIds"] = serde_json::json!(["pdf-edit"]);
         assert!(parse(edit_only).unwrap_err().contains("not to convert-to-pdf"));
+        let mut no_formatted = pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }));
+        no_formatted["toolIds"] = serde_json::json!(["pdf-edit", "convert-to-pdf"]);
+        assert!(parse(no_formatted).unwrap_err().contains("not to formatted-pdf"));
         let twice = parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [
             pack(serde_json::json!({ "Arabic": "fonts/Arabic.ttf" })),
             script_pack("unicode-scripts-cjk", "CJK", serde_json::json!({ "Arabic": "fonts/Arabic.ttf" }), MIB),

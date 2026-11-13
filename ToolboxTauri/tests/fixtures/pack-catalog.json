@@ -4,8 +4,8 @@
     {
       "id": "unicode-scripts",
       "name": "Unicode scripts",
-      "description": "Adds fonts for writing systems beyond Latin, Cyrillic and Greek so Edit PDF can show and add text in them and Convert to PDF can write documents in them.",
-      "toolIds": ["pdf-edit", "convert-to-pdf"],
+      "description": "Adds fonts for writing systems beyond Latin, Cyrillic and Greek so Edit PDF can show and add text in them, and Convert to PDF and Formatted PDF can write documents in them.",
+      "toolIds": ["pdf-edit", "convert-to-pdf", "formatted-pdf"],
       "license": "Open-source license. Free to use, including for work.",
       "version": "1.0",
       "minPackFormat": 1,

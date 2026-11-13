@@ -5619,7 +5619,7 @@ mod tests {
             let mut entry = fixture.catalog_entry();
             entry.as_object_mut().unwrap().remove("ocrLanguage");
             entry["name"] = PACK_NAME.into();
-            entry["toolIds"] = serde_json::json!(["pdf-edit", "convert-to-pdf"]);
+            entry["toolIds"] = serde_json::json!(crate::packs::SCRIPT_FONT_TOOL_IDS);
             entry["scriptFonts"] = serde_json::json!({ "Arabic": "fonts/Arabic.ttf", "Devanagari": "fonts/Devanagari.ttf", "Han": "fonts/Han.ttf" });
             entry["payloads"][0]["path"] = "packs/unicode-scripts.toolboxpack".into();
             crate::packs::parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": [entry] }).to_string()).unwrap()

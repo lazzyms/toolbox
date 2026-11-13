@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ArrowDown, ArrowUp, Check, CircleX, History, Image as ImageIcon, ImageOff, List, ListOrdered, LoaderCircle, Minus, Plus, SeparatorHorizontal, Table, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, CircleX, History, Image as ImageIcon, ImageOff, List, ListOrdered, LoaderCircle, Minus, Plus, SeparatorHorizontal, Table, Trash2, TriangleAlert } from "lucide-react";
 import type { JobOutcome, ToolDefinition } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,7 +15,9 @@ import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResultList } from "../components/ResultList";
-import { FormattedPdfPreview, useFormattedPreview } from "./FormattedPdfPreview";
+import { FormattedPdfPreview, packVerbOf, ScriptPackNote, useFormattedPreview } from "./FormattedPdfPreview";
+import { useScriptPacks } from "../features/pdf-editor/ScriptPackPrompt";
+import { scriptPackUsable } from "../features/pdf-editor/scriptPacks";
 import { defaultFont, FontSettings, FontsUsed, type DocumentFont } from "./FormattedPdfFonts";
 import { RunStateContext } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
@@ -94,6 +96,18 @@ const table = (): TableBlock => ({ id: nextId(), kind: "table", headerRow: true,
 
 const isList = (block: Block): block is Extract<Block, { kind: ListKind }> => block.kind === "bulletedList" || block.kind === "numberedList";
 const isTable = (block: Block): block is TableBlock => block.kind === "table";
+/** Every piece of text a block draws. */
+const blockText = (block: Block) => isList(block) ? block.items.map((item) => runsText(item.runs)).join("\n")
+  : isTable(block) ? block.rows.flat().map((cell) => runsText(cell.runs)).join("\n")
+  : "runs" in block ? runsText(block.runs) : "";
+/** Whether `text` has a letter in the Unicode script named `script`, as in `Arabic`. */
+const hasScript = (text: string, script: string) => {
+  try {
+    return new RegExp(`\\p{Script=${script}}`, "u").test(text);
+  } catch {
+    return false;
+  }
+};
 /** A block with no text of its own: a page break or an image. */
 const isFixed = (block: Block): block is Extract<Block, { kind: "pageBreak" | "image" }> => block.kind === "pageBreak" || block.kind === "image";
 const isText = (block: Block): block is Extract<Block, { kind: TextKind }> => !isFixed(block) && !isList(block) && !isTable(block);
@@ -605,7 +619,21 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
 
   // The preview gets the document a save would send, without the output path.
   const typed = { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page, font };
-  const { preview, updating, error: previewError } = useFormattedPreview(typed.blocks.length > 0 ? typed : null);
+  const scriptPacks = useScriptPacks();
+  const { preview, updating, error: previewError, refusal } = useFormattedPreview(typed.blocks.length > 0 ? typed : null, scriptPacks.changes);
+  // A refused preview names the script whose pack is missing; the prompt clears as soon as the pack is usable.
+  const refusedPack = refusal ? scriptPacks.states.find((state) => state.packId === refusal.packId && state.script === refusal.script) : undefined;
+  const scriptNeed = refusal && !(refusedPack && scriptPackUsable(refusedPack)) ? refusal : null;
+  const scriptBlock = scriptNeed ? blocks.findIndex((block) => hasScript(blockText(block), scriptNeed.script)) : -1;
+  const packJob = scriptNeed && scriptPacks.job?.packId === scriptNeed.packId ? scriptPacks.job : null;
+  const packLabel = (index: number) => scriptNeed && index === scriptBlock ? `, has ${scriptNeed.script} text that needs the ${scriptNeed.packName} pack` : "";
+  /** The block's content, with the board's hint under it when it has the text whose pack is missing. */
+  const withPackHint = (index: number, content: ReactNode) => !scriptNeed || index !== scriptBlock ? content : (
+    <div className="formatted-pdf-block-body">
+      {content}
+      <p className="formatted-pdf-pack-hint"><TriangleAlert aria-hidden="true" />{scriptNeed.script} text needs the {scriptNeed.packName} pack to be drawn in the PDF.</p>
+    </div>
+  );
   const [portraitWidth, portraitHeight] = pageSizes[page.pageSize].points;
   const previewSize = page.orientation === "portrait" ? [portraitWidth, portraitHeight] as const : [portraitHeight, portraitWidth] as const;
   const estimate = preview && !updating && preview.pageCount > 0
@@ -878,12 +906,14 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                       data-kind={block.kind}
                       data-selected={index === currentPlace.index}
                       data-missing={block === missingBlock || undefined}
+                      data-script-pack={index === scriptBlock || undefined}
                       aria-label={isList(block)
-                        ? `Block ${number}, ${name}, ${block.items.length} ${block.items.length === 1 ? "item" : "items"}`
-                        : isTable(block) ? `Block ${number}, ${name}, ${block.rows[0].length} ${block.rows[0].length === 1 ? "column" : "columns"}${block.headerRow ? ", header row" : ""}` : undefined}
+                        ? `Block ${number}, ${name}, ${block.items.length} ${block.items.length === 1 ? "item" : "items"}${packLabel(index)}`
+                        : isTable(block) ? `Block ${number}, ${name}, ${block.rows[0].length} ${block.rows[0].length === 1 ? "column" : "columns"}${block.headerRow ? ", header row" : ""}${packLabel(index)}`
+                        : index === scriptBlock ? `Block ${number}, ${name}${packLabel(index)}` : undefined}
                     >
                       <span className="formatted-pdf-gutter" aria-hidden="true">{gutterLabels[block.kind]}</span>
-                      {block.kind === "pageBreak" ? (
+                      {withPackHint(index, block.kind === "pageBreak" ? (
                         <div
                           className="formatted-pdf-break"
                           role="group"
@@ -964,7 +994,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                         </div>
                       ) : (
                         field(block, index, String(block.id), `Block ${number}, ${name}`, block.runs, block.kind !== "paragraph", null)
-                      )}
+                      ))}
                       <div className="formatted-pdf-block-actions">
                         <Button variant="ghost" size="icon" aria-label={`Move block ${number} up`} aria-keyshortcuts={formatKeyAria("moveUp")} disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUp /></Button>
                         <Button variant="ghost" size="icon" aria-label={`Move block ${number} down`} aria-keyshortcuts={formatKeyAria("moveDown")} disabled={saving || index === blocks.length - 1} onClick={() => move(index, 1)}><ArrowDown /></Button>
@@ -983,6 +1013,16 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                 preview={preview}
                 updating={updating}
                 error={previewError}
+                paused={scriptNeed && (
+                  <ScriptPackNote
+                    refusal={scriptNeed}
+                    block={scriptBlock < 0 ? null : scriptBlock + 1}
+                    downloadBytes={refusedPack?.downloadBytes ?? null}
+                    downloading={packJob ? (packJob.totalBytes > 0 ? Math.floor((packJob.receivedBytes / packJob.totalBytes) * 100) : null) : undefined}
+                    installError={scriptPacks.installError}
+                    onInstall={() => void scriptPacks.install(scriptNeed.packId)}
+                  />
+                )}
                 pageName={`${pageSizes[page.pageSize].name} ${page.orientation}`}
                 pageSize={previewSize}
               />
@@ -1052,7 +1092,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
           <footer className="formatted-pdf-footer">
             {canDiscard && <Button variant="ghost" disabled={saving} onClick={() => setDiscarding(true)}>Discard draft…</Button>}
             {empty && <p id="formatted-pdf-blocker" className="workspace-note">Empty document. Add some text to save a PDF.</p>}
-            {!empty && !missingBlock && estimate && (
+            {!empty && !missingBlock && !scriptNeed && estimate && (
               <p id="formatted-pdf-estimate" className="formatted-pdf-status">
                 <strong>{estimate}</strong>
                 <span className="workspace-note">Opens the save dialog. Nothing is replaced.</span>
@@ -1064,10 +1104,16 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                 <span className="workspace-note">Fix the image block, then save again</span>
               </p>
             )}
+            {!empty && !missingBlock && scriptNeed && (
+              <p id="formatted-pdf-pack-status" className="formatted-pdf-status" role="status" aria-live="polite">
+                <strong className="formatted-pdf-status-warning">Can't save yet</strong>
+                <span className="workspace-note">{packVerbOf(scriptNeed)} the script pack, or remove the {scriptNeed.script} text</span>
+              </p>
+            )}
             <Button
               variant="default"
-              aria-describedby={empty ? "formatted-pdf-blocker" : missingBlock ? "formatted-pdf-status" : estimate ? "formatted-pdf-estimate" : undefined}
-              disabled={saving || empty}
+              aria-describedby={empty ? "formatted-pdf-blocker" : missingBlock ? "formatted-pdf-status" : scriptNeed ? "formatted-pdf-pack-status" : estimate ? "formatted-pdf-estimate" : undefined}
+              disabled={saving || empty || scriptNeed !== null}
               onClick={() => void save()}
               className="workspace-primary-action"
               {...shortcutTarget("run")}

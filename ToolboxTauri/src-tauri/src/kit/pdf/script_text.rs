@@ -83,6 +83,32 @@ pub struct PackFont {
 /// unavailable. Development builds read the font from `TOOLBOX_SCRIPT_FONT_DIR` when the pack is
 /// not installed.
 pub fn pack_font(script: &str, packs: &RunPacks) -> Result<PackFont, ToolError> {
+    let font = pack_font_file(script, packs)?;
+    let unreadable = || ToolError::unavailable(format!("The {} pack's font for {script} can't be read. Nothing was saved.", font.pack_name));
+    let bytes = std::fs::read(&font.path).map_err(|_| unreadable())?;
+    if rustybuzz::Face::from_slice(&bytes, 0).is_none() || table_directory(&bytes).is_err() {
+        return Err(unreadable());
+    }
+    let name = font.font_path.rsplit('/').next().unwrap_or(&font.font_path).trim_end_matches(".ttf")
+        .chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect();
+    Ok(PackFont { file: (font.pack_id, font.font_path), name, bytes })
+}
+
+/// Refuses `script` as [`pack_font`] does, without reading the font: a tool checks every script in
+/// its text this way before it draws anything.
+pub fn require_pack_font(script: &str, packs: &RunPacks) -> Result<(), ToolError> {
+    pack_font_file(script, packs).map(|_| ())
+}
+
+/// Where `script`'s font is: its pack, its path in the pack, and the file on disk.
+struct PackFontFile {
+    pack_id: String,
+    pack_name: String,
+    font_path: String,
+    path: PathBuf,
+}
+
+fn pack_font_file(script: &str, packs: &RunPacks) -> Result<PackFontFile, ToolError> {
     let catalog = packs.catalog()?;
     let (pack, font_path) = catalog.packs.iter()
         .find_map(|pack| pack.script_fonts.get(script).map(|font| (pack, font)))
@@ -96,14 +122,7 @@ pub fn pack_font(script: &str, packs: &RunPacks) -> Result<PackFont, ToolError> 
             }
             error
         })?;
-    let unreadable = || ToolError::unavailable(format!("The {} pack's font for {script} can't be read. Nothing was saved.", pack.name));
-    let bytes = std::fs::read(&resolved.path).map_err(|_| unreadable())?;
-    if rustybuzz::Face::from_slice(&bytes, 0).is_none() || table_directory(&bytes).is_err() {
-        return Err(unreadable());
-    }
-    let name = font_path.rsplit('/').next().unwrap_or(font_path).trim_end_matches(".ttf")
-        .chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect();
-    Ok(PackFont { file: (pack.id.clone(), font_path.clone()), name, bytes })
+    Ok(PackFontFile { pack_id: pack.id.clone(), pack_name: pack.name.clone(), font_path: font_path.clone(), path: resolved.path })
 }
 
 /// The fonts a scene's text is written with: the app's own font, then one font per pack font file.
