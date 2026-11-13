@@ -75,6 +75,13 @@ pub(crate) fn render_preview(path: &Path, page: usize, width: f32, height: f32) 
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 || width > super::PDF_MAX_PAGE_POINTS || height > super::PDF_MAX_PAGE_POINTS {
         return None;
     }
+    let bytes = render_page_png(path, page)?;
+    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// Renders one page to a PNG at most `PDF_PREVIEW_MAX_DIMENSION` pixels on its longer side, or
+/// `None` when the renderer is missing or fails.
+pub(crate) fn render_page_png(path: &Path, page: usize) -> Option<Vec<u8>> {
     let renderer = find_pdftoppm()?;
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_nanos();
     let prefix = std::env::temp_dir().join(format!("toolbox-pdf-preview-{}-{page}-{nonce}", std::process::id()));
@@ -94,12 +101,9 @@ pub(crate) fn render_preview(path: &Path, page: usize, width: f32, height: f32) 
         command
     }, Instant::now() + super::PDF_PREVIEW_TIMEOUT, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").ok();
     let preview_path = prefix.with_extension("png");
-    let preview = output.filter(|result| result.status.success()).and_then(|_| {
-        let (bytes, _, _) = super::read_preview_png(&preview_path).ok()?;
-        Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
-    });
+    let rendered = output.filter(|result| result.status.success()).and_then(|_| super::read_preview_png(&preview_path).ok()).map(|(bytes, _, _)| bytes);
     let _ = std::fs::remove_file(preview_path);
-    preview
+    rendered
 }
 
 fn find_pdftoppm() -> Option<PathBuf> {

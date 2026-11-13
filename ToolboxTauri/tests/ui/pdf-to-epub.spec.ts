@@ -34,6 +34,10 @@ test.beforeEach(async ({ page }) => {
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command.startsWith("plugin:") || command === "shell_ready" || command === "open_output_path" || command === "reveal_output_path") return null;
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
+                if (command === "read_pdf_properties") return (args as { request: { paths: string[] } }).request.paths.map((inputPath) => ({
+                    inputPath, outputPaths: [], state: "succeeded", failure: null, reason: null, warnings: [],
+                    detail: JSON.stringify({ title: "The Long Road Home", author: "Mira Okafor", subject: null }),
+                }));
                 if (win.__outcomes) return win.__outcomes;
                 const { request } = (args ?? {}) as { request?: { paths?: string[] } };
                 return (request?.paths ?? []).map((inputPath) => ({
@@ -92,13 +96,13 @@ test("PDF to EPUB sends the paths and the output location, and a folder chosen f
     await openToolBySearch(page, "PDF to EPUB");
     await choose(page, paths);
     await expect(destination(page).getByTestId("run-destination-path")).toHaveText("Next to each original");
-    expect(await run(page)).toEqual({ paths, outputLocation: "alongsideInput", removeHeadersAndFooters: true });
+    expect(await run(page)).toEqual({ paths, outputLocation: "alongsideInput", removeHeadersAndFooters: true, cover: "firstPage" });
 
     await queueDialog(page, runFolder);
     await destination(page).getByRole("button", { name: "Change for this run" }).click();
     await expect(destination(page).getByTestId("run-destination-path")).toHaveText("~/Books");
     await expect(destination(page)).toContainText("This run only");
-    expect(await run(page)).toEqual({ paths, outputLocation: { customFolder: runFolder }, removeHeadersAndFooters: true });
+    expect(await run(page)).toEqual({ paths, outputLocation: { customFolder: runFolder }, removeHeadersAndFooters: true, cover: "firstPage" });
     expect(await invocationsOf(page, "set_output_settings")).toEqual([]);
 });
 
@@ -115,7 +119,49 @@ test("PDF to EPUB removes running headers, footers and page numbers by default a
 
     await removal.click();
     await expect(removal).not.toBeChecked();
-    expect(await run(page)).toEqual({ paths, outputLocation: "alongsideInput", removeHeadersAndFooters: false });
+    expect(await run(page)).toMatchObject({ paths, outputLocation: "alongsideInput", removeHeadersAndFooters: false });
+});
+
+test("PDF to EPUB makes a cover from the first page by default and sends the choice", async ({ page }) => {
+    await openToolBySearch(page, "PDF to EPUB");
+    const cover = page.getByRole("group", { name: "Cover" }).getByRole("radiogroup", { name: "Cover" });
+    await expect(cover.getByRole("radio", { name: "First page" })).toBeChecked();
+    await expect(cover).toHaveAccessibleDescription("The first page becomes the cover.");
+
+    await choose(page, ["/Users/test/books/field notes.pdf", "/Users/test/books/memo.pdf"]);
+    expect((await run(page)).cover).toBe("firstPage");
+    await cover.getByRole("radio", { name: "No cover" }).click();
+    await expect(cover.getByRole("radio", { name: "No cover" })).toBeChecked();
+    expect((await run(page)).cover).toBe("none");
+});
+
+test("PDF to EPUB fills in one PDF's title and author, sends the edits, and hides them for a batch", async ({ page }) => {
+    const single = "/Users/test/books/the-long-road-home.pdf";
+    await openToolBySearch(page, "PDF to EPUB");
+    const details = page.getByRole("group", { name: "Book details" });
+    await choose(page, [single]);
+    const title = details.getByRole("textbox", { name: "Title" });
+    const author = details.getByRole("textbox", { name: "Author" });
+    await expect(title).toHaveValue("The Long Road Home");
+    await expect(author).toHaveValue("Mira Okafor");
+    await expect(title).toHaveAccessibleDescription("Filled in from the PDF. Your changes go into this EPUB only; the PDF isn't changed.");
+    expect(await invocationsOf(page, "read_pdf_properties")).toEqual([{ request: { paths: [single] } }]);
+    expect(await run(page)).toEqual({
+        paths: [single], outputLocation: "alongsideInput", removeHeadersAndFooters: true, cover: "firstPage",
+        title: "The Long Road Home", author: "Mira Okafor",
+    });
+
+    await title.fill("Road Home");
+    await author.fill("M. Okafor");
+    expect(await run(page)).toMatchObject({ paths: [single], title: "Road Home", author: "M. Okafor" });
+
+    await choose(page, ["/Users/test/books/memo.pdf"]);
+    await expect(details.getByRole("textbox")).toHaveCount(0);
+    await expect(details).toContainText("Each book uses its PDF's title and author. Convert one PDF to edit them.");
+    const batch = await run(page);
+    expect(batch.paths).toEqual([single, "/Users/test/books/memo.pdf"]);
+    expect(batch).not.toHaveProperty("title");
+    expect(batch).not.toHaveProperty("author");
 });
 
 test("PDF to EPUB shows each PDF's own result with Open and Reveal on converted rows", async ({ page }) => {

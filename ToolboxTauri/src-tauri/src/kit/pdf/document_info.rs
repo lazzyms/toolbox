@@ -215,6 +215,24 @@ pub struct PdfDocumentInfo {
     pub unsupported: Vec<String>,
 }
 
+impl PdfDocumentInfo {
+    /// The document's current properties: each Info dictionary value, or the XMP one where Info has none.
+    pub(crate) fn merged(self) -> PdfProperties {
+        let xmp = self.xmp.map(|xmp| xmp.values).unwrap_or_default();
+        let info = self.info;
+        PdfProperties {
+            title: info.title.or(xmp.title),
+            author: info.author.or(xmp.author),
+            subject: info.subject.or(xmp.subject),
+            keywords: info.keywords.or(xmp.keywords),
+            creator: info.creator.or(xmp.creator),
+            producer: info.producer.or(xmp.producer),
+            creation_date: info.creation_date.or(xmp.creation_date),
+            modification_date: info.modification_date.or(xmp.modification_date),
+        }
+    }
+}
+
 pub fn read(path: &Path, password: Option<&str>) -> Result<PdfDocumentInfo, ToolError> {
     load(&read_bytes(path)?, password).map(|document| from_document(&document))
 }

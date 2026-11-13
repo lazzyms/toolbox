@@ -2688,7 +2688,7 @@ mod command_tests {
     }
 
     fn epub_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> to_epub::PdfToEpubRequest {
-        to_epub::PdfToEpubRequest { paths, output_location, remove_headers_and_footers: true }
+        to_epub::PdfToEpubRequest { paths, output_location, remove_headers_and_footers: true, cover: to_epub::EpubCover::NoCover, title: None, author: None }
     }
 
     fn epub_entries(path: &PathBuf) -> Vec<(String, zip::CompressionMethod, Vec<u8>)> {
@@ -2712,7 +2712,7 @@ mod command_tests {
 
         let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "books"))));
         assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
-        assert_eq!(outcomes[0].detail, "3 pages.");
+        assert_eq!(outcomes[0].detail, "3 pages. No bookmarks or headings, so the contents list the title only.");
         assert!(outcomes[0].warnings.is_empty(), "{:?}", outcomes[0].warnings);
         let epub = outcomes[0].output_paths()[0].clone();
         assert_eq!(epub, root.join("books").join("field notes.epub"), "the chosen folder holds stem.epub");
@@ -5297,7 +5297,7 @@ mod command_tests {
             outputs.extend(named(&mut naming, "extract_from_pdf", mixed_pdf.clone(), both));
         }
         // PDF to EPUB reads text in-process, so it needs no helper or pack.
-        let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub"), remove_headers_and_footers: true }));
+        let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub"), remove_headers_and_footers: true, cover: to_epub::EpubCover::NoCover, title: None, author: None }));
         assert_eq!(epub, [root.join("pdf to epub").join("document.epub")], "PDF to EPUB names its book after the PDF with no suffix");
         outputs.extend(named(&mut naming, "pdf_to_epub", pdf.clone(), epub));
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
