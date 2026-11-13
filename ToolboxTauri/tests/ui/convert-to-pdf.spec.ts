@@ -737,3 +737,43 @@ test("a file in a script that needs a pack shows the script pack's Install on it
     await hindi.getByRole("button", { name: "Install Unicode scripts pack for circular-hindi.docx", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as ConvertWindow).__invocations.filter(({ command }) => command === "install_pack").map(({ args }) => (args as { packId: string }).packId))).toEqual(["unicode-scripts"]);
 });
+
+test("older Office files are marked basic fidelity in the list and on every result row, and take the spreadsheet and slide options", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/minutes-2009.doc", "/local/budget.XLS", "/local/pitch.ppt", "/local/report.docx"]);
+    for (const name of ["minutes-2009.doc", "budget.XLS", "pitch.ppt"]) {
+        const row = fileRow(page, name);
+        await expect(row).toHaveAccessibleName(`${name}, basic fidelity`);
+        await expect(row.locator(".file-selection-badge")).toHaveText("Basic fidelity");
+        await expect(row).not.toContainText("Not available yet");
+        await expect(row).not.toContainText("Won't run");
+    }
+    await expect(fileRow(page, "report.docx")).toHaveAccessibleName("report.docx");
+    await expect(fileRow(page, "report.docx").locator(".file-selection-badge")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Spreadsheets options" })).toContainText("Applies to budget.XLS");
+    await expect(page.getByRole("region", { name: "Presentations options" })).toContainText("Applies to pitch.ppt");
+    await expect(page.getByText("This will make 4 PDFs", { exact: true })).toBeVisible();
+
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/minutes-2009.doc", "/local/budget.XLS", "/local/pitch.ppt", "/local/report.docx"],
+        outputLocation: "alongsideInput",
+        spreadsheets: { sheets: "all", printAreas: true, fitToWidth: true },
+        presentations: { speakerNotes: false, hiddenSlides: false },
+    });
+
+    const locked = "It's password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.";
+    await page.evaluate((locked) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/minutes-2009.doc", outputPaths: ["/local/minutes-2009.pdf"], detail: "2 pages.", state: "succeeded", failure: null, reason: null, warnings: [], basicFidelity: true },
+        { inputPath: "/local/budget.XLS", outputPaths: ["/local/budget.pdf"], detail: "1 page. 1 sheet. 1 hidden sheet left out.", state: "succeeded", failure: null, reason: null, warnings: [], basicFidelity: true },
+        { inputPath: "/local/pitch.ppt", outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: locked, pointer: { kind: "tool", toolId: "lock-unlock" } }, reason: null, warnings: [], basicFidelity: true },
+        { inputPath: "/local/report.docx", outputPaths: ["/local/report.pdf"], detail: "3 pages.", state: "succeeded", failure: null, reason: null, warnings: [] },
+    ]), locked);
+    const rows = resultRows(page);
+    for (const name of ["minutes-2009.doc", "budget.XLS", "pitch.ppt"]) {
+        await expect(rows.filter({ hasText: name }).locator(".result-row-heading")).toHaveText(`${name}Basic fidelity`);
+    }
+    await expect(rows.filter({ hasText: "budget.XLS" })).toContainText("1 hidden sheet left out.");
+    await expect(rows.filter({ hasText: "pitch.ppt" }).getByRole("button", { name: "Open Lock & Unlock" })).toBeVisible();
+    await expect(rows.filter({ hasText: "report.docx" })).not.toContainText("Basic fidelity");
+});

@@ -14,7 +14,7 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   const outcomes = parseToolResult(nativeSamples);
 
   assert.deepEqual(outcomes, nativeSamples);
-  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
+  assert.deepEqual(outcomes.map((outcome) => outcome.state), ["succeeded", "skipped", "skipped", "failed", "failed", "succeeded", "skipped", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]);
 
   const [succeeded, pointedSkip, plainSkip, failed, limited, , , notCarried, converted, images, blankPages, flattened] = outcomes;
   for (const outcome of outcomes.slice(0, 5)) {
@@ -139,6 +139,16 @@ test("native-shaped outcomes carry a labelled page breakdown when reported", () 
 
   for (const bad of ["Pages 1-3", [{ label: "Recognized" }], [{ label: 1, value: "Page 1" }]]) {
     assert.throws(() => parseJobOutcome({ ...sample(12), pageDetails: bad }), /Invalid job outcome: outcome.pageDetails/);
+  }
+});
+
+test("native-shaped outcomes say when the input was read in basic fidelity", () => {
+  const outcomes = parseToolResult(nativeSamples);
+
+  assert.equal(outcomes[13].basicFidelity, true);
+  for (const outcome of outcomes.slice(0, 13)) assert.ok(!("basicFidelity" in outcome), "outcomes in full fidelity carry no mark");
+  for (const bad of ["yes", 1, null]) {
+    assert.throws(() => parseJobOutcome({ ...sample(13), basicFidelity: bad }), /Invalid job outcome: outcome.basicFidelity/);
   }
 });
 

@@ -15,7 +15,7 @@ use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontReport, FontResolver, FontSource, FontStyle, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, expand_tabs, Align, Assembly, Block, Bookmark, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Paragraph, Span, Style, Theme};
 use crate::kit::pdf::presentation::Include;
-use crate::kit::pdf::{delimited, docx, epub, html, markdown, odp, ods, odt, pptx, rtf, xlsx};
+use crate::kit::pdf::{delimited, doc, docx, epub, html, markdown, odp, ods, odt, ppt, pptx, rtf, xls, xlsx};
 use crate::packs::uninstall::RunPacks;
 
 pub const COMMAND: &str = "convert_to_pdf";
@@ -298,11 +298,11 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
         "md" | "markdown" => markdown_file(job, &job.request.markdown.unwrap_or_default(), &input),
         "html" | "htm" => html_file(job, &job.request.web_pages.unwrap_or_default(), &input),
         "rtf" => rich_text(job, &input),
-        "docx" | "odt" => word_file(job, &input, &extension),
+        "docx" | "odt" | "doc" => word_file(job, &input, &extension),
         "csv" | "tsv" => table_file(job, &job.request.tables.unwrap_or_default(), &input, &extension),
-        "xlsx" | "ods" => spreadsheet_file(job, &job.request.spreadsheets.unwrap_or_default(), &input, &extension),
+        "xlsx" | "ods" | "xls" => spreadsheet_file(job, &job.request.spreadsheets.unwrap_or_default(), &input, &extension),
         "epub" => ebook_file(job, &job.request.ebooks.unwrap_or_default(), &input),
-        "pptx" | "odp" => presentation_file(job, &job.request.presentations.unwrap_or_default(), &input, &extension),
+        "pptx" | "odp" | "ppt" => presentation_file(job, &job.request.presentations.unwrap_or_default(), &input, &extension),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
     result.unwrap_or_else(|error| JobOutcome::failure(input, error))
@@ -655,19 +655,29 @@ fn approximate_placement(floats: &[usize], (one, many): (&str, &str), (unit, uni
     Some(OutcomeWarning { kind: WarningKind::ApproximateLayout, message: format!("Approximate layout: {objects} placed as close as possible.") })
 }
 
+/// Fails with `locked` when an Office file is password-protected, or with `damaged` when its encryption can't be checked.
+fn unlocked(bytes: &[u8], extension: &str, locked: ToolError, damaged: &str) -> Result<(), ToolError> {
+    match office::is_encrypted(bytes, extension) {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(locked),
+        Err(_) => Err(ToolError::invalid_input(damaged)),
+    }
+}
+
 fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
     let limits = (job.limits)(input);
-    let parsed = if extension == "odt" {
-        odt::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?
-    } else {
-        match office::is_encrypted(&bytes, "docx") {
-            Ok(false) => {}
-            Ok(true) => return Err(locked),
-            Err(_) => return Err(ToolError::invalid_input(docx::DAMAGED)),
+    let parsed = match extension {
+        "odt" => odt::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?,
+        "doc" => {
+            unlocked(&bytes, "doc", locked, doc::DAMAGED)?;
+            doc::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
         }
-        docx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
+        _ => {
+            unlocked(&bytes, "docx", locked, docx::DAMAGED)?;
+            docx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
+        }
     };
     let geometry = page_geometry(parsed.page, &job.request.page_defaults);
     let mut theme = Theme::new(parsed.body_family.as_deref().unwrap_or(RTF_FAMILY), CODE_FAMILY, parsed.body_size, false);
@@ -737,15 +747,16 @@ fn spreadsheet_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Spreadsh
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
     let limits = (job.limits)(input);
-    let workbook = if extension == "ods" {
-        ods::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?
-    } else {
-        match office::is_encrypted(&bytes, "xlsx") {
-            Ok(false) => {}
-            Ok(true) => return Err(locked),
-            Err(_) => return Err(ToolError::invalid_input(xlsx::DAMAGED)),
+    let workbook = match extension {
+        "ods" => ods::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?,
+        "xls" => {
+            unlocked(&bytes, "xls", locked, xls::DAMAGED)?;
+            xls::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
         }
-        xlsx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
+        _ => {
+            unlocked(&bytes, "xlsx", locked, xlsx::DAMAGED)?;
+            xlsx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input))?
+        }
     };
     let mut theme = Theme::new(workbook.body_family.as_deref().unwrap_or(TABLE_FAMILY), CODE_FAMILY, TABLE_SIZE, false);
     theme.families = workbook.families.clone();
@@ -807,15 +818,16 @@ fn presentation_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Present
     let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
     let limits = (job.limits)(input);
     let include = Include { hidden: options.hidden_slides, notes: options.speaker_notes };
-    let deck = if extension == "odp" {
-        odp::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked, include)?
-    } else {
-        match office::is_encrypted(&bytes, "pptx") {
-            Ok(false) => {}
-            Ok(true) => return Err(locked),
-            Err(_) => return Err(ToolError::invalid_input(pptx::DAMAGED)),
+    let deck = match extension {
+        "odp" => odp::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked, include)?,
+        "ppt" => {
+            unlocked(&bytes, "ppt", locked, ppt::DAMAGED)?;
+            ppt::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), include)?
         }
-        pptx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), include)?
+        _ => {
+            unlocked(&bytes, "pptx", locked, pptx::DAMAGED)?;
+            pptx::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), include)?
+        }
     };
     if deck.slides.is_empty() {
         let hint = if deck.hidden_left_out > 0 { " Its slides are all hidden; choose Include hidden slides to include them." } else { "" };
@@ -947,7 +959,7 @@ impl<S: SystemFontLookup> Measure<'_, '_, S> {
 /// One small document for each family that converts, shared by the conversion, determinism and release snapshot tests.
 #[cfg(test)]
 pub mod fixtures {
-    use crate::kit::pdf::{docx, odp, ods, odt, pptx, xlsx};
+    use crate::kit::pdf::{doc, docx, odp, ods, odt, ppt, pptx, xls, xlsx};
 
     pub fn epub_package(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -975,6 +987,7 @@ pub mod fixtures {
         );
         let chapter = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head><body><p>{line}</p></body></html>"#);
         let opf = r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:2</dc:identifier><dc:title>Base</dc:title><dc:language>ru</dc:language></metadata><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>"#;
+        let paragraph = format!("{line}\r");
         vec![
             ("note.txt", line.into()),
             ("note.md", format!("# {line}\n\n*{line}* and **{line}**").into()),
@@ -989,6 +1002,9 @@ pub mod fixtures {
             ("note.odp", odp::fixtures::odp(odp_styles, "", &format!(r#"<draw:page draw:name="One" draw:master-page-name="Default"><draw:frame svg:x="36pt" svg:y="24pt" svg:width="800pt" svg:height="60pt"><draw:text-box><text:p>{line}</text:p></draw:text-box></draw:frame></draw:page>"#), &[])),
             ("note.html", format!("<h1>{line}</h1><p><b>{line}</b> <i>{line}</i></p>").into()),
             ("note.epub", epub_package(&[("OEBPS/content.opf", opf.as_bytes()), ("OEBPS/one.xhtml", chapter.as_bytes())])),
+            ("note.doc", doc::fixtures::document(&[doc::fixtures::Run::plain(&paragraph)], false)),
+            ("note.xls", xls::fixtures::workbook(&[("Sheet", false, vec![(0, 0, xls::fixtures::Value::Text(line))])])),
+            ("note.ppt", ppt::fixtures::deck(&[ppt::fixtures::Page { title: line, body: line, hidden: false, notes: None, picture: false }])),
         ]
     }
 }
@@ -2462,6 +2478,57 @@ mod tests {
         assert_eq!((outcomes[5].error().unwrap().message.as_str(), &outcomes[5].error().unwrap().pointer), (LOCKED, &error.pointer));
         assert_eq!(inputs.map(|path| fs::read(path).unwrap()), originals);
         assert!(["locked.pdf", "locked-1.pdf", "damaged.pdf", "bomb.pdf", "hidden.pdf"].iter().all(|name| !root.join(name).exists() && !root.join("locked").join(name).exists()));
+    }
+
+    #[test]
+    fn legacy_office_files_convert_in_basic_fidelity_with_modern_hidden_defaults() {
+        use crate::kit::office::tests::{locked_doc, locked_xls, ppt_fixture, LegacyEncryption};
+        let root = sandbox("legacy_office");
+        let report = root.join("report.doc");
+        fs::write(&report, doc::fixtures::document(&[doc::fixtures::Run::plain("Quarterly Caf\u{e9} report\r"), doc::fixtures::Run { text: "North\u{7}42\u{7}", characters: &[], istd: 0, paragraph: doc::fixtures::IN_TABLE }, doc::fixtures::Run { text: "\u{7}", characters: &[], istd: 0, paragraph: doc::fixtures::ROW_END }], false)).unwrap();
+        let book = root.join("book.xls");
+        fs::write(&book, xls::fixtures::workbook(&[
+            ("Summary", false, vec![(0, 0, xls::fixtures::Value::Text("Pens")), (0, 1, xls::fixtures::Value::Number(42.))]),
+            ("Secret", true, vec![(0, 0, xls::fixtures::Value::Text("Hidden note"))]),
+        ])).unwrap();
+        let deck = root.join("deck.ppt");
+        let page = |title, hidden| ppt::fixtures::Page { title, body: "Body text", hidden, notes: None, picture: false };
+        fs::write(&deck, ppt::fixtures::deck(&[page("Opening", false), page("Backstage", true), page("Closing", false)])).unwrap();
+        let modern = root.join("modern.docx");
+        fs::write(&modern, docx::fixtures::docx("<w:p><w:r><w:t>Modern</w:t></w:r></w:p>", &[], &[])).unwrap();
+        let locked = [("locked.doc", locked_doc(LegacyEncryption::Rc4)), ("locked.xls", locked_xls(LegacyEncryption::Xor)), ("locked.ppt", ppt_fixture(true, false))].map(|(name, bytes)| {
+            let path = root.join(name);
+            fs::write(&path, bytes).unwrap();
+            path
+        });
+        let damaged = root.join("damaged.xls");
+        fs::write(&damaged, b"not a compound file").unwrap();
+        let inputs = [&report, &book, &deck, &modern, &locked[0], &locked[1], &locked[2], &damaged];
+        let originals = inputs.map(|path| fs::read(path).unwrap());
+
+        let outcomes = convert_paths(&inputs.map(|path| path.as_path()), json!({}));
+        for outcome in &outcomes[..3] { assert!(succeeded(outcome), "{outcome:?}"); }
+        assert_eq!(outcomes.iter().map(|outcome| outcome.basic_fidelity).collect::<Vec<_>>(), [true, true, true, false, true, true, true, true]);
+        let text = |name: &str| { let document = Document::load(root.join(name)).unwrap(); let pages: Vec<u32> = document.get_pages().keys().copied().collect(); document.extract_text(&pages).unwrap() };
+        assert!(in_order(&text("report.pdf"), &["Quarterly", "report", "North", "42"]), "{}", text("report.pdf"));
+        assert_eq!(outcomes[1].detail, "1 page. 1 sheet. 1 hidden sheet left out.");
+        let sheet = text("book.pdf");
+        assert!(sheet.contains("Pens") && sheet.contains("42") && !sheet.contains("Hidden note"), "{sheet}");
+        assert_eq!(outcomes[2].detail, "2 pages. 2 slides. 1 hidden slide left out.");
+        let slides = text("deck.pdf");
+        assert!(in_order(&slides, &["Opening", "Closing"]) && !slides.contains("Backstage"), "{slides}");
+        for outcome in &outcomes[4..7] {
+            let error = outcome.error().unwrap_or_else(|| panic!("{outcome:?}"));
+            assert_eq!((error.kind.clone(), error.message.as_str()), (ErrorKind::InvalidInput, LOCKED));
+            assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        }
+        assert_eq!(outcomes[7].error().unwrap().message, xls::DAMAGED);
+        assert_eq!(inputs.map(|path| fs::read(path).unwrap()), originals);
+        assert!(["locked.pdf", "damaged.pdf"].iter().all(|name| !root.join(name).exists()));
+
+        let all = convert_paths(&[&book, &deck], json!({ "spreadsheets": { "sheets": "all", "printAreas": true, "fitToWidth": true }, "presentations": { "hiddenSlides": true, "speakerNotes": false } }));
+        assert_eq!((all[0].detail.as_str(), all[1].detail.as_str()), ("2 pages. 2 sheets.", "3 pages. 3 slides."));
+        assert!(text("deck-1.pdf").contains("Backstage") && text("book-1.pdf").contains("Hidden note"));
     }
 
     const PICTURE: &str = r#"<p:pic><p:nvPicPr><p:cNvPr id="3" name="Picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rIdImage"/></p:blipFill><p:spPr><a:xfrm><a:off x="6350000" y="2540000"/><a:ext cx="2540000" cy="1270000"/></a:xfrm></p:spPr></p:pic>"#;

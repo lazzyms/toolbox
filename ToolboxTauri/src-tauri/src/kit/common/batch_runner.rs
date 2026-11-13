@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 use crate::kit::common::limits::{self, CancelFlag, ToolLimits};
 use crate::kit::common::JobOutcome;
-use crate::kit::contracts::{partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{is_basic_fidelity, partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io;
@@ -173,12 +173,16 @@ impl BatchRunner {
         L: Fn(&Path) -> Option<ToolLimits> + Sync,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
+        // Every result for a file read in basic fidelity says so, whichever way the file settled.
+        let label = |outcome: JobOutcome| {
+            if is_basic_fidelity(command, &outcome.input_path) { outcome.with_basic_fidelity() } else { outcome }
+        };
         // rayon::into_par_iter automatically uses the system core count for the thread pool,
         // matching the original Swift `ProcessInfo.processInfo.activeProcessorCount` behavior.
         match partition_command_inputs(command, &inputs) {
             Ok(validation) => {
                 let mut outcomes = vec![None; inputs.len()];
-                for (index, outcome) in validation.rejected { outcomes[index] = Some(outcome); }
+                for (index, outcome) in validation.rejected { outcomes[index] = Some(label(outcome)); }
                 let mut writable = HashMap::new();
                 let mut runnable = Vec::with_capacity(validation.accepted.len());
                 for (index, path) in validation.accepted {
@@ -189,10 +193,10 @@ impl BatchRunner {
                     if is_writable {
                         runnable.push((index, path));
                     } else {
-                        outcomes[index] = Some(JobOutcome::failure(
+                        outcomes[index] = Some(label(JobOutcome::failure(
                             path,
                             ToolError::processing(READ_ONLY_OUTPUT_MESSAGE).with_pointer(OutcomePointer::OutputFolder),
-                        ));
+                        )));
                     }
                 }
                 for (index, outcome) in outcomes.iter().enumerate() {
@@ -201,12 +205,12 @@ impl BatchRunner {
                 let job = Arc::new(job);
                 let processed = runnable.into_par_iter().map(|(index, path)| {
                     if events.cancel.flag().is_cancelled() {
-                        let outcome = JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START));
+                        let outcome = label(JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START)));
                         events.settled(index, &outcome);
                         return (index, outcome);
                     }
                     events.emit(FileEvent::Started { index });
-                    let outcome = match limits_for(&path) {
+                    let outcome = label(match limits_for(&path) {
                         Some(limits) => {
                             let (job, request, sink) = (Arc::clone(&job), Arc::clone(request), events.sink.clone());
                             limits.run_each(path, events.cancel.flag(), move |path| {
@@ -215,14 +219,14 @@ impl BatchRunner {
                             })
                         }
                         None => JobOutcome::failure(path, ToolError::processing(format!("No processing limits are recorded for {command}."))),
-                    };
+                    });
                     events.emit(FileEvent::Finished { index, outcome: outcome.clone() });
                     (index, outcome)
                 }).collect::<Vec<_>>();
                 for (index, outcome) in processed { outcomes[index] = Some(outcome); }
                 outcomes.into_iter().map(Option::unwrap).collect()
             }
-            Err(outcomes) => outcomes,
+            Err(outcomes) => outcomes.into_iter().map(label).collect(),
         }
     }
 }

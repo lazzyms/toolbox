@@ -24,6 +24,8 @@ export interface RowView {
     fonts: RowFont[];
     /** Set when the file failed only for want of a pack that has since been installed. */
     packInstalled: boolean;
+    /** Set when the file is in a format read in basic fidelity, so its output may differ from it more than usual. */
+    basicFidelity: boolean;
 }
 
 export type RowFont = { requested: string; used: string; source: string };
@@ -208,6 +210,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
     const warnings = outcome.warnings.map(detailOf);
     const sizes = sizeLine(outcome);
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
+    const basicFidelity = outcome.basicFidelity === true;
     switch (outcome.state) {
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
@@ -234,6 +237,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                     canRetry: false,
                     canRetryWithPassword: false,
                     packInstalled: false,
+                    basicFidelity,
                     fonts,
                 };
             }
@@ -249,6 +253,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 canRetry: false,
                 canRetryWithPassword: false,
                 packInstalled: false,
+                basicFidelity,
                 fonts,
             };
         }
@@ -265,6 +270,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 canRetry: false,
                 canRetryWithPassword: false,
                 packInstalled: false,
+                basicFidelity,
                 fonts: [],
             };
         case "failed": {
@@ -283,6 +289,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                     canRetry: false,
                     canRetryWithPassword: false,
                     packInstalled: installed,
+                    basicFidelity,
                     fonts: [],
                 };
             }
@@ -301,6 +308,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 canRetry: isRetryable(outcome.failure) && outcome.failure.pointer?.kind !== "outputFolder",
                 canRetryWithPassword: wrongPassword,
                 packInstalled: false,
+                basicFidelity,
                 fonts: [],
             };
         }

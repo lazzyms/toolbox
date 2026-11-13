@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // One fixture per extension the release snapshot test converts (family_documents in convert.rs).
-export const FAMILIES = ["txt", "md", "rtf", "csv", "tsv", "docx", "odt", "xlsx", "ods", "pptx", "odp", "html", "epub"];
+export const FAMILIES = ["txt", "md", "rtf", "csv", "tsv", "docx", "odt", "xlsx", "ods", "pptx", "odp", "html", "epub", "doc", "xls", "ppt"];
 export const ASPECTS = ["text", "geometry"];
 export const DIFFERENCES_PATH = new URL("../convert-platform-differences.json", import.meta.url);
 export const CAPABILITIES_PATH = new URL("../shared/tool-capabilities.json", import.meta.url);

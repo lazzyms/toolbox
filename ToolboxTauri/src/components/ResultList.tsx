@@ -303,7 +303,10 @@ export const ResultList = ({ results, progress, loading, resultVerb, resultNoun,
                 ) : <span aria-hidden="true" />)}
                 <span className="result-row-icon" aria-hidden="true"><Icon /></span>
                 <span className="result-row-text">
-                    <span className="result-row-name" title={view.fullPath}>{name}</span>
+                    <span className="result-row-heading">
+                        <span className="result-row-name" title={view.fullPath}>{name}</span>
+                        {view.basicFidelity && <Badge variant="outline">Basic fidelity</Badge>}
+                    </span>
                     {view.detailLines.map((line, lineIndex) => (
                         <span key={lineIndex} className="result-row-detail" data-tone={line.tone ?? undefined}>{line.text}</span>
                     ))}
