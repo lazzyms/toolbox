@@ -1,4 +1,6 @@
 use flate2::{write::ZlibEncoder, Compression};
+use image::metadata::Orientation;
+use image::{DynamicImage, GrayImage, Luma};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use std::fs;
 use std::io::{self, Write};
@@ -199,15 +201,42 @@ impl PageLayout {
 
 impl PagePlacement {
     // Fill trims by clipping the drawn image to the page's content box; the
-    // embedded image data itself is never cropped or resampled.
-    fn content(&self) -> String {
+    // embedded image data itself is never cropped or resampled. A camera
+    // orientation still pending on the embedded data is turned in the matrix.
+    fn content(&self, orientation: Orientation) -> String {
         let mut content = String::from("q ");
         if let Some([x, y, width, height]) = self.clip {
             content.push_str(&format!("{} {} {} {} re W n ", points(x), points(y), points(width), points(height)));
         }
-        let [x, y, width, height] = self.image;
-        content.push_str(&format!("{} 0 0 {} {} {} cm /Im0 Do Q", points(width), points(height), points(x), points(y)));
+        let matrix = CornerMap::of(orientation).matrix(self.image).map(points);
+        content.push_str(&format!("{} cm /Im0 Do Q", matrix.join(" ")));
         content
+    }
+}
+
+/// Where image's own `apply_orientation` moves a stored image's corners, so
+/// pixels oriented before embedding and a JPEG turned by its placement follow
+/// one rule. Positions are fractions of the upright image from its top-left:
+/// the stored top-left corner, then one step across and one step down.
+struct CornerMap { origin: (f32, f32), across: (f32, f32), down: (f32, f32) }
+
+impl CornerMap {
+    fn of(orientation: Orientation) -> Self {
+        let mut probe = DynamicImage::ImageLuma8(GrayImage::from_fn(2, 2, |column, row| Luma([(column + 2 * row) as u8])));
+        probe.apply_orientation(orientation);
+        let probe = probe.into_luma8();
+        let upright = |corner: u8| probe.enumerate_pixels().find(|(_, _, pixel)| pixel[0] == corner).map(|(column, row, _)| (column as f32, row as f32)).expect("orienting keeps every corner");
+        let (origin, across, down) = (upright(0), upright(1), upright(2));
+        CornerMap { origin, across: (across.0 - origin.0, across.1 - origin.1), down: (down.0 - origin.0, down.1 - origin.1) }
+    }
+
+    fn swaps_sides(&self) -> bool { self.across.0 == 0.0 }
+
+    // The `cm` operands that draw the stored image's unit square (rows bottom
+    // to top) upright into the rectangle [x, y, width, height].
+    fn matrix(&self, [x, y, width, height]: [f32; 4]) -> [f32; 6] {
+        let CornerMap { origin: (p0, q0), across: (p1, q1), down: (p2, q2) } = *self;
+        [width * p1, -height * q1, -width * p2, height * q2, x + width * (p0 + p2), y + height * (1.0 - q0 - q2)]
     }
 }
 
@@ -894,7 +923,7 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
         for image in images {
             if let Some(bits) = image.reduced_from_bits { reduced.push(format!("page {} ({bits}-bit)", kids.len() + 1)); }
             let placement = request.layout.place(image.width, image.height);
-            let content_id = document.add_object(Stream::new(dictionary! {}, placement.content().into_bytes()));
+            let content_id = document.add_object(Stream::new(dictionary! {}, placement.content(image.orientation).into_bytes()));
             let (page_width, page_height) = placement.page;
             let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), page_width.into(), page_height.into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image.id } }, "Contents" => content_id });
             kids.push(page_id.into());
@@ -920,10 +949,13 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
     }
 }
 
+// Width and height are the upright size; orientation is what the page
+// placement still has to apply to the embedded data.
 struct EmbeddedImage {
     id: lopdf::ObjectId,
     width: u32,
     height: u32,
+    orientation: Orientation,
     reduced_from_bits: Option<u8>,
 }
 
@@ -936,9 +968,10 @@ fn embed_image(document: &mut Document, path: &Path) -> Result<EmbeddedImage, St
     Ok(images.swap_remove(0))
 }
 
-// A baseline JPEG goes in as its own bytes; everything else is stored without
-// loss as 8-bit Flate samples, with any alpha kept as a soft mask. A TIFF
-// gives one image per page, in page order.
+// A baseline JPEG goes in as its own bytes and is turned upright by its
+// placement; everything else is oriented, then stored without loss as 8-bit
+// Flate samples, with any alpha kept as a soft mask. A TIFF gives one image
+// per page, in page order, and its orientation tag applies to every page.
 fn embed_images(document: &mut Document, path: &Path) -> Result<Vec<EmbeddedImage>, String> {
     if !matches!(ImageFamily::of(path), ImageFamily::Jpeg | ImageFamily::Png | ImageFamily::WebP | ImageFamily::Heif | ImageFamily::Tiff) {
         return Err("Only PNG, JPEG, WebP, HEIC, HEIF and TIFF images can be combined into a PDF.".to_string());
@@ -946,17 +979,19 @@ fn embed_images(document: &mut Document, path: &Path) -> Result<Vec<EmbeddedImag
     let decoded = source::decode(path)?;
     let reduced_from_bits = (decoded.bits_per_channel > 8).then_some(decoded.bits_per_channel);
     let baseline_jpeg = decoded.baseline_jpeg.and_then(|bytes| jpeg_color_space(&bytes).map(|space| (bytes, space)));
+    let orientation = decoded.orientation.unwrap_or(Orientation::NoTransforms);
     let mut images = Vec::with_capacity(decoded.pages.len());
-    for page in &decoded.pages {
-        let (width, height) = (page.width(), page.height());
-        let image = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8 };
+    for mut page in decoded.pages {
         if let Some((jpeg, color_space)) = &baseline_jpeg {
-            let mut dict = image;
-            dict.set("ColorSpace", *color_space);
-            dict.set("Filter", "DCTDecode");
-            images.push(EmbeddedImage { id: document.add_object(Stream::new(dict, jpeg.clone())), width, height, reduced_from_bits });
+            let (width, height) = (page.width(), page.height());
+            let dict = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8, "ColorSpace" => *color_space, "Filter" => "DCTDecode" };
+            let (width, height) = if CornerMap::of(orientation).swaps_sides() { (height, width) } else { (width, height) };
+            images.push(EmbeddedImage { id: document.add_object(Stream::new(dict, jpeg.clone())), width, height, orientation, reduced_from_bits });
             continue;
         }
+        page.apply_orientation(orientation);
+        let (width, height) = (page.width(), page.height());
+        let image = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "BitsPerComponent" => 8 };
         let (samples, color_space) = if page.color().has_color() { (page.to_rgb8().into_raw(), "DeviceRGB") } else { (page.to_luma8().into_raw(), "DeviceGray") };
         let mut dict = image;
         dict.set("ColorSpace", color_space);
@@ -965,7 +1000,7 @@ fn embed_images(document: &mut Document, path: &Path) -> Result<Vec<EmbeddedImag
             let mask = dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => width as i64, "Height" => height as i64, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8 };
             dict.set("SMask", document.add_object(flate_stream(mask, &alpha)?));
         }
-        images.push(EmbeddedImage { id: document.add_object(flate_stream(dict, &samples)?), width, height, reduced_from_bits });
+        images.push(EmbeddedImage { id: document.add_object(flate_stream(dict, &samples)?), width, height, orientation: Orientation::NoTransforms, reduced_from_bits });
     }
     Ok(images)
 }
