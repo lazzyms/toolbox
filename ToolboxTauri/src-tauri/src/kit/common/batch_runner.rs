@@ -1,4 +1,3 @@
-use rayon::prelude::*;
 use crate::kit::common::limits::{self, CancelFlag, ToolLimits};
 use crate::kit::common::JobOutcome;
 use crate::kit::contracts::{is_basic_fidelity, partition_command_inputs, OutcomePointer, OutputLocation, SkipCode, SkipReason, ToolError};
@@ -120,7 +119,21 @@ impl BatchRunner {
         R: Send + Sync + 'static,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
-        let limits = limits::recorded(command);
+        Self::inspect_with_limits(events, command, inputs, limits::recorded(command), request, job)
+    }
+
+    pub fn inspect_with_limits<R, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        limits: Option<ToolLimits>,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
         Self::run_batch(events, command, inputs, None, move |_| limits, request, job)
     }
 
@@ -177,8 +190,6 @@ impl BatchRunner {
         let label = |outcome: JobOutcome| {
             if is_basic_fidelity(command, &outcome.input_path) { outcome.with_basic_fidelity() } else { outcome }
         };
-        // rayon::into_par_iter automatically uses the system core count for the thread pool,
-        // matching the original Swift `ProcessInfo.processInfo.activeProcessorCount` behavior.
         match partition_command_inputs(command, &inputs) {
             Ok(validation) => {
                 let mut outcomes = vec![None; inputs.len()];
@@ -203,7 +214,7 @@ impl BatchRunner {
                     if let Some(outcome) = outcome { events.settled(index, outcome); }
                 }
                 let job = Arc::new(job);
-                let processed = runnable.into_par_iter().map(|(index, path)| {
+                let process = |(index, path): (usize, PathBuf)| {
                     if events.cancel.flag().is_cancelled() {
                         let outcome = label(JobOutcome::skipped(path, SkipReason::new(SkipCode::Cancelled, CANCELLED_BEFORE_START)));
                         events.settled(index, &outcome);
@@ -222,13 +233,35 @@ impl BatchRunner {
                     });
                     events.emit(FileEvent::Finished { index, outcome: outcome.clone() });
                     (index, outcome)
-                }).collect::<Vec<_>>();
-                for (index, outcome) in processed { outcomes[index] = Some(outcome); }
+                };
+                for (index, outcome) in run_side_by_side(runnable, process) { outcomes[index] = Some(outcome); }
                 outcomes.into_iter().map(Option::unwrap).collect()
             }
             Err(outcomes) => outcomes.into_iter().map(label).collect(),
         }
     }
+}
+
+/// Runs `process` on each item, as many at once as the current rayon pool has threads (one per core by default), and
+/// returns the results in the order they finish.
+///
+/// Each item waits on its own job thread for the time limit, so the waiting happens on plain threads rather than rayon
+/// workers. Jobs use rayon themselves (lopdf parses a PDF's objects in parallel); waiting on rayon workers left those
+/// jobs no worker once a batch had as many files as cores, and every file then ran out its time limit.
+fn run_side_by_side<T: Send, U: Send>(items: Vec<T>, process: impl Fn(T) -> U + Sync) -> Vec<U> {
+    let workers = rayon::current_num_threads().clamp(1, items.len().max(1));
+    let queue = Mutex::new(items.into_iter());
+    let done = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let Some(item) = queue.lock().unwrap_or_else(PoisonError::into_inner).next() else { break };
+                let result = process(item);
+                done.lock().unwrap_or_else(PoisonError::into_inner).push(result);
+            });
+        }
+    });
+    done.into_inner().unwrap_or_else(PoisonError::into_inner)
 }
 
 // Permission bits miss ACLs, sandboxing and read-only mounts, so only a real create answers the question.
