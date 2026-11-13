@@ -2794,6 +2794,7 @@ mod command_tests {
         let rich_text_bytes = std::fs::read(&rich_text).unwrap();
         let word = root.join("brief.docx"); std::fs::write(&word, crate::kit::pdf::docx::fixtures::docx(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Project brief</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">Scope and </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>timeline</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Phase</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Week</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#, &[("rIdStyles", "styles", "styles.xml", false)], &[("word/styles.xml", br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style></w:styles>"#)])).unwrap();
         let open_document = root.join("minutes.odt"); std::fs::write(&open_document, crate::kit::pdf::odt::fixtures::odt("", r#"<text:h text:outline-level="1">Meeting minutes</text:h><text:p>Agreed <text:span>actions</text:span></text:p><table:table><table:table-row><table:table-cell><text:p>Owner</text:p></table:table-cell><table:table-cell><text:p>Due</text:p></table:table-cell></table:table-row></table:table>"#, &[], &[])).unwrap();
+        let workbook = root.join("budget.xlsx"); std::fs::write(&workbook, crate::kit::pdf::xlsx::fixtures::xlsx(&[("Budget", "visible", &crate::kit::pdf::xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Quarter</t></is></c><c r="B1" t="inlineStr"><is><t>Spend</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Q1</t></is></c><c r="B2"><f>SUM(1,2)</f><v>3</v></c></row>"#, "")), ("Draft", "hidden", &crate::kit::pdf::xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="inlineStr"><is><t>Scratch</t></is></c></row>"#, ""))], "", "", &[])).unwrap();
         let table = root.join("orders.csv"); std::fs::write(&table, "Order;Customer;Note\n1001;\"Smith; Jo\";\"said \"\"hi\"\"\"\n1002;Lee;plain\n").unwrap();
         let table_bytes = std::fs::read(&table).unwrap();
 
@@ -2909,6 +2910,12 @@ mod command_tests {
         assert!(["Meeting minutes", "Agreed", "actions", "Owner", "Due"].iter().all(|expected| odt_text.contains(expected)), "converted ODT must stay searchable: {odt_text}");
         assert!(odt_pdf.catalog().unwrap().has(b"Outlines"), "ODT headings become bookmarks");
         outputs.extend(named(&mut naming, "convert_to_pdf", open_document.clone(), converted_odt));
+        let sheet_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [workbook.clone()], "outputLocation": location(&root, "convert xlsx to pdf"), "spreadsheets": { "sheets": "visible", "printAreas": true, "fitToWidth": true } })));
+        assert_eq!(sheet_outcomes[0].detail, "1 page. 1 sheet. 1 hidden sheet left out.", "{sheet_outcomes:?}");
+        let converted_sheet = sheet_outcomes[0].output_paths().to_vec();
+        let sheet_text = lopdf::Document::load(&converted_sheet[0]).unwrap().extract_text(&[1]).unwrap();
+        assert!(["Quarter", "Spend", "Q1", "3"].iter().all(|expected| sheet_text.contains(expected)) && !sheet_text.contains("Scratch") && !sheet_text.contains("SUM"), "converted XLSX shows stored values of visible sheets: {sheet_text}");
+        outputs.extend(named(&mut naming, "convert_to_pdf", workbook.clone(), converted_sheet));
         let table_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [table.clone()], "outputLocation": location(&root, "convert table to pdf"), "tables": { "delimiter": "semicolon", "headerRow": true, "encoding": "detect", "orientation": "landscape", "fit": "width" } })));
         assert_eq!(table_outcomes[0].detail, "1 page. 2 rows, semicolon. Read as UTF-8.", "{table_outcomes:?}");
         let converted_table = table_outcomes[0].output_paths().to_vec();

@@ -36,15 +36,21 @@ export type TableOptions = {
 
 export const defaultTableOptions: TableOptions = { delimiter: "auto", headerRow: true, encoding: "detect", orientation: "landscape", fit: "width" };
 
+export type SpreadsheetOptions = { sheets: "all" | "visible"; printAreas: boolean; fitToWidth: boolean };
+
+export const defaultSpreadsheetOptions: SpreadsheetOptions = { sheets: "all", printAreas: true, fitToWidth: true };
+
 export const isPlainText = (path: string) => extensionOf(path) === ".txt";
 
 export const isMarkdown = (path: string) => [".md", ".markdown"].includes(extensionOf(path));
 
 export const isTable = (path: string) => [".csv", ".tsv"].includes(extensionOf(path));
 
-export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions };
+export const isSpreadsheet = (path: string) => [".xlsx", ".ods"].includes(extensionOf(path));
 
-export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions };
+export type ConvertToPdfOptions = { plainText: PlainTextOptions; markdown: MarkdownOptions; tables: TableOptions; spreadsheets: SpreadsheetOptions };
+
+export const defaultConvertToPdfOptions: ConvertToPdfOptions = { plainText: defaultPlainTextOptions, markdown: defaultMarkdownOptions, tables: defaultTableOptions, spreadsheets: defaultSpreadsheetOptions };
 
 export const convertToPdfRequest = (paths: string[], outputLocation: unknown, options: ConvertToPdfOptions) => ({
   paths,
@@ -52,6 +58,7 @@ export const convertToPdfRequest = (paths: string[], outputLocation: unknown, op
   ...(paths.some(isPlainText) ? { plainText: options.plainText } : {}),
   ...(paths.some(isMarkdown) ? { markdown: options.markdown } : {}),
   ...(paths.some(isTable) ? { tables: options.tables } : {}),
+  ...(paths.some(isSpreadsheet) ? { spreadsheets: options.spreadsheets } : {}),
 });
 
 const unavailableFamily = (tool: ToolDefinition, path: string) =>
@@ -79,15 +86,54 @@ const appliesTo = (files: string[], plural: string) => `Applies to ${files.lengt
 type PanelProps<T> = { files: string[]; options: T; onChange: (options: T) => void; disabled: boolean };
 
 export const ConvertToPdfOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<ConvertToPdfOptions>) => {
-  if (![isPlainText, isMarkdown, isTable].some((matches) => files.some(matches))) {
+  if (![isSpreadsheet, isPlainText, isMarkdown, isTable].some((matches) => files.some(matches))) {
     return <p className="workspace-note">Options for each format appear here when a file of that format is in the list.</p>;
   }
   return (
     <>
+      <SpreadsheetOptionsPanel files={files} options={options.spreadsheets} onChange={(spreadsheets) => onChange({ ...options, spreadsheets })} disabled={disabled} />
       <MarkdownOptionsPanel files={files} options={options.markdown} onChange={(markdown) => onChange({ ...options, markdown })} disabled={disabled} />
       <PlainTextOptionsPanel files={files} options={options.plainText} onChange={(plainText) => onChange({ ...options, plainText })} disabled={disabled} />
       <TablesOptionsPanel files={files} options={options.tables} onChange={(tables) => onChange({ ...options, tables })} disabled={disabled} />
     </>
+  );
+};
+
+const SpreadsheetOptionsPanel = ({ files, options, onChange, disabled }: PanelProps<SpreadsheetOptions>) => {
+  const spreadsheetFiles = files.filter(isSpreadsheet);
+  if (spreadsheetFiles.length === 0) return null;
+  const set = <K extends keyof SpreadsheetOptions>(key: K, value: SpreadsheetOptions[K]) => onChange({ ...options, [key]: value });
+  return (
+    <fieldset role="region" aria-label="Spreadsheets options" className="grid gap-3" disabled={disabled}>
+      <div className="workspace-panel-intro">
+        <p className="workspace-panel-label">Spreadsheets</p>
+        <p className="workspace-panel-copy">{appliesTo(spreadsheetFiles, "spreadsheets")}</p>
+      </div>
+      <div className="workspace-field">
+        <Label id="spreadsheets-sheets-label">Sheets</Label>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          aria-labelledby="spreadsheets-sheets-label"
+          value={options.sheets}
+          onValueChange={(value) => {
+            if (value) set("sheets", value as SpreadsheetOptions["sheets"]);
+          }}
+        >
+          <ToggleGroupItem value="all">All sheets</ToggleGroupItem>
+          <ToggleGroupItem value="visible">Visible only</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      <Label htmlFor="spreadsheets-print-areas" className="cursor-pointer">
+        <Checkbox id="spreadsheets-print-areas" checked={options.printAreas} onCheckedChange={(checked) => set("printAreas", checked === true)} />
+        Respect print areas
+      </Label>
+      <Label htmlFor="spreadsheets-fit-to-width" className="cursor-pointer">
+        <Checkbox id="spreadsheets-fit-to-width" checked={options.fitToWidth} onCheckedChange={(checked) => set("fitToWidth", checked === true)} />
+        Fit each sheet to the page width
+      </Label>
+    </fieldset>
   );
 };
 
