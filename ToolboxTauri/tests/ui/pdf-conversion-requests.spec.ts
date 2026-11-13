@@ -141,20 +141,15 @@ test.describe("PDF Editor file tools send their exact requests", () => {
     test("Split PDF in every mode", async ({ page }) => {
         await selectFromRail(page, "PDF Editor", "Split PDF");
         await chooseFiles(page, "/local/report.three.pdf");
-        expect(await exportAndCapture(page, "split_pdf")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], pages: [], pageRanges: null, splitMode: "pages", chunkSize: null, outputLocation,
-        }));
-
-        await page.getByLabel("Split mode").selectOption("ranges");
         await page.getByRole("textbox", { name: "Page ranges" }).fill("1-2, 3");
         expect(await exportAndCapture(page, "split_pdf")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], pages: [], pageRanges: "1-2, 3", splitMode: "ranges", chunkSize: null, outputLocation,
+            paths: ["/local/report.three.pdf"], mode: { kind: "ranges", ranges: "1-2, 3" }, outputLocation,
         }));
 
-        await page.getByLabel("Split mode").selectOption("chunks");
+        await page.getByRole("radiogroup", { name: "Split by" }).getByRole("radio", { name: "Every N pages" }).click();
         await page.getByRole("spinbutton", { name: "Pages per file" }).fill("3");
         expect(await exportAndCapture(page, "split_pdf")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], pages: [], pageRanges: null, splitMode: "chunks", chunkSize: 3, outputLocation,
+            paths: ["/local/report.three.pdf"], mode: { kind: "everyN", pages: 3 }, outputLocation,
         }));
     });
 

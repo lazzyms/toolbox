@@ -948,7 +948,10 @@ for (const tool of [
     test(`${tool.title} without qpdf shows the native Unavailable message in plain language`, async ({ page }) => {
         await open(page, "Merge PDF");
         await drop(page, tool.paths);
-        if (tool.title === "Split PDF") await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+        if (tool.title === "Split PDF") {
+            await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
+            await page.getByRole("textbox", { name: "Page ranges" }).fill("1");
+        }
         await page.evaluate(({ paths, message }) => {
             (window as unknown as IntakeWindow).__failures = Object.fromEntries(paths.map((path) => [path, { kind: "unavailable", message }]));
         }, { paths: tool.paths, message: qpdfUnavailableMessage });

@@ -283,9 +283,8 @@ async fn run_merge_pdfs(request: &remaining::MergePdfRequest) -> Vec<JobOutcome>
 }
 
 #[tauri::command]
-async fn split_pdf(events: RunEvents, request: remaining::PageSelectionRequest) -> Vec<JobOutcome> {
+async fn split_pdf(events: RunEvents, request: remaining::SplitPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("split_pdf", &request.paths) { return outcomes; }
-    if let Err(outcomes) = validate_page_ranges(&request.paths, request.split_page_ranges()) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "split_pdf", request.paths.clone(), &request.output_location, &request, remaining::split)
 }
@@ -627,7 +626,7 @@ mod command_tests {
     use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, EditPdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RangedPageScope, RedactPdfRequest, RotatePage, SignPdfRequest};
-    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfWatermarkRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode};
+    use crate::kit::pdf::remaining::{CompressPdfRequest, ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfWatermarkRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode, SplitMode, SplitPdfRequest};
     use crate::kit::vision::VisionRequest;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
@@ -1165,8 +1164,8 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    fn split_ranges_request(paths: Vec<PathBuf>, ranges: &str, output_location: OutputLocation) -> PageSelectionRequest {
-        PageSelectionRequest { paths, pages: vec![], page_ranges: Some(ranges.into()), split_mode: Some("ranges".into()), chunk_size: None, output_location }
+    fn split_ranges_request(paths: Vec<PathBuf>, ranges: &str, output_location: OutputLocation) -> SplitPdfRequest {
+        SplitPdfRequest { paths, mode: SplitMode::Ranges { ranges: ranges.into() }.into(), output_location }
     }
 
     fn images_range_request(paths: Vec<PathBuf>, range: &str, output_location: OutputLocation) -> PdfToImagesRequest {
@@ -1179,10 +1178,11 @@ mod command_tests {
         let inputs = vec![root.join("first.pdf"), root.join("second.pdf")];
         std::fs::write(&inputs[0], b"not a pdf yet").unwrap();
         make_pdf(&inputs[1], 3);
-        for (range, named) in [("3-1", "\"3-1\""), ("0-2", "\"0-2\""), ("1,,2", "Entry 2"), ("1, two", "\"two\"")] {
+        // Split names the offending entry in its own words; the shared grammar quotes it.
+        for (range, split_named, named) in [("3-1", "3-1 runs backwards (write 1-3).", "\"3-1\""), ("0-2", "0-2 isn't a range. Pages start at 1.", "\"0-2\""), ("1,,2", "Entry 2 is empty.", "Entry 2"), ("1, two", "two isn't a page.", "\"two\"")] {
             let split = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(inputs[..1].to_vec(), range, location(&root, "split"))));
             let images = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(inputs.clone(), range, location(&root, "images"))));
-            for (tool, outcomes, expected) in [("split", split, &inputs[..1]), ("pdf to images", images, &inputs[..])] {
+            for (tool, outcomes, expected, named) in [("split", split, &inputs[..1], split_named), ("pdf to images", images, &inputs[..], named)] {
                 assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), expected, "{tool} {range}");
                 for outcome in &outcomes {
                     let error = outcome.error().unwrap_or_else(|| panic!("{tool} accepted {range}"));
@@ -1207,7 +1207,7 @@ mod command_tests {
 
         let parts = assert_success("split ranges", split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1-3, 5, 8-", location(&root, "split"))));
         let names = parts.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
-        assert_eq!(names, ["document-split-0.pdf", "document-split-1.pdf", "document-split-2.pdf"]);
+        assert_eq!(names, ["document-pages-1-3.pdf", "document-page-5.pdf", "document-pages-8-9.pdf"]);
         let page_counts = parts.iter().map(|path| lopdf::Document::load(path).unwrap().get_pages().len()).collect::<Vec<_>>();
         assert_eq!(page_counts, [3, 1, 2]);
 
@@ -1215,12 +1215,13 @@ mod command_tests {
         let names = images.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
         assert_eq!(names, ["document-images-1.png", "document-images-2.png", "document-images-3.png", "document-images-5.png", "document-images-8.png", "document-images-9.png"]);
 
-        for (tool, outcomes) in [
-            ("split", tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))))),
-            ("pdf to images", tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(vec![input.clone()], "1, 10-", location(&root, "images-past-end"))))),
+        // Split checks its ranges against the page count before writing, so going past the end is invalid input there.
+        for (tool, kind, outcomes) in [
+            ("split", ErrorKind::InvalidInput, tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))))),
+            ("pdf to images", ErrorKind::Processing, tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), images_range_request(vec![input.clone()], "1, 10-", location(&root, "images-past-end"))))),
         ] {
             let error = outcomes[0].error().unwrap_or_else(|| panic!("{tool} accepted pages past the end"));
-            assert_eq!(error.kind, ErrorKind::Processing, "{tool}: {}", error.message);
+            assert_eq!(error.kind, kind, "{tool}: {}", error.message);
             assert!(outcomes[0].output_paths().is_empty(), "{tool}");
         }
         let _ = std::fs::remove_dir_all(root);
@@ -1457,8 +1458,8 @@ mod command_tests {
         make_pdf(&good, 2);
         let originals = [Original::of(&offender), Original::of(&good)];
         let output = location(&root, "out");
-        let outcomes = [&offender, &good].into_iter().flat_map(|path| tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), PageSelectionRequest {
-            paths: vec![path.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: output.clone(),
+        let outcomes = [&offender, &good].into_iter().flat_map(|path| tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), SplitPdfRequest {
+            paths: vec![path.clone()], mode: SplitMode::EveryN { pages: 1 }.into(), output_location: output.clone(),
         }))).collect::<Vec<_>>();
         for original in &originals { original.assert_untouched(); }
         assert_only_offender_limited(&outcomes, &offender, LimitKind::PageCount, "5,000");
@@ -1563,11 +1564,11 @@ mod command_tests {
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
         outputs.extend(named(&mut naming, "extract_from_pdf", pdf.clone(), assert_success("extract text from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, None, location(&root, "extract text"))))));
-        outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))));
+        outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), SplitPdfRequest { paths: vec![pdf.clone()], mode: SplitMode::EveryN { pages: 1 }.into(), output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_from_pdf", image_pdf.clone(), assert_success("extract images from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![image_pdf.clone()], ExtractMode::Images, None, location(&root, "extract images"))))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
         outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", ocr_pdf(RunEvents::silent(), vision::OcrRequest { paths: vec![pdf.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr") }))));
-        outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), split_mode: None, chunk_size: None, output_location: location(&root, "extract pages") }))));
+        outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), output_location: location(&root, "extract pages") }))));
         outputs.extend(named(&mut naming, "compress_pdf", pdf.clone(), assert_success("compress pdf", compress_pdf(RunEvents::silent(), serde_json::from_value::<CompressPdfRequest>(serde_json::json!({ "paths": [pdf.clone()], "quality": 80, "outputLocation": location(&root, "compress pdf") })).expect("Compress Files view payload for compress_pdf")))));
         outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));
         outputs.extend(named(&mut naming, "repair_pdf", pdf.clone(), assert_success("repair pdf", repair_pdf(RunEvents::silent(), RepairPdfRequest { paths: vec![pdf.clone()], output_location: location(&root, "repair pdf") }))));
@@ -2251,7 +2252,7 @@ mod command_tests {
         let runs = [
             ("compress", tauri::async_runtime::block_on(compress_pdf(RunEvents::silent(), CompressPdfRequest { paths: inputs.clone(), quality: 80, output_location: location(&root, "compress") }))),
             ("merge", tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: inputs.clone(), output_location: location(&root, "merge"), output_path: None }))),
-            ("split", tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), PageSelectionRequest { paths: inputs[..1].to_vec(), pages: vec![], page_ranges: None, split_mode: Some("pages".into()), chunk_size: None, output_location: location(&root, "split") }))),
+            ("split", tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), SplitPdfRequest { paths: inputs[..1].to_vec(), mode: SplitMode::EveryN { pages: 1 }.into(), output_location: location(&root, "split") }))),
         ];
 
         for (name, outcomes) in &runs {
@@ -3011,12 +3012,9 @@ mod command_tests {
         assert!(wrong_format[0].output_paths().is_empty());
         assert!(wrong_format[0].error().is_some_and(|error| error.message.contains("Accepted extensions")));
 
-        let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), PageSelectionRequest {
+        let wrong_cardinality = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), SplitPdfRequest {
             paths: vec![pdf.clone(), second_pdf.clone()],
-            pages: vec![],
-            page_ranges: None,
-            split_mode: Some("pages".to_string()),
-            chunk_size: None,
+            mode: SplitMode::EveryN { pages: 1 }.into(),
             output_location: location(&root, "wrong-cardinality"),
         }));
         assert_eq!(wrong_cardinality.len(), 2);
