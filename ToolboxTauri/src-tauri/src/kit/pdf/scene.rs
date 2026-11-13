@@ -658,7 +658,7 @@ pub struct WatermarkImageInfo { pub width: u32, pub height: u32 }
 
 /// Refuses a watermark picture before anything is placed: PNG or JPG within the image tools' recorded limits.
 pub fn check_watermark_image(path: &Path) -> Result<WatermarkImageInfo, ToolError> {
-    crate::kit::common::limits::recorded("watermark_images").ok_or_else(|| ToolError::processing("Image limits are missing."))?.check(path)?;
+    crate::kit::common::limits::IMAGE.check(path)?;
     let unreadable = |error: std::io::Error| ToolError::invalid_input(format!("Could not read the watermark picture: {error}"));
     let reader = image::ImageReader::open(path).map_err(unreadable)?.with_guessed_format().map_err(unreadable)?;
     if !matches!(reader.format(), Some(image::ImageFormat::Png | image::ImageFormat::Jpeg)) {

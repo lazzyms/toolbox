@@ -111,17 +111,11 @@ export type ToolCommand =
   | "ocr_pdf"
   | "blur_faces"
   | "remove_image_background"
-  | "resize_images"
-  | "rotate_images"
-  | "crop_images"
   | "export_image_edit_stack"
-  | "adjust_image_tone"
-  | "watermark_images"
   | "generate_icon_set"
   | "create_gif"
   | "extract_gif_frames"
-  | "process_tiff_pages"
-  | "image_metadata";
+  | "process_tiff_pages";
 
 
 export type OutcomePointer =
@@ -371,8 +365,6 @@ export interface WatermarkOptions {
   position?: WatermarkPosition;
   rotation?: number;
 }
-
-export interface WatermarkImagesRequest extends ToolRequest, WatermarkOptions {}
 
 export interface CompressImagesRequest extends ToolRequest {
   quality: number;
