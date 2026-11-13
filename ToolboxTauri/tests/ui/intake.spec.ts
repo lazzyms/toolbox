@@ -15,6 +15,7 @@ type IntakeWindow = Window & {
     __failures: Record<string, { kind: string; message: string }>;
     __warnings: Record<string, Array<{ code: string; message: string }>>;
     __pageCounts: Record<string, number | null>;
+    __outputs: Record<string, { outputPaths: string[]; detail: string }>;
     __outputSettings: unknown;
     __sent: string[];
     __drop: (paths: string[]) => void;
@@ -36,6 +37,7 @@ test.beforeEach(async ({ page }) => {
         win.__failures = {};
         win.__warnings = {};
         win.__pageCounts = {};
+        win.__outputs = {};
         win.__outputSettings = { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
         // Everything that leaves the page or lands in the console, so a test can prove no password does.
         win.__sent = [];
@@ -93,17 +95,18 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("plugin:") || command === "shell_ready") return null;
                 if (command === "inspect_image_pages") return (args as { request: { paths: string[] } }).request.paths.map((path) => win.__pageCounts[path] ?? 1);
                 if (command.startsWith("inspect_")) throw "No preview in this test.";
+                if (command === "open_output_path" || command === "reveal_output_path") return null;
                 if (win.__processingDelayMs) await new Promise((resolve) => window.setTimeout(resolve, win.__processingDelayMs));
                 const { request } = args as { request: { paths: string[] } };
                 return request.paths.map((inputPath) => win.__failures[inputPath]
-                    ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { ...win.__failures[inputPath], pointer: null }, reason: null, warnings: [] }
+                    ? { inputPath, outputPaths: win.__outputs[inputPath]?.outputPaths ?? [], detail: "", state: "failed", failure: { ...win.__failures[inputPath], pointer: null }, reason: null, warnings: [] }
                     : win.__skippedPaths[inputPath]
                     ? { inputPath, outputPaths: [], detail: "", state: "skipped", failure: null, reason: { ...win.__skippedPaths[inputPath], pointer: null }, warnings: [] }
                     : win.__wrongPasswordPaths.includes(inputPath)
                     ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "wrongPassword", message: "Wrong password or unsupported encryption.", pointer: null }, reason: null, warnings: [] }
                     : win.__invalidInputPaths.includes(inputPath)
                         ? { inputPath, outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "Only PDF, Word, Excel, and PowerPoint files can be unlocked.", pointer: null }, reason: null, warnings: [] }
-                        : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: win.__warnings[inputPath] ?? [] });
+                        : { inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", ...win.__outputs[inputPath], state: "succeeded", failure: null, reason: null, warnings: win.__warnings[inputPath] ?? [] });
             },
             transformCallback: (callback: (event: unknown) => void) => {
                 const id = nextId++;
@@ -1283,6 +1286,72 @@ test("Convert Image Format reports flattened transparency and reduced bit depth 
     const plain = results(page).filter({ hasText: "plain.png" });
     await expect(plain).toHaveAttribute("data-tone", "ok");
     await expect(plain).not.toContainText("flattened");
+});
+
+test("Convert Image Format accepts .tif and .tiff files and sends them with the batch", async ({ page }) => {
+    const paths = ["/local/scan-0042.tif", "/local/fax-0007.TIFF", "/local/a.png"];
+    await open(page, "Convert Image Format");
+    await drop(page, paths);
+    for (const name of ["scan-0042.tif", "fax-0007.TIFF", "a.png"]) await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Not added" })).toHaveCount(0);
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "PNG", exact: true }).click();
+    await run(page).click();
+
+    const requests = await requestFor(page, "convert_images");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ paths, format: "png" });
+    await expect(results(page)).toHaveCount(3);
+});
+
+test("Convert Image Format lists every page output of a multi-page TIFF on its one row, each with Open and Reveal", async ({ page }) => {
+    const pages = ["/local/scan-0042-converted-p1.png", "/local/scan-0042-converted-p2.png", "/local/scan-0042-converted-p3.png"];
+    await open(page, "Convert Image Format");
+    await drop(page, ["/local/scan-0042.tif", "/local/fax-0007.tif", "/local/a.png"]);
+    await page.evaluate((pages) => {
+        const win = window as unknown as IntakeWindow;
+        win.__outputs = {
+            "/local/scan-0042.tif": { outputPaths: pages, detail: "3 files, one per page." },
+            "/local/fax-0007.tif": { outputPaths: ["/local/fax-0007-converted-p1.png"], detail: "" },
+        };
+        win.__failures = { "/local/fax-0007.tif": { kind: "invalidInput", message: "TIFF page 2 of 3 can't be read. Page 1 was saved as fax-0007-converted-p1.png." } };
+    }, pages);
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "PNG", exact: true }).click();
+    await run(page).click();
+
+    const rowsList = page.getByRole("list", { name: "Results" });
+    await expect(rowsList.locator(":scope > li")).toHaveCount(3);
+    const scan = rowsList.locator(":scope > li").filter({ hasText: "scan-0042.tif" });
+    await expect(scan).toHaveAttribute("data-state", "succeeded");
+    await expect(scan).toContainText("3 files, one per page.");
+    await expect(scan.getByRole("button", { name: /^Open first/ })).toHaveCount(0);
+    const toggle = scan.getByRole("button", { name: "Show 3 files", exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
+    await expect(scan.getByRole("button", { name: "Hide files", exact: true })).toHaveAttribute("aria-expanded", "true");
+    const outputs = scan.getByRole("list", { name: "Files from scan-0042.tif" });
+    await expect(outputs.getByRole("listitem")).toHaveText([/scan-0042-converted-p1\.png/, /scan-0042-converted-p2\.png/, /scan-0042-converted-p3\.png/]);
+    for (const path of pages) {
+        const name = path.split("/").pop() ?? path;
+        await outputs.getByRole("button", { name: `Open ${name}`, exact: true }).click();
+        await outputs.getByRole("button", { name: `Show in Finder: ${name}`, exact: true }).click();
+    }
+    const invocations = await page.evaluate(() => (window as unknown as IntakeWindow).__invocations);
+    const opened = (command: string) => invocations.filter((invocation) => invocation.command === command).map(({ args }) => (args as { path: string }).path);
+    expect(opened("open_output_path")).toEqual(pages);
+    expect(opened("reveal_output_path")).toEqual(pages);
+
+    const fax = rowsList.locator(":scope > li").filter({ hasText: "fax-0007.tif" });
+    await expect(fax).toHaveAttribute("data-state", "failed");
+    await expect(fax).toContainText("Page 1 was saved as fax-0007-converted-p1.png.");
+    await fax.getByRole("button", { name: "Show 1 file", exact: true }).click();
+    const saved = fax.getByRole("list", { name: "Files from fax-0007.tif" });
+    await expect(saved.getByRole("listitem")).toHaveCount(1);
+    await expect(saved.getByRole("button", { name: "Open fax-0007-converted-p1.png", exact: true })).toBeVisible();
+    await expect(saved.getByRole("button", { name: "Show in Finder: fax-0007-converted-p1.png", exact: true })).toBeVisible();
+
+    const single = rowsList.locator(":scope > li").filter({ hasText: "a.png" });
+    await expect(single.getByRole("button", { name: "Open a.png.out", exact: true })).toBeVisible();
+    await expect(single.getByRole("button", { name: /^Show \d/ })).toHaveCount(0);
 });
 
 test("Convert Image Format keeps a GIF out of the list and its pointer opens Extract GIF Frames", async ({ page }) => {
