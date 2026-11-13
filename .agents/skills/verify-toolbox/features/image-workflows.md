@@ -30,18 +30,19 @@ Image workflows edit images and provide utilities for icon sets, animation frame
 Preconditions:
 
 - The native Toolbox window passes Doctor.
-- Make a scratch image with `sips -s format png /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericDocumentIcon.icns --out <run-dir>/scratch/sample.png`. Never process a system or checked-in icon directly.
+- `helpers/make-fixtures.sh` has written `sample.png`, `sample2.png` and `sample.heic` into scratch. Never process a system or checked-in image directly.
 - Settings > Output location is `Next to each original`.
 - For GIF creation, stage at least two ordered images. For GIF or TIFF frame actions, use a matching local sample.
 
 - **Enter an image action.** Search its exact title and choose `Open <title>`. Confirm the workspace heading, such as "Image Editor". An unavailable tool shows its own title instead.
 - **Load an image.** Choose `Choose files to process` and select the scratch copy through the native file picker. The `Files` list shows the selected file.
 - **Edit an image.** The edit tabs are Resize, Rotate, Crop, Watermark, and Adjust. Use the controls named `Resize mode`, `Width`, `Height`, `Rotation`, `Mirror`, `Aspect ratio`, `Watermark text`, `Brightness`, `Contrast`, `Saturation`, and `Exposure`. `Crop width` and `Crop height` appear only when `Aspect ratio` is "Free crop". The flip control's visible text is "Flip" while its name is `Mirror`.
-- **Convert.** There is no per-tool convert button. Set `Target format`, then choose `Export edited images`. The current draft counts without `Add edit to plan`: the plan reads "0 committed edits plus current draft" and "1 edits will be applied". On `sample.png` with JPEG the result reads "Done. 1 converted" and writes `sample-edited.jpg`. Proven 2026-10-23.
+- **Convert.** There is no per-tool convert button. `Target format` offers JPEG, PNG, WebP, HEIC and TIFF. Set it, then choose `Export edited images`. The current draft counts without `Add edit to plan`: the plan reads "0 committed edits plus current draft" and "1 edits will be applied". On `sample.png` with JPEG the result reads "Done. 1 converted" and writes `sample-edited.jpg`. Proven 2026-10-23.
 - **Export a combined edit plan.** Add each edit with `Add edit to plan`, confirm the preview updates, then choose `Export edited images`. Verify the output and the unchanged source hash.
-- **Compress.** Open `Compress` in Compress Files. Choose a `Strength` and optionally `Strip EXIF`, then choose `Compress N files`. PDFs, JPEG, PNG and WebP run in one batch. There is no quality slider or "Preserve original pixels" switch. The result names each output.
+- **Compress.** Open `Compress` in Compress Files. Choose a `Strength` of Low, Medium or High and optionally `Strip EXIF`, then choose `Compress N files`. PDFs, JPEG, PNG and WebP run in one batch. There is no quality slider or "Preserve original pixels" switch. The result names each output. A file that is already small is skipped: "0 compressed, 1 skipped". Proven 2026-11-13.
+- **App icons.** Load `sample.png`. The platforms are macOS (7 sizes), iOS (13), Android (6) and Website (6). Choose `Make 1 icon set`. With every platform on it writes 58 files into `sample-icons/`. Proven 2026-11-13.
 - **Generate or inspect media.** Use the visible controls for the icon, GIF, TIFF, or metadata action. Create GIF and TIFF combine open a save dialog. The result names each output. Metadata inspection shows a report without writing a file.
-- **Check vision tools.** The `Blur Faces` and `Remove Background` rail items are disabled and marked "Unavailable". Opening one shows "Unavailable in this build." and its search help reads "<title> is unavailable in this build". Record them as unavailable.
+- **Check vision tools.** The `Blur Faces` and `Remove Background` rail items are disabled and marked "Unavailable". Opening one shows "Unavailable in this build." and its search help reads "<title> is unavailable in this build". Record them as verified-unreachable: `shared/tool-capabilities.json` marks both `unavailable`, so no staging enables them.
 
 ## Gotchas
 

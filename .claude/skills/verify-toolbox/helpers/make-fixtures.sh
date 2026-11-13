@@ -6,6 +6,7 @@ run_dir="${1:?usage: make-fixtures.sh <run-dir>}"
 mkdir -p "$run_dir/scratch"
 scratch="$(cd "$run_dir/scratch" && pwd)"
 command -v qpdf >/dev/null || { echo "qpdf not found on PATH" >&2; exit 1; }
+command -v sips >/dev/null || { echo "sips not found (macOS only)" >&2; exit 1; }
 
 raw="$scratch/.raw.pdf"
 cat > "$raw" <<'PDF'
@@ -27,8 +28,15 @@ owner_pw="$(openssl rand -hex 12)"
 qpdf --encrypt --user-password= --owner-password="$owner_pw" --bits=256 \
   --print=none --modify=none --extract=n -- "$scratch/plain.pdf" "$scratch/restricted.pdf"
 
+qpdf --object-streams=generate "$scratch/plain.pdf" "$scratch/plain2.pdf"
+
+sips -s format png -z 1024 1024 "$scratch/plain.pdf" --out "$scratch/sample.png" >/dev/null
+sips -r 90 "$scratch/sample.png" --out "$scratch/sample2.png" >/dev/null
+sips -s format heic "$scratch/sample.png" --out "$scratch/sample.heic" >/dev/null
+
 printf 'Legacy Word stub for Toolbox verification\n' > "$scratch/legacy.doc"
 
-(cd "$scratch" && shasum -a 256 plain.pdf restricted.pdf legacy.doc > inputs.sha256)
+names="plain.pdf plain2.pdf restricted.pdf legacy.doc sample.png sample2.png sample.heic"
+(cd "$scratch" && shasum -a 256 $names > inputs.sha256)
 qpdf --show-encryption "$scratch/restricted.pdf" | head -3 >&2
-ls -1 "$scratch"/plain.pdf "$scratch"/restricted.pdf "$scratch"/legacy.doc
+for name in $names; do printf '%s\n' "$scratch/$name"; done

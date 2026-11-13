@@ -22,13 +22,13 @@ PDF workflows group page editing and conversion actions under the PDF Editor and
 - `pdf-to-text` extracts selectable text.
 - `pdf-image-extract` extracts embedded JPEG images.
 - `images-to-pdf` combines selected images into a PDF.
-- `pdf-ocr` is listed but unavailable in every build.
+- `pdf-ocr` recognizes text in scanned PDFs.
 - `pdf-compress` writes a compressed PDF copy.
 
 ## How to get to it (user POV)
 
 - Choose `PDF Editor`, `PDF Conversion`, or `Compress Files` under Views in the sidebar and select the action in the view's tool rail.
-- PDF Editor lists Edit PDF (with Watermark, Sign, and Remove Pages), Organize, Merge, Split, Crop, Page Numbers, and Redact. Rotate PDFs, Repair PDF, Compare PDFs, and Extract PDF Pages sit under "More".
+- PDF Editor lists Edit PDF (with Watermark, Sign, and Remove Pages), Organize, Merge, Split, Crop, Page Numbers, and Redact. Redact PDF, Privacy Check, Edit Properties, Rotate PDFs, Repair PDF, Compare PDFs, Extract PDF Pages and Bates Numbering sit under "More".
 - PDF Conversion lists PDF to Images, Images to PDF, OCR PDF, PDF to Text, and Extract Images from PDF.
 - Search `Search tools` for an exact action title such as `Edit PDF` or `Merge PDF` and choose `Open <title>`.
 - Choose `Open PDF Editor` or `Open PDF Conversion` from the corresponding Tool library card.
@@ -48,8 +48,10 @@ Preconditions:
 - **Enter a conversion action.** Search the exact title and choose `Open <title>`. Choose `Choose files to process`. The `Files` list shows the selected file and the action's controls appear.
 - **Set conversion options.** Controls go by accessible name: `Render DPI`, `Output format`, `Page range`, `Split mode`, `Page ranges`, `Pages per file`, `Page numbers or ranges`, `Rotation direction`, `Redaction area`, and `Compression quality`. Visible labels can be shorter, such as "Resolution" or "Direction".
 - **Export a conversion.** Choose the button named `Export <title>`, such as `Export PDF to Text`. Wait for the headline "Done. N <verb>", such as "Done. 1 extracted". Each row names its output and has `Open <file>` and `Show in Finder: <file>`. Confirm the output exists in scratch and the source hash is unchanged.
-- **PDF to Text.** On `plain.pdf` the result is `plain-text.txt` containing "Toolbox verification". Proven 2026-10-23.
-- **Check OCR.** The `OCR PDF` rail item is disabled and marked "Unavailable". Opening it from search shows "Unavailable in this build." Record it as unavailable, not as an OCR run.
+- **Extract from PDF.** The default mode is Both. Choose `Extract from 1 PDF`. On `plain2.pdf` the result reads "Done. 1 extracted" and "No images in this PDF, so only the text file was saved." It writes `plain2-text.txt` containing "Toolbox verification". It needs the bundled PDF helpers from the Launch section. Proven 2026-11-13.
+- **Merge.** Pick `plain.pdf` and `plain2.pdf` with cmd-click. Choose `Save the merged PDF`. The result reads "Done. 2 merged". Proven 2026-11-13.
+- **Split.** Enter `1-3, 5, 8-` in `Page ranges`. The result reads "Done. 1 split". Proven 2026-11-13.
+- **Edit PDF.** Before any change the export area reads "Nothing to export yet". After one change it reads "1 change not exported". Export reads "Done. 1 edited". Proven 2026-11-13.
 
 ## Gotchas
 
@@ -58,5 +60,5 @@ Preconditions:
 - With no file open, the page editor shows two `Choose files to process` buttons. Use the one in the `Open document` region. After a file loads its visible text becomes "Replace file" or "Add files" while the name stays.
 - The `Export <title>` visible text differs from its name. Merge, Images to PDF, and Compare show "Merge…", "Make PDF…", and "Compare…" and open a save dialog instead of writing beside the input.
 - The page editor writes `<stem>-edited-1.pdf` while the Example line shows `<stem>-edited.pdf`. PDF to Text's Example shows `plain-text.pdf` while it writes `plain-text.txt`. Trust the result row, then check disk.
-- OCR PDF's message says the offline resource "is not bundled". Report it as unavailable regardless.
+- A note about an existing output name can render twice. Report it; don't treat it as a failure.
 - File operations create new outputs. Never select a checked-in asset as the direct input when the operation writes beside its source.
