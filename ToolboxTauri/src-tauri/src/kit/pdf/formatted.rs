@@ -24,6 +24,10 @@ const BAND_INK: [u8; 3] = [0x66, 0x66, 0x66];
 const BAND_INSET: f32 = 0.4;
 /// The least space between a header or footer and the text.
 const BAND_GAP: f32 = 6.;
+/// The most a table may hold, checked when the request arrives.
+const MAX_TABLE_COLUMNS: usize = 20;
+const MAX_TABLE_ROWS: usize = 1000;
+const MAX_CELL_CHARACTERS: usize = 1000;
 
 /// A stretch of paragraph or list text in one style.
 #[derive(Debug, Clone, Deserialize)]
@@ -41,8 +45,9 @@ pub struct ListItem {
 }
 
 /// One block of the document. Headings are drawn bold, so they carry plain text; paragraphs and list items carry runs.
+/// A table carries its rows of plain cell text, and with `header_row` its first row is the header.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DocumentBlock {
     Heading1 { text: String },
     Heading2 { text: String },
@@ -50,6 +55,7 @@ pub enum DocumentBlock {
     Paragraph { runs: Vec<Run> },
     BulletedList { items: Vec<ListItem> },
     NumberedList { items: Vec<ListItem> },
+    Table { header_row: bool, rows: Vec<Vec<String>> },
     PageBreak,
 }
 
@@ -60,8 +66,30 @@ impl DocumentBlock {
             Self::Heading1 { text } | Self::Heading2 { text } | Self::Heading3 { text } => text.len(),
             Self::Paragraph { runs: paragraph } => runs(paragraph),
             Self::BulletedList { items } | Self::NumberedList { items } => items.iter().map(|item| runs(&item.runs)).sum(),
+            Self::Table { rows, .. } => rows.iter().flatten().map(String::len).sum(),
             Self::PageBreak => 0,
         }
+    }
+
+    /// Refuses a table that is not a grid of rows with the same number of cells, or that holds more than a table may.
+    fn check(&self) -> Result<(), ToolError> {
+        let Self::Table { rows, .. } = self else { return Ok(()) };
+        let columns = rows.first().map_or(0, Vec::len);
+        if rows.is_empty() || columns == 0 { return Err(ToolError::invalid_input("A table needs at least one row and one column.")); }
+        if rows.iter().any(|row| row.len() != columns) { return Err(ToolError::invalid_input("Every row of a table needs the same number of cells.")); }
+        if columns > MAX_TABLE_COLUMNS || rows.len() > MAX_TABLE_ROWS {
+            return Err(ToolError::limit_exceeded(
+                LimitKind::Dimensions,
+                format!("A table can have up to {MAX_TABLE_COLUMNS} columns and {MAX_TABLE_ROWS} rows. Split it into smaller tables and try again."),
+            ));
+        }
+        if rows.iter().flatten().any(|cell| cell.chars().count() > MAX_CELL_CHARACTERS) {
+            return Err(ToolError::limit_exceeded(
+                LimitKind::TextLength,
+                format!("A table cell can hold up to {MAX_CELL_CHARACTERS} characters. Shorten the cell and try again."),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -150,6 +178,7 @@ pub fn create(request: &FormattedPdfRequest, packs: &RunPacks) -> JobOutcome {
 fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontResolver<S>, packs: &RunPacks) -> JobOutcome {
     let result = (|| {
         let document = &request.document;
+        document.blocks.iter().try_for_each(DocumentBlock::check)?;
         let blocks = layout_blocks(&document.blocks);
         if blocks.is_empty() { return Err(ToolError::invalid_input("The document is empty. Add some text and try again.")); }
         if document.font.family.trim().is_empty() { return Err(ToolError::invalid_input("Choose a font for the document.")); }
@@ -209,7 +238,7 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
     result.unwrap_or_else(|error| JobOutcome::failure(request.output_path.clone(), error))
 }
 
-/// The document's blocks for layout, in order. Blank blocks and list items are left out, and so are page breaks
+/// The document's blocks for layout, in order. Blank blocks, list items and table rows are left out, and so are page breaks
 /// with nothing before or after them. A numbered list that follows another across page breaks continues its numbering.
 fn layout_blocks(blocks: &[DocumentBlock]) -> Vec<Block> {
     let mut laid: Vec<Block> = Vec::new();
@@ -242,6 +271,13 @@ fn layout_blocks(blocks: &[DocumentBlock]) -> Vec<Block> {
                 continued = next;
                 continue;
             }
+            DocumentBlock::Table { header_row, rows } => {
+                let mut rows = rows.iter().map(|row| row.iter().map(|cell| cell_spans(cell)).collect::<Vec<_>>());
+                let head = if *header_row { rows.next().unwrap_or_default() } else { Vec::new() };
+                let body: Vec<Vec<Vec<Span>>> = rows.filter(|row| row.iter().any(|cell| !cell.is_empty())).collect();
+                if body.is_empty() && head.iter().all(Vec::is_empty) { continue; }
+                Block::Table { aligns: Vec::new(), head, rows: body }
+            }
         };
         laid.extend(std::iter::repeat_n(Block::PageBreak, std::mem::take(&mut breaks)));
         laid.push(made);
@@ -261,6 +297,12 @@ fn spans(runs: &[Run]) -> Option<Vec<Span>> {
         spans.pop();
     }
     if spans.is_empty() { None } else { Some(spans) }
+}
+
+/// A table cell's text as one plain span, or no spans when it is blank.
+fn cell_spans(text: &str) -> Vec<Span> {
+    let text = text.trim();
+    if text.is_empty() { Vec::new() } else { vec![Span { text: text.to_string(), style: Style::default(), link: None }] }
 }
 
 fn page_size_label(size: PageSize) -> &'static str {
@@ -470,7 +512,10 @@ mod tests {
             json!([{ "kind": "paragraph", "runs": [{ "text": "x", "bold": true, "italic": false, "underline": true }] }]),
             json!([{ "kind": "paragraph", "runs": [{ "text": "x" }] }]),
             json!([{ "kind": "bulletedList", "items": [{ "runs": [plain("x")], "level": 2 }] }]),
-            json!([{ "kind": "table", "rows": [] }]),
+            json!([{ "kind": "table", "rows": [["Room"]] }]),
+            json!([{ "kind": "table", "headerRow": true, "rows": [["Room"]], "caption": "Rooms" }]),
+            json!([{ "kind": "table", "headerRow": true, "rows": [[{ "text": "Room", "bold": true, "italic": false }]] }]),
+            json!([{ "kind": "table", "header_row": true, "rows": [["Room"]] }]),
         ] {
             assert!(serde_json::from_value::<FormattedPdfRequest>(document(rejected.clone())).is_err(), "{rejected} must be refused");
         }
@@ -731,6 +776,172 @@ mod tests {
         for rejected in [missing, page_json(&json!({ "orientation": "sideways" })), page_json(&json!({ "headerAlign": "right" })), page_json(&json!({ "pageSize": "a3" }))] {
             assert!(serde_json::from_value::<FormattedPdfRequest>(document(rejected.clone())).is_err(), "{rejected} must be refused");
         }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn table(header_row: bool, rows: &[&[&str]]) -> serde_json::Value {
+        json!({ "kind": "table", "headerRow": header_row, "rows": rows })
+    }
+
+    /// The stroked cell borders on a page, as left, bottom, width and height.
+    fn cell_borders(document: &Document, page: u32) -> Vec<[f32; 4]> {
+        let content = lopdf::content::Content::decode(&document.get_page_content(document.get_pages()[&page])).unwrap();
+        let mut rects = Vec::new();
+        let mut last = None;
+        for operation in content.operations {
+            match operation.operator.as_str() {
+                "re" => last = Some(<[f32; 4]>::try_from(operation.operands.iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>()).unwrap()),
+                "S" => rects.extend(last.take()),
+                _ => last = None,
+            }
+        }
+        rects
+    }
+
+    #[test]
+    fn a_table_draws_its_cell_text_in_row_order_with_a_bold_header_and_content_sized_columns() {
+        let root = sandbox("table");
+        let blocks = json!([
+            paragraph("Condition of each room."),
+            table(true, &[&["Room", "Condition", "Notes"], &["Kitchen", "Good", "Oven cleaned"], &["  ", "", " "], &["Bathroom", "Fair", " Grout stained "]]),
+            paragraph("Signed by the tenant."),
+        ]);
+        let first = root.join("first.pdf");
+        let second = root.join("second.pdf");
+        for path in [&first, &second] {
+            let outcome = run(&request(blocks.clone(), path));
+            assert!(outcome.error().is_none(), "{:?}", outcome.error());
+            assert_eq!(outcome.detail, "1 page, A4.");
+        }
+        let document = Document::load(&first).unwrap();
+        let shown = drawn(&document, 1);
+        let texts = shown.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>();
+        assert_eq!(texts, [
+            "Condition of each room.",
+            "Room", "Condition", "Notes",
+            "Kitchen", "Good", "Oven cleaned",
+            "Bathroom", "Fair", "Grout stained",
+            "Signed by the tenant.",
+        ], "cells are drawn row by row, left to right, and the blank row is left out");
+        let font_of = |cell: &str| shown.iter().find(|(_, text)| text == cell).map(|(font, _)| font.as_str());
+        for header in ["Room", "Condition", "Notes"] { assert_eq!(font_of(header), Some("LiberationSerif-Bold"), "{header}"); }
+        for cell in ["Kitchen", "Oven cleaned", "Grout stained"] { assert_eq!(font_of(cell), Some("LiberationSerif"), "{cell}"); }
+        let text = flat(&document.extract_text(&[1]).unwrap());
+        assert!(text.contains("room.RoomConditionNotesKitchenGoodOven cleanedBathroomFairGrout stainedSigned"), "the extracted text keeps row order: {text:?}");
+
+        // Three rows of three cells, sized to their short text rather than stretched across the page.
+        let borders = cell_borders(&document, 1);
+        assert_eq!(borders.len(), 9, "{borders:?}");
+        let right = borders.iter().map(|[x, _, width, _]| x + width).fold(f32::MIN, f32::max);
+        assert!(right < 300., "short cells give a narrow table, its right edge is at {right}");
+        assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap(), "the same table must make the same bytes");
+
+        // Long cells share the text width and wrap, staying inside the margins.
+        let wide = root.join("wide.pdf");
+        let long = "Every room is swept, every shelf is wiped, and every light works. ".repeat(4);
+        assert!(run(&request(json!([table(false, &[&["Kitchen", long.as_str(), long.as_str()]])]), &wide)).error().is_none());
+        let wide = Document::load(&wide).unwrap();
+        let borders = cell_borders(&wide, 1);
+        let (left, right) = (borders.iter().map(|[x, ..]| *x).fold(f32::MAX, f32::min), borders.iter().map(|[x, _, width, _]| x + width).fold(f32::MIN, f32::max));
+        let margin = Margins::Normal.points();
+        assert!((left - margin).abs() < 0.5 && (right - (595.28 - margin)).abs() < 1., "the table fills the text width, {left}..{right}");
+        assert!(drawn(&wide, 1).iter().all(|(font, _)| font == "LiberationSerif"), "without a header row every cell is regular");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_long_table_splits_across_pages_and_repeats_its_header_row_at_the_top_of_each() {
+        let root = sandbox("long_table");
+        let names = (1..=120).map(|index| format!("Item {index:03}")).collect::<Vec<_>>();
+        let rows = std::iter::once(vec!["Room", "Condition", "Notes"])
+            .chain(names.iter().map(|name| vec![name.as_str(), "Good", "Checked on handover"]))
+            .collect::<Vec<_>>();
+        let rows = rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let path = root.join("long.pdf");
+        let outcome = run(&request(json!([paragraph("Inventory."), table(true, &rows)]), &path));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let document = Document::load(&path).unwrap();
+        let pages = document.get_pages().len() as u32;
+        assert!(pages >= 3, "120 rows fill several pages, got {pages}");
+        assert_eq!(outcome.detail, format!("{pages} pages, A4."));
+        let mut seen = Vec::new();
+        for page in 1..=pages {
+            let texts = drawn(&document, page).into_iter().map(|(_, text)| text).collect::<Vec<_>>();
+            let table = if page == 1 { &texts[1..] } else { &texts[..] };
+            assert_eq!(&table[..3], ["Room", "Condition", "Notes"], "page {page} starts the table with its header row: {texts:?}");
+            assert_eq!(texts.iter().filter(|text| text.as_str() == "Room").count(), 1, "the header row is drawn once on page {page}");
+            assert_eq!(fonts_drawing(&document, page, "Condition"), ["LiberationSerif-Bold"]);
+            let body = &table[3..];
+            assert_eq!(body.len() % 3, 0, "only whole rows are on page {page}: {body:?}");
+            for row in body.chunks(3) {
+                assert_eq!(&row[1..], ["Good", "Checked on handover"], "a row's cells stay together on page {page}");
+                seen.push(row[0].clone());
+            }
+            assert!(!body.is_empty(), "page {page} has rows under its header");
+        }
+        assert_eq!(seen, names, "every row is drawn once, in order, across the pages");
+
+        // Without a header row, the first row is an ordinary row and nothing repeats.
+        let plain_path = root.join("plain.pdf");
+        assert!(run(&request(json!([table(false, &rows)]), &plain_path)).error().is_none());
+        let plain = Document::load(&plain_path).unwrap();
+        let count = plain.get_pages().len() as u32;
+        assert!(count >= 3);
+        let rooms = (1..=count).map(|page| drawn(&plain, page).into_iter().filter(|(_, text)| text == "Room").count()).sum::<usize>();
+        assert_eq!(rooms, 1);
+        assert!(!fonts_drawing(&plain, 1, "Room").contains(&"LiberationSerif-Bold".to_string()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_header_row_never_sits_alone_at_the_foot_of_a_page() {
+        let root = sandbox("table_foot");
+        let mut moved = false;
+        // Push the table further down page 1 each time, through the point where only its header row would fit.
+        for filler in 24..=34 {
+            let mut blocks = (0..filler).map(|index| paragraph(&format!("Line {index}."))).collect::<Vec<_>>();
+            blocks.push(table(true, &[&["Room", "Condition"], &["Kitchen", "Good"], &["Bathroom", "Fair"]]));
+            let path = root.join(format!("{filler}.pdf"));
+            assert!(run(&request(json!(blocks), &path)).error().is_none());
+            let document = Document::load(&path).unwrap();
+            for page in 1..=document.get_pages().len() as u32 {
+                let texts = drawn(&document, page).into_iter().map(|(_, text)| text).collect::<Vec<_>>();
+                if let Some(at) = texts.iter().position(|text| text == "Room") {
+                    assert!(texts.get(at + 2).is_some_and(|text| text == "Kitchen" || text == "Bathroom"), "{filler} lines: the header row on page {page} has its first row under it: {texts:?}");
+                    moved |= page == 2 && at == 0;
+                }
+            }
+        }
+        assert!(moved, "one of the documents puts the whole table on page 2");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn table_rows_columns_and_cell_text_are_checked_when_the_request_arrives() {
+        let root = sandbox("table_limits");
+        let path = root.join("x.pdf");
+        let wide = vec!["x"; 21];
+        let tall = vec![["x"].as_slice(); 1001];
+        let long = "x".repeat(1001);
+        for (blocks, kind, message) in [
+            (json!([table(true, &[])]), ErrorKind::InvalidInput, "at least one row and one column"),
+            (json!([table(true, &[&[]])]), ErrorKind::InvalidInput, "at least one row and one column"),
+            (json!([table(true, &[&["Room", "Condition"], &["Kitchen"]])]), ErrorKind::InvalidInput, "same number of cells"),
+            (json!([paragraph("Rooms"), table(true, &[&wide[..]])]), ErrorKind::LimitExceeded { limit: LimitKind::Dimensions }, "up to 20 columns and 1000 rows"),
+            (json!([table(false, &tall)]), ErrorKind::LimitExceeded { limit: LimitKind::Dimensions }, "up to 20 columns and 1000 rows"),
+            (json!([table(false, &[&["Kitchen", long.as_str()]])]), ErrorKind::LimitExceeded { limit: LimitKind::TextLength }, "up to 1000 characters"),
+        ] {
+            let outcome = run(&request(blocks.clone(), &path));
+            let error = outcome.error().unwrap_or_else(|| panic!("{blocks} must be refused"));
+            assert!(error.kind == kind && error.message.contains(message), "{blocks}: {error:?}");
+        }
+        // At the limits, and a table of blank cells is left out like any blank block.
+        let most = vec![vec!["x"; 20]; 2];
+        let most = most.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let full = "x".repeat(1000);
+        assert!(run(&request(json!([table(true, &most), table(false, &[&[full.as_str()]])]), &path)).error().is_none());
+        let blank = run(&request(json!([table(true, &[&[" ", ""], &["", " "]])]), &root.join("blank.pdf")));
+        assert!(blank.error().is_some_and(|error| error.message.contains("empty")), "{:?}", blank.error());
         let _ = fs::remove_dir_all(root);
     }
 }
