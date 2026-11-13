@@ -341,14 +341,42 @@ fn validate_split_request(request: &PageSelectionRequest) -> Result<(), String> 
     Ok(())
 }
 
+/// Shown for every file when the bundled page renderer is missing, so the row blames this copy of
+/// Toolbox rather than the user's PDF.
+pub(crate) const PDF_RENDERER_UNAVAILABLE: &str = "Not converted. The page renderer is unavailable. It's a bundled helper that ships inside Toolbox, so this is a problem with this copy of the app, not with your PDF. Reinstall Toolbox to restore it.";
+pub(crate) const PDF_TO_IMAGES_PASSWORD_PROTECTED: &str = "It's password-protected. Remove its password, then convert it again.";
+/// Each file gets this much renderer time, plus `PDF_RENDER_TIME_PER_PAGE` for every page it renders.
+pub(crate) const PDF_RENDER_TIME_PER_FILE: Duration = Duration::from_secs(15);
+pub(crate) const PDF_RENDER_TIME_PER_PAGE: Duration = Duration::from_secs(2);
+const PDF_RENDER_MAX_OUTPUT_BYTES: usize = 64 * 1024;
+
+fn pdf_render_time_limit(page_count: usize) -> Duration {
+    PDF_RENDER_TIME_PER_FILE.saturating_add(PDF_RENDER_TIME_PER_PAGE.saturating_mul(u32::try_from(page_count).unwrap_or(u32::MAX)))
+}
+
 pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
+    to_images_within(request, input, pdf_render_time_limit)
+}
+
+fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn(usize) -> Duration) -> JobOutcome {
     let format = request.format.to_lowercase();
     if format != "jpg" && format != "png" { return failure(input, "PDF images must be JPEG or PNG.".to_string()); }
     let ranges = match request.page_range().map(PageRanges::parse).transpose() {
         Ok(ranges) => ranges,
         Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
-    let Some(renderer) = tool("TOOLBOX_PDFTOPPM_PATH", "pdftoppm") else { return failure(input, "pdftoppm is required to render PDFs. Set TOOLBOX_PDFTOPPM_PATH or add pdftoppm to PATH.".to_string()); };
+    let Ok(renderer) = crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER) else {
+        return JobOutcome::failure(input, ToolError::unavailable(PDF_RENDERER_UNAVAILABLE));
+    };
+    let document = match Document::load(&input) {
+        Ok(document) => document,
+        Err(_) => return JobOutcome::failure(input, crate::kit::password::unreadable(crate::kit::password::ProtectedFormat::Pdf)),
+    };
+    if document.is_encrypted() {
+        return JobOutcome::failure(input, ToolError::invalid_input(PDF_TO_IMAGES_PASSWORD_PROTECTED)
+            .with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+    }
+    let page_count = document.get_pages().len();
     let dpi = request.dpi.clamp(72, 300);
     let extension = if format == "jpg" { "jpg" } else { "png" };
     let workspace = match SplitWorkspace::new() {
@@ -361,23 +389,22 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
     };
     let renderer_format = if format == "jpg" { "jpeg" } else { "png" };
     if let Some(requested_pages) = request.pages.as_ref() {
-        let document = match Document::load(&input) {
-            Ok(document) => document,
-            Err(error) => return failure(input, error.to_string()),
-        };
         let pages = match selected_pdf_pages(&document, Some(requested_pages)) {
             Ok(pages) if !pages.is_empty() => pages,
             Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
             Err(error) => return failure(input, error),
         };
-        let generated = match render_selected_pages(&renderer, &input, &prefix, renderer_format, dpi, extension, &pages) {
+        let deadline = RenderDeadline::new(time_limit(pages.len()));
+        let generated = match render_selected_pages(&renderer, &input, &prefix, renderer_format, dpi, extension, &pages, &deadline) {
             Ok(outputs) => outputs,
-            Err(error) => return failure(input, error),
+            Err(error) => return JobOutcome::failure(input, error),
         };
         return materialize_rendered_images(&input, &request.output_location, &generated);
     }
 
     let spans = ranges.map_or_else(|| vec![None], |ranges| ranges.spans().iter().copied().map(Some).collect());
+    let rendered_pages = spans.iter().map(|span| span.map_or(page_count, |span| (span.last.unwrap_or(page_count).min(page_count) + 1).saturating_sub(span.first))).sum::<usize>();
+    let deadline = RenderDeadline::new(time_limit(rendered_pages));
     for span in spans {
         let mut command = Command::new(&renderer);
         command.arg(format!("-{renderer_format}")).arg("-r").arg(dpi.to_string());
@@ -385,16 +412,37 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
             command.arg("-f").arg(span.first.to_string());
             if let Some(last) = span.last { command.arg("-l").arg(last.to_string()); }
         }
-        match command.arg(&input).arg(&prefix).output_until_stopped() {
+        command.arg(&input).arg(&prefix);
+        match deadline.run(command) {
             Ok(result) if result.status.success() => {}
             Ok(result) => return failure(input, stderr(result, "pdftoppm failed to render the PDF.")),
-            Err(error) => return failure(input, format!("Could not run pdftoppm: {error}")),
+            Err(error) => return JobOutcome::failure(input, error),
         }
     }
     let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
     outputs.sort_by_key(|path| rendered_page_index(path, &prefix));
     if outputs.is_empty() { return failure(input, "PDF renderer produced no images.".to_string()); }
     materialize_rendered_images(&input, &request.output_location, &outputs)
+}
+
+/// One deadline shared by every renderer call for a file. Passing it fails the file with a time limit.
+struct RenderDeadline {
+    at: Instant,
+    timed_out: String,
+}
+
+impl RenderDeadline {
+    fn new(limit: Duration) -> Self {
+        Self { at: Instant::now() + limit, timed_out: format!("Rendering took longer than {} and was stopped. Nothing was saved.", crate::kit::common::limits::duration_label(limit)) }
+    }
+
+    fn run(&self, command: Command) -> Result<std::process::Output, ToolError> {
+        match super::run_bounded_helper(command, self.at, PDF_RENDER_MAX_OUTPUT_BYTES, PDF_RENDER_MAX_OUTPUT_BYTES, &self.timed_out) {
+            Ok(output) => Ok(output),
+            Err(message) if message == self.timed_out => Err(ToolError::limit_exceeded(LimitKind::Time, message)),
+            Err(message) => Err(ToolError::processing(format!("Could not run pdftoppm: {message}"))),
+        }
+    }
 }
 
 fn rendered_page_index(path: &Path, prefix: &Path) -> Option<u32> {
@@ -431,13 +479,15 @@ fn render_selected_pages(
     dpi: u16,
     extension: &str,
     pages: &[u32],
-) -> Result<Vec<PathBuf>, String> {
+    deadline: &RenderDeadline,
+) -> Result<Vec<PathBuf>, ToolError> {
     let mut outputs = Vec::with_capacity(pages.len());
     let base = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("output");
     for page in pages {
         let page_prefix = prefix.with_file_name(format!("{base}-page-{page}"));
         let output = page_prefix.with_extension(extension);
-        let result = Command::new(renderer)
+        let mut command = Command::new(renderer);
+        command
             .arg(format!("-{renderer_format}"))
             .arg("-r")
             .arg(dpi.to_string())
@@ -447,13 +497,12 @@ fn render_selected_pages(
             .arg(page.to_string())
             .arg("-singlefile")
             .arg(input)
-            .arg(&page_prefix)
-            .output_until_stopped();
-        match result {
-            Ok(result) if result.status.success() && output.exists() => outputs.push(output),
-            Ok(result) => return Err(stderr(result, "pdftoppm failed to render the selected PDF page.")),
-            Err(error) => return Err(format!("Could not run pdftoppm: {error}")),
+            .arg(&page_prefix);
+        let result = deadline.run(command)?;
+        if !(result.status.success() && output.exists()) {
+            return Err(ToolError::processing(stderr(result, "pdftoppm failed to render the selected PDF page.")));
         }
+        outputs.push(output);
     }
     Ok(outputs)
 }
@@ -1107,6 +1156,7 @@ fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failu
 pub(crate) mod tests {
     use super::*;
 
+    /// Held by tests that create or count split workspaces in the shared temporary directory.
     pub(crate) static SPLIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn watermark_request(input: &Path, text: &str, logo_path: Option<PathBuf>, position: Option<WatermarkPlacement>, output_location: OutputLocation) -> PdfWatermarkRequest {
@@ -2027,6 +2077,7 @@ pub(crate) mod tests {
 
     #[test]
     fn redaction_removes_text_under_the_box_from_the_file() {
+        let _guard = crate::kit::lock_process_env();
         if pdftoppm().is_none() { return; }
         let input = text_pdf("redact", &["SECRET123\nkeep this line", "OTHERPAGE"]);
         let outcome = crate::kit::pdf::editor::redact(&crate::kit::pdf::editor::RedactPdfRequest {
@@ -2276,5 +2327,58 @@ pub(crate) mod tests {
             return;
         }
         assert_eq!(qpdf(), Ok(PathBuf::from(std::env::var_os(BUNDLED_QPDF_CHILD).unwrap())));
+    }
+
+    #[test]
+    fn pdf_render_deadlines_are_per_file_plus_per_page() {
+        assert_eq!(PDF_RENDER_TIME_PER_FILE, Duration::from_secs(15));
+        assert_eq!(PDF_RENDER_TIME_PER_PAGE, Duration::from_secs(2));
+        assert_eq!(pdf_render_time_limit(1), Duration::from_secs(17));
+        assert_eq!(pdf_render_time_limit(100), Duration::from_secs(215));
+        assert!(pdf_render_time_limit(usize::MAX) > pdf_render_time_limit(100), "a huge page count saturates instead of overflowing");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdf_to_images_stops_a_slow_renderer_at_the_deadline_and_fails_only_that_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _split = SPLIT_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::kit::lock_process_env();
+        let root = split_fixture_root("slow-renderer");
+        let input = root.join("document.pdf");
+        let output_folder = root.join("outputs");
+        let renderer = root.join("renderer.sh");
+        fs::create_dir_all(&output_folder).unwrap();
+        split_fixture_pdf(&input, 3);
+        fs::write(&renderer, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        let mut permissions = fs::metadata(&renderer).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&renderer, permissions).unwrap();
+        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
+        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", &renderer);
+
+        let outcomes = [None, Some(vec![0, 2])].map(|pages| {
+            let started = Instant::now();
+            let outcome = to_images_within(&PdfToImagesRequest {
+                paths: vec![input.clone()], dpi: 72, format: "png".to_string(), page_range: None, pages,
+                output_location: OutputLocation::CustomFolder(output_folder.clone()),
+            }, input.clone(), |_| Duration::from_millis(200));
+            (outcome, started.elapsed())
+        });
+
+        match previous {
+            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
+            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
+        }
+        for (outcome, elapsed) in outcomes {
+            let error = outcome.error().expect("a renderer past its deadline fails the file");
+            assert_eq!(error.kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: LimitKind::Time }, "{}", error.message);
+            assert_eq!(error.message, "Rendering took longer than 200 milliseconds and was stopped. Nothing was saved.");
+            assert!(outcome.output_paths().is_empty());
+            assert!(elapsed < Duration::from_secs(10), "the stalled renderer must be stopped, took {elapsed:?}");
+        }
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 0, "a timed-out render leaves nothing behind");
+        fs::remove_dir_all(root).unwrap();
     }
 }

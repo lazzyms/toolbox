@@ -150,6 +150,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
           ./scripts/bundle-qpdf.ps1 -Target ${{ matrix.target }} -ResourcesDir src-tauri\resources
           Copy-Item $pdftoppm.FullName src-tauri\resources\pdftoppm.exe -Force
+          node scripts/check-release-readiness.mjs --renderer src-tauri\resources\pdftoppm.exe --target ${{ matrix.target }}
+          if ($LASTEXITCODE -ne 0) { throw 'The bundled page renderer is not native to ${{ matrix.target }}' }
           Get-ChildItem $pdftoppm.DirectoryName -Filter *.dll | Copy-Item -Destination src-tauri\resources -Force
           Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           @{version=$env:VERSION; bundle=@{resources=@('resources/*')}} | ConvertTo-Json -Compress | Out-File -Encoding ascii release-config.json
