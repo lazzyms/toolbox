@@ -4632,7 +4632,7 @@ mod command_tests {
         serde_json::from_value(serde_json::json!({
             "document": {
                 "title": "Move-out checklist", "author": "Sam Lee",
-                "blocks": [{ "kind": "heading1", "text": "Move-out checklist" }, { "kind": "paragraph", "text": "Return the keys." }],
+                "blocks": [{ "kind": "heading1", "text": "Move-out checklist" }, { "kind": "paragraph", "runs": [{ "text": "Return the ", "bold": false, "italic": false }, { "text": "keys", "bold": true, "italic": false }, { "text": ".", "bold": false, "italic": false }] }],
                 "page": { "pageSize": "a4", "margins": "normal" }, "font": { "family": "Liberation Serif", "size": 11 },
             },
             "outputPath": output_path,
@@ -5560,7 +5560,8 @@ mod command_tests {
         let formatted_path = formatted_folder.join("Move-out checklist.pdf");
         let formatted_pdf = assert_aggregate_success("formatted pdf", std::slice::from_ref(&formatted_path), run_create_formatted_pdf(formatted_request(&formatted_path), no_packs()));
         assert_eq!(formatted_pdf, [formatted_path.clone()]);
-        assert!(lopdf::Document::load(&formatted_path).unwrap().extract_text(&[1]).unwrap().contains("Return the keys."));
+        // The bold run is its own text object, which lopdf ends with a line break.
+        assert!(lopdf::Document::load(&formatted_path).unwrap().extract_text(&[1]).unwrap().replace('\n', "").contains("Return the keys."));
         outputs.extend(named(&mut naming, "create_formatted_pdf", formatted_path.clone(), formatted_pdf));
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
         assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
