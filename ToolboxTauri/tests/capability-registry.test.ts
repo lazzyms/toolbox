@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { saveStepAppliesTo, saveStepCommands, saveStepFor } from "../src/registry/saveSteps.ts";
 import {
+  capabilityFor,
   parseCapabilityRegistry,
   SharedCapabilityRegistry,
 } from "../src/registry/capabilities.ts";
@@ -302,6 +303,9 @@ test("Crop and Resize PDF is a PDF Editor batch tool that takes many PDFs", () =
   assert.equal(isPdfSceneTool("pdf-crop"), false, "the rail entry opens the batch view, not the page editor");
   assert.equal(crop.capability.inputCardinality, "multiple");
   assert.deepEqual(crop.capability.acceptedExtensions, [".pdf"]);
+  const resize = capabilityFor("resize_pdf");
+  assert.equal(resize.outputSuffix, "-resized");
+  assert.deepEqual({ ...resize, outputSuffix: "-cropped" }, capabilityFor("crop_pdf"), "Resize shares every input rule with Crop");
 });
 
 test("shared capability parsing rejects drift-prone shapes", () => {
