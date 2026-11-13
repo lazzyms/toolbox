@@ -38,10 +38,12 @@ impl HelperDeadline {
 }
 
 /// What an over-the-page-limit message asks for: fewer pages, or splitting the PDF and running the tool on the parts.
+/// `SplitEach` words it the way the PDF to EPUB board does, naming the page count against the limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageRemedy {
     UseFewer,
     SplitThen(&'static str),
+    SplitEach(&'static str),
 }
 
 const SPLIT_PDF_TOOL_ID: &str = "pdf-split";
@@ -122,9 +124,10 @@ impl MadeLimits {
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "resize_pdf"
-        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf" | "pdf_to_epub"
+        | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" | "edit_pdf_properties" | "bates_number_pdfs" => PDF,
         "compress_files" => ToolLimits { page_remedy: PageRemedy::SplitThen("compress"), ..PDF },
+        "pdf_to_epub" => ToolLimits { page_remedy: PageRemedy::SplitEach("convert"), ..PDF },
         "export_image_edit_plan" | "blur_faces"
         | "remove_image_background" | "generate_icon_set" | "create_gif" => IMAGE,
         "extract_gif_frames" | "process_tiff_pages" | "images_to_pdf" | "convert_images" => PAGED_IMAGE,
@@ -216,6 +219,14 @@ impl ToolLimits {
                     format!(
                         "Over the size limit: {} {}, and the limit is {}. Split it, then {verb} the parts.",
                         count_label(shape.pages), format.pages(), count_label(u64::from(max_pages)),
+                    ),
+                )
+                .with_pointer(OutcomePointer::Tool { tool_id: SPLIT_PDF_TOOL_ID.into() }),
+                PageRemedy::SplitEach(verb) => ToolError::limit_exceeded(
+                    LimitKind::PageCount,
+                    format!(
+                        "{} {} is over the limit of {} {} for one {}. Split it, then {verb} each part.",
+                        count_label(shape.pages), format.pages(), count_label(u64::from(max_pages)), format.pages(), format.noun(),
                     ),
                 )
                 .with_pointer(OutcomePointer::Tool { tool_id: SPLIT_PDF_TOOL_ID.into() }),
@@ -731,6 +742,7 @@ mod tests {
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
         assert_eq!(recorded("compress_files"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::SplitThen("compress") }));
+        assert_eq!(recorded("pdf_to_epub"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::SplitEach("convert") }));
         assert_eq!(recorded("split_pdf").map(|limits| limits.page_remedy), Some(PageRemedy::UseFewer));
         assert_eq!(recorded("compress_images"), None, "Compress Images is retired into compress_files");
         assert_eq!(recorded("export_image_edit_stack"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: Some(1_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: Some(16_384), page_remedy: PageRemedy::UseFewer }));
