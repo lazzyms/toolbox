@@ -6,6 +6,7 @@ import {
   createImageEditHistory,
   defaultImageCropStep,
   defaultImageResizeStep,
+  defaultImageRotateStep,
   imageEditStackPreviewPlan,
   imageEditStackRequestSteps,
   imageEditStackSuffix,
@@ -112,6 +113,18 @@ test("a stack keeps the fixed run order and names more than one step -edited", (
   assert.deepEqual(Object.keys(imageEditStackRequestSteps({ resize, crop })), ["crop", "resize"], "resize added first is still sent after crop");
   assert.deepEqual(Object.keys(imageEditStackRequestSteps({ resize, crop: undefined })), ["resize"], "a removed step is not sent");
   assert.deepEqual(imageEditStackPreviewPlan({ resize, crop }).edits.map(({ kind }) => kind), ["crop", "resize"]);
+});
+
+test("Rotate and Flip is one step that runs last and is named -rotated on its own", () => {
+  const rotate = defaultImageRotateStep();
+  assert.deepEqual(rotate, { degrees: 90, flip: "none" });
+  assert.equal(imageEditStackSuffix({ rotate }), "-rotated");
+  assert.equal(imageEditStackSuffix({ rotate, crop: defaultImageCropStep() }), "-edited");
+  const stack = { rotate: { degrees: 270, flip: "horizontal" }, resize: defaultImageResizeStep(), crop: defaultImageCropStep() };
+  assert.deepEqual(presentImageEditSteps(stack), ["crop", "resize", "rotate"]);
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps(stack)), ["crop", "resize", "rotate"], "rotate added first is still sent last");
+  assert.deepEqual(imageEditStackRequestSteps({ rotate: { degrees: 180, flip: "vertical" } }), { rotate: { degrees: 180, flip: "vertical" } });
+  assert.deepEqual(imageEditStackPreviewPlan(stack).edits.at(-1), { kind: "rotate", degrees: 270, flip: "horizontal" });
 });
 
 test("resize steps are checked against the native limits", () => {

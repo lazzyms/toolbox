@@ -44,19 +44,21 @@ export type ImageEditHistory = EditHistory<ImageEditPlan>;
 
 export type ImageCropStep = Omit<Extract<ImageEditOperation, { kind: "crop" }>, "kind">;
 export type ImageResizeStep = Omit<Extract<ImageEditOperation, { kind: "resize" }>, "kind">;
+export type ImageRotateStep = Omit<Extract<ImageEditOperation, { kind: "rotate" }>, "kind">;
 
 /** The shared edit stack holds at most one of each step. Native runs them in a fixed order, so the stack has no order of its own. */
 export interface ImageEditStack {
   crop?: ImageCropStep;
   resize?: ImageResizeStep;
+  rotate?: ImageRotateStep;
 }
 
 /** The fixed run order. */
-export const imageEditStackSteps = ["crop", "resize"] as const;
+export const imageEditStackSteps = ["crop", "resize", "rotate"] as const;
 export type ImageEditStackStep = (typeof imageEditStackSteps)[number];
 
-export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize" };
-const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized" };
+export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize", rotate: "Rotate and Flip" };
+const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized", rotate: "-rotated" };
 
 export const presentImageEditSteps = (stack: ImageEditStack) => imageEditStackSteps.filter((step) => stack[step] !== undefined);
 
@@ -67,6 +69,11 @@ export const defaultImageCropStep = (): ImageCropStep => ({
 export const defaultImageResizeStep = (): ImageResizeStep => ({
   mode: "longestSide", longestSide: 2048, width: 1600, height: 1200, percentage: 50, resampling: "lanczos", keepAspectRatio: true,
 });
+
+export const imageRotateDegrees = [0, 90, 180, 270] as const;
+export const imageFlips = ["none", "horizontal", "vertical"] as const;
+
+export const defaultImageRotateStep = (): ImageRotateStep => ({ degrees: 90, flip: "none" });
 
 /** A single step names its own output; more than one is named -edited. */
 export const imageEditStackSuffix = (stack: ImageEditStack) => {
@@ -82,7 +89,9 @@ export const imageEditStackRequestSteps = (stack: ImageEditStack): ImageEditStac
 export const imageEditStackPreviewPlan = (stack: ImageEditStack): ImageEditPlan => ({
   edits: presentImageEditSteps(stack).map((step): ImageEditOperation => step === "crop"
     ? { kind: "crop", ...stack.crop! }
-    : { kind: "resize", ...stack.resize! }),
+    : step === "resize"
+      ? { kind: "resize", ...stack.resize! }
+      : { kind: "rotate", ...stack.rotate! }),
 });
 
 const MAX_DIMENSION = 16384;

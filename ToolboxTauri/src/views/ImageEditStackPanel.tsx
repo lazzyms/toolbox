@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronLeft, ChevronRight, Link2, Redo2, Undo2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Info, Link2, Redo2, Undo2, X } from "lucide-react";
 import type { ImagePreview, OutputLocation } from "../contracts";
 import {
   imageEditRequestPlan,
   imageEditStackPreviewPlan,
   imageEditStackSteps,
   imageEditStepLabels,
+  imageFlips,
   imageResizeStepProblem,
+  imageRotateDegrees,
   presentImageEditSteps,
   resolveImageCropRect,
   type EditHistory,
@@ -15,6 +17,7 @@ import {
   type ImageEditStack,
   type ImageEditStackStep,
   type ImageResizeStep,
+  type ImageRotateStep,
 } from "../features/image-editor/session";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
@@ -52,6 +55,8 @@ const resamplingOptions = [
   { value: "bicubic", label: "Sharp, keeps fine detail" },
   { value: "nearest", label: "Nearest, for pixel art" },
 ] as const;
+
+const flipLabels: Record<(typeof imageFlips)[number], string> = { none: "None", horizontal: "Horizontal", vertical: "Vertical" };
 
 const fileName = (path: string | undefined) => path?.split(/[\\/]/).pop() ?? "selected image";
 
@@ -94,6 +99,7 @@ export const ImageEditStackPanel = ({
   onAdd,
   onEditCrop,
   onEditResize,
+  onEditRotate,
   onRemove,
   onUndo,
   onRedo,
@@ -116,6 +122,7 @@ export const ImageEditStackPanel = ({
   /** Edits sharing a coalesce key replace one another in the history instead of each adding an undo step. */
   onEditCrop: (crop: ImageCropStep, coalesceKey?: string) => void;
   onEditResize: (resize: ImageResizeStep, coalesceKey?: string) => void;
+  onEditRotate: (rotate: ImageRotateStep) => void;
   onRemove: (step: ImageEditStackStep) => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -124,6 +131,7 @@ export const ImageEditStackPanel = ({
   const stack = history.present;
   const crop = stack.crop;
   const resize = stack.resize;
+  const rotate = stack.rotate;
   const steps = presentImageEditSteps(stack);
   const problem = stackProblem(stack);
   const canUndo = history.past.length > 0;
@@ -486,6 +494,40 @@ export const ImageEditStackPanel = ({
                     {resamplingOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </NativeSelect>
                 </div>
+              </>
+            ) : focus === "rotate" && rotate ? (
+              <>
+                <fieldset className="workspace-field">
+                  <legend className="workspace-panel-label">Rotate</legend>
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    size="sm"
+                    aria-label="Rotate"
+                    aria-describedby="image-rotate-hint"
+                    className="w-full"
+                    value={String(rotate.degrees)}
+                    onValueChange={(value) => { if (value && Number(value) !== rotate.degrees) onEditRotate({ ...rotate, degrees: Number(value) }); }}
+                  >
+                    {imageRotateDegrees.map((degrees) => <ToggleGroupItem key={degrees} value={String(degrees)} aria-label={`${degrees} degrees`} className="min-w-0 flex-1">{degrees}°</ToggleGroupItem>)}
+                  </ToggleGroup>
+                  <p id="image-rotate-hint" className="workspace-panel-copy">Clockwise, as you see the image in the preview.</p>
+                </fieldset>
+                <fieldset className="workspace-field">
+                  <legend className="workspace-panel-label">Flip</legend>
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    size="sm"
+                    aria-label="Flip"
+                    className="w-full"
+                    value={rotate.flip}
+                    onValueChange={(flip) => { if (flip && flip !== rotate.flip) onEditRotate({ ...rotate, flip }); }}
+                  >
+                    {imageFlips.map((flip) => <ToggleGroupItem key={flip} value={flip} className="min-w-0 flex-1">{flipLabels[flip]}</ToggleGroupItem>)}
+                  </ToggleGroup>
+                </fieldset>
+                <p className="workspace-panel-copy flex gap-2"><Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />Rotated images are always re-encoded at quality 90, even with no other changes.</p>
               </>
             ) : (
               <Card className="py-0" role="note">
