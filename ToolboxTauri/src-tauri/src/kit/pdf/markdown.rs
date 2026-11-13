@@ -127,7 +127,7 @@ fn local_image(destination: &str, base: &Path) -> Option<Vec<PathBuf>> {
 }
 
 impl Builder<'_> {
-    fn style(&self, code: bool) -> Style { Style { bold: self.bold > 0, italic: self.italic > 0, strike: self.strike > 0, code } }
+    fn style(&self, code: bool) -> Style { Style { bold: self.bold > 0, italic: self.italic > 0, strike: self.strike > 0, code, ..Style::default() } }
 
     fn push(&mut self, block: Block) {
         match self.frames.last_mut() {

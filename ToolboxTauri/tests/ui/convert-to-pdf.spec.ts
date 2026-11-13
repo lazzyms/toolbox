@@ -217,3 +217,33 @@ test("a run with Markdown and text files sends both sections", async ({ page }) 
         markdown: { pageSize: "a4", margins: "normal", bodyFont: "sans", codeStyle: "shaded", tableOfContents: false },
     });
 });
+
+test("an RTF file needs no format section, sends no RTF section, and its row lists the fonts it used", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/memo.rtf"]);
+    await expect(fileRow(page, "memo.rtf")).not.toContainText("comes in a later update");
+    await expect(fileRow(page, "memo.rtf")).not.toContainText("Not available yet");
+    await expect(page.getByText("Options for each format appear here when a file of that format is in the list.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: /options/ })).toHaveCount(0);
+    await expect(page.getByText("This will make 1 PDF", { exact: true })).toBeVisible();
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({ paths: ["/local/memo.rtf"], outputLocation: "alongsideInput" });
+
+    const fonts = [
+        { requestedFamily: "Times New Roman", requestedStyle: "regular", fontUsed: "Liberation Serif", styleUsed: "regular", source: "bundled fallback" },
+        { requestedFamily: "Arial", requestedStyle: "bold", fontUsed: "Liberation Sans", styleUsed: "bold", source: "bundled fallback" },
+        { requestedFamily: "Brand Grotesk", requestedStyle: "regular", fontUsed: "DejaVu Sans", styleUsed: "regular", source: "bundled default" },
+    ];
+    const note = "2 pages. Omitted content: 1 picture couldn't be shown and was left out.";
+    await page.evaluate(({ fonts, note }) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/memo.rtf", outputPaths: ["/local/memo.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts },
+    ]), { fonts, note });
+    const saved = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") }).filter({ hasText: "memo.rtf" });
+    await expect(saved).toContainText(note);
+    await saved.getByRole("button", { name: "Show fonts" }).click();
+    await expect(page.getByRole("list", { name: "Fonts used in memo.rtf" }).getByRole("listitem")).toHaveText([
+        /Times New Roman.*Liberation Serif.*Bundled fallback, same widths/,
+        /Arial.*Liberation Sans.*Bundled fallback, same widths/,
+        /Brand Grotesk.*DejaVu Sans.*Bundled default font/,
+    ]);
+});

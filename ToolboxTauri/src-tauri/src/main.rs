@@ -2770,6 +2770,8 @@ mod command_tests {
         let text_bytes = std::fs::read(&text).unwrap();
         let markdown = root.join("release-notes.md"); std::fs::write(&markdown, "# Release notes\n\n| Step | Result |\n|---|---|\n| build | ok |\n\n```\ncargo test\n```\n\n![chart](image.png)\n\n![logo](https://example.com/logo.png)\n\nSee [the site](https://example.com).\n").unwrap();
         let markdown_bytes = std::fs::read(&markdown).unwrap();
+        let rich_text = root.join("memo.rtf"); std::fs::write(&rich_text, r"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}}{\info{\title Team memo}}{\f1\b\fs32 Team memo\par}{\i Ship} the {\ul release}.\par\trowd\cellx2000\cellx4000\pard\intbl Owner\cell Date\cell\row\pard Done.\par}").unwrap();
+        let rich_text_bytes = std::fs::read(&rich_text).unwrap();
 
         let protected = root.join("protected.pdf");
         let protected_result = protect_files(RunEvents::silent(), PasswordRequest { paths: vec![pdf.clone()], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: OutputLocation::AlongsideInput });
@@ -2858,6 +2860,13 @@ mod command_tests {
         assert!(["Release notes", "build", "cargo test", "the site"].iter().all(|expected| markdown_text.contains(expected)), "converted Markdown must stay searchable: {markdown_text}");
         assert!(markdown_pdf.catalog().unwrap().has(b"Outlines"), "headings become bookmarks");
         outputs.extend(named(&mut naming, "convert_to_pdf", markdown.clone(), converted_markdown));
+        let rich_text_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [rich_text.clone()], "outputLocation": location(&root, "convert rich text to pdf") })));
+        assert_eq!(rich_text_outcomes[0].detail, "1 page.", "{rich_text_outcomes:?}");
+        assert!(["Times New Roman", "Arial"].iter().all(|family| rich_text_outcomes[0].fonts.iter().any(|font| font.requested_family == *family)), "requested RTF fonts are reported: {rich_text_outcomes:?}");
+        let converted_rich_text = rich_text_outcomes[0].output_paths().to_vec();
+        let rich_text_text = lopdf::Document::load(&converted_rich_text[0]).unwrap().extract_text(&[1]).unwrap();
+        assert!(["Team memo", "Ship", "release", "Owner", "Date", "Done."].iter().all(|expected| rich_text_text.contains(expected)), "converted RTF must stay searchable: {rich_text_text}");
+        outputs.extend(named(&mut naming, "convert_to_pdf", rich_text.clone(), converted_rich_text));
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), SplitPdfRequest { paths: vec![pdf.clone()], mode: SplitMode::EveryN { pages: 1 }.into(), output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_from_pdf", image_pdf.clone(), assert_success("extract images from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![image_pdf.clone()], ExtractMode::Images, None, location(&root, "extract images"))))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
@@ -2955,6 +2964,7 @@ mod command_tests {
         assert_eq!(std::fs::read(&tiff).unwrap(), tiff_bytes, "native E2E commands must not modify their TIFF input");
         assert_eq!(std::fs::read(&text).unwrap(), text_bytes, "native E2E commands must not modify their text input");
         assert_eq!(std::fs::read(&markdown).unwrap(), markdown_bytes, "native E2E commands must not modify their Markdown input");
+        assert_eq!(std::fs::read(&rich_text).unwrap(), rich_text_bytes, "native E2E commands must not modify their RTF input");
         assert!(!outputs.is_empty(), "native E2E matrix must exercise every producing command");
         if std::env::var_os("TOOLBOX_KEEP_NATIVE_E2E").is_none() {
             let _ = std::fs::remove_dir_all(root);

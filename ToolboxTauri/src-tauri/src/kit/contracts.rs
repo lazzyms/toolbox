@@ -1205,7 +1205,7 @@ mod tests {
         let convert = native_capability("convert_to_pdf").unwrap();
         let families = convert.format_families.iter().map(|family| (family.id.as_str(), family.native_available, family.basic_fidelity)).collect::<Vec<_>>();
         assert_eq!(families, [
-            ("plain-text", true, false), ("pdf", true, false), ("documents", false, false), ("spreadsheets", false, false),
+            ("plain-text", true, false), ("pdf", true, false), ("documents", false, false), ("rich-text", true, false), ("spreadsheets", false, false),
             ("presentations", false, false), ("markdown", true, false), ("web-pages", false, false), ("tables", false, false),
             ("ebooks", false, false), ("legacy-office", false, true), ("mobi", false, false),
         ]);

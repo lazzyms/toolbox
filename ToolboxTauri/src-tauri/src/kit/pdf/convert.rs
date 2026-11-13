@@ -12,7 +12,7 @@ use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::{native_capabilities, SkipCode, SkipReason, ToolError};
 use crate::kit::pdf::font_resolver::{FontResolver, FontStyle, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Face, FontBook, Flow, Geometry, PageOut, Theme};
-use crate::kit::pdf::markdown;
+use crate::kit::pdf::{markdown, rtf};
 
 pub const COMMAND: &str = "convert_to_pdf";
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
@@ -20,6 +20,10 @@ const FONT_SIZE: f32 = 10.;
 const LEADING: f32 = 13.;
 const MARKDOWN_SIZE: f32 = 11.;
 const CODE_FAMILY: &str = "Courier New";
+const RTF_FAMILY: &str = "Times New Roman";
+const RTF_SIZE: f32 = 12.;
+const MIN_PAGE_SIDE: f32 = 72.;
+const MAX_PAGE_SIDE: f32 = 14_400.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -173,6 +177,7 @@ fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutco
     let result = match extension.as_str() {
         "pdf" => return JobOutcome::skipped(input, SkipReason::new(SkipCode::AlreadyInTargetFormat, ALREADY_PDF)),
         "md" | "markdown" => markdown_file(job, &job.request.markdown.unwrap_or_default(), &input),
+        "rtf" => rich_text(job, &input),
         _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
     };
     result.unwrap_or_else(|error| JobOutcome::failure(input, error))
@@ -225,7 +230,7 @@ fn plain_text<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PlainTextOptio
         out.push(page);
     }
     let count = out.len();
-    let document = assemble(&book, Assembly { size, pages: out, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None })?;
+    let document = assemble(&book, Assembly { size, pages: out, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None, author: None })?;
     let path = save(&job.request.output_location, input, document)?;
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], format!("{}. Read as {encoding}.", page_count(count))).with_fonts(book.reports()))
 }
@@ -235,8 +240,8 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
     let (text, _) = decode(&bytes, TextEncoding::Detect)?;
     let parsed = markdown::parse(&text, input.parent().unwrap_or(Path::new(".")));
     let size = options.page_size.unwrap_or(job.request.page_defaults.page_size).points();
-    let geometry = Geometry { width: size.0, height: size.1, margin: options.margins.unwrap_or(job.request.page_defaults.margins).points() };
-    let theme = Theme { body_family: options.body_font.family().to_string(), code_family: CODE_FAMILY.to_string(), body_size: MARKDOWN_SIZE, shaded_code: options.code_style == CodeStyle::Shaded };
+    let geometry = Geometry::uniform(size.0, size.1, options.margins.unwrap_or(job.request.page_defaults.margins).points());
+    let theme = Theme::new(options.body_font.family(), CODE_FAMILY, MARKDOWN_SIZE, options.code_style == CodeStyle::Shaded);
 
     let mut book = FontBook::new(&job.fonts);
     let mut body = Flow::new(&mut book, theme.clone(), &parsed.pictures, geometry);
@@ -259,7 +264,7 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
     let mut pages = contents;
     pages.append(&mut laid.pages);
     let count = pages.len();
-    let document = assemble(&book, Assembly { size, pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref() })?;
+    let document = assemble(&book, Assembly { size, pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: None })?;
     let path = save(&job.request.output_location, input, document)?;
 
     let mut detail = format!("{}.", page_count(count));
@@ -272,6 +277,48 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
         0 => {}
         1 => detail.push_str(" 1 local image couldn't be read and was left out."),
         count => detail.push_str(&format!(" {count} local images couldn't be read and were left out.")),
+    }
+    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
+}
+
+fn rtf_geometry(page: rtf::PageSetup, defaults: &PageDefaults) -> Geometry {
+    let (default_width, default_height) = defaults.page_size.points();
+    let margin = defaults.margins.points();
+    let side = |value: Option<f32>, fallback: f32| value.filter(|value| (MIN_PAGE_SIDE..=MAX_PAGE_SIDE).contains(value)).unwrap_or(fallback);
+    let (width, height) = match (page.width, page.height) {
+        (None, None) => (default_width, default_height),
+        (width, height) => (side(width, default_width), side(height, default_height)),
+    };
+    let edge = |value: Option<f32>| value.filter(|value| *value >= 0.).unwrap_or(margin);
+    let geometry = Geometry { width, height, left: edge(page.left), right: edge(page.right), top: edge(page.top), bottom: edge(page.bottom) };
+    if geometry.width - geometry.left - geometry.right < MIN_PAGE_SIDE || geometry.height - geometry.top - geometry.bottom < MIN_PAGE_SIDE {
+        return Geometry::uniform(width, height, margin.min(width / 4.).min(height / 4.));
+    }
+    geometry
+}
+
+fn rich_text<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<JobOutcome, ToolError> {
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    let parsed = rtf::parse(&bytes)?;
+    let geometry = rtf_geometry(parsed.page, &job.request.page_defaults);
+    let mut theme = Theme::new(parsed.body_family.as_deref().unwrap_or(RTF_FAMILY), CODE_FAMILY, RTF_SIZE, false);
+    theme.families = parsed.families.clone();
+    theme.leading = 1.2;
+
+    let mut book = FontBook::new(&job.fonts);
+    let mut flow = Flow::new(&mut book, theme, &parsed.pictures, geometry);
+    flow.blocks(&parsed.blocks)?;
+    let laid = flow.finish();
+    let count = laid.pages.len();
+    let assembly = Assembly { size: (geometry.width, geometry.height), pages: laid.pages, pictures: &parsed.pictures, bookmarks: &[], anchors: &BTreeMap::new(), title: parsed.title.as_deref(), author: parsed.author.as_deref() };
+    let document = assemble(&book, assembly)?;
+    let path = save(&job.request.output_location, input, document)?;
+
+    let mut detail = format!("{}.", page_count(count));
+    match parsed.omitted_pictures {
+        0 => {}
+        1 => detail.push_str(" Omitted content: 1 picture couldn't be shown and was left out."),
+        count => detail.push_str(&format!(" Omitted content: {count} pictures couldn't be shown and were left out.")),
     }
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
 }
@@ -670,5 +717,114 @@ mod tests {
         assert_eq!(media_box, [0., 0., 612., 792.]);
         assert!(!String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&1])).contains(" re f"), "plain code has no shading");
         assert_eq!(names(&root), ["broken.png", "notes-1.pdf", "notes.md", "notes.pdf"]);
+    }
+
+    fn rtf_fixture() -> String {
+        let mut png = Vec::new();
+        image::RgbaImage::from_fn(8, 6, |x, _| image::Rgba([30, 90, 200, if x < 4 { 255 } else { 128 }]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let hex = png.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        [
+            r"{\rtf1\ansi\ansicpg1252\deff0",
+            r"{\fonttbl{\f0\froman\fcharset0 Times New Roman;}{\f1\fswiss\fcharset0 Arial;}{\f2\fmodern\fcharset0 Courier New;}{\f3\fnil\fcharset2 Symbol;}}",
+            r"{\colortbl;\red200\green0\blue0;}",
+            r"{\info{\title Quarterly report}{\author Dana Whitfield}{\operator Someone Else}}",
+            r"\paperw12240\paperh15840\margl1440\margr1440\margt1080\margb1080",
+            r"{\header \pard\plain\f1 Header text left out\par}",
+            r"\pard\qc\sa240{\f1\fs36\b Quarterly summary\par}",
+            r"\pard\plain\f0\fs24 Plain serif with {\b bold}, {\i italic}, {\ul underlined}, {\strike struck} and {\cf1 red} words in Caf\'e9 Ren\u233?e{\v  hidden words}{\deleted  removed text}{\revised  added text}.",
+            r"{\*\atnid A}{\*\atnauthor Reviewer}\chatn{\*\annotation{\*\atnref 1}\pard Comment text\par}\par",
+            r#"\pard\li720{\f2 Monospace line}\line {\field{\*\fldinst HYPERLINK "https://example.com/rtf"}{\fldrslt Example link}}\par"#,
+            r"{\pntext\f3\'b7\tab}\pard\li720 Bullet item\par",
+            r"\trowd\cellx3000\cellx6000\pard\intbl\b Region\cell Revenue\cell\b0\row",
+            r"\trowd\cellx3000\cellx6000\pard\intbl North\cell 1,200\cell\row",
+            r"\pard After the table\par",
+            &format!(r"{{\*\shppict{{\pict\pngblip\picw8\pich6\picwgoal1200\pichgoal900 {hex}}}}}{{\nonshppict{{\pict\wmetafile8 0102}}}}\par"),
+            r"{\pict\wmetafile8\picw10\pich10 010203}\par",
+            r"\page Second page\par",
+            "}",
+        ].join("\n")
+    }
+
+    fn info(document: &Document, key: &[u8]) -> Vec<u8> {
+        let info = document.trailer.get(b"Info").and_then(Object::as_reference).unwrap();
+        document.get_dictionary(info).unwrap().get(key).unwrap().as_str().unwrap().to_vec()
+    }
+
+    #[test]
+    fn rich_text_keeps_styles_tables_pictures_page_setup_and_requested_fonts() {
+        let root = sandbox("rtf");
+        let input = root.join("report.rtf");
+        let source = rtf_fixture();
+        fs::write(&input, &source).unwrap();
+
+        let outcomes = convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "a4", "margins": "wide" } }));
+        let outcome = &outcomes[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "2 pages. Omitted content: 1 picture couldn't be shown and was left out.");
+        for family in ["Times New Roman", "Arial", "Courier New"] {
+            assert!(outcome.fonts.iter().any(|font| font.requested_family == family && font.source == FontSource::BundledFallback), "{family} missing from {:?}", outcome.fonts);
+        }
+        assert!(!outcome.fonts.iter().any(|font| font.requested_family == "Symbol"));
+
+        let document = Document::load(root.join("report.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), 2);
+        let text = document.extract_text(&[1]).unwrap();
+        for expected in ["Quarterly summary", "Plain serif with", "bold", "italic", "underlined", "struck", "red", "Caf\u{e9} Ren\u{e9}e", "added text", "Monospace line", "Example link", "\u{2022}", "Bullet item", "Region", "Revenue", "North", "1,200", "After the table"] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        for absent in ["hidden words", "removed text", "Comment text", "Reviewer", "Header text"] {
+            assert!(!text.contains(absent), "{absent:?} should be left out of {text}");
+        }
+        assert!(document.extract_text(&[2]).unwrap().contains("Second page"));
+        let images = document.objects.values().filter_map(|object| object.as_stream().ok()).filter(|stream| stream.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image".as_slice())).collect::<Vec<_>>();
+        let pictures = images.iter().filter(|image| image.dict.has(b"SMask")).collect::<Vec<_>>();
+        assert_eq!(pictures.len(), 1, "only the PNG is embedded; the metafiles are left out");
+        assert_eq!(pictures[0].dict.get(b"Width").unwrap().as_i64().unwrap(), 8);
+        let content = String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&1])).into_owned();
+        assert!(content.contains("60.00 0 0 45.00 72.00"), "the picture keeps its stored size and the document's left margin");
+        assert!(content.contains("0.78431374 0 0 rg"), "the red colour is applied");
+        assert!(links(&document).iter().any(|link| link.get(b"A").and_then(Object::as_dict).and_then(|action| action.get(b"URI")).and_then(Object::as_str).ok() == Some(b"https://example.com/rtf".as_slice())));
+        let media_box = document.get_dictionary(document.get_pages()[&1]).unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>();
+        assert_eq!(media_box, [0., 0., 612., 792.], "the document's own page setup wins");
+        assert_eq!(info(&document, b"Title"), b"Quarterly report");
+        assert_eq!(info(&document, b"Author"), b"Dana Whitfield");
+
+        assert!(succeeded(&convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "a4", "margins": "wide" } }))[0]));
+        assert_eq!(fs::read(root.join("report.pdf")).unwrap(), fs::read(root.join("report-1.pdf")).unwrap());
+        assert_eq!(fs::read_to_string(&input).unwrap(), source);
+        assert_eq!(names(&root), ["report-1.pdf", "report.pdf", "report.rtf"]);
+    }
+
+    #[test]
+    fn a_damaged_rtf_fails_alone_and_rtf_without_page_setup_uses_page_defaults() {
+        let root = sandbox("rtf_batch");
+        let unclosed = root.join("unclosed.rtf");
+        let not_rtf = root.join("renamed.rtf");
+        let good = root.join("letter.rtf");
+        let notes = root.join("notes.txt");
+        fs::write(&unclosed, r"{\rtf1\ansi {\b bold never closes\par").unwrap();
+        fs::write(&not_rtf, "just text with an rtf name").unwrap();
+        fs::write(&good, r"{\rtf1\ansi{\fonttbl{\f0\fswiss Helvetica;}}\f0 Dear reader,\par}").unwrap();
+        fs::write(&notes, "notes").unwrap();
+
+        let outcomes = convert_paths(&[&unclosed, &good, &not_rtf, &notes], json!({ "pageDefaults": { "pageSize": "letter", "margins": "narrow" } }));
+        for outcome in [&outcomes[0], &outcomes[2]] {
+            let error = outcome.error().unwrap();
+            assert_eq!((error.kind.clone(), error.message.as_str()), (ErrorKind::InvalidInput, "This RTF file is damaged or incomplete, so no PDF was made."));
+        }
+        assert!(succeeded(&outcomes[1]) && succeeded(&outcomes[3]), "{outcomes:?}");
+        assert_eq!(outcomes[1].detail, "1 page.");
+        assert!(outcomes[1].fonts.iter().any(|font| font.requested_family == "Helvetica"));
+        let document = Document::load(root.join("letter.pdf")).unwrap();
+        assert!(document.extract_text(&[1]).unwrap().contains("Dear reader,"));
+        assert!(document.trailer.get(b"Info").is_err(), "no title or author means no Info dictionary");
+        let media_box = document.get_dictionary(document.get_pages()[&1]).unwrap().get(b"MediaBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>();
+        assert_eq!(media_box, [0., 0., 612., 792.]);
+        assert!(String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&1])).contains(" 36.00 "), "narrow margins apply");
+        assert_eq!(names(&root), ["letter.pdf", "letter.rtf", "notes.pdf", "notes.txt", "renamed.rtf", "unclosed.rtf"]);
+
+        let outcomes = convert_paths(&[&good], json!({ "richText": {} }));
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
     }
 }
