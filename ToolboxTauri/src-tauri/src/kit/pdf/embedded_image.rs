@@ -103,7 +103,7 @@ fn undo_filters(document: &Document, image: &Stream, (width, height): (u64, u64)
             b"ASCIIHexDecode" | b"AHx" => ascii_hex(&data)?,
             b"RunLengthDecode" | b"RL" => run_length(&data, (width, height))?,
             b"JBIG2Decode" => return Err(NotSaved::Unsupported("JBIG2".into())),
-            b"CCITTFaxDecode" | b"CCF" => return Err(NotSaved::Unsupported("CCITT fax".into())),
+            b"CCITTFaxDecode" | b"CCF" => ccitt_fax(parms.as_ref(), &data, (width, height))?,
             other => return Err(NotSaved::Unsupported(String::from_utf8_lossy(other).into_owned())),
         };
     }
@@ -153,6 +153,65 @@ fn run_length(data: &[u8], (width, height): (u64, u64)) -> Result<Vec<u8>, NotSa
         if output.len() as u64 > MAX_DECODED_BYTES { return Err(NotSaved::TooLarge { width, height }); }
     }
     Ok(output)
+}
+
+/// Decodes CCITT Group 3 (`K` = 0 one-dimensional, `K` > 0 mixed) or Group 4 (`K` < 0) fax data into 1-bit rows that
+/// each start on a byte boundary, so the image's own colour space, `Decode` array or `ImageMask` then applies as usual.
+///
+/// Black is written as 0 and white as 1 unless `BlackIs1` is true. `EndOfLine`, `EncodedByteAlign` and `EndOfBlock` are
+/// honoured. Rows are decoded `Columns` wide (1728 when absent) and then cut or padded with white to the image's width.
+/// Data that ends before the image's height is reached counts as damaged.
+fn ccitt_fax(parms: Option<&Dictionary>, data: &[u8], (width, height): (u64, u64)) -> Result<Vec<u8>, NotSaved> {
+    use hayro_ccitt::{DecodeSettings, DecoderContext, EncodingMode};
+    let entry = |key: &[u8]| parms.and_then(|parms| parms.get(key).ok());
+    let number = |key: &[u8], default: i64| entry(key).and_then(|value| value.as_i64().ok()).unwrap_or(default);
+    let flag = |key: &[u8], default: bool| entry(key).and_then(|value| value.as_bool().ok()).unwrap_or(default);
+    let row_bytes = width.div_ceil(8);
+    if row_bytes.saturating_mul(height) > MAX_DECODED_BYTES { return Err(NotSaved::TooLarge { width, height }); }
+    let columns = u32::try_from(number(b"Columns", 1728)).ok().filter(|columns| *columns > 0).ok_or(NotSaved::Damaged)?;
+    let k = number(b"K", 0);
+    let settings = DecodeSettings {
+        columns,
+        rows: u32::try_from(height).map_err(|_| NotSaved::TooLarge { width, height })?,
+        end_of_block: flag(b"EndOfBlock", true),
+        end_of_line: flag(b"EndOfLine", false),
+        rows_are_byte_aligned: flag(b"EncodedByteAlign", false),
+        encoding: if k < 0 { EncodingMode::Group4 } else if k == 0 { EncodingMode::Group3_1D } else { EncodingMode::Group3_2D },
+        strict: false,
+    };
+    let mut rows = FaxRows { width: width as usize, row_bytes: row_bytes as usize, height, black_is_one: flag(b"BlackIs1", false), rows: 0, data: Vec::new() };
+    rows.data.reserve((row_bytes * height) as usize);
+    // Rows decoded before an error are kept, so the image is damaged only when rows are missing.
+    let _ = hayro_ccitt::decode(data, &mut rows, &mut DecoderContext::new(settings));
+    if rows.rows < height { return Err(NotSaved::Damaged); }
+    Ok(rows.data)
+}
+
+/// Packs the rows hayro-ccitt reports as colour changes into 1-bit rows of the image's width.
+struct FaxRows {
+    width: usize,
+    row_bytes: usize,
+    height: u64,
+    black_is_one: bool,
+    rows: u64,
+    data: Vec<u8>,
+}
+
+impl hayro_ccitt::Decoder for FaxRows {
+    fn push_row(&mut self, changes: &[u32]) {
+        if self.rows == self.height { return; }
+        self.rows += 1;
+        let start = self.data.len();
+        self.data.resize(start + self.row_bytes, if self.black_is_one { 0x00 } else { 0xFF });
+        let row = &mut self.data[start..];
+        for span in changes.chunks(2) {
+            let from = (span[0] as usize).min(self.width);
+            let to = span.get(1).map_or(self.width, |end| (*end as usize).min(self.width));
+            for x in from..to {
+                if self.black_is_one { row[x / 8] |= 0x80 >> (x % 8) } else { row[x / 8] &= !(0x80 >> (x % 8)) }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -2412,6 +2412,7 @@ hashbrown 0.12.3 - MIT OR Apache-2.0 - https://github.com/rust-lang/hashbrown
 hashbrown 0.15.5 - MIT OR Apache-2.0 - https://github.com/rust-lang/hashbrown
 hashbrown 0.16.1 - MIT OR Apache-2.0 - https://github.com/rust-lang/hashbrown
 hashbrown 0.17.1 - MIT OR Apache-2.0 - https://github.com/rust-lang/hashbrown
+hayro-ccitt 0.5.0 - Apache-2.0 OR MIT - https://github.com/LaurenzV/hayro
 heck 0.5.0 - MIT OR Apache-2.0 - https://github.com/withoutboats/heck
 heif-rs 26.7.0 - Apache-2.0 - https://github.com/vegidio/heif-rs
 hex 0.4.3 - MIT OR Apache-2.0 - https://github.com/KokaKiwi/rust-hex
@@ -8542,7 +8543,7 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 
 ------------------------------------------------------------------------
 
-Used by: fdeflate 0.3.7 (LICENSE-APACHE), fontdue 0.9.4 (LICENSE-APACHE), half 2.7.1 (LICENSE-APACHE), image 0.25.10 (LICENSE-APACHE), image-webp 0.2.4 (LICENSE-APACHE), miniz_oxide 0.8.9 (LICENSE-APACHE.md), miniz_oxide 0.9.1 (LICENSE-APACHE.md), num-conv 0.2.2 (LICENSE-Apache), pin-project-lite 0.2.17 (LICENSE-APACHE), raw-window-handle 0.6.2 (LICENSE-APACHE.md), sync_wrapper 1.0.2 (LICENSE), tauri 2.11.5 (LICENSE_APACHE-2.0), tauri-codegen 2.6.3 (LICENSE_APACHE-2.0), tauri-macros 2.6.3 (LICENSE_APACHE-2.0), tauri-plugin-dialog 2.7.2 (LICENSE_APACHE-2.0), tauri-plugin-fs 2.5.1 (LICENSE_APACHE-2.0), tauri-plugin-process 2.3.1 (LICENSE_APACHE-2.0), tauri-plugin-single-instance 2.4.0 (LICENSE_APACHE-2.0), tauri-plugin-updater 2.11.0 (LICENSE_APACHE-2.0), tauri-runtime 2.11.3 (LICENSE_APACHE-2.0), tauri-runtime-wry 2.11.4 (LICENSE_APACHE-2.0), tauri-utils 2.9.3 (LICENSE_APACHE-2.0), tauri-winrt-notification 0.8.1 (LICENSE_APACHE-2.0), time 0.3.55 (LICENSE-Apache), time-core 0.1.9 (LICENSE-Apache), time-macros 0.2.32 (LICENSE-Apache)
+Used by: fdeflate 0.3.7 (LICENSE-APACHE), fontdue 0.9.4 (LICENSE-APACHE), half 2.7.1 (LICENSE-APACHE), hayro-ccitt 0.5.0 (LICENSE-APACHE), image 0.25.10 (LICENSE-APACHE), image-webp 0.2.4 (LICENSE-APACHE), miniz_oxide 0.8.9 (LICENSE-APACHE.md), miniz_oxide 0.9.1 (LICENSE-APACHE.md), num-conv 0.2.2 (LICENSE-Apache), pin-project-lite 0.2.17 (LICENSE-APACHE), raw-window-handle 0.6.2 (LICENSE-APACHE.md), sync_wrapper 1.0.2 (LICENSE), tauri 2.11.5 (LICENSE_APACHE-2.0), tauri-codegen 2.6.3 (LICENSE_APACHE-2.0), tauri-macros 2.6.3 (LICENSE_APACHE-2.0), tauri-plugin-dialog 2.7.2 (LICENSE_APACHE-2.0), tauri-plugin-fs 2.5.1 (LICENSE_APACHE-2.0), tauri-plugin-process 2.3.1 (LICENSE_APACHE-2.0), tauri-plugin-single-instance 2.4.0 (LICENSE_APACHE-2.0), tauri-plugin-updater 2.11.0 (LICENSE_APACHE-2.0), tauri-runtime 2.11.3 (LICENSE_APACHE-2.0), tauri-runtime-wry 2.11.4 (LICENSE_APACHE-2.0), tauri-utils 2.9.3 (LICENSE_APACHE-2.0), tauri-winrt-notification 0.8.1 (LICENSE_APACHE-2.0), time 0.3.55 (LICENSE-Apache), time-core 0.1.9 (LICENSE-Apache), time-macros 0.2.32 (LICENSE-Apache)
 
 Apache License
                            Version 2.0, January 2004
@@ -9633,6 +9634,18 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+------------------------------------------------------------------------
+
+Used by: hayro-ccitt 0.5.0 (LICENSE-MIT)
+
+Copyright (c) The Hayro Authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------
 
