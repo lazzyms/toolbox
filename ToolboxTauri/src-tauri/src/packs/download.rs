@@ -538,6 +538,36 @@ mod tests {
             list_packs_in(&self.catalog, &self.app_data, &current_target(), APP).packs.into_iter().find(|pack| pack.id == id).unwrap().status
         }
 
+        /// Installs version 1.0 of `id` from a pack file, so the catalog's 2.0 is an update.
+        fn install_old(&self, id: &str) {
+            let mut old = Fixture::new();
+            old.id = id.to_string();
+            old.version = "1.0".into();
+            let file = self.app_data.with_file_name(format!("{id}-1.0.toolboxpack"));
+            std::fs::write(&file, old.file(&self.key)).unwrap();
+            let (catalog, target, public_key) = (old.catalog(), current_target(), self.key.public_key());
+            install::install(&file, &InstallContext { catalog: &catalog, app_data: &self.app_data, target: &target, app_version: APP, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: None }).unwrap();
+        }
+
+        fn installed_version(&self, id: &str) -> Option<String> {
+            list_packs_in(&self.catalog, &self.app_data, &current_target(), APP).packs.into_iter().find(|pack| pack.id == id).unwrap().installed_version
+        }
+
+        /// The version folders in the pack's folder.
+        fn version_folders(&self, id: &str) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(self.app_data.join(PACKS_DIR).join(id)).unwrap().flatten()
+                .filter(|entry| entry.file_type().unwrap().is_dir())
+                .map(|entry| entry.file_name().into_string().unwrap()).collect();
+            names.sort();
+            names
+        }
+
+        /// Nothing in install staging and no downloaded file left.
+        fn assert_no_staging(&self, case: &str) {
+            assert!(!self.app_data.join("pack-staging").exists(), "{case}: staging was left");
+            assert!(!self.app_data.join(DOWNLOADS_DIR).exists(), "{case}: the download was left");
+        }
+
         /// No visible pack, nothing in install staging and no downloaded file left.
         fn assert_clean(&self, id: &str, case: &str) {
             assert!(!self.app_data.join(PACKS_DIR).join(id).exists(), "{case}: a pack folder was left");
@@ -597,7 +627,7 @@ mod tests {
         let mut changed = original.clone();
         changed[0] ^= 1;
         std::fs::write(&model, changed).unwrap();
-        let resolve = || resolve_pack_resource(MODEL, &setup.app_data, "ocr-hindi", None, None, &mut PackHolds::default());
+        let resolve = || resolve_pack_resource(MODEL, &setup.app_data, "ocr-hindi", APP, None, None, &mut PackHolds::default());
         assert!(resolve().is_err());
         assert_eq!(setup.status("ocr-hindi"), PackStatus::Damaged);
 
@@ -619,6 +649,102 @@ mod tests {
         assert!(!setup.app_data.join("pack-staging").exists() && !setup.app_data.join(DOWNLOADS_DIR).exists());
         let resolved = resolve().unwrap();
         assert_eq!(std::fs::read(resolved.path).unwrap(), original);
+    }
+
+    const MODEL: &str = "tessdata/hin.traineddata";
+
+    fn resolve(setup: &Setup, run: &mut super::super::uninstall::PackHolds) -> std::result::Result<PathBuf, crate::kit::contracts::ToolError> {
+        super::super::uninstall::resolve_pack_resource(MODEL, &setup.app_data, "ocr-hindi", APP, None, None, run).map(|resolved| resolved.path)
+    }
+
+    #[test]
+    fn a_newer_catalog_version_is_an_update_that_downloads_only_when_asked_and_replaces_the_old_version() {
+        let setup = Setup::new("update", &["ocr-hindi"]);
+        let server = Server::start();
+        setup.serve(&server);
+        setup.install_old("ocr-hindi");
+
+        assert_eq!((setup.status("ocr-hindi"), setup.installed_version("ocr-hindi").as_deref()), (PackStatus::UpdateAvailable, Some("1.0")));
+        assert!(resolve(&setup, &mut Default::default()).unwrap().starts_with(setup.app_data.join("packs/ocr-hindi/1.0")));
+        assert!(server.requests().is_empty(), "nothing is downloaded before Update");
+
+        let events = Events::default();
+        setup.install(&Downloads::new(transport(server.base())).unwrap(), "ocr-hindi", &CancelFlag::default(), &recorder(&events)).unwrap();
+        assert_eq!(server.requests(), [format!("/releases/{}", pack_path("ocr-hindi"))]);
+        assert!(!events.into_inner().unwrap().is_empty(), "the update reports its progress");
+        assert_eq!((setup.status("ocr-hindi"), setup.installed_version("ocr-hindi").as_deref()), (PackStatus::Installed, Some("2.0")));
+        assert_eq!(setup.version_folders("ocr-hindi"), ["2.0"], "the old version is removed");
+        assert!(resolve(&setup, &mut Default::default()).unwrap().starts_with(setup.app_data.join("packs/ocr-hindi/2.0")));
+        setup.assert_no_staging("updated");
+    }
+
+    #[test]
+    fn a_failed_or_cancelled_update_keeps_the_old_version_usable_and_leaves_nothing_behind() {
+        let setup = Setup::new("update-fails", &["ocr-hindi"]);
+        let server = Server::start();
+        let path = format!("/releases/{}", pack_path("ocr-hindi"));
+        let downloads = Downloads::new(transport(server.base())).unwrap();
+        setup.install_old("ocr-hindi");
+        let old = setup.app_data.join("packs/ocr-hindi/1.0");
+        let assert_old_kept = |case: &str| {
+            assert_eq!((setup.status("ocr-hindi"), setup.installed_version("ocr-hindi").as_deref()), (PackStatus::UpdateAvailable, Some("1.0")), "{case}");
+            assert_eq!(setup.version_folders("ocr-hindi"), ["1.0"], "{case}: no half-installed version");
+            let resolved = resolve(&setup, &mut Default::default()).unwrap_or_else(|error| panic!("{case}: {error:?}"));
+            assert!(resolved.starts_with(&old), "{case}");
+            setup.assert_no_staging(case);
+        };
+
+        let mut corrupt = setup.file("ocr-hindi");
+        let middle = corrupt.len() / 2;
+        corrupt[middle] ^= 0xff;
+        for (case, reply) in [("server error", Reply::Status(500)), ("corrupt download", Reply::File(corrupt)), ("cut short", Reply::CutShort(setup.file("ocr-hindi")))] {
+            server.route(&path, reply);
+            assert!(setup.install(&downloads, "ocr-hindi", &CancelFlag::default(), &|_, _, _| {}).is_err(), "{case}");
+            assert_old_kept(case);
+        }
+
+        let gate = Arc::new(AtomicBool::new(false));
+        server.route(&path, Reply::Gated(setup.file("ocr-hindi"), gate.clone()));
+        let cancel = CancelFlag::default();
+        let during_download = setup.install(&downloads, "ocr-hindi", &cancel, &|phase, _, _| if phase == Phase::Downloading { cancel.cancel() });
+        gate.store(true, Ordering::Release);
+        assert_eq!(kind(during_download), PackInstallErrorKind::Cancelled);
+        assert_old_kept("cancelled while downloading");
+
+        server.route(&path, Reply::File(setup.file("ocr-hindi")));
+        let cancel = CancelFlag::default();
+        let during_check = setup.install(&downloads, "ocr-hindi", &cancel, &|phase, _, _| if phase == Phase::Verifying { cancel.cancel() });
+        assert_eq!(kind(during_check), PackInstallErrorKind::Cancelled);
+        assert_old_kept("cancelled while checking");
+
+        setup.install(&downloads, "ocr-hindi", &CancelFlag::default(), &|_, _, _| {}).unwrap();
+        assert_eq!(setup.installed_version("ocr-hindi").as_deref(), Some("2.0"));
+    }
+
+    #[test]
+    fn a_run_using_the_old_version_keeps_it_through_the_update_and_it_is_removed_when_the_run_ends() {
+        let setup = Setup::new("update-held", &["ocr-hindi"]);
+        let server = Server::start();
+        setup.serve(&server);
+        setup.install_old("ocr-hindi");
+        let mut running = Default::default();
+        let old_model = resolve(&setup, &mut running).unwrap();
+        assert!(old_model.starts_with(setup.app_data.join("packs/ocr-hindi/1.0")));
+
+        setup.install(&Downloads::new(transport(server.base())).unwrap(), "ocr-hindi", &CancelFlag::default(), &|_, _, _| {}).unwrap();
+        assert_eq!((setup.status("ocr-hindi"), setup.installed_version("ocr-hindi").as_deref()), (PackStatus::Installed, Some("2.0")));
+        // The running run still reads the version it started with; a new run gets the new one.
+        assert_eq!(setup.version_folders("ocr-hindi"), ["1.0", "2.0"]);
+        assert!(std::fs::read(&old_model).is_ok());
+        let mut later = Default::default();
+        assert!(resolve(&setup, &mut later).unwrap().starts_with(setup.app_data.join("packs/ocr-hindi/2.0")));
+        drop(later);
+        assert_eq!(setup.version_folders("ocr-hindi"), ["1.0", "2.0"], "the first run still holds the pack");
+
+        drop(running);
+        assert_eq!(setup.version_folders("ocr-hindi"), ["2.0"]);
+        assert!(resolve(&setup, &mut Default::default()).unwrap().starts_with(setup.app_data.join("packs/ocr-hindi/2.0")));
+        setup.assert_no_staging("held update");
     }
 
     #[test]
