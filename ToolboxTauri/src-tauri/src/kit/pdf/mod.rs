@@ -15,6 +15,8 @@ mod jbig2_spike;
 pub(crate) mod qpdf;
 pub mod unicode_font;
 pub mod font_resolver;
+pub mod layout;
+pub mod markdown;
 pub mod convert;
 
 use std::collections::HashSet;

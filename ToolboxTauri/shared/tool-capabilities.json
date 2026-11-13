@@ -30,7 +30,7 @@
     {"id": "documents", "extensions": [".docx", ".odt", ".rtf"], "nativeAvailability": "unavailable"},
     {"id": "spreadsheets", "extensions": [".xlsx", ".ods"], "nativeAvailability": "unavailable"},
     {"id": "presentations", "extensions": [".pptx", ".odp"], "nativeAvailability": "unavailable"},
-    {"id": "markdown", "extensions": [".md", ".markdown"], "nativeAvailability": "unavailable"},
+    {"id": "markdown", "extensions": [".md", ".markdown"], "nativeAvailability": "available"},
     {"id": "web-pages", "extensions": [".html", ".htm"], "nativeAvailability": "unavailable"},
     {"id": "tables", "extensions": [".csv", ".tsv"], "nativeAvailability": "unavailable"},
     {"id": "ebooks", "extensions": [".epub"], "nativeAvailability": "unavailable"},

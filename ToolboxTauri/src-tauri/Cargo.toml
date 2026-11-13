@@ -56,6 +56,7 @@ tiff = "0.11"
 fax = "0.2"
 tract-onnx = { version = "0.23.7", optional = true }
 notify-rust = "4"
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]
 # JBIG2 decoder spike (#623); promote to [dependencies] for #630.

@@ -1,23 +1,25 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
-use lopdf::{dictionary, Document, Object, Stream};
+use lopdf::Document;
 use serde::Deserialize;
 
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::{native_capabilities, SkipCode, SkipReason, ToolError};
 use crate::kit::pdf::font_resolver::{FontResolver, FontStyle, SystemFontLookup};
-use crate::kit::pdf::unicode_font::UnicodeFont;
+use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Face, FontBook, Flow, Geometry, PageOut, Theme};
+use crate::kit::pdf::markdown;
 
 pub const COMMAND: &str = "convert_to_pdf";
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
 const FONT_SIZE: f32 = 10.;
 const LEADING: f32 = 13.;
-const TAB_WIDTH: usize = 8;
+const MARKDOWN_SIZE: f32 = 11.;
+const CODE_FAMILY: &str = "Courier New";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +67,10 @@ impl TextFont {
 #[serde(rename_all = "camelCase")]
 pub enum TextEncoding { #[default] Detect, Utf8, Utf16le, Utf16be, Windows1252 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CodeStyle { #[default] Shaded, Plain }
+
 #[derive(Debug, Clone, Copy, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageDefaults {
@@ -86,6 +92,20 @@ impl Default for PlainTextOptions {
     fn default() -> Self { Self { page_size: None, margins: None, font: TextFont::default(), encoding: TextEncoding::default(), wrap_lines: true } }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkdownOptions {
+    #[serde(default)] pub page_size: Option<PageSize>,
+    #[serde(default)] pub margins: Option<Margins>,
+    pub body_font: TextFont,
+    pub code_style: CodeStyle,
+    pub table_of_contents: bool,
+}
+
+impl Default for MarkdownOptions {
+    fn default() -> Self { Self { page_size: None, margins: None, body_font: TextFont::Sans, code_style: CodeStyle::default(), table_of_contents: false } }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConvertToPdfRequest {
@@ -93,6 +113,7 @@ pub struct ConvertToPdfRequest {
     pub output_location: OutputLocation,
     #[serde(default)] pub page_defaults: PageDefaults,
     #[serde(default)] pub plain_text: Option<PlainTextOptions>,
+    #[serde(default)] pub markdown: Option<MarkdownOptions>,
 }
 
 pub struct ConvertJob<S: SystemFontLookup> {
@@ -149,28 +170,37 @@ fn parse_request(request: serde_json::Value) -> Result<ConvertToPdfRequest, Tool
 
 fn convert<S: SystemFontLookup>(job: &ConvertJob<S>, input: PathBuf) -> JobOutcome {
     let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
-    if extension == "pdf" {
-        return JobOutcome::skipped(input, SkipReason::new(SkipCode::AlreadyInTargetFormat, ALREADY_PDF));
-    }
-    let options = job.request.plain_text.unwrap_or_default();
-    match plain_text(job, &options, &input) {
-        Ok(outcome) => outcome,
-        Err(error) => JobOutcome::failure(input, error),
-    }
+    let result = match extension.as_str() {
+        "pdf" => return JobOutcome::skipped(input, SkipReason::new(SkipCode::AlreadyInTargetFormat, ALREADY_PDF)),
+        "md" | "markdown" => markdown_file(job, &job.request.markdown.unwrap_or_default(), &input),
+        _ => plain_text(job, &job.request.plain_text.unwrap_or_default(), &input),
+    };
+    result.unwrap_or_else(|error| JobOutcome::failure(input, error))
+}
+
+fn page_count(count: usize) -> String {
+    if count == 1 { "1 page".to_string() } else { format!("{count} pages") }
+}
+
+fn save(job_location: &OutputLocation, input: &Path, mut document: Document) -> Result<PathBuf, ToolError> {
+    let output = OutputNaming::reserve_destination(input, job_location, "", "pdf")
+        .map_err(|error| ToolError::processing(format!("Could not reserve the PDF output: {error}")))?;
+    document.save(output.path()).map_err(|error| ToolError::processing(format!("Could not write the PDF: {error}")))?;
+    output.publish().map_err(|error| ToolError::processing(format!("Could not save the PDF: {error}")))
 }
 
 fn plain_text<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PlainTextOptions, input: &Path) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let (text, encoding) = decode(&bytes, options.encoding)?;
-    let resolved = job.fonts.resolve(options.font.family(), FontStyle::Regular, &[])?;
-    let mut font = UnicodeFont::parse(resolved.data)?;
-    let size = options.page_size.unwrap_or(job.request.page_defaults.page_size);
+    let mut book = FontBook::new(&job.fonts);
+    let face = book.face(options.font.family(), FontStyle::Regular)?;
+    let size = options.page_size.unwrap_or(job.request.page_defaults.page_size).points();
     let margin = options.margins.unwrap_or(job.request.page_defaults.margins).points();
-    let (width, height) = size.points();
+    let (width, height) = size;
     let text_width = width - 2. * margin;
     let lines_per_page = (((height - 2. * margin) / LEADING).floor() as usize).max(1);
 
-    let mut measure = Measure { font: &mut font, widths: HashMap::new() };
+    let mut measure = Measure { book: &mut book, face, widths: HashMap::new() };
     let mut pages: Vec<Vec<String>> = vec![Vec::new()];
     for (page_index, page) in text.split('\u{c}').enumerate() {
         if page_index > 0 { pages.push(Vec::new()); }
@@ -184,41 +214,66 @@ fn plain_text<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PlainTextOptio
         }
     }
 
-    let mut document = Document::with_version("1.7");
-    let pages_id = document.new_object_id();
-    let mut contents = Vec::with_capacity(pages.len());
+    let mut out = Vec::with_capacity(pages.len());
     for rows in &pages {
-        let mut content = String::new();
+        let mut page = PageOut::default();
         for (index, row) in rows.iter().enumerate() {
             if row.trim().is_empty() { continue; }
-            let run = font.show(row, FONT_SIZE)?;
             let baseline = height - margin - FONT_SIZE - index as f32 * LEADING;
-            content.push_str(&format!("BT /F1 {FONT_SIZE} Tf {margin} {baseline:.2} Td {} ET\n", run.operators));
+            page.content.push_str(&book.text(face, FONT_SIZE, margin, baseline, row)?);
         }
-        contents.push(content);
+        out.push(page);
     }
-    let font_id = font.embed(&mut document)?;
-    let kids = contents.into_iter().map(|content| {
-        let content_id = document.add_object(Stream::new(dictionary! {}, content.into_bytes()));
-        Object::Reference(document.add_object(dictionary! {
-            "Type" => "Page", "Parent" => pages_id,
-            "MediaBox" => vec![0.into(), 0.into(), Object::Real(width), Object::Real(height)],
-            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
-            "Contents" => content_id,
-        }))
-    }).collect::<Vec<_>>();
-    let page_count = kids.len();
-    document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => page_count as i64 }.into());
-    let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
-    document.trailer.set("Root", catalog_id);
-    document.compress();
+    let count = out.len();
+    let document = assemble(&book, Assembly { size, pages: out, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None })?;
+    let path = save(&job.request.output_location, input, document)?;
+    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], format!("{}. Read as {encoding}.", page_count(count))).with_fonts(book.reports()))
+}
 
-    let output = OutputNaming::reserve_destination(input, &job.request.output_location, "", "pdf")
-        .map_err(|error| ToolError::processing(format!("Could not reserve the PDF output: {error}")))?;
-    document.save(output.path()).map_err(|error| ToolError::processing(format!("Could not write the PDF: {error}")))?;
-    let path = output.publish().map_err(|error| ToolError::processing(format!("Could not save the PDF: {error}")))?;
-    let pages_label = if page_count == 1 { "1 page".to_string() } else { format!("{page_count} pages") };
-    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], format!("{pages_label}. Read as {encoding}.")).with_fonts(vec![resolved.report]))
+fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOptions, input: &Path) -> Result<JobOutcome, ToolError> {
+    let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
+    let (text, _) = decode(&bytes, TextEncoding::Detect)?;
+    let parsed = markdown::parse(&text, input.parent().unwrap_or(Path::new(".")));
+    let size = options.page_size.unwrap_or(job.request.page_defaults.page_size).points();
+    let geometry = Geometry { width: size.0, height: size.1, margin: options.margins.unwrap_or(job.request.page_defaults.margins).points() };
+    let theme = Theme { body_family: options.body_font.family().to_string(), code_family: CODE_FAMILY.to_string(), body_size: MARKDOWN_SIZE, shaded_code: options.code_style == CodeStyle::Shaded };
+
+    let mut book = FontBook::new(&job.fonts);
+    let mut body = Flow::new(&mut book, theme.clone(), &parsed.pictures, geometry);
+    body.blocks(&parsed.blocks)?;
+    let mut laid = body.finish();
+
+    let mut contents = Vec::new();
+    if options.table_of_contents && !laid.bookmarks.is_empty() {
+        let mut offset = 1;
+        loop {
+            let mut flow = Flow::new(&mut book, theme.clone(), &parsed.pictures, geometry);
+            flow.contents("Contents", &laid.bookmarks, offset)?;
+            let pages = flow.finish().pages;
+            if pages.len() == offset { contents = pages; break; }
+            offset = pages.len();
+        }
+        for bookmark in &mut laid.bookmarks { bookmark.page += contents.len(); }
+        for (page, _) in laid.anchors.values_mut() { *page += contents.len(); }
+    }
+    let mut pages = contents;
+    pages.append(&mut laid.pages);
+    let count = pages.len();
+    let document = assemble(&book, Assembly { size, pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref() })?;
+    let path = save(&job.request.output_location, input, document)?;
+
+    let mut detail = format!("{}.", page_count(count));
+    match parsed.remote_images {
+        0 => {}
+        1 => detail.push_str(" Remote content left out: 1 image from the internet wasn't loaded."),
+        count => detail.push_str(&format!(" Remote content left out: {count} images from the internet weren't loaded.")),
+    }
+    match parsed.unreadable_images {
+        0 => {}
+        1 => detail.push_str(" 1 local image couldn't be read and was left out."),
+        count => detail.push_str(&format!(" {count} local images couldn't be read and were left out.")),
+    }
+    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
 }
 
 fn decode(bytes: &[u8], encoding: TextEncoding) -> Result<(String, &'static str), ToolError> {
@@ -252,31 +307,16 @@ fn decode(bytes: &[u8], encoding: TextEncoding) -> Result<(String, &'static str)
     Ok((text.chars().filter(|character| !character.is_control() || matches!(character, '\n' | '\t' | '\u{c}')).collect(), label))
 }
 
-fn expand_tabs(line: &str) -> String {
-    let mut expanded = String::with_capacity(line.len());
-    let mut column = 0;
-    for character in line.chars() {
-        if character == '\t' {
-            let spaces = TAB_WIDTH - column % TAB_WIDTH;
-            expanded.extend(std::iter::repeat_n(' ', spaces));
-            column += spaces;
-        } else {
-            expanded.push(character);
-            column += 1;
-        }
-    }
-    expanded
-}
-
-struct Measure<'a> {
-    font: &'a mut UnicodeFont,
+struct Measure<'a, 'r, S: SystemFontLookup> {
+    book: &'a mut FontBook<'r, S>,
+    face: Face,
     widths: HashMap<char, f32>,
 }
 
-impl Measure<'_> {
+impl<S: SystemFontLookup> Measure<'_, '_, S> {
     fn width(&mut self, character: char) -> Result<f32, ToolError> {
         if let Some(width) = self.widths.get(&character) { return Ok(*width); }
-        let width = self.font.show(character.encode_utf8(&mut [0; 4]), FONT_SIZE)?.width;
+        let width = self.book.char_width(self.face, character, FONT_SIZE)?;
         self.widths.insert(character, width);
         Ok(width)
     }
@@ -322,6 +362,7 @@ mod tests {
     fn succeeded(outcome: &JobOutcome) -> bool { matches!(outcome.state, OutcomeState::Succeeded { .. }) }
     fn skip(outcome: &JobOutcome) -> &SkipReason { match &outcome.state { OutcomeState::Skipped { reason } => reason, other => panic!("not skipped: {other:?}") } }
     use crate::kit::pdf::font_resolver::{BundledFonts, FontSource, SystemFace};
+    use lopdf::Object;
     use serde_json::json;
 
     struct NoSystemFonts;
@@ -477,9 +518,11 @@ mod tests {
             assert_eq!(outcomes.len(), 1);
             assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput, "{options}");
         }
-        let outcomes = convert_paths(&[&input], json!({ "markdown": { "toc": true } }));
+        let outcomes = convert_paths(&[&input], json!({ "markdown": { "bodyFont": "sans", "codeStyle": "shaded", "tableOfContents": false, "toc": true } }));
+        assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::InvalidInput);
+        let outcomes = convert_paths(&[&input], json!({ "tables": {} }));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
-        assert_eq!(outcomes[0].error().unwrap().message, "Markdown options come in a later update.");
+        assert_eq!(outcomes[0].error().unwrap().message, "Tables options come in a later update.");
         let outcomes = convert_paths(&[&input], json!({ "webPages": {} }));
         assert_eq!(outcomes[0].error().unwrap().message, "Web pages options come in a later update.");
         let mobi = root.join("book.mobi");
@@ -504,5 +547,128 @@ mod tests {
         let outcomes = run_with::<NoSystemFonts, _>(&RunEvents::silent(), request, || Err(ToolError::unavailable("fonts missing")));
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
         assert_eq!(names(&root), ["emoji.txt"]);
+    }
+
+    fn markdown_options(table_of_contents: bool) -> serde_json::Value {
+        json!({ "markdown": { "bodyFont": "sans", "codeStyle": "shaded", "tableOfContents": table_of_contents } })
+    }
+
+    fn links(document: &Document) -> Vec<lopdf::Dictionary> {
+        document.objects.values().filter_map(|object| object.as_dict().ok())
+            .filter(|dictionary| dictionary.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Link".as_slice()))
+            .cloned().collect()
+    }
+
+    fn outline_titles(document: &Document) -> Vec<String> {
+        let root = document.catalog().unwrap().get(b"Outlines").unwrap().as_reference().unwrap();
+        let mut titles = Vec::new();
+        let mut stack = vec![document.get_dictionary(root).unwrap().get(b"First").unwrap().as_reference().unwrap()];
+        while let Some(id) = stack.pop() {
+            let item = document.get_dictionary(id).unwrap();
+            let title = item.get(b"Title").unwrap().as_str().unwrap();
+            titles.push(match title.strip_prefix(&[0xFE, 0xFF]) {
+                Some(units) => String::from_utf16(&units.chunks(2).map(|pair| u16::from_be_bytes([pair[0], pair[1]])).collect::<Vec<_>>()).unwrap(),
+                None => String::from_utf8_lossy(title).into_owned(),
+            });
+            if let Ok(next) = item.get(b"Next").and_then(Object::as_reference) { stack.push(next); }
+            if let Ok(first) = item.get(b"First").and_then(Object::as_reference) { stack.push(first); }
+        }
+        titles
+    }
+
+    fn page_of(document: &Document, destination: &Object) -> u32 {
+        let target = destination.as_array().unwrap()[0].as_reference().unwrap();
+        *document.get_pages().iter().find(|(_, id)| **id == target).unwrap().0
+    }
+
+    #[test]
+    fn markdown_keeps_structure_local_images_bookmarks_and_links_without_fetching_remote_images() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let root = sandbox("markdown");
+        fs::create_dir_all(root.join("images")).unwrap();
+        image::RgbaImage::from_fn(8, 6, |x, _| image::Rgba([200, 40, 40, if x < 4 { 255 } else { 128 }])).save(root.join("images/chart one.png")).unwrap();
+        let input = root.join("release-notes.md");
+        let source = format!("---\ntitle: Release notes 2.0\n---\n# Overview\n\nIntro with **bold**, *italic*, ~~old~~, `inline code` and a [docs link](https://example.com/docs) plus a [jump](#install-steps).\n\n## Install steps\n\n| Step | Command |\n|------|:-------:|\n| fetch | `cargo build` |\n| run | toolbox |\n\n```rust\nfn main() {{\n    println!(\"hello\");\n}}\n```\n\n![Local chart](images/chart%20one.png)\n\n![Remote logo](http://127.0.0.1:{port}/logo.png)\n\n> Quoted advice\n\n1. first item\n2. second item\n   - nested point\n\n### Notes\n\nDone.\n");
+        fs::write(&input, &source).unwrap();
+
+        let outcomes = convert_paths(&[&input], markdown_options(false));
+        let outcome = &outcomes[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "1 page. Remote content left out: 1 image from the internet wasn't loaded.");
+        assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock), "the remote image was requested");
+        assert!(outcome.fonts.iter().any(|font| font.requested_family == "Arial"));
+        assert!(outcome.fonts.iter().any(|font| font.requested_family == "Courier New"));
+
+        let output = root.join("release-notes.pdf");
+        let document = Document::load(&output).unwrap();
+        let text = document.extract_text(&[1]).unwrap();
+        for expected in ["Overview", "Intro with", "bold", "inline code", "docs link", "Install steps", "Step", "Command", "fetch", "cargo build", "toolbox", "println!(\"hello\");", "Quoted advice", "first item", "nested point", "Notes", "Done."] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        assert!(text.contains("Remote logo"), "the left-out image keeps its alt text");
+        let images = document.objects.values().filter_map(|object| object.as_stream().ok()).filter(|stream| stream.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image".as_slice())).collect::<Vec<_>>();
+        assert!(images.iter().any(|image| image.dict.get(b"Width").unwrap().as_i64().unwrap() == 8 && image.dict.has(b"SMask")), "the local image is embedded");
+        assert_eq!(outline_titles(&document), ["Overview", "Install steps", "Notes"]);
+        let links = links(&document);
+        assert!(links.iter().any(|link| link.get(b"A").and_then(Object::as_dict).and_then(|action| action.get(b"URI")).and_then(Object::as_str).ok() == Some(b"https://example.com/docs".as_slice())));
+        assert!(links.iter().any(|link| link.has(b"Dest")), "the in-document link jumps to its heading");
+        let info = document.trailer.get(b"Info").and_then(Object::as_reference).unwrap();
+        assert_eq!(document.get_dictionary(info).unwrap().get(b"Title").unwrap().as_str().unwrap(), b"Release notes 2.0");
+        assert_eq!(fs::read_to_string(&input).unwrap(), source);
+        assert_eq!(names(&root), ["images", "release-notes.md", "release-notes.pdf"]);
+    }
+
+    #[test]
+    fn table_of_contents_is_off_by_default_and_lists_every_heading_when_on() {
+        let root = sandbox("contents");
+        let input = root.join("guide.markdown");
+        let headings = ["Getting started", "Configuration", "Advanced use", "Caf\u{e9} appendix"];
+        let source = headings.iter().enumerate().map(|(index, heading)| format!("{} {heading}\n\n{}\n", "#".repeat(index.min(2) + 1), "Paragraph text. ".repeat(200))).collect::<String>();
+        fs::write(&input, &source).unwrap();
+
+        let plain = convert_paths(&[&input], json!({}));
+        assert!(succeeded(&plain[0]), "{:?}", plain[0]);
+        let without = Document::load(root.join("guide.pdf")).unwrap();
+        assert!(!without.extract_text(&[1]).unwrap().contains("Contents"));
+        assert!(without.trailer.get(b"Info").and_then(Object::as_reference).is_ok(), "the first heading becomes the title");
+
+        let with = convert_paths(&[&input], markdown_options(true));
+        assert!(succeeded(&with[0]), "{:?}", with[0]);
+        let document = Document::load(root.join("guide-1.pdf")).unwrap();
+        assert_eq!(document.get_pages().len(), without.get_pages().len() + 1);
+        assert_eq!(with[0].detail, format!("{} pages.", without.get_pages().len() + 1));
+        let contents = document.extract_text(&[1]).unwrap();
+        assert!(contents.contains("Contents"), "{contents}");
+        for heading in headings { assert!(contents.contains(heading), "missing {heading:?} in {contents}"); }
+        assert!(!document.extract_text(&[2]).unwrap().contains("Contents"));
+        let contents_page = document.get_pages()[&1];
+        let entries = document.get_dictionary(contents_page).unwrap().get(b"Annots").unwrap().as_array().unwrap().iter()
+            .map(|annotation| document.get_dictionary(annotation.as_reference().unwrap()).unwrap().get(b"Dest").unwrap().clone()).collect::<Vec<_>>();
+        assert_eq!(entries.len(), headings.len());
+        assert!(entries.iter().all(|destination| page_of(&document, destination) > 1));
+        assert_eq!(outline_titles(&document), headings);
+        assert_eq!(names(&root), ["guide-1.pdf", "guide.markdown", "guide.pdf"]);
+    }
+
+    #[test]
+    fn unreadable_local_images_are_noted_and_markdown_reruns_are_identical() {
+        let root = sandbox("markdown_repeat");
+        let input = root.join("notes.md");
+        fs::write(root.join("broken.png"), "not an image").unwrap();
+        fs::write(&input, "# Notes\n\n![missing](missing.png) ![broken](broken.png) ![a](https://example.com/a.png) ![b](//cdn.example.com/b.gif)\n\n```\nplain code\n```\n").unwrap();
+        let first = convert_paths(&[&input], json!({ "markdown": { "pageSize": "letter", "margins": "narrow", "bodyFont": "serif", "codeStyle": "plain", "tableOfContents": false } }));
+        assert_eq!(first[0].detail, "1 page. Remote content left out: 2 images from the internet weren't loaded. 2 local images couldn't be read and were left out.");
+        assert!(first[0].fonts.iter().any(|font| font.requested_family == "Times New Roman"));
+        let second = convert_paths(&[&input], json!({ "markdown": { "pageSize": "letter", "margins": "narrow", "bodyFont": "serif", "codeStyle": "plain", "tableOfContents": false } }));
+        assert!(succeeded(&second[0]));
+        assert_eq!(fs::read(root.join("notes.pdf")).unwrap(), fs::read(root.join("notes-1.pdf")).unwrap());
+        let document = Document::load(root.join("notes.pdf")).unwrap();
+        let page = document.get_dictionary(document.get_pages()[&1]).unwrap();
+        let media_box = page.get(b"MediaBox").unwrap().as_array().unwrap().iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>();
+        assert_eq!(media_box, [0., 0., 612., 792.]);
+        assert!(!String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&1])).contains(" re f"), "plain code has no shading");
+        assert_eq!(names(&root), ["broken.png", "notes-1.pdf", "notes.md", "notes.pdf"]);
     }
 }
