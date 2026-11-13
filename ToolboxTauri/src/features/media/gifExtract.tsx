@@ -1,6 +1,8 @@
 import type { JobOutcome, SucceededJobOutcome } from "../../contracts";
 import { exampleOutputName } from "../../components/RunDestination";
 import { fileName, type OutputGroup } from "../../components/resultRow";
+import { extensionOf, type IntakeRedirect } from "../../components/intake";
+import { UtilityRegistry } from "../../registry";
 import type { MediaTool } from "./types";
 
 const isTimings = (path: string) => path.toLowerCase().endsWith(".json");
@@ -54,6 +56,13 @@ const OutputsPanel = () => (
   </section>
 );
 
+const gifCreateExtensions = new Set(UtilityRegistry.find((tool) => tool.id === "gif-create")?.capability.acceptedExtensions ?? []);
+
+// A still image dropped here was meant to become a GIF, so the notice points at Create GIF.
+const stillImageRedirect = (path: string): IntakeRedirect | null => gifCreateExtensions.has(extensionOf(path))
+  ? { message: "Not a GIF. To make a GIF from images, use Create GIF.", toolId: "gif-create", action: "Open Create GIF" }
+  : null;
+
 /** Extracting frames has no options: each GIF splits into its frames and one timings file. */
 export const gifExtractTool: MediaTool<Record<string, never>> = {
   initialOptions: {},
@@ -68,4 +77,5 @@ export const gifExtractTool: MediaTool<Record<string, never>> = {
   ],
   outputGroup: groupFrames,
   resultsHint: framesSaved,
+  intakeRedirect: stillImageRedirect,
 };

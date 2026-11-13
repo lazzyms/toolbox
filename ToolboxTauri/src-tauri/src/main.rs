@@ -4552,6 +4552,211 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    fn gray_tiff(path: &PathBuf, pages: usize) {
+        std::fs::write(path, raw_tiff(&(0..pages).map(|page| gray_tiff_page(2, 1, 1, vec![page as u8, 9])).collect::<Vec<_>>())).unwrap();
+    }
+
+    fn sparse_file(path: &PathBuf, head: &[u8], len: u64) {
+        std::fs::write(path, head).unwrap();
+        std::fs::OpenOptions::new().write(true).open(path).unwrap().set_len(len).unwrap();
+    }
+
+    fn icon_request(paths: Vec<PathBuf>, sizes: Vec<u32>, output_location: OutputLocation) -> IconSetRequest {
+        IconSetRequest { paths, platforms: vec![IconPlatform { preset: "custom".into(), sizes, containers: None }], square_rule: SquareRule::Pad, output_location }
+    }
+
+    fn gif_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> GifCreateRequest {
+        GifCreateRequest { paths, frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location, output_path: None }
+    }
+
+    fn tiff_request(mode: TiffMode, paths: Vec<PathBuf>, pages: Option<Vec<crate::kit::images::tools::TiffPageRef>>, output_location: OutputLocation) -> TiffRequest {
+        TiffRequest { mode, paths, pages, output_location, output_path: None, compression: Default::default() }
+    }
+
+    /// An aggregate run that one input stopped: that input carries the limit, the rest say what stopped them, and nothing is saved.
+    fn assert_aggregate_limited(outcomes: &[JobOutcome], paths: &[PathBuf], offender: &PathBuf, limit: LimitKind, recorded_value: &str, folder: &PathBuf) {
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        let stopped = format!("Stopped because {} failed. Nothing was saved.", offender.file_name().unwrap().to_string_lossy());
+        for outcome in outcomes {
+            assert!(outcome.output_paths().is_empty());
+            let error = outcome.error().expect("every entry of a stopped aggregate fails");
+            if outcome.input_path == *offender {
+                assert_eq!(error.kind, ErrorKind::LimitExceeded { limit }, "{}", error.message);
+                assert!(error.message.contains(recorded_value), "{} should state {recorded_value}", error.message);
+            } else {
+                assert_eq!(error.message, stopped);
+            }
+        }
+        assert!(folder_entries(folder).is_empty(), "nothing is saved: {:?}", folder_entries(folder));
+    }
+
+    #[test]
+    fn creation_tools_save_into_the_chosen_folder_and_number_every_collision() {
+        use crate::kit::images::tools::TiffPageRef;
+        let root = sandbox("creation-chosen-folder");
+        let sources = root.join("sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let logo = sources.join("logo.png"); write_png(&logo, 40, 3);
+        let second = sources.join("second.png"); write_png(&second, 40, 90);
+        let animated = sources.join("spinner.gif");
+        std::fs::write(&animated, crate::kit::common::limits::fixtures::gif_with_frames(4, 4, 2)).unwrap();
+        let scan = sources.join("scan.tiff"); gray_tiff(&scan, 2);
+        let fax = sources.join("fax.tiff"); gray_tiff(&fax, 1);
+        let originals = [&logo, &second, &animated, &scan, &fax].map(|path| (path.clone(), std::fs::read(path).unwrap()));
+        let chosen = location(&root, "chosen");
+        let OutputLocation::CustomFolder(folder) = chosen.clone() else { unreachable!() };
+
+        for run in 0..2 {
+            let icons = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), icon_request(vec![logo.clone()], vec![16], chosen.clone())));
+            assert!(icons[0].error().is_none(), "{:?}", icons[0].error());
+            let gif = assert_aggregate_success("Create GIF", &[logo.clone(), second.clone()], run_create_gif(&gif_request(vec![logo.clone(), second.clone()], chosen.clone())));
+            let frames = tauri::async_runtime::block_on(extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: chosen.clone() }));
+            assert!(frames[0].error().is_none(), "{:?}", frames[0].error());
+            let split = run_split_tiff_pages(&RunEvents::silent(), tiff_request(TiffMode::Split, vec![scan.clone()], None, chosen.clone()));
+            assert!(split[0].error().is_none(), "{:?}", split[0].error());
+            let order = vec![TiffPageRef { path: fax.clone(), page: 0 }, TiffPageRef { path: scan.clone(), page: 1 }];
+            let combined = assert_aggregate_success("Combine TIFF", &[scan.clone(), fax.clone()], run_combine_tiff_pages(&tiff_request(TiffMode::Combine, vec![scan.clone(), fax.clone()], Some(order), chosen.clone())));
+            let tail = if run == 0 { String::new() } else { format!("-{run}") };
+            let name = |path: &PathBuf| path.file_name().unwrap().to_string_lossy().into_owned();
+            assert_eq!(icons[0].output_paths(), [folder.join(format!("logo-icons{tail}"))], "run {run}: the icon folder lands in the chosen folder");
+            assert!(icons[0].output_paths()[0].join("custom").is_dir());
+            assert_eq!(name(&gif[0]), format!("logo-animated{tail}.gif"));
+            assert_eq!(frames[0].output_paths().iter().map(name).collect::<Vec<_>>(), [format!("spinner-frame-001{tail}.png"), format!("spinner-frame-002{tail}.png"), format!("spinner-timings{tail}.json")]);
+            assert_eq!(split[0].output_paths().iter().map(name).collect::<Vec<_>>(), [format!("scan-page-01{tail}.tif"), format!("scan-page-02{tail}.tif")]);
+            assert_eq!(name(&combined[0]), format!("scan-combined{tail}.tif"));
+            for output in [&gif[0], &combined[0]].into_iter().chain(frames[0].output_paths()).chain(split[0].output_paths()) {
+                assert_eq!(output.parent(), Some(folder.as_path()), "{} lands in the chosen folder", output.display());
+            }
+        }
+        assert_eq!(std::fs::read_dir(&sources).unwrap().count(), originals.len(), "nothing is written next to the originals");
+        for (path, bytes) in originals { assert_eq!(std::fs::read(&path).unwrap(), bytes, "{} must stay byte-identical", path.display()); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_icon_set_stops_a_master_over_its_limits_and_the_rest_continue() {
+        use crate::kit::common::limits::fixtures::png_header;
+        let root = sandbox("limit-icon-set");
+        let good = root.join("good.png"); write_png(&good, 32, 9);
+        let oversized = root.join("oversized.png"); sparse_file(&oversized, &png_header(64, 64), 250_000_001);
+        let expanding = root.join("expanding.png"); std::fs::write(&expanding, png_header(11_200, 11_200)).unwrap();
+        let originals = [Original::of(&good), Original::of(&oversized), Original::of(&expanding)];
+        for (offender, limit, value, name) in [(&oversized, LimitKind::FileSize, "250 MB", "size"), (&expanding, LimitKind::Decompression, "500 MB", "expansion")] {
+            let outcomes = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), icon_request(vec![offender.clone(), good.clone()], vec![16], location(&root, name))));
+            assert_only_offender_limited(&outcomes, offender, limit, value);
+            assert_eq!(folder_entries(&root.join(name)), ["good-icons"]);
+        }
+        // 3,000 to 3,100 pixels is 101 sizes and about 3.8 GB of icons, over the 2 GB a run may make for one master.
+        let outcomes = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), icon_request(vec![good.clone()], (3_000..=3_100).collect(), location(&root, "output"))));
+        let error = outcomes[0].error().expect("an icon set over the output limit fails");
+        assert_eq!(error.kind, ErrorKind::LimitExceeded { limit: LimitKind::OutputSize }, "{}", error.message);
+        assert_eq!(error.message, "Would make more than 2 GB of image data, over the limit for one icon set. Use fewer or smaller sizes and try again.");
+        assert!(folder_entries(&root.join("output")).is_empty(), "no icon folder is reserved");
+        for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn extract_gif_frames_stops_a_gif_over_its_limits_and_the_rest_continue() {
+        use crate::kit::common::limits::fixtures::gif_with_frames;
+        let root = sandbox("limit-gif-extract");
+        let good = root.join("good.gif"); std::fs::write(&good, gif_with_frames(4, 4, 2)).unwrap();
+        let oversized = root.join("oversized.gif"); sparse_file(&oversized, &gif_with_frames(4, 4, 2), 250_000_001);
+        let long = root.join("long.gif"); std::fs::write(&long, gif_with_frames(4, 4, 1_001)).unwrap();
+        let wide = root.join("wide.gif"); std::fs::write(&wide, gif_with_frames(12_000, 12_000, 1)).unwrap();
+        // 501 full 1,000 × 1,000 frames hold about 2.004 GB, over the 2 GB the frames of one GIF may make.
+        let heavy = root.join("heavy.gif"); std::fs::write(&heavy, gif_with_frames(1_000, 1_000, 501)).unwrap();
+        let originals = [&good, &oversized, &long, &wide, &heavy].map(Original::of);
+        for (offender, limit, value, name) in [
+            (&oversized, LimitKind::FileSize, "250 MB", "size"),
+            (&long, LimitKind::PageCount, "More than 1,000 frames", "frames"),
+            (&wide, LimitKind::Decompression, "500 MB", "expansion"),
+            (&heavy, LimitKind::OutputSize, "Would make more than 2 GB of image data, over the limit for one GIF.", "output"),
+        ] {
+            let outcomes = tauri::async_runtime::block_on(extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![offender.clone(), good.clone()], output_location: location(&root, name) }));
+            assert_only_offender_limited(&outcomes, offender, limit, value);
+            assert_eq!(folder_entries(&root.join(name)), ["good-frame-001.png", "good-frame-002.png", "good-timings.json"], "{name}");
+        }
+        for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tiff_split_stops_a_tiff_over_its_limits_and_the_rest_continue() {
+        let root = sandbox("limit-tiff-split");
+        let good = root.join("good.tiff"); gray_tiff(&good, 2);
+        let oversized = root.join("oversized.tiff"); sparse_file(&oversized, &std::fs::read(&good).unwrap(), 250_000_001);
+        let long = root.join("long.tiff"); gray_tiff(&long, 1_001);
+        let originals = [&good, &oversized, &long].map(Original::of);
+        for (offender, limit, value, name) in [(&oversized, LimitKind::FileSize, "250 MB", "size"), (&long, LimitKind::PageCount, "More than 1,000 pages", "pages")] {
+            let outcomes = run_split_tiff_pages(&RunEvents::silent(), tiff_request(TiffMode::Split, vec![offender.clone(), good.clone()], None, location(&root, name)));
+            assert_only_offender_limited(&outcomes, offender, limit, value);
+            assert_eq!(folder_entries(&root.join(name)), ["good-page-01.tif", "good-page-02.tif"], "{name}");
+        }
+        for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn create_gif_and_tiff_combine_stop_at_their_limits_and_save_nothing() {
+        use crate::kit::common::limits::fixtures::png_header;
+        use crate::kit::images::tools::TiffPageRef;
+        let root = sandbox("limit-creation-aggregates");
+        let frames_folder = root.join("frames");
+        std::fs::create_dir_all(&frames_folder).unwrap();
+        let frame = |index: usize| frames_folder.join(format!("frame-{index:04}.png"));
+        for index in 0..=1_000 { write_png(&frame(index), 1, index as u8); }
+        let first = frame(0);
+        let oversized = root.join("oversized.png"); sparse_file(&oversized, &png_header(4, 4), 250_000_001);
+        let canvas = root.join("canvas.png");
+        image::RgbaImage::from_pixel(800, 700, Rgba([9, 8, 7, 255])).save(&canvas).unwrap();
+        let half = root.join("half.tiff"); gray_tiff(&half, 501);
+        let other_half = root.join("other-half.tiff"); gray_tiff(&other_half, 501);
+        let tiff_oversized = root.join("oversized.tiff"); sparse_file(&tiff_oversized, &std::fs::read(&half).unwrap(), 250_000_001);
+        let originals = [&first, &canvas, &oversized, &half, &other_half, &tiff_oversized].map(Original::of);
+
+        // Frame 1,001 is one past the 1,000 frames a GIF may hold, so the run stops on it before reading any frame.
+        let paths = (0..=1_000).map(frame).collect::<Vec<_>>();
+        let out = location(&root, "gif-frames");
+        let OutputLocation::CustomFolder(folder) = out.clone() else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(run_create_gif(&gif_request(paths.clone(), out)));
+        assert_aggregate_limited(&outcomes, &paths, &paths[1_000], LimitKind::PageCount, "More than 1,000 frames, over the limit for one GIF.", &folder);
+
+        // Frame 1 sets an 800 × 700 canvas, so 1,000 frames would hold about 2.24 GB.
+        let paths = std::iter::once(canvas.clone()).chain((1..1_000).map(frame)).collect::<Vec<_>>();
+        let out = location(&root, "gif-output");
+        let OutputLocation::CustomFolder(folder) = out.clone() else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(run_create_gif(&gif_request(paths.clone(), out)));
+        assert_aggregate_limited(&outcomes, &paths, &canvas, LimitKind::OutputSize, "Would make more than 2 GB of image data, over the limit for one GIF.", &folder);
+
+        let paths = vec![first.clone(), oversized.clone()];
+        let out = location(&root, "gif-size");
+        let OutputLocation::CustomFolder(folder) = out.clone() else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(run_create_gif(&gif_request(paths.clone(), out)));
+        assert_aggregate_limited(&outcomes, &paths, &oversized, LimitKind::FileSize, "250 MB", &folder);
+
+        let paths = vec![half.clone(), other_half.clone()];
+        let out = location(&root, "tiff-pages");
+        let OutputLocation::CustomFolder(folder) = out.clone() else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&tiff_request(TiffMode::Combine, paths.clone(), None, out)));
+        assert_aggregate_limited(&outcomes, &paths, &other_half, LimitKind::PageCount, "More than 1,000 pages, over the limit for one TIFF.", &folder);
+
+        let order = (0..1_001).map(|index| TiffPageRef { path: if index < 501 { half.clone() } else { other_half.clone() }, page: index % 501 }).collect();
+        let out = location(&root, "tiff-order");
+        let OutputLocation::CustomFolder(folder) = out.clone() else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&tiff_request(TiffMode::Combine, paths.clone(), Some(order), out)));
+        assert_aggregate_limited(&outcomes, &paths, &other_half, LimitKind::PageCount, "More than 1,000 pages", &folder);
+
+        let paths = vec![half.clone(), tiff_oversized.clone()];
+        let out = location(&root, "tiff-size");
+        let OutputLocation::CustomFolder(folder) = out.clone() else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&tiff_request(TiffMode::Combine, paths.clone(), None, out)));
+        assert_aggregate_limited(&outcomes, &paths, &tiff_oversized, LimitKind::FileSize, "250 MB", &folder);
+
+        for original in &originals { original.assert_untouched(); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn a_file_past_its_time_limit_fails_alone_and_others_finish() {
         use std::sync::atomic::{AtomicBool, Ordering};

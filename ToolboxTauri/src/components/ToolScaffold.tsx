@@ -20,7 +20,7 @@ import { rowView, type OutputGrouping } from './resultRow';
 import { BATCH_PROGRESS_EVENT, foldRunEvent, parseRunEvent, startRun, type LiveRun } from './liveRun';
 import { BlockedDestinationDialog, RunDestination, exampleOutputName, sameLocation, type BlockedDestination, type FolderCheck } from './RunDestination';
 import { TablerIcon } from './TablerIcon';
-import { chooseCreatedDocumentSavePath, chooseManyToOneSavePath } from './saveStep';
+import { chooseCreatedDocumentSavePath, chooseManyToOneSavePath, proposedSaveFolder } from './saveStep';
 import { PasteHtmlDialog } from './PasteHtmlDialog';
 import { addPastedHtml, choosePastedOutput, isPastedHtml, pastedHtml, pastedRowDetail } from './pastedHtml';
 import { saveStepAppliesTo, saveStepFor, type SaveDialog } from '../registry/saveSteps';
@@ -875,7 +875,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                             <span className="intake-not-added-message">{item.message}</span>
                             {item.redirectTo && (
                                 <Button variant="outline" size="sm" onClick={() => item.redirectTo && followPointer({ kind: 'tool', toolId: item.redirectTo }, item.path)}>
-                                    {UtilityRegistry.find((tool) => tool.id === item.redirectTo)?.title}
+                                    {item.redirectAction ?? UtilityRegistry.find((tool) => tool.id === item.redirectTo)?.title}
                                 </Button>
                             )}
                         </li>
@@ -964,6 +964,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         exampleName={destinationCopy ? null : files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
                         exampleHint={exampleHint}
                         savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
+                        saveDialog={saveStep?.dialogPlace && { ...saveStep.dialogPlace, folder: files[0] || outputLocation !== 'alongsideInput' ? proposedSaveFolder(files[0] ?? '', outputLocation) : null }}
                         mentionsSettingKept={destinationMentionsSettingKept}
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
