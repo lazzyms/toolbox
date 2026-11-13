@@ -199,10 +199,18 @@ test("the picker filters by the active tool and allows one file only for single-
 
     await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Split PDF", exact: true }).click();
     await expect(rows(page)).toHaveCount(2);
-    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = "/local/c.pdf"; });
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = ["/local/c.pdf", "/local/d.pdf"]; });
     await page.getByRole("button", { name: "Choose files to process" }).click();
-    await expect(rows(page)).toHaveText([/^c\.pdf/]);
+    await expect(rows(page)).toHaveText([/^a\.pdf/, /^b\.pdf/, /^c\.pdf/, /^d\.pdf/]);
+    await drop(page, ["/local/e.pdf", "/local/f.pdf"]);
+    await expect(rows(page)).toHaveText([/^a\.pdf/, /^b\.pdf/, /^c\.pdf/, /^d\.pdf/, /^e\.pdf/, /^f\.pdf/]);
+
+    await page.getByRole("toolbar", { name: "PDF Editor tools" }).getByRole("button", { name: "Extract PDF Pages", exact: true }).click();
+    await page.evaluate(() => { (window as unknown as IntakeWindow).__dialogResult = "/local/g.pdf"; });
+    await page.getByRole("button", { name: "Choose files to process" }).click();
+    await expect(rows(page)).toHaveText([/^g\.pdf/]);
     expect(await pickerOptions()).toEqual([
+        { multiple: true, extensions: ["pdf"] },
         { multiple: true, extensions: ["pdf"] },
         { multiple: false, extensions: ["pdf"] },
     ]);

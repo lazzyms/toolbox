@@ -359,11 +359,23 @@ fn split_within(request: &SplitPdfRequest, input: PathBuf, deadline: QpdfDeadlin
     };
     let page_count = readable.pages;
     let location = &request.output_location;
-    let spans = match plan.spans(page_count) {
-        Ok(spans) if spans.is_empty() => return failure(input, "The PDF has no pages to split.".to_string()),
-        Ok(spans) => spans,
-        Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
-    };
+    if page_count == 0 { return failure(input, "The PDF has no pages to split.".to_string()); }
+    let FittedSplit { spans, notes } = plan.fit(page_count);
+    if spans.is_empty() {
+        let reason = format!("{} Nothing was saved.", notes.join(" "));
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::RangeEmptyAfterClamping, reason));
+    }
+    if spans.len() == 1 && spans[0].first == 1 && spans[0].last == page_count {
+        let whole = match &plan {
+            SplitPlan::Ranges(_) if notes.is_empty() => format!("{} is the whole file.", page_span(1, page_count)),
+            SplitPlan::Ranges(_) => format!("Only {} fits, which is the whole file.", page_span(1, page_count)),
+            SplitPlan::EveryN(size) if page_count < *size => format!("{} is fewer than {size}, so it would be the whole file.", pages_phrase(page_count)),
+            SplitPlan::EveryN(size) => format!("{} is exactly one part of {size}, so it would be the whole file.", pages_phrase(page_count)),
+        };
+        let reason = notes.into_iter().chain([whole, "Nothing was saved.".to_string()]).collect::<Vec<_>>().join(" ");
+        return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, reason));
+    }
+    let part_count = spans.len();
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
     let workspace = match SplitWorkspace::new() {
         Ok(workspace) => workspace,
@@ -381,13 +393,7 @@ fn split_within(request: &SplitPdfRequest, input: PathBuf, deadline: QpdfDeadlin
     }
     match materialize_split_outputs(&input, location, &generated) {
         Ok(outputs) => {
-            let detail = match plan {
-                SplitPlan::Ranges(_) => {
-                    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("split");
-                    format!("PDF split into selected ranges from {stem}")
-                }
-                SplitPlan::EveryN(_) => "PDF split".to_string(),
-            };
+            let detail = [format!("{} into {}.", pages_phrase(page_count), if part_count == 1 { "1 file".to_string() } else { format!("{part_count} files") })].into_iter().chain(notes).collect::<Vec<_>>().join(" ");
             readable.note_what_was_not_kept(JobOutcome::succeeded(input, outputs, detail), "the parts")
         }
         Err(outcome) => outcome,
@@ -436,17 +442,43 @@ impl SplitPlan {
         }
     }
 
-    fn spans(&self, page_count: usize) -> Result<Vec<SplitSpan>, String> {
+    /// Fits the plan to one document. A range that starts past the last page is
+    /// dropped and one that ends past it is shortened; each change is noted.
+    fn fit(&self, page_count: usize) -> FittedSplit {
         match self {
             Self::Ranges(ranges) => {
-                let beyond = ranges.iter().filter(|(_, range)| range.start > page_count || range.end.is_some_and(|end| end > page_count)).map(|(token, _)| format!("{token} goes past the last page ({page_count}).")).collect::<Vec<_>>();
-                if !beyond.is_empty() { return Err(beyond.join(" ")); }
-                Ok(ranges.iter().map(|(_, range)| SplitSpan::pages(range.start, range.end.unwrap_or(page_count))).collect())
+                let mut fitted = FittedSplit { spans: Vec::new(), notes: Vec::new() };
+                for (token, range) in ranges {
+                    if range.start > page_count {
+                        fitted.notes.push(format!("{token} was past page {page_count} and was dropped."));
+                        continue;
+                    }
+                    let last = range.end.map_or(page_count, |end| end.min(page_count));
+                    if range.end.is_some_and(|end| end > page_count) {
+                        fitted.notes.push(format!("{token} was past page {page_count} and was shortened to {}.", page_span(range.start, last)));
+                    }
+                    fitted.spans.push(SplitSpan::pages(range.start, last));
+                }
+                fitted
             }
             // Consecutive parts of `size` pages; the last part keeps whatever is left.
-            Self::EveryN(size) => Ok((1..=page_count).step_by(*size).map(|first| SplitSpan::pages(first, (first + size - 1).min(page_count))).collect()),
+            Self::EveryN(size) => FittedSplit {
+                spans: (1..=page_count).step_by(*size).map(|first| SplitSpan::pages(first, (first + size - 1).min(page_count))).collect(),
+                notes: Vec::new(),
+            },
         }
     }
+}
+
+/// The parts one document is split into, and what fitting the ranges to it changed.
+struct FittedSplit { spans: Vec<SplitSpan>, notes: Vec<String> }
+
+fn page_span(first: usize, last: usize) -> String {
+    if first == last { first.to_string() } else { format!("{first}\u{2013}{last}") }
+}
+
+fn pages_phrase(count: usize) -> String {
+    if count == 1 { "1 page".to_string() } else { format!("{count} pages") }
 }
 
 impl SplitSpan {
@@ -2826,7 +2858,7 @@ pub(crate) mod tests {
 
     #[test]
     fn split_spans_name_parts_by_mode() {
-        let suffixes = |mode: SplitMode, pages: usize| SplitPlan::new(&mode).unwrap().spans(pages).unwrap().into_iter().map(|span| (span.suffix, span.first, span.last)).collect::<Vec<_>>();
+        let suffixes = |mode: SplitMode, pages: usize| SplitPlan::new(&mode).unwrap().fit(pages).spans.into_iter().map(|span| (span.suffix, span.first, span.last)).collect::<Vec<_>>();
         let span = |suffix: &str, first: usize, last: usize| (suffix.to_string(), first, last);
 
         assert_eq!(suffixes(SplitMode::EveryN { pages: 1 }, 3), vec![span("-page-1", 1, 1), span("-page-2", 2, 2), span("-page-3", 3, 3)]);
@@ -2838,6 +2870,20 @@ pub(crate) mod tests {
         assert_eq!(suffixes(ranges("3, 1-2, 2-"), 3), vec![span("-page-3", 3, 3), span("-pages-1-2", 1, 2), span("-pages-2-3", 2, 3)]);
         assert_eq!(suffixes(ranges("1-3, 5, 8-"), 10), vec![span("-pages-1-3", 1, 3), span("-page-5", 5, 5), span("-pages-8-10", 8, 10)]);
         assert_eq!(suffixes(ranges("4-4,10-"), 10), vec![span("-page-4", 4, 4), span("-page-10", 10, 10)]);
+    }
+
+    #[test]
+    fn ranges_are_fitted_to_each_document_and_every_change_is_noted() {
+        let fit = |raw: &str, pages: usize| {
+            let fitted = SplitPlan::new(&ranges(raw)).unwrap().fit(pages);
+            (fitted.spans.into_iter().map(|span| (span.first, span.last)).collect::<Vec<_>>(), fitted.notes)
+        };
+
+        assert_eq!(fit("1-2, 4-9, 12-", 14), (vec![(1, 2), (4, 9), (12, 14)], vec![]));
+        assert_eq!(fit("1-2, 4-9, 12-", 6), (vec![(1, 2), (4, 6)], vec!["4-9 was past page 6 and was shortened to 4\u{2013}6.".to_string(), "12- was past page 6 and was dropped.".to_string()]));
+        assert_eq!(fit("1-2, 4-9, 12-", 1), (vec![(1, 1)], vec!["1-2 was past page 1 and was shortened to 1.".to_string(), "4-9 was past page 1 and was dropped.".to_string(), "12- was past page 1 and was dropped.".to_string()]));
+        assert_eq!(fit("6-", 6), (vec![(6, 6)], vec![]), "an open range that starts on the last page is kept as is");
+        assert_eq!(fit("7, 9-", 6), (vec![], vec!["7 was past page 6 and was dropped.".to_string(), "9- was past page 6 and was dropped.".to_string()]));
     }
 
     #[test]
@@ -3112,8 +3158,6 @@ pub(crate) mod tests {
             ranges("1-2-3").into(),
             ranges("-5").into(),
             ranges("  ").into(),
-            ranges("1-3, 12").into(),
-            ranges("11-").into(),
             SplitMode::EveryN { pages: 0 }.into(),
             RequestedSplitMode::default(),
             serde_json::from_str::<RequestedSplitMode>(r#"{"kind":"ranges","ranges":"1-3","pages":2}"#).unwrap(),
@@ -3129,7 +3173,74 @@ pub(crate) mod tests {
             assert_eq!(fixture.output_count(), 0, "{described} wrote an output");
         }
         assert_eq!(split_temp_entries(), temp_before, "a rejected split left a temporary directory");
-        assert_eq!(fixture.split(ranges("1-3, 12, 9-11")).error().unwrap().message, "12 goes past the last page (10). 9-11 goes past the last page (10).");
+    }
+
+    fn split_batch(paths: &[PathBuf], output_folder: &Path, mode: SplitMode) -> Vec<JobOutcome> {
+        let request = std::sync::Arc::new(SplitPdfRequest { paths: paths.to_vec(), mode: mode.into(), output_location: OutputLocation::CustomFolder(output_folder.to_path_buf()) });
+        crate::kit::common::batch_runner::BatchRunner::run(&crate::kit::common::batch_runner::RunEvents::silent(), "split_pdf", paths.to_vec(), &request.output_location.clone(), &request, split)
+    }
+
+    fn skip_reason(outcome: &JobOutcome) -> (SkipCode, String) {
+        match &outcome.state {
+            crate::kit::contracts::OutcomeState::Skipped { reason } => (reason.code.clone(), reason.message.clone()),
+            other => panic!("{} was not skipped: {other:?}", outcome.input_path.display()),
+        }
+    }
+
+    #[test]
+    fn a_batch_split_fits_one_range_string_to_each_pdf_and_isolates_skips_and_failures() {
+        let _lock = SPLIT_TEST_LOCK.lock().unwrap();
+        if qpdf().is_err() { eprintln!("skipping: qpdf not available"); return; }
+        let root = split_fixture_root("batch");
+        let output_folder = root.join("outputs");
+        fs::create_dir_all(&output_folder).unwrap();
+        let pdf = |name: &str, pages: usize| { let path = root.join(name); split_fixture_pdf(&path, pages); path };
+        let long = pdf("long.pdf", 14);
+        let short = pdf("short.pdf", 6);
+        let single = pdf("single.pdf", 1);
+        let damaged = root.join("damaged.pdf");
+        fs::write(&damaged, b"%PDF-1.7 damaged").unwrap();
+        let five = pdf("five.pdf", 5);
+        let three = pdf("three.pdf", 3);
+        let originals = [&long, &short, &single, &damaged, &five, &three].map(|path| (path.clone(), fs::read(path).unwrap()));
+        let temp_before = split_temp_entries();
+        let names = |outcome: &JobOutcome| split_output_names(outcome);
+        let contents = |outcome: &JobOutcome| outcome.output_paths().iter().map(|path| split_page_labels(path)).collect::<Vec<_>>();
+
+        let batch = vec![long.clone(), short.clone(), single.clone(), damaged.clone()];
+        let outcomes = split_batch(&batch, &output_folder, ranges("1-2, 4-9, 12-"));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), batch);
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert_eq!(names(&outcomes[0]), ["long-pages-1-2.pdf", "long-pages-4-9.pdf", "long-pages-12-14.pdf"]);
+        assert_eq!(contents(&outcomes[0]), [labels(&[1, 2]), labels(&[4, 5, 6, 7, 8, 9]), labels(&[12, 13, 14])]);
+        assert_eq!(outcomes[0].detail, "14 pages into 3 files.");
+        assert!(outcomes[1].error().is_none(), "{:?}", outcomes[1].error());
+        assert_eq!(names(&outcomes[1]), ["short-pages-1-2.pdf", "short-pages-4-6.pdf"]);
+        assert_eq!(contents(&outcomes[1]), [labels(&[1, 2]), labels(&[4, 5, 6])]);
+        assert_eq!(outcomes[1].detail, "6 pages into 2 files. 4-9 was past page 6 and was shortened to 4\u{2013}6. 12- was past page 6 and was dropped.");
+        assert_eq!(skip_reason(&outcomes[2]), (SkipCode::NoEffectiveChange, "1-2 was past page 1 and was shortened to 1. 4-9 was past page 1 and was dropped. 12- was past page 1 and was dropped. Only 1 fits, which is the whole file. Nothing was saved.".to_string()));
+        assert!(outcomes[3].error().is_some(), "the damaged PDF should fail on its own");
+        assert!(outcomes[3].output_paths().is_empty());
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 5, "only the two split PDFs wrote parts");
+
+        let beyond = split_batch(&[short.clone(), five.clone()], &output_folder, ranges("7, 9-12"));
+        assert_eq!(skip_reason(&beyond[0]), (SkipCode::RangeEmptyAfterClamping, "7 was past page 6 and was dropped. 9-12 was past page 6 and was dropped. Nothing was saved.".to_string()));
+        assert_eq!(skip_reason(&beyond[1]).0, SkipCode::RangeEmptyAfterClamping);
+
+        let open = split_batch(&[five.clone(), three.clone()], &output_folder, ranges("1-"));
+        assert_eq!(skip_reason(&open[0]), (SkipCode::NoEffectiveChange, "1\u{2013}5 is the whole file. Nothing was saved.".to_string()));
+        assert_eq!(skip_reason(&open[1]), (SkipCode::NoEffectiveChange, "1\u{2013}3 is the whole file. Nothing was saved.".to_string()));
+
+        let every = split_batch(&[long.clone(), five.clone(), three.clone()], &output_folder, SplitMode::EveryN { pages: 5 });
+        assert_eq!(names(&every[0]), ["long-pages-1-5.pdf", "long-pages-6-10.pdf", "long-pages-11-14.pdf"]);
+        assert_eq!(every[0].detail, "14 pages into 3 files.");
+        assert_eq!(skip_reason(&every[1]), (SkipCode::NoEffectiveChange, "5 pages is exactly one part of 5, so it would be the whole file. Nothing was saved.".to_string()));
+        assert_eq!(skip_reason(&every[2]), (SkipCode::NoEffectiveChange, "3 pages is fewer than 5, so it would be the whole file. Nothing was saved.".to_string()));
+
+        assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 8, "skipped PDFs wrote no output");
+        for (path, bytes) in &originals { assert_eq!(&fs::read(path).unwrap(), bytes, "{} was modified", path.display()); }
+        assert_eq!(split_temp_entries(), temp_before, "a batch split left a temporary workspace");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
