@@ -60,5 +60,4 @@ Preconditions:
 - With no file open, the page editor shows two `Choose files to process` buttons. Use the one in the `Open document` region. After a file loads its visible text becomes "Replace file" or "Add files" while the name stays.
 - The `Export <title>` visible text differs from its name. Merge, Images to PDF, and Compare show "Merge…", "Make PDF…", and "Compare…" and open a save dialog instead of writing beside the input.
 - The page editor writes `<stem>-edited-1.pdf` while the Example line shows `<stem>-edited.pdf`. PDF to Text's Example shows `plain-text.pdf` while it writes `plain-text.txt`. Trust the result row, then check disk.
-- A note about an existing output name can render twice. Report it; don't treat it as a failure.
 - File operations create new outputs. Never select a checked-in asset as the direct input when the operation writes beside its source.

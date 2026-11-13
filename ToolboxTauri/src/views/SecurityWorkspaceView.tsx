@@ -116,7 +116,6 @@ export const SecurityWorkspaceView = ({ utility: activeUtility }: { utility: Too
           </div>
           <BatchPasswordFields mode={mode} passwords={passwords} files={files} />
           {destination}
-          <p className="workspace-note">An existing name gets -1, -2 and so on. Nothing is replaced.</p>
           <p className="workspace-note">Runs on this device with no network. Passwords are never saved and are cleared when you switch mode or leave.</p>
           {files.length > 0 && readiness.reason && <p className="workspace-note" data-testid="password-readiness">{readiness.reason}</p>}
           {!readiness.reason && failingHint && <p className="workspace-note" data-testid="failing-files">{failingHint}</p>}

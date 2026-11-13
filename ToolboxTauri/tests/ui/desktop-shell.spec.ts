@@ -124,6 +124,13 @@ test("publishes the selected workspace and document title to the native window",
     await emitShellEvent(page, { kind: "files", activationId: "activation-pdf-1", workspace: "pdf-editor", paths: [pdfPath] });
     await expect(page.getByText(path.basename(pdfPath), { exact: true })).toBeVisible();
     await expect.poll(async () => (await invocations(page)).some((call) => call.command === "set_document_title" && JSON.stringify(call.args).includes(path.basename(pdfPath)))).toBe(true);
+
+    const lastTitle = async () => (await invocations(page)).filter((call) => call.command === "set_document_title").at(-1)?.args;
+    await page.locator("body").press("Meta+,");
+    await expect(page.getByRole("heading", { level: 1, name: "Appearance" })).toBeVisible();
+    await expect.poll(lastTitle).toEqual({ title: "Toolbox — Settings" });
+    await page.keyboard.press("Escape");
+    await expect.poll(lastTitle).toEqual({ title: `Toolbox — ${path.basename(pdfPath)}` });
 });
 
 test("accepts each typed file activation and acknowledges only after intake", async ({ page }) => {

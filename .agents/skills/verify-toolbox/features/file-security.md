@@ -31,8 +31,8 @@ Preconditions:
 ## Gotchas
 
 - `Unlock 1 file` stays disabled with "1 file has no password yet" even for a permissions-only PDF. The product decision says Unlock needs no password there. Until that lands, type a throwaway value. Report the disabled button as a finding, not a pass.
-- After a file loads, "An existing name gets -1, -2 and so on. Nothing is replaced." renders twice in both modes. Observed 2026-10-20 and 2026-10-23.
-- The `Open Lock & Unlock` help text still reads "Remove a password you know…" and does not mention Lock.
+- After a file loads, "An existing name gets -1, -2 and so on. Nothing is replaced." renders once, under Destination.
+- The `Open Lock & Unlock` help text reads "Add a password to PDF, Word, Excel and PowerPoint files, or remove one you know."
 - The Lock drop zone says it accepts `.doc`, but Lock fails every `.doc` file.
 - The password field is masked. `type_text` may report "0 of N delivered" while the dots appear. Count the dots in a re-read.
 - A result message does not prove the output. Always run the qpdf checks.
