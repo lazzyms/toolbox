@@ -44,13 +44,39 @@ pub struct CropPdfRequest {
     pub output_location: OutputLocation,
 }
 
-/// What to keep on each page. Rectangle is in PDF user space; margins are points inset from the page's
-/// displayed edges, so a rotated page loses them from the sides the reader sees.
+/// What to keep on each page, measured on the page as the reader sees it (after /Rotate). The rectangle is
+/// fractions of the displayed page with a top-left origin, so it lands in the same relative spot on any page
+/// size; margins are points inset from the displayed edges.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum CropSpec {
-    Rectangle { rectangle: PdfRect },
+    Rectangle { left: f32, top: f32, width: f32, height: f32 },
     Margins { top: f32, right: f32, bottom: f32, left: f32 },
+}
+
+/// Slack for fractions that were rounded on their way from the preview.
+const FRACTION_TOLERANCE: f32 = 1e-4;
+
+impl CropSpec {
+    fn validate(&self) -> Result<(), ToolError> {
+        match *self {
+            CropSpec::Rectangle { left, top, width, height } => {
+                let finite = [left, top, width, height].iter().all(|value| value.is_finite());
+                if !finite || width <= 0.0 || height <= 0.0 {
+                    return Err(ToolError::invalid_input("The crop rectangle needs a width and height above zero."));
+                }
+                if left < -FRACTION_TOLERANCE || top < -FRACTION_TOLERANCE || left + width > 1.0 + FRACTION_TOLERANCE || top + height > 1.0 + FRACTION_TOLERANCE {
+                    return Err(ToolError::invalid_input("The crop rectangle must stay inside the page."));
+                }
+            }
+            CropSpec::Margins { top, right, bottom, left } => {
+                if [top, right, bottom, left].iter().any(|margin| !margin.is_finite() || *margin < 0.0) {
+                    return Err(ToolError::invalid_input("Margins must be zero or more points."));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -80,12 +106,7 @@ fn validate_unique_page_refs(label: &str, pages: &[usize], page_count: usize) ->
 pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
     // Only the crop box changes, so page objects, annotations, links, forms and structure stay valid.
     transform_or_skip_pdf_checked(input, &request.output_location, "-cropped", PdfMutationIntent::ValidateOnly, SignedPdf::RemoveSignature, |document, pages, _preflight| {
-        if let CropSpec::Rectangle { rectangle } = &request.spec { validate_rect(rectangle).map_err(ToolError::invalid_input)?; }
-        if let CropSpec::Margins { top, right, bottom, left } = request.spec {
-            if [top, right, bottom, left].iter().any(|margin| !margin.is_finite() || *margin < 0.0) {
-                return Err(ToolError::invalid_input("Margins must be zero or more points."));
-            }
-        }
+        request.spec.validate()?;
         let (selected, notes) = match &request.scope {
             RangedPageScope::All => ((0..pages.len()).collect(), Vec::new()),
             RangedPageScope::Selected { pages: selected } => (selected_indices(selected, pages.len()).map_err(ToolError::invalid_input)?, Vec::new()),
@@ -96,13 +117,7 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
         };
         for page_index in selected {
             let page_id = pages[page_index];
-            let crop_box = match &request.spec {
-                CropSpec::Rectangle { rectangle } => {
-                    validate_rect_for_page(document, page_id, rectangle).map_err(ToolError::invalid_input)?;
-                    [rectangle.x, rectangle.y, rectangle.x + rectangle.width, rectangle.y + rectangle.height]
-                }
-                &CropSpec::Margins { top, right, bottom, left } => margin_crop_box(document, page_id, page_index, [top, right, bottom, left])?,
-            };
+            let crop_box = displayed_crop_box(document, page_id, page_index, &request.spec)?;
             let page = document.get_dictionary_mut(page_id).map_err(|error| ToolError::processing(error.to_string()))?;
             page.set("CropBox", crop_box.iter().copied().map(Object::Real).collect::<Vec<_>>());
         }
@@ -110,25 +125,37 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
     })
 }
 
-/// Insets the page's visible area by margins given for its displayed top, right, bottom and left edges.
-fn margin_crop_box(document: &Document, page_id: ObjectId, page_index: usize, [top, right, bottom, left]: [f32; 4]) -> Result<[f32; 4], ToolError> {
+/// Insets the page's visible area from its displayed top, right, bottom and left edges: by fixed lengths for
+/// margins, or by the parts of the displayed page outside a fractional rectangle.
+fn displayed_crop_box(document: &Document, page_id: ObjectId, page_index: usize, spec: &CropSpec) -> Result<[f32; 4], ToolError> {
     let [x0, y0, x1, y1] = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
     let user_unit = match document.get_dictionary(page_id).ok().and_then(|page| page.get(b"UserUnit").ok()) {
         Some(value) => super::resolve(document, value).and_then(super::metadata::number).map_err(ToolError::processing)?,
         None => 1.0,
     };
     if !user_unit.is_finite() || user_unit <= 0.0 { return Err(ToolError::processing("PDF page has an invalid UserUnit.")); }
+    let rotation = page_rotation(document, page_id);
+    let [top, right, bottom, left] = match *spec {
+        CropSpec::Margins { top, right, bottom, left } => [top, right, bottom, left].map(|inset| inset / user_unit),
+        CropSpec::Rectangle { left, top, width, height } => {
+            // Displayed width and height in user space: a quarter turn swaps the page's sides.
+            let (displayed_width, displayed_height) = if rotation % 180 == 90 { (y1 - y0, x1 - x0) } else { (x1 - x0, y1 - y0) };
+            let clamp = |fraction: f32| fraction.clamp(0.0, 1.0);
+            [clamp(top) * displayed_height, clamp(1.0 - left - width) * displayed_width, clamp(1.0 - top - height) * displayed_height, clamp(left) * displayed_width]
+        }
+    };
     // User-space insets (left, bottom, right, top) for each clockwise /Rotate value.
-    let [inset_left, inset_bottom, inset_right, inset_top] = match page_rotation(document, page_id) {
+    let [inset_left, inset_bottom, inset_right, inset_top] = match rotation {
         0 => [left, bottom, right, top],
         90 => [top, left, bottom, right],
         180 => [right, top, left, bottom],
         270 => [bottom, right, top, left],
         rotation => return Err(ToolError::processing(format!("Page {} has an unsupported rotation of {rotation} degrees.", page_index + 1))),
-    }.map(|inset| inset / user_unit);
+    };
     let crop_box = [x0 + inset_left, y0 + inset_bottom, x1 - inset_right, y1 - inset_top];
     if crop_box[2] <= crop_box[0] || crop_box[3] <= crop_box[1] {
-        return Err(ToolError::invalid_input(format!("Page {} has no area left after these margins.", page_index + 1)));
+        let cause = if matches!(spec, CropSpec::Margins { .. }) { "these margins" } else { "this rectangle" };
+        return Err(ToolError::invalid_input(format!("Page {} has no area left after {cause}.", page_index + 1)));
     }
     Ok(crop_box)
 }
@@ -414,14 +441,15 @@ mod session_tests {
 
         let outcome = crop(&CropPdfRequest {
             paths: vec![source.clone()],
-            spec: CropSpec::Rectangle { rectangle: PdfRect { x: 100.0, y: 100.0, width: 200.0, height: 300.0 } },
+            // Fractions of the displayed 612 x 792 page, top-left origin: user space 100,100 to 300,400.
+            spec: CropSpec::Rectangle { left: 100.0 / 612.0, top: 392.0 / 792.0, width: 200.0 / 612.0, height: 300.0 / 792.0 },
             scope: RangedPageScope::All,
             output_location: editor_request_location(&output_dir),
         }, source.clone());
         assert!(outcome.error().is_none(), "crop failed: {:?}", outcome.error());
         let output_document = Document::load(outcome.output_paths().first().unwrap()).unwrap();
         let page = output_document.get_pages().values().next().copied().unwrap();
-        assert_eq!(page_box(&output_document, page, b"CropBox"), [100.0, 100.0, 300.0, 400.0]);
+        assert_box_near(page_box(&output_document, page, b"CropBox"), [100.0, 100.0, 300.0, 400.0], "rectangle");
         assert_eq!(page_box(&output_document, page, b"MediaBox"), [0.0, 0.0, 612.0, 792.0]);
         assert_eq!(page_box(&output_document, page, b"BleedBox"), [0.0, 0.0, 612.0, 792.0]);
         assert_eq!(page_box(&output_document, page, b"TrimBox"), [50.0, 50.0, 150.0, 200.0]);
@@ -513,6 +541,76 @@ mod session_tests {
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir_all(output_dir);
         }
+    }
+
+    fn rectangle(left: f32, top: f32, width: f32, height: f32) -> CropSpec { CropSpec::Rectangle { left, top, width, height } }
+
+    #[test]
+    fn crop_rectangle_keeps_the_same_relative_area_of_the_displayed_page_on_any_size_or_rotation() {
+        let a4 = [0.0, 0.0, 595.2756, 841.8898];
+        let letter = [0.0, 0.0, 612.0, 792.0];
+        // Keep from 10% in and 20% down, 50% wide and 60% tall, as seen on screen.
+        let spec = rectangle(0.1, 0.2, 0.5, 0.6);
+        for (name, media, existing, rotate, expected) in [
+            ("a4", a4, None, None, [0.1 * a4[2], 0.2 * a4[3], 0.6 * a4[2], 0.8 * a4[3]]),
+            ("letter", letter, None, None, [61.2, 158.4, 367.2, 633.6]),
+            // Rotated a quarter turn, the page shows 792 wide and 612 tall; its displayed top is the user-space left edge.
+            ("rotate-90", letter, None, Some(90), [122.4, 79.2, 489.6, 475.2]),
+            ("rotate-180", letter, None, Some(180), [244.8, 158.4, 550.8, 633.6]),
+            // At 270 the displayed top is the user-space right edge and the displayed left is the top edge.
+            ("rotate-270", letter, None, Some(270), [122.4, 316.8, 489.6, 712.8]),
+            // Fractions are of the visible page, so an existing crop box is the frame they measure.
+            ("existing-crop", [-50.0, -50.0, 700.0, 900.0], Some([100.0, 100.0, 500.0, 700.0]), None, [140.0, 220.0, 340.0, 580.0]),
+        ] {
+            let source = temp_path(&format!("crop-rectangle-{name}.pdf"));
+            let output_dir = temp_path(&format!("crop-rectangle-{name}-output"));
+            std::fs::create_dir_all(&output_dir).unwrap();
+            make_boxed_pdf(&source, media, existing, rotate);
+            let original = std::fs::read(&source).unwrap();
+            let before = Document::load(&source).unwrap();
+            let before_page = before.get_pages().values().next().copied().unwrap();
+
+            let outcome = crop_margins(&source, &output_dir, spec.clone());
+
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            let after = Document::load(outcome.output_paths().first().unwrap()).unwrap();
+            let page = after.get_pages().values().next().copied().unwrap();
+            assert_box_near(page_box(&after, page, b"CropBox"), expected, name);
+            for key in [b"MediaBox".as_slice(), b"BleedBox", b"TrimBox", b"ArtBox"] {
+                assert_eq!(page_box(&after, page, key), page_box(&before, before_page, key), "{name}: {}", String::from_utf8_lossy(key));
+            }
+            assert_eq!(after.get_dictionary(page).unwrap().get(b"Rotate").ok(), before.get_dictionary(before_page).unwrap().get(b"Rotate").ok(), "{name}: rotation must stay");
+            assert_eq!(after.get_page_content(page), before.get_page_content(before_page), "{name}: content must stay");
+            assert_eq!(std::fs::read(&source).unwrap(), original, "{name}: original must stay");
+            let _ = std::fs::remove_file(source);
+            let _ = std::fs::remove_dir_all(output_dir);
+        }
+    }
+
+    #[test]
+    fn crop_rectangle_that_is_empty_or_leaves_the_page_fails_with_invalid_input_and_writes_nothing() {
+        let source = temp_path("crop-rectangle-invalid.pdf");
+        let output_dir = temp_path("crop-rectangle-invalid-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf_with_pages(&source, 1);
+        let original = std::fs::read(&source).unwrap();
+        for (name, spec) in [
+            ("zero-width", rectangle(0.1, 0.1, 0.0, 0.5)),
+            ("zero-height", rectangle(0.1, 0.1, 0.5, 0.0)),
+            ("past-right", rectangle(0.6, 0.1, 0.5, 0.5)),
+            ("past-bottom", rectangle(0.1, 0.7, 0.5, 0.5)),
+            ("negative", rectangle(-0.1, 0.1, 0.5, 0.5)),
+            ("nan", rectangle(f32::NAN, 0.1, 0.5, 0.5)),
+        ] {
+            let outcome = crop_margins(&source, &output_dir, spec);
+            let error = outcome.error().unwrap_or_else(|| panic!("{name} must fail"));
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "{name}: {error:?}");
+            assert!(outcome.output_paths().is_empty(), "{name}");
+            assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0, "{name}");
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
     }
 
     #[test]
@@ -621,7 +719,7 @@ mod session_tests {
             document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(annotation)]);
             document.save(&source).unwrap();
             let outcome = crop(&CropPdfRequest {
-                paths: vec![source.clone()], spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
+                paths: vec![source.clone()], spec: CropSpec::Rectangle { left: 0.0, top: 0.0, width: 0.5, height: 0.5 },
                 scope: RangedPageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
             assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
@@ -644,7 +742,7 @@ mod session_tests {
             document.get_dictionary_mut(pages).unwrap().set("Count", count);
             document.save(&source).unwrap();
             let outcome = crop(&CropPdfRequest {
-                paths: vec![source.clone()], spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
+                paths: vec![source.clone()], spec: CropSpec::Rectangle { left: 0.0, top: 0.0, width: 0.5, height: 0.5 },
                 scope: RangedPageScope::All, output_location: editor_request_location(&output_dir),
             }, source.clone());
             assert!(outcome.error().is_some_and(|error| error.message.contains("page-tree")), "count {count}: {:?}", outcome.error());
@@ -665,7 +763,7 @@ mod session_tests {
 
         let outcome = crop(&CropPdfRequest {
             paths: vec![source.clone()],
-            spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
+            spec: CropSpec::Rectangle { left: 0.0, top: 0.0, width: 0.5, height: 0.5 },
             scope: RangedPageScope::All,
             output_location: location(&output_dir),
         }, source.clone());
@@ -690,7 +788,7 @@ mod session_tests {
         let original = std::fs::read(&source).unwrap();
 
         let outcome = crop(&CropPdfRequest {
-            paths: vec![source.clone()], spec: CropSpec::Rectangle { rectangle: PdfRect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 } },
+            paths: vec![source.clone()], spec: CropSpec::Rectangle { left: 0.0, top: 0.0, width: 0.5, height: 0.5 },
             scope: RangedPageScope::All, output_location: location(&output_dir),
         }, source.clone());
 
