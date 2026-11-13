@@ -432,7 +432,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(37);
+    expect(UtilityRegistry).toHaveLength(38);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -3500,8 +3500,8 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await expect(action).toBeEnabled();
     await action.click();
     // A read-only report tool sends only the paths and shows a report instead of saved results.
-    // (Convert to PDF also has no suffix, since the output changes extension, but it saves files.)
-    if (utility.capability.outputSuffix === "" && !utility.capability.formatFamilies) {
+    // (Convert to PDF and PDF to EPUB also have no suffix, since the output changes extension, but they save files.)
+    if (utility.command === "inspect_pdf_privacy") {
         await expect(page.getByRole("region", { name: pdfFixtureName, exact: true }).getByText("None found", { exact: true })).toHaveCount(14);
         const reportRuns = await page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? []).filter((call) => call.command === command), utility.command);
         expect(reportRuns.map(({ args }) => (args as { request: unknown }).request)).toEqual([{ paths: [selectedFixturePath], password: "", passwordOverrides: {} }]);
@@ -3526,7 +3526,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(37);
+    expect(UtilityRegistry).toHaveLength(38);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {

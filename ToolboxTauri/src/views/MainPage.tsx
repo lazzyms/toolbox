@@ -37,6 +37,7 @@ import { BatesView } from "./BatesView";
 import { PDFEditorWorkspaceView } from "./PDFEditorWorkspaceView";
 import { PDFConversionWorkspaceView } from "./PDFConversionWorkspaceView";
 import { ExtractFromPdfView } from "./ExtractFromPdfView";
+import { PdfToEpubView } from "./PdfToEpubView";
 import { ImageEditorWorkspaceView } from "./ImageEditorWorkspaceView";
 import { CompressFilesWorkspaceView } from "./CompressFilesWorkspaceView";
 import { MediaWorkspaceView } from "./MediaWorkspaceView";
@@ -747,6 +748,7 @@ const ViewFor = ({ utility, initialPaths, handoff, fileActivation, onActivationA
   // Views are chosen by tool: the PDF Editor holds both the scene editor and batch PDF tools.
   if (utility.id === "pdf-crop") return <CropResizeView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
   if (utility.id === "pdf-extract") return <ExtractFromPdfView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
+  if (utility.id === "pdf-to-epub") return <PdfToEpubView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (utility.id === "pdf-bates") return <BatesView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onLeaveGuard={onLeaveGuard} onSelectTool={onSelectTool} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} handoff={handoff} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;

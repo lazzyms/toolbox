@@ -11,6 +11,7 @@ pub mod editor;
 pub mod remaining;
 pub mod text_layer;
 pub mod page_text;
+pub mod to_epub;
 #[cfg(test)]
 pub(crate) mod jbig2_fixtures;
 pub(crate) mod qpdf;
