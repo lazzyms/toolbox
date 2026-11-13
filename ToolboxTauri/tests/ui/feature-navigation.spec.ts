@@ -3241,24 +3241,19 @@ test("Edit Image tabs switch with arrow keys and keep the files and the edit pla
     await expect(page.getByRole("toolbar", { name: "Image Editor tools" }).getByRole("button", { name: "Edit Image" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("Redact opens from the Edit PDF toolbar with the open file unless edits are unexported", async ({ page }) => {
+test("Redact in the Edit PDF toolbar marks areas in the editor alongside other edits", async ({ page }) => {
     await page.goto("/");
     await openFromHome(page, "Edit PDF");
     await chooseFixture(page, pdfFixturePath);
     const redact = page.getByRole("toolbar", { name: "PDF editor tools" }).getByRole("button", { name: "Redact", exact: true });
-    await expect(redact).toBeEnabled();
-    await expect(redact).toHaveAttribute("title", "Black out private details in a copy of this PDF");
 
     await drawSceneMark(page, "Text");
-    await expect(redact).toBeDisabled();
-    await expect(redact).toHaveAttribute("title", "Export or reset your edits before redacting");
-    await page.getByRole("button", { name: "Reset edits" }).click();
     await expect(redact).toBeEnabled();
-
     await redact.click();
-    await expect(page.getByRole("button", { name: "Add Redact PDF to favorites" })).toBeVisible();
-    await expect(page.getByText(path.basename(pdfFixturePath), { exact: true })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Redaction area" })).toBeVisible();
+    await expect(redact).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByText("Drag over anything you want removed. Marks are only previews until you export.")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Redaction area" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add Redact PDF to favorites" })).toHaveCount(0);
 });
 
 test("search and favorites list folded tools by their own names and open them", async ({ page }) => {

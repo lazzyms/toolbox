@@ -21,6 +21,8 @@ import { Slider } from '../components/ui/slider';
 import type { PdfDocument, PdfEditRun, PdfPage, PdfTextEdit, PdfTextRun } from '../features/pdf-editor/contracts';
 import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens';
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
+import { RedactDisclosure, RedactInspector, listMarks, redactionFills } from '../features/pdf-editor/RedactInspector';
+import type { ListedMark } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
 import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
@@ -51,11 +53,11 @@ const tools: { id: EditorTool; label: string; glyph: string }[] = [
   { id: 'select', label: 'Select', glyph: '↖' }, { id: 'edit-text', label: 'Edit text', glyph: '✎' }, { id: 'text', label: 'Text', glyph: 'T' },
   { id: 'highlight', label: 'Highlight', glyph: '▰' }, { id: 'shape', label: 'Shape', glyph: '□' },
   { id: 'signature', label: 'Signature', glyph: '〰' }, { id: 'watermark', label: 'Watermark', glyph: 'W' },
-  { id: 'crop', label: 'Crop', glyph: '⌗' },
+  { id: 'crop', label: 'Crop', glyph: '⌗' }, { id: 'redact', label: 'Redact', glyph: '▮' },
 ];
 const toolFlagBySceneTool: Record<EditorTool, AtomicToolId> = {
   organize: 'pdf-organize', select: 'pdf-edit', 'edit-text': 'pdf-edit', text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
-  signature: 'pdf-sign', watermark: 'pdf-watermark', crop: 'pdf-crop',
+  signature: 'pdf-sign', watermark: 'pdf-watermark', crop: 'pdf-crop', redact: 'pdf-redact',
 };
 const toolFlagByObjectKind: Record<SceneObject['kind'], AtomicToolId> = {
   text: 'pdf-edit', highlight: 'pdf-edit', shape: 'pdf-edit',
@@ -67,7 +69,7 @@ const toolGuidance: Record<EditorTool, string> = {
   text: 'Drag to add text. Double-click text to edit it.',
   highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
   signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Choose a pattern, then add a watermark.',
-  crop: 'Drag a rectangle on the page to crop it.',
+  crop: 'Drag a rectangle on the page to crop it.', redact: 'Drag over anything you want removed.',
 };
 const kindLabels: Record<SceneObject['kind'], string> = {
   text: 'Text box', highlight: 'Highlight', shape: 'Shape', signature: 'Signature', watermark: 'Watermark',
@@ -77,7 +79,7 @@ const objectText = (object: SceneObject) => object.kind === 'shape' ? object.sha
     : object.kind === 'signature' && object.signatureMode === 'image' ? 'signature image' : object.text;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
-export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact' | 'lock-unlock';
+export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'lock-unlock';
 export type PdfEditorNavigation = (navigation: {
   utilityId: ExistingPdfUtilityId;
   initialPaths: readonly string[];
@@ -303,6 +305,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [watermarkText, setWatermarkText] = useState('DRAFT');
   const [watermarkFontSize, setWatermarkFontSize] = useState(40);
   const [watermarkPattern, setWatermarkPattern] = useState<WatermarkPattern>('across-page');
+  const [redactionFill, setRedactionFill] = useState<string>(redactionFills.Black);
+  const [reviewing, setReviewing] = useState(false);
+  const [previewRedactions, setPreviewRedactions] = useState(true);
+  const [disclosure, setDisclosure] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(path));
   const [rendering, setRendering] = useState(false);
@@ -310,6 +316,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [thumbnails, setThumbnails] = useState<Record<string, { key: string; value: ScenePreview }>>({});
   const [renderError, setRenderError] = useState<string | null>(null);
   const group = useRef<string | null>(null);
+  const focusMark = useRef(false);
   const draggedPage = useRef<string | null>(null);
   const toolsToolbar = useRef<HTMLDivElement>(null);
   const bottomToolbar = useRef<HTMLDivElement>(null);
@@ -337,6 +344,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       : !exactPreview || rendering ? { title: 'Updating the preview', detail: 'Export turns on once the preview shows your latest edits.' }
         : null;
   const selectedSignature = selected?.kind === 'signature' ? selected : null;
+  const marks = listMarks(scene);
+  // Export and Export As both pause on the redaction disclosure; the chosen action runs once the marks are confirmed.
+  const pendingExport = useRef(onExport);
+  const requestExport = (action: () => Promise<void>) => { pendingExport.current = action; if (marks.length) setDisclosure(true); else void action(); };
   const updateThumbnail = (item: ScenePage, key: string, value: ScenePreview) => {
     setThumbnails((existing) => {
       if (existing[item.id]?.key === key) return existing;
@@ -512,11 +523,33 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       const command = (event as CustomEvent<string>).detail;
       if (command === 'undo') undo();
       else if (command === 'redo') redo();
-      else if (command === 'export' && canExport) void onExport();
+      else if (command === 'export' && canExport) requestExport(onExport);
     };
     window.addEventListener('toolbox:editor-command', onShellCommand);
     return () => window.removeEventListener('toolbox:editor-command', onShellCommand);
-  }, [canExport, onExport, redo, undo]);
+  }, [canExport, onExport, redo, undo, marks.length]);
+  const selectMark = (mark: ListedMark) => { endGroup(); setCurrentId(mark.pageId); setSelectedPages([mark.pageId]); setSelectedId(mark.id); };
+  const removeMarks = (ids: string[]) => {
+    if (!availability.allows('pdf-redact')) return;
+    commit({ pages: scene.pages.map((item) => item.redactions?.some((mark) => ids.includes(mark.id))
+      ? { ...item, redactions: item.redactions.filter((mark) => !ids.includes(mark.id)) } : item) });
+    setSelectedId(null);
+    if (ids.length >= marks.length) setReviewing(false);
+  };
+  const recolorMarks = (color: string) => {
+    setRedactionFill(color);
+    if (marks.some((mark) => mark.color !== color)) commit({ pages: scene.pages.map((item) => item.redactions?.length
+      ? { ...item, redactions: item.redactions.map((mark) => ({ ...mark, color })) } : item) });
+  };
+  const review = (on: boolean) => {
+    setReviewing(on);
+    if (on && marks.length && !marks.some((mark) => mark.id === selectedId)) selectMark(marks[0]);
+  };
+  useEffect(() => {
+    if (!focusMark.current) return;
+    focusMark.current = false;
+    window.document.querySelector<SVGElement>(`[data-redaction="${selectedId}"]`)?.focus();
+  }, [selectedId, currentId]);
   const updateObject = (patch: Partial<SceneObject>, field: string) => {
     if (!selected || !page || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
     commit({ ...scene, pages: scene.pages.map((item) => item.id === page.id ? { ...page,
@@ -674,6 +707,14 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const Guide = tool && tool !== 'organize' ? subToolInspectors[tool]?.Guide : undefined;
 
   return <section className="pdf-scene-workspace" aria-label="PDF editing session" onKeyDown={(event) => {
+    const markId = event.target instanceof SVGElement ? event.target.dataset.redaction : undefined;
+    if (reviewing && event.key === 'Tab' && markId && marks.length) {
+      event.preventDefault();
+      const index = marks.findIndex((mark) => mark.id === markId);
+      focusMark.current = true;
+      selectMark(marks[(index + (event.shiftKey ? -1 : 1) + marks.length) % marks.length]);
+      return;
+    }
     const input = event.target instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable);
     if (input || !(event.metaKey || event.ctrlKey)) return;
     const key = event.key.toLowerCase();
@@ -683,10 +724,6 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
       {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
         onClick={() => chooseTool(item.id)} disabled={!page}><span aria-hidden="true">{item.glyph}</span>{item.label}</Button>)}
-      {/* Redaction removes content for good, so it runs on a saved copy in its own screen with a confirmation step. */}
-      {availability.allows('pdf-redact') && onNavigate && <Button variant="ghost" size="sm" aria-label="Redact"
-        title={dirty ? 'Export or reset your edits before redacting' : 'Black out private details in a copy of this PDF'}
-        disabled={!page || !path || Boolean(dirty)} onClick={() => { if (path) onNavigate({ utilityId: 'pdf-redact', initialPaths: [path] }); }}><span aria-hidden="true">▮</span>Redact</Button>}
       <span className="scene-toolbar-divider" />
       <Button variant="ghost" size="icon-sm" aria-label="Undo" title={`Undo (${shortcutLabel('undo')})`} disabled={!history.past.length} onClick={undo}>↶</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Redo" title={`Redo (${shortcutLabel('redo')})`} disabled={!history.future.length} onClick={redo}>↷</Button>
@@ -694,10 +731,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       <ExportDestination destination={destination} inputPath={path} />
       {exporting ? <ExportProgress step={exportStep} fileName={path ? fileName(path) : 'PDF'} /> : <>
         <Button variant="outline" size="sm" className="scene-export-as" aria-label="Export As…" disabled={!canExport}
-          aria-describedby={exportReason ? 'scene-export-reason' : undefined} onClick={() => void onExportAs()}>Export As…</Button>
+          aria-describedby={exportReason ? 'scene-export-reason' : undefined} onClick={() => requestExport(onExportAs)}>Export As…</Button>
         <Button variant="default" size="sm" className="workspace-primary-action scene-export" aria-label="Export PDF" disabled={!canExport}
           aria-describedby={exportReason ? 'scene-export-reason' : undefined}
-          {...shortcutTarget('run')} onClick={() => void onExport()}>Export PDF<ShortcutHint id="run" /></Button>
+          {...shortcutTarget('run')} onClick={() => requestExport(onExport)}>Export PDF<ShortcutHint id="run" /></Button>
       </>}
       {exportReason && <p id="scene-export-reason" role="status" className="scene-export-reason"><strong>{exportReason.title}</strong> {exportReason.detail}</p>}
     </div>
@@ -811,17 +848,20 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
             textRuns={page.sourceIndex === null ? [] : document?.pages[page.sourceIndex]?.textRuns ?? []}
             renderedPreview={exactPreview} tool={tool ?? 'select'} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
             onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject}
+            redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions}
             editRuns={editRuns} textEdits={pageEdits} selectedRun={selectedRun} onSelectRun={setSelectedRun} onEditRun={setTextEdit} />
         </div>
         <aside className="scene-inspector" aria-label="PDF editor inspector">
           <Card role="region" aria-label="Properties" className="scene-inspector-panel gap-4 overflow-y-auto py-4">
             <CardHeader className="gap-1 px-4 py-0">
-              <CardTitle>{selected ? `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : tool === 'edit-text' ? 'Edit text' : 'Properties'}</CardTitle>
-              <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool === 'edit-text' ? toolGuidance['edit-text'] : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
+              <CardTitle>{selected ? `${selected.kind[0].toUpperCase()}${selected.kind.slice(1)} properties` : tool === 'edit-text' ? 'Edit text' : tool === 'redact' ? 'Redact' : 'Properties'}</CardTitle>
+              <CardDescription>{selected ? 'Adjust the selected item.' : tool === 'select' ? 'Select a mark to edit its properties.' : tool === 'edit-text' ? toolGuidance['edit-text'] : tool === 'redact' ? 'Drag over anything you want removed. Marks are only previews until you export.' : tool ? `New ${tool} settings` : 'No page markup tools are enabled.'}</CardDescription>
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
+              {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill}
+                onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks} />}
               {Fields && inspector && <Fields {...inspector} />}
-              {(selected || (tool !== null && !['select', 'edit-text', 'crop'].includes(tool))) && <>
+              {(selected || (tool !== null && !['select', 'edit-text', 'crop', 'redact'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
                   <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
@@ -864,6 +904,9 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
           </Card>
         </aside>
       </div>
+      <RedactDisclosure marks={marks} open={disclosure} onOpenChange={setDisclosure}
+        onReview={() => { setDisclosure(false); setTool('redact'); review(true); }}
+        onContinue={() => { setDisclosure(false); void pendingExport.current(); }} />
       <div ref={bottomToolbar} className="scene-bottom-bar" role="toolbar" aria-label="PDF page and zoom controls" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
         <Button variant="ghost" size="icon-sm" aria-label="Previous page" disabled={currentIndex <= 0} onClick={() => selectPage(scene.pages[currentIndex - 1].id)}>‹</Button>
         <span>Page {currentIndex + 1} of {scene.pages.length}</span>

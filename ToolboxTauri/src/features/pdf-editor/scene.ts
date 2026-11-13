@@ -3,7 +3,7 @@ import type { PdfDocument, PdfEditRun, PdfEditRunReason, PdfTextEdit, PdfTextRun
 // All geometry is in points, from the top-left of the unrotated visible source page.
 export interface SceneRect { x: number; y: number; width: number; height: number }
 export interface ScenePoint { x: number; y: number }
-export type SceneTool = 'select' | 'edit-text' | 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'crop';
+export type SceneTool = 'select' | 'edit-text' | 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'crop' | 'redact';
 export type SceneShape = 'square' | 'round' | 'triangle' | 'line' | 'dotted-line' | 'arrow-left' | 'arrow-right' | 'arrow-up' | 'arrow-down';
 export type SignatureMode = 'image' | 'text';
 export type WatermarkPattern = 'across-page' | 'bottom-right-to-top-left' | 'top-right-to-bottom-left' | 'center-horizontal' | 'center-vertical';
@@ -47,7 +47,10 @@ export interface ScenePage {
   sourceRotation: number | null;
   sourceBox: SceneRect | null;
   objects: SceneObject[];
+  // Marks are drawn only on the canvas; export sends them as the request's redactions section.
+  redactions?: SceneRedaction[];
 }
+export interface SceneRedaction { id: string; rect: SceneRect; color: string }
 export interface PdfScene { pages: ScenePage[]; textEdits?: PdfTextEdit[] }
 export interface ScenePreview { dataUrl: string; width: number; height: number }
 export interface SceneCanvasProps {
@@ -61,6 +64,8 @@ export interface SceneCanvasProps {
   onSelect: (id: string | null) => void;
   onCommit: (page: ScenePage) => void;
   makeObject: (kind: SceneObject['kind'], rect: SceneRect) => SceneObject;
+  redactionFill?: string;
+  redactionPreview?: boolean;
   editRuns: PdfEditRun[];
   textEdits: PdfTextEdit[];
   selectedRun: number | null;
