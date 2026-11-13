@@ -120,11 +120,11 @@ pub fn merge(request: &MergePdfRequest) -> JobOutcome {
         };
         expected_pages += document.get_pages().len();
     }
+    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
     let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-merged", "pdf") {
         Ok(output) => output,
         Err(error) => return failure(first, format!("Could not reserve merged PDF output: {error}")),
     };
-    let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(first, ToolError::unavailable(error)) };
     let result = Command::new(qpdf).arg("--empty").arg("--pages").args(&request.paths).arg("--").arg(output.path()).output_until_stopped();
     match result {
         Ok(result) if result.status.success() => match Document::load(output.path()) {
@@ -1716,5 +1716,35 @@ mod tests {
         assert!(!fs::read(&input).unwrap().windows(16).any(|window| window == b"ToolboxSignature"), "original must be unchanged");
         let _ = fs::remove_file(output);
         let _ = fs::remove_file(input);
+    }
+
+    const BUNDLED_QPDF_CHILD: &str = "TOOLBOX_TEST_BUNDLED_QPDF_CHILD";
+
+    // Other tests resolve qpdf without the env lock, so the lookup environment is changed only in a child test process.
+    #[cfg(unix)]
+    #[test]
+    fn pdf_commands_find_qpdf_in_the_bundled_resources_location() {
+        if std::env::var_os(BUNDLED_QPDF_CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let _guard = crate::kit::lock_process_env();
+            let root = split_fixture_root("bundled-qpdf");
+            let bundled = root.join("qpdf-bin/qpdf");
+            fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+            fs::write(&bundled, b"#!/bin/sh\nexit 0\n").unwrap();
+            fs::set_permissions(&bundled, fs::Permissions::from_mode(0o755)).unwrap();
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args(["kit::pdf::remaining::tests::pdf_commands_find_qpdf_in_the_bundled_resources_location", "--exact", "--nocapture", "--test-threads=1"])
+                .env(BUNDLED_QPDF_CHILD, &bundled)
+                .env("TOOLBOX_RESOURCE_ROOT", &root)
+                .env_remove("TOOLBOX_QPDF_PATH")
+                .env("PATH", root.join("missing-path"))
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            let _ = fs::remove_dir_all(root);
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            return;
+        }
+        assert_eq!(qpdf(), Ok(PathBuf::from(std::env::var_os(BUNDLED_QPDF_CHILD).unwrap())));
     }
 }
