@@ -67,3 +67,20 @@ export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIn
   if (selected) parts.push("selected");
   return parts.join(", ");
 };
+
+const listWords = (parts: string[]) => parts.length < 2 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+
+/** Names 1-based positions for an announcement: "Page 5", "Pages 8 and 9", "Pages 4 to 6", "Pages 1 to 3, 7 and 9". */
+export const pagePositionsLabel = (positions: number[]) => {
+  const sorted = [...new Set(positions)].sort((a, b) => a - b);
+  if (sorted.length === 1) return `Page ${sorted[0]}`;
+  const parts: string[] = [];
+  for (let start = 0; start < sorted.length;) {
+    let end = start;
+    while (end + 1 < sorted.length && sorted[end + 1] === sorted[end] + 1) end += 1;
+    if (end - start >= 2) parts.push(`${sorted[start]} to ${sorted[end]}`);
+    else for (let index = start; index <= end; index += 1) parts.push(String(sorted[index]));
+    start = end + 1;
+  }
+  return `Pages ${listWords(parts)}`;
+};

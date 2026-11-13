@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   clearPageSelection, clickPage, extendPageSelection, pageOptionName, selectAllPages, selectPagesByParity,
-  selectPagesByRange, selectionCountLabel, togglePage,
+  pagePositionsLabel, selectPagesByRange, selectionCountLabel, togglePage,
 } from "../src/features/pdf-editor/pageSelection";
 import type { PageSelection } from "../src/features/pdf-editor/pageSelection";
 
@@ -90,4 +90,13 @@ test("each page is named by position, original page, orientation and selected st
   assert.equal(pageOptionName(3, { sourceIndex: 4, rotation: 180 }, false), "Position 3, original page 5, rotated 180°");
   assert.equal(pageOptionName(4, { sourceIndex: 3, rotation: 270 }, true), "Position 4, original page 4, rotated 90° left, selected");
   assert.equal(pageOptionName(5, { sourceIndex: null, rotation: 0 }, false), "Position 5");
+});
+
+test("page positions read as a short phrase for announcements", () => {
+  assert.equal(pagePositionsLabel([5]), "Page 5");
+  assert.equal(pagePositionsLabel([8, 9]), "Pages 8 and 9");
+  assert.equal(pagePositionsLabel([4, 5, 6]), "Pages 4 to 6");
+  assert.equal(pagePositionsLabel([2, 7]), "Pages 2 and 7");
+  assert.equal(pagePositionsLabel([1, 2, 3, 7, 9]), "Pages 1 to 3, 7 and 9");
+  assert.equal(pagePositionsLabel([9, 1, 8]), "Pages 1, 8 and 9");
 });
