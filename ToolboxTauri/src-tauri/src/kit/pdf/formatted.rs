@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::kit::common::limits::{self, ToolLimits};
 use crate::kit::common::{note_renamed, OutputLocation, OutputNaming};
-use crate::kit::contracts::{JobOutcome, LimitKind, ToolError};
+use crate::kit::contracts::{JobOutcome, LimitKind, OutcomePointer, ToolError};
 use crate::kit::images::source::{self, ImageFamily};
 use crate::kit::pdf::convert::{page_count, Margins, Orientation, PageSize};
 use crate::kit::pdf::font_resolver::{BundledFonts, FontReport, FontResolver, InstalledSystemFonts, SystemFontLookup};
+use crate::kit::pdf::script_text::{character_pack_script, require_pack_font};
 use crate::kit::pdf::layout::{assemble, Align, Assembly, Block, FontBook, Flow, Geometry, Paragraph, Picture, Span, Style, Theme, PAGE_COUNT, PAGE_NUMBER};
 use crate::packs::uninstall::RunPacks;
 
@@ -75,6 +76,17 @@ impl DocumentBlock {
             Self::Table { rows, .. } => rows.iter().flatten().map(String::len).sum(),
             Self::Image { path } => path.as_os_str().len(),
             Self::PageBreak => 0,
+        }
+    }
+
+    /// The text the block draws, in order.
+    fn texts(&self) -> Vec<&str> {
+        match self {
+            Self::Heading1 { text } | Self::Heading2 { text } | Self::Heading3 { text } => vec![text],
+            Self::Paragraph { runs } => runs.iter().map(|run| run.text.as_str()).collect(),
+            Self::BulletedList { items } | Self::NumberedList { items } => items.iter().flat_map(|item| &item.runs).map(|run| run.text.as_str()).collect(),
+            Self::Table { rows, .. } => rows.iter().flatten().map(String::as_str).collect(),
+            Self::Image { .. } | Self::PageBreak => Vec::new(),
         }
     }
 
@@ -218,6 +230,27 @@ impl FormattedDocument {
         }
         Ok(())
     }
+
+    /// Refuses text in a script the app's own fonts don't write when that script's pack can't be used, before anything is
+    /// laid out, so nothing is drawn or written. Latin, Cyrillic and Greek need no pack. The blocks are read in order, then
+    /// the header and footer, and the first script refused is named with the pack it needs.
+    fn check_scripts(&self, packs: &RunPacks) -> Result<(), ScriptRefusal> {
+        let mut checked = std::collections::BTreeSet::new();
+        let texts = self.blocks.iter().flat_map(DocumentBlock::texts).chain([self.page.header.as_str(), self.page.footer.as_str()]);
+        for script in texts.flat_map(str::chars).filter_map(character_pack_script) {
+            if checked.insert(script) {
+                require_pack_font(script, packs).map_err(|error| ScriptRefusal { script, error })?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Text in `script` that can't be drawn: its pack is not installed, is damaged or doesn't fit this app (`error` points at
+/// it), or no pack writes the script.
+struct ScriptRefusal {
+    script: &'static str,
+    error: ToolError,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -270,6 +303,7 @@ fn make<S: SystemFontLookup>(
     picture: impl Fn(&Path) -> Result<(Picture, Option<String>), ToolError>,
 ) -> Result<Made, ToolError> {
     document.check()?;
+    document.check_scripts(packs).map_err(|refusal| refusal.error)?;
     let (mut blocks, images) = layout_blocks(&document.blocks);
     if blocks.is_empty() { return Err(ToolError::invalid_input("The document is empty. Add some text and try again.")); }
     let limits = limits();
@@ -355,6 +389,28 @@ pub struct FormattedPreview {
     pub missing_images: Vec<String>,
 }
 
+/// Why the preview can't be drawn. Text in a script whose pack can't be used pauses it, as saving refuses it: `script`
+/// names that script and `pointer` the pack to install, repair or update.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewError {
+    pub message: String,
+    pub script: Option<String>,
+    pub pointer: Option<OutcomePointer>,
+}
+
+impl From<String> for PreviewError {
+    fn from(message: String) -> Self { Self { message, script: None, pointer: None } }
+}
+
+impl From<&str> for PreviewError {
+    fn from(message: &str) -> Self { message.to_string().into() }
+}
+
+impl From<ToolError> for PreviewError {
+    fn from(error: ToolError) -> Self { Self { message: error.message, script: None, pointer: error.pointer } }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewPage {
@@ -373,18 +429,20 @@ const PLACEHOLDER_BORDER: [u8; 3] = [0xcc, 0xcc, 0xcc];
 
 /// Lays the document out exactly as saving does and draws its first pages, all in memory. Nothing is written: the
 /// PDF goes to the renderer on stdin and the page images come back on stdout. An empty document has no pages.
-pub fn preview(request: &FormattedPreviewRequest, packs: &RunPacks) -> Result<FormattedPreview, String> {
+pub fn preview(request: &FormattedPreviewRequest, packs: &RunPacks) -> Result<FormattedPreview, PreviewError> {
     // The same rule as saving, so the preview draws the fonts the saved PDF will use.
     let fonts = FontResolver::shared().map_err(|error| error.message)?;
     let renderer = crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)?;
     preview_with(request, &fonts, packs, &renderer)
 }
 
-fn preview_with<S: SystemFontLookup>(request: &FormattedPreviewRequest, fonts: &FontResolver<S>, packs: &RunPacks, renderer: &Path) -> Result<FormattedPreview, String> {
+fn preview_with<S: SystemFontLookup>(request: &FormattedPreviewRequest, fonts: &FontResolver<S>, packs: &RunPacks, renderer: &Path) -> Result<FormattedPreview, PreviewError> {
     let document = &request.document;
     if layout_blocks(&document.blocks).0.is_empty() {
         return Ok(FormattedPreview { page_count: 0, pages: Vec::new(), missing_images: Vec::new() });
     }
+    document.check()?;
+    document.check_scripts(packs).map_err(|refusal| PreviewError { script: Some(refusal.script.to_string()), ..refusal.error.into() })?;
     let missing = std::cell::RefCell::new(Vec::new());
     let made = make(document, fonts, packs, |path| {
         match load_picture(path) {
@@ -395,7 +453,7 @@ fn preview_with<S: SystemFontLookup>(request: &FormattedPreviewRequest, fonts: &
                 Ok((placeholder(), Some(name)))
             }
         }
-    }).map_err(|error| error.message)?;
+    })?;
     let mut pdf = made.pdf;
     let mut bytes = Vec::new();
     pdf.save_to(&mut bytes).map_err(|error| format!("Could not make the preview: {error}"))?;
@@ -1473,7 +1531,7 @@ mod tests {
         let empty = preview_of(&request(json!([paragraph("   "), { "kind": "pageBreak" }]), &root.join("empty.pdf")));
         assert_eq!((empty.page_count, empty.pages.len()), (0, 0));
         let refused = preview_with(&FormattedPreviewRequest { document: request(json!([{ "kind": "image", "path": "floorplan.png" }]), &root.join("x.pdf")).document }, &fonts(), &no_packs(), &renderer());
-        assert!(refused.unwrap_err().contains("read from this device only"), "the preview checks the document as saving does");
+        assert!(refused.unwrap_err().message.contains("read from this device only"), "the preview checks the document as saving does");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1489,5 +1547,144 @@ mod tests {
         assert_eq!(super::super::split_png_stream(&stream).unwrap(), [first.as_slice(), second.as_slice()]);
         assert!(super::super::split_png_stream(&stream[..stream.len() - 4]).is_err());
         assert!(super::super::split_png_stream(b"not a png").is_err());
+    }
+
+    mod script_packs {
+        use super::*;
+        use crate::kit::contracts::{OutcomePointer, PackNeed};
+        use crate::packs::install::tests::Fixture;
+
+        const PACK_ID: &str = "unicode-scripts";
+        const PACK_NAME: &str = "Unicode scripts";
+        const ARABIC: &str = "مرحبا";
+        const BASE_LINE: &str = "Café Привет κόσμε № 5 – Ωmega";
+
+        /// The catalog's script pack, which writes Arabic, Devanagari and Han, not installed under `app_data`.
+        fn packs(app_data: &Path) -> RunPacks {
+            let mut fixture = Fixture::new();
+            fixture.id = PACK_ID.into();
+            let mut entry = fixture.catalog_entry();
+            entry.as_object_mut().unwrap().remove("ocrLanguage");
+            entry["name"] = PACK_NAME.into();
+            entry["toolIds"] = json!(crate::packs::SCRIPT_FONT_TOOL_IDS);
+            entry["scriptFonts"] = json!({ "Arabic": "fonts/Arabic.ttf", "Devanagari": "fonts/Devanagari.ttf", "Han": "fonts/Han.ttf" });
+            entry["payloads"][0]["path"] = "packs/unicode-scripts.toolboxpack".into();
+            let catalog = crate::packs::parse_catalog(&json!({ "formatVersion": 1, "packs": [entry] }).to_string()).unwrap();
+            RunPacks::new(Ok(app_data.to_path_buf()), "1.0.14", Ok(catalog))
+        }
+
+        fn set_font_dir(value: Option<&Path>) {
+            match value { Some(value) => std::env::set_var("TOOLBOX_SCRIPT_FONT_DIR", value), None => std::env::remove_var("TOOLBOX_SCRIPT_FONT_DIR") }
+        }
+
+        /// The PDF's text as Poppler extracts it, with the bidi marks it adds around right-to-left runs removed.
+        fn extracted_text(path: &Path) -> String {
+            let tool = std::env::var_os("TOOLBOX_PDFTOTEXT_PATH").unwrap_or_else(|| "pdftotext".into());
+            let output = std::process::Command::new(tool).args(["-enc", "UTF-8"]).arg(path).arg("-").output().expect("these tests need pdftotext");
+            assert!(output.status.success());
+            String::from_utf8_lossy(&output.stdout).replace(['\u{202A}', '\u{202B}', '\u{202C}'], "")
+        }
+
+        fn with_band(mut request: FormattedPdfRequest, header: &str) -> FormattedPdfRequest {
+            request.document.page.header = header.into();
+            request
+        }
+
+        fn preview_with_packs(request: &FormattedPdfRequest, packs: &RunPacks) -> Result<FormattedPreview, PreviewError> {
+            preview_with(&FormattedPreviewRequest { document: request.document.clone() }, &fonts(), packs, &renderer())
+        }
+
+        fn files(root: &Path) -> Vec<String> {
+            let mut names = fs::read_dir(root).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+            names.sort();
+            names
+        }
+
+        #[test]
+        fn latin_cyrillic_and_greek_save_and_extract_with_no_packs() {
+            let root = sandbox("script_base");
+            let path = root.join("Notes.pdf");
+            let request = with_band(request(json!([
+                { "kind": "heading1", "text": "Привет, мир" },
+                paragraph(BASE_LINE),
+                list("bulletedList", &["Ελληνικά γράμματα".to_string()]),
+                { "kind": "table", "headerRow": true, "rows": [["Город", "Πόλη"], ["Москва", "Αθήνα"]] },
+            ]), &path), "Заметки");
+            let outcome = run(&request);
+            assert!(outcome.error().is_none(), "{:?}", outcome.error());
+            assert_eq!(outcome.output_paths(), [path.clone()]);
+            let text = extracted_text(&path);
+            for needle in ["Привет, мир", BASE_LINE, "Ελληνικά γράμματα", "Город", "Πόλη", "Москва", "Αθήνα", "Заметки"] {
+                assert!(text.contains(needle), "{needle:?} extracts: {text:?}");
+            }
+            let preview = preview_with_packs(&request, &no_packs()).unwrap();
+            assert_eq!((preview.page_count, preview.pages.len()), (1, 1), "the preview draws without packs too");
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn another_script_without_its_pack_is_refused_with_a_pointer_before_anything_is_written() {
+            let _guard = crate::kit::lock_process_env();
+            set_font_dir(None);
+            let root = sandbox("script_missing");
+            let packs = packs(&root.join("app-data"));
+            let pointer = Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled });
+            // The image is never read: the refusal comes first.
+            let picture = root.join("missing.png");
+            let cases = [
+                ("Arabic", request(json!([paragraph(BASE_LINE), paragraph(&format!("Paid {ARABIC} 2026")), { "kind": "image", "path": picture }]), &root.join("arabic.pdf"))),
+                ("Devanagari", request(json!([list("numberedList", &["Received from आशा".to_string()])]), &root.join("hindi.pdf"))),
+                ("Han", request(json!([{ "kind": "table", "headerRow": false, "rows": [["Name", "你好"]] }]), &root.join("table.pdf"))),
+                ("Han", with_band(request(json!([paragraph("Only the header needs a pack.")]), &root.join("header.pdf")), "会議メモ")),
+            ];
+            for (script, request) in &cases {
+                let outcome = create_with(request, &fonts(), &packs);
+                let error = outcome.error().unwrap_or_else(|| panic!("{script}: {outcome:?}"));
+                assert_eq!(error.kind, ErrorKind::Unavailable, "{script}");
+                assert_eq!(error.pointer, pointer, "{script}");
+                assert_eq!(error.message, format!("{script} text needs the {PACK_NAME} pack, which isn't installed. Nothing was saved."));
+                assert!(outcome.output_paths().is_empty());
+                let refused = preview_with_packs(request, &packs).unwrap_err();
+                assert_eq!(refused, PreviewError { message: error.message.clone(), script: Some(script.to_string()), pointer: pointer.clone() }, "the preview pauses for the same pack");
+            }
+            // A script no pack in the catalog writes is refused without a pointer.
+            let thai = request(json!([paragraph("สวัสดี")]), &root.join("thai.pdf"));
+            let error = create_with(&thai, &fonts(), &packs).error().unwrap().clone();
+            assert_eq!((error.kind, error.pointer, error.message.as_str()), (ErrorKind::Unavailable, None, "Toolbox can't write Thai text yet. Nothing was saved."));
+            assert_eq!(preview_with_packs(&thai, &packs).unwrap_err().script.as_deref(), Some("Thai"));
+            assert!(files(&root).is_empty(), "nothing was written and no pack folder was made: {:?}", files(&root));
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn with_the_test_pack_script_text_is_drawn_with_its_font_and_extracts() {
+            let _guard = crate::kit::lock_process_env();
+            let root = sandbox("script_pack");
+            let font_dir = root.join("dev-fonts");
+            fs::create_dir_all(font_dir.join("fonts")).unwrap();
+            fs::write(font_dir.join("fonts/Arabic.ttf"), crate::kit::images::tools::INCLUDED_WATERMARK_FONT).unwrap();
+            set_font_dir(Some(&font_dir));
+            let packs = packs(&root.join("app-data"));
+            let path = root.join("Receipt.pdf");
+            let request = with_band(request(json!([{ "kind": "heading1", "text": "Receipt" }, paragraph(&format!("Paid {ARABIC} 2026")), paragraph(BASE_LINE)]), &path), ARABIC);
+            let outcome = create_with(&request, &fonts(), &packs);
+            let preview = preview_with_packs(&request, &packs);
+            set_font_dir(None);
+            assert!(outcome.error().is_none(), "{:?}", outcome.error());
+            assert_eq!(outcome.output_paths(), [path.clone()]);
+            assert_eq!(preview.map(|preview| preview.page_count), Ok(1), "the preview draws with the pack");
+            let text = extracted_text(&path);
+            for needle in ["Receipt", ARABIC, "Paid", "2026", BASE_LINE] {
+                assert!(text.contains(needle), "{needle:?} extracts: {text:?}");
+            }
+            // The Arabic is drawn with a subset of the pack's font, beside the document's own font.
+            let document = Document::load(&path).unwrap();
+            let page = document.get_pages()[&1];
+            let fonts = document.get_page_fonts(page).unwrap().values()
+                .map(|font| String::from_utf8_lossy(font.get(b"BaseFont").unwrap().as_name().unwrap()).into_owned()).collect::<Vec<_>>();
+            assert!(fonts.iter().any(|font| font.ends_with("+DejaVuSans")), "the pack's font is embedded as a subset: {fonts:?}");
+            assert!(fonts.iter().any(|font| font.contains("LiberationSerif")), "{fonts:?}");
+            let _ = fs::remove_dir_all(root);
+        }
     }
 }

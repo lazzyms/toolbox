@@ -386,7 +386,7 @@ async fn run_create_formatted_pdf(request: formatted::FormattedPdfRequest, packs
 
 /// Draws the document's first pages as saving would lay them out, without writing anything.
 #[tauri::command]
-async fn preview_formatted_pdf(app: tauri::AppHandle, request: formatted::FormattedPreviewRequest) -> Result<formatted::FormattedPreview, String> {
+async fn preview_formatted_pdf(app: tauri::AppHandle, request: formatted::FormattedPreviewRequest) -> Result<formatted::FormattedPreview, formatted::PreviewError> {
     run_preview_formatted_pdf(request, run_packs(&app)).await
 }
 
@@ -415,8 +415,8 @@ async fn clear_formatted_draft(app: tauri::AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || formatted_draft::clear(&path)).await.map_err(|error| error.to_string())?
 }
 
-async fn run_preview_formatted_pdf(request: formatted::FormattedPreviewRequest, packs: RunPacks) -> Result<formatted::FormattedPreview, String> {
-    if !command_supports_preview(formatted::COMMAND) { return Err("Formatted PDF preview is unavailable in this build.".to_string()); }
+async fn run_preview_formatted_pdf(request: formatted::FormattedPreviewRequest, packs: RunPacks) -> Result<formatted::FormattedPreview, formatted::PreviewError> {
+    if !command_supports_preview(formatted::COMMAND) { return Err("Formatted PDF preview is unavailable in this build.".into()); }
     tauri::async_runtime::spawn_blocking(move || formatted::preview(&request, &packs)).await.map_err(|error| error.to_string())?
 }
 

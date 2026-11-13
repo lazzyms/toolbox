@@ -11,6 +11,12 @@ type FormattedWindow = Window & {
     __preview: unknown;
     __holdPreview: boolean;
     __heldPreviews: Array<(preview: unknown) => void>;
+    /** When set, preview_formatted_pdf rejects with it, as the native command does for a missing script pack. */
+    __previewError: unknown;
+    /** What the script_packs query reports. */
+    __scriptPacks: unknown[];
+    /** Sends a native event, as `pack-changed`, to the app's listeners. */
+    __emit: (event: string, payload: unknown) => void;
     /** What list_formatted_pdf_fonts replies: the bundled families, then the installed ones. */
     __fonts: { bundled: string[]; system: string[] };
 };
@@ -35,10 +41,17 @@ test.beforeEach(async ({ page }) => {
         win.__preview = { pageCount: 1, pages: [{ dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQi1rwHwADygIY2ofr+QAAAABJRU5ErkJggg==", width: 566, height: 800 }], missingImages: [] };
         win.__holdPreview = false;
         win.__heldPreviews = [];
+        win.__previewError = null;
+        win.__scriptPacks = [];
         win.__fonts = { bundled: ["Liberation Sans", "Liberation Serif", "Liberation Mono", "Carlito", "Caladea", "DejaVu Sans"], system: ["Calibri", "Georgia"] };
         win.__drop = (paths, point) => {
             for (const [id, listener] of listeners) {
                 if (listener.event === "toolbox://shell-event") callbacks.get(listener.handler)?.({ event: listener.event, id, payload: { kind: "dropped-files", paths, point } });
+            }
+        };
+        win.__emit = (event, payload) => {
+            for (const [id, listener] of listeners) {
+                if (listener.event === event) callbacks.get(listener.handler)?.({ event, id, payload });
             }
         };
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -51,8 +64,10 @@ test.beforeEach(async ({ page }) => {
                 if (command === "get_last_save_folder") return win.__lastSaveFolder ?? "/Users/test/Documents";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command === "create_formatted_pdf") return new Promise((resolve) => { finish = resolve; });
+                if (command === "preview_formatted_pdf" && win.__previewError) throw win.__previewError;
                 if (command === "preview_formatted_pdf") return win.__holdPreview ? new Promise((resolve) => { win.__heldPreviews.push(resolve); }) : win.__preview;
                 if (command === "list_formatted_pdf_fonts") return win.__fonts;
+                if (command === "script_packs") return win.__scriptPacks;
                 // The draft lives in session storage, so it survives a reload as the app-data file survives a restart.
                 if (command === "load_formatted_draft") {
                     const stored = sessionStorage.getItem(DRAFT_KEY);
@@ -763,6 +778,78 @@ test("Formatted PDF says how many pages the preview leaves out and why a preview
     await expect(preview.getByRole("status")).toHaveText("Preview unavailable");
     await expect(preview.getByText("The preview could not be drawn.")).toBeVisible();
     await expect(saveButton(page)).toBeEnabled();
+});
+
+const MB = 1024 * 1024;
+const scriptPacks = (status: string) => ["Arabic", "Devanagari", "Han"].map((script) => ({ script, packId: "unicode-scripts", packName: "Unicode scripts", status, downloadBytes: 38 * MB }));
+/** What the native preview rejects with when Arabic text needs the Unicode scripts pack. */
+const arabicRefusal = {
+    message: "Arabic text needs the Unicode scripts pack, which isn't installed. Nothing was saved.",
+    script: "Arabic",
+    pointer: { kind: "pack", packId: "unicode-scripts", name: "Unicode scripts", reason: "notInstalled" },
+};
+
+test("Formatted PDF pauses the preview for text whose script pack is missing, offers the install and clears once it's installed", async ({ page }) => {
+    await page.addInitScript((states) => { (window as unknown as FormattedWindow).__scriptPacks = states; }, scriptPacks("notInstalled"));
+    await openFormatted(page);
+    const preview = page.getByRole("region", { name: "Preview" });
+    await block(page, "Block 1, Paragraph").fill("Receipt");
+    await expect(preview.getByRole("img", { name: "Page 1 of 1, A4 portrait" })).toBeVisible();
+    await expect(saveButton(page)).toBeEnabled();
+
+    // The native preview refuses the Arabic text before drawing anything; the last page stays, dimmed and paused.
+    await page.evaluate((refusal) => { (window as unknown as FormattedWindow).__previewError = refusal; }, arabicRefusal);
+    await block(page, "Block 1, Paragraph").focus();
+    await caretAt(page, "end");
+    await page.keyboard.press("Enter");
+    await block(page, "Block 2, Paragraph").fill("مرحبا بكم");
+    const note = preview.getByRole("status").filter({ hasText: "Arabic text needs the Unicode scripts pack" });
+    await expect(note).toContainText("Install it to preview and save block 2, or remove that text. Nothing downloads until you choose Install.");
+    await expect(note).toContainText("38 MB download");
+    await expect(preview.getByRole("status").first()).toHaveText("Paused");
+    await expect(preview.getByText("Preview paused")).toBeVisible();
+    await expect(preview.getByRole("img", { name: "Page 1 of 1, A4 portrait" })).toHaveAttribute("data-updating", "true");
+    await expect(preview.getByText(arabicRefusal.message)).toHaveCount(0);
+    const blocks = page.getByRole("list", { name: "Document blocks, in order" });
+    await expect(blocks.getByRole("listitem", { name: "Block 2, Paragraph, has Arabic text that needs the Unicode scripts pack" }))
+        .toContainText("Arabic text needs the Unicode scripts pack to be drawn in the PDF.");
+    await expect(blocks.locator("[data-script-pack]")).toHaveCount(1);
+    const footer = page.getByRole("status").filter({ hasText: "Can't save yet" });
+    await expect(footer).toContainText("Install the script pack, or remove the Arabic text");
+    await expect(saveButton(page)).toBeDisabled();
+    expect((await page.evaluate(() => (window as unknown as FormattedWindow).__invocations.map(({ command }) => command))).includes("create_formatted_pdf")).toBe(false);
+
+    // Install asks for the pack the refusal named, and nothing else.
+    await note.getByRole("button", { name: "Install script pack", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as FormattedWindow).__invocations
+        .filter(({ command }) => command === "install_pack").map(({ args }) => (args as { packId: string }).packId))).toEqual(["unicode-scripts"]);
+
+    // The native install announces the pack; the query reports it installed, the prompt clears and the preview is drawn again, with no restart.
+    const before = (await previewRequests(page)).length;
+    await page.evaluate((states) => {
+        const win = window as unknown as FormattedWindow;
+        win.__scriptPacks = states;
+        win.__previewError = null;
+        win.__emit("pack-changed", { packId: "unicode-scripts" });
+    }, scriptPacks("installed"));
+    await expect(note).toHaveCount(0);
+    await expect(footer).toHaveCount(0);
+    await expect(blocks.locator("[data-script-pack]")).toHaveCount(0);
+    await expect.poll(async () => (await previewRequests(page)).length).toBeGreaterThan(before);
+    await expect(preview.getByText("Preview paused")).toHaveCount(0);
+    await expect(preview.getByRole("img", { name: "Page 1 of 1, A4 portrait" })).not.toHaveAttribute("data-updating");
+    await expect(saveButton(page)).toBeEnabled();
+});
+
+test("Formatted PDF names the document instead of a block when the refused text is in no block, as in the header", async ({ page }) => {
+    await page.addInitScript((states) => { (window as unknown as FormattedWindow).__scriptPacks = states; }, scriptPacks("notInstalled"));
+    await openFormatted(page);
+    await page.evaluate((refusal) => { (window as unknown as FormattedWindow).__previewError = refusal; }, arabicRefusal);
+    await block(page, "Block 1, Paragraph").fill("Receipt");
+    const note = page.getByRole("region", { name: "Preview" }).getByRole("status").filter({ hasText: "Arabic text needs the Unicode scripts pack" });
+    await expect(note).toContainText("Install it to preview and save the document, or remove that text.");
+    await expect(page.getByRole("list", { name: "Document blocks, in order" }).locator("[data-script-pack]")).toHaveCount(0);
+    await expect(saveButton(page)).toBeDisabled();
 });
 
 const fontSent = async (page: Page, command: "create_formatted_pdf" | "preview_formatted_pdf") =>
