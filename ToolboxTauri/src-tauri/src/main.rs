@@ -16,6 +16,7 @@ use crate::kit::compress::{compress_file, CompressFilesRequest};
 use crate::kit::pdf::{convert, editor, metadata, privacy, properties, remaining, scene, PDFProcessor};
 use crate::kit::pdf::page_ranges::{require_page_ranges, validate_page_ranges};
 use crate::kit::vision;
+use crate::packs::uninstall::RunPacks;
 use crate::kit::contracts::{command_supports_preview, validate_command_inputs, validate_page_selection, CompressImagesRequest, ConvertImagesRequest, OutcomeState, PasswordRequest, ToolError};
 use crate::kit::common::batch_runner::{BatchRunner, FileEvent, FolderCheck, RunEvents};
 use crate::kit::password::PasswordProcessor;
@@ -150,16 +151,29 @@ async fn inspect_signature_image(request: InspectPdfRequest) -> Result<scene::Si
     tauri::async_runtime::spawn_blocking(move || scene::inspect_signature_image(&request.path)).await.map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-async fn preview_pdf_scene(request: scene::PreviewRequest) -> Result<scene::ScenePreview, String> {
-    if !command_supports_preview("export_pdf_scene") { return Err("PDF scene preview is unavailable in this build.".to_string()); }
-    tauri::async_runtime::spawn_blocking(move || scene::preview(&request)).await.map_err(|error| error.to_string())?
+/// The packs a run may read fonts and data from.
+fn run_packs(app: &tauri::AppHandle) -> RunPacks {
+    RunPacks::new(packs::app_data(app), app.package_info().version.to_string(), packs::load_catalog())
 }
 
 #[tauri::command]
-async fn preview_pdf_scene_pages(request: scene::PreviewPagesRequest) -> Result<Vec<scene::IndexedScenePreview>, String> {
+async fn preview_pdf_scene(app: tauri::AppHandle, request: scene::PreviewRequest) -> Result<scene::ScenePreview, String> {
+    run_preview_pdf_scene(request, run_packs(&app)).await
+}
+
+async fn run_preview_pdf_scene(request: scene::PreviewRequest, packs: RunPacks) -> Result<scene::ScenePreview, String> {
     if !command_supports_preview("export_pdf_scene") { return Err("PDF scene preview is unavailable in this build.".to_string()); }
-    tauri::async_runtime::spawn_blocking(move || scene::preview_pages(&request)).await.map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || scene::preview(&request, &packs)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn preview_pdf_scene_pages(app: tauri::AppHandle, request: scene::PreviewPagesRequest) -> Result<Vec<scene::IndexedScenePreview>, String> {
+    run_preview_pdf_scene_pages(request, run_packs(&app)).await
+}
+
+async fn run_preview_pdf_scene_pages(request: scene::PreviewPagesRequest, packs: RunPacks) -> Result<Vec<scene::IndexedScenePreview>, String> {
+    if !command_supports_preview("export_pdf_scene") { return Err("PDF scene preview is unavailable in this build.".to_string()); }
+    tauri::async_runtime::spawn_blocking(move || scene::preview_pages(&request, &packs)).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -175,13 +189,13 @@ async fn classify_pdf_blank_pages(request: scene::BlankPagesRequest) -> Result<V
 #[tauri::command]
 async fn export_pdf_scene(app: tauri::AppHandle, events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
     let chosen = request.output_path.clone();
-    let outcomes = run_export_pdf_scene(events, request).await;
+    let outcomes = run_export_pdf_scene(events, request, run_packs(&app)).await;
     settings::remember_chosen_save(&app, chosen.as_deref(), outcomes)
 }
 
-async fn run_export_pdf_scene(events: RunEvents, request: scene::ExportRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "export_pdf_scene", request.paths.clone(), &request.output_location, &request, scene::export)
+async fn run_export_pdf_scene(events: RunEvents, request: scene::ExportRequest, packs: RunPacks) -> Vec<JobOutcome> {
+    let run = Arc::new(scene::SceneRun { request, packs });
+    BatchRunner::run(&events, "export_pdf_scene", run.request.paths.clone(), &run.request.output_location, &run, scene::export)
 }
 
 #[tauri::command]
@@ -376,11 +390,10 @@ async fn run_images_to_pdf(request: &remaining::ImagesToPdfRequest) -> Vec<JobOu
 
 #[tauri::command]
 async fn ocr_pdf(app: tauri::AppHandle, events: RunEvents, request: vision::OcrRequest) -> Vec<JobOutcome> {
-    let packs = vision::OcrPacks::new(packs::app_data(&app), app.package_info().version.to_string(), packs::load_catalog());
-    run_ocr_pdf(events, request, packs).await
+    run_ocr_pdf(events, request, run_packs(&app)).await
 }
 
-async fn run_ocr_pdf(events: RunEvents, request: vision::OcrRequest, packs: vision::OcrPacks) -> Vec<JobOutcome> {
+async fn run_ocr_pdf(events: RunEvents, request: vision::OcrRequest, packs: RunPacks) -> Vec<JobOutcome> {
     if let Err(outcomes) = vision::validate_ocr_request(&request) { return outcomes; }
     if let Err(outcomes) = validate_command_inputs("ocr_pdf", &request.paths) { return outcomes; }
     let run = Arc::new(vision::OcrRun { request, packs });
@@ -720,7 +733,9 @@ mod command_tests {
     use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, EditPdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RangedPageScope, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::compress::CompressLevel;
     use crate::kit::pdf::remaining::{ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfWatermarkRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode, SplitMode, SplitPdfRequest};
-    use crate::kit::vision::{OcrPacks, OcrRequest, VisionRequest};
+    use crate::kit::vision::{OcrRequest, VisionRequest};
+
+    fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
     use std::path::PathBuf;
@@ -2070,7 +2085,7 @@ mod command_tests {
         let request = |change: fn(&mut vision::OcrRequest)| {
             let mut request = vision::OcrRequest { paths: vec![input.clone()], page_range: Some("1".into()), mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr"), language_overrides: Default::default() };
             change(&mut request);
-            tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), request, no_ocr_packs()))
+            tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), request, no_packs()))
         };
         let cases: [(fn(&mut vision::OcrRequest), &str); 4] = [
             (|request| request.languages.clear(), "Choose at least one recognition language."),
@@ -2185,11 +2200,6 @@ mod command_tests {
         None
     }
 
-    /// OCR packs for a test that reads English only.
-    fn no_ocr_packs() -> vision::OcrPacks {
-        vision::OcrPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into()))
-    }
-
     fn ocr_text_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
         vision::OcrRequest { paths, page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location, language_overrides: Default::default() }
     }
@@ -2204,8 +2214,8 @@ mod command_tests {
         let original = std::fs::read(&input).unwrap();
         let folder = location(&root, "ocr");
 
-        let first = assert_success("ocr first run", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], folder.clone()), no_ocr_packs()));
-        let second = assert_success("ocr second run", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], folder), no_ocr_packs()));
+        let first = assert_success("ocr first run", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], folder.clone()), no_packs()));
+        let second = assert_success("ocr second run", run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![input.clone()], folder), no_packs()));
         let text = std::fs::read_to_string(&first[0]).unwrap();
         let again = std::fs::read(&second[0]).unwrap();
         let names = [&first[0], &second[0]].map(|path| path.file_name().unwrap().to_string_lossy().into_owned());
@@ -2239,7 +2249,7 @@ mod command_tests {
         let paths = vec![locked.clone(), blank.clone(), readable.clone()];
         let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
 
-        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "ocr")), no_ocr_packs()));
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "ocr")), no_packs()));
         let written = std::fs::read_dir(root.join("ocr")).unwrap().count();
         let text = outcomes.get(2).and_then(|outcome| outcome.output_paths().first()).and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
         let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
@@ -2317,7 +2327,7 @@ mod command_tests {
             ("TOOLBOX_PDFTOPPM_PATH", "The PDF page renderer is missing. Reinstall Toolbox."),
             ("TOOLBOX_TESSDATA_PATH", "The English recognition data is missing. Reinstall Toolbox."),
         ];
-        let run = |name: &str| tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(inputs.clone(), location(&root, name)), no_ocr_packs()));
+        let run = |name: &str| tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(inputs.clone(), location(&root, name)), no_packs()));
         for (variable, message) in cases {
             let values = [("TOOLBOX_PDFTOPPM_PATH", &renderer), ("TOOLBOX_TESSERACT_PATH", &engine), ("TOOLBOX_TESSDATA_PATH", &tessdata)]
                 .map(|(key, value)| (key, Some(if key == variable { missing.clone() } else { value.clone() })));
@@ -2357,7 +2367,7 @@ mod command_tests {
         make_pdf(&last, 2);
         let locked_original = std::fs::read(&locked).unwrap();
 
-        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![first, locked.clone(), last], location(&root, "ocr")), no_ocr_packs()));
+        let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![first, locked.clone(), last], location(&root, "ocr")), no_packs()));
         let locked_after = std::fs::read(&locked).unwrap();
         let texts = [&outcomes[0], &outcomes[2]].map(|outcome| outcome.output_paths().first().and_then(|path| std::fs::read_to_string(path).ok()));
         let _ = std::fs::remove_dir_all(&root);
@@ -2864,9 +2874,9 @@ mod command_tests {
                 { "kind": "text", "rect": { "x": 72, "y": 100, "width": 350, "height": 40 }, "text": "New page in the same session", "fontSize": 18, "color": "#202020", "opacity": 1 }
             ] }
         ] })).unwrap();
-        let rendered_scene = tauri::async_runtime::block_on(preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0, sections: Default::default() })).unwrap();
+        let rendered_scene = tauri::async_runtime::block_on(run_preview_pdf_scene(scene::PreviewRequest { path: pdf.clone(), scene: visual_scene.clone(), page_index: 0, sections: Default::default() }, no_packs())).unwrap();
         assert!(rendered_scene.data_url.starts_with("data:image/png;base64,"));
-        let rendered_scene_pages = tauri::async_runtime::block_on(preview_pdf_scene_pages(scene::PreviewPagesRequest { path: pdf.clone(), scene: visual_scene.clone(), page_indices: vec![1, 0], sections: Default::default() })).unwrap();
+        let rendered_scene_pages = tauri::async_runtime::block_on(run_preview_pdf_scene_pages(scene::PreviewPagesRequest { path: pdf.clone(), scene: visual_scene.clone(), page_indices: vec![1, 0], sections: Default::default() }, no_packs())).unwrap();
         assert_eq!(rendered_scene_pages.iter().map(|preview| preview.page_index).collect::<Vec<_>>(), vec![1, 0]);
         assert!(rendered_scene_pages.iter().all(|preview| preview.preview.data_url.starts_with("data:image/png;base64,")));
         let wire = serde_json::to_value(&rendered_scene_pages).unwrap();
@@ -2901,7 +2911,7 @@ mod command_tests {
         let blank_out_of_range = tauri::async_runtime::block_on(classify_pdf_blank_pages(scene::BlankPagesRequest { path: pdf.clone(), page_indices: vec![2] })).err().expect("an out-of-range page must be rejected");
         assert!(matches!(blank_out_of_range.kind, ErrorKind::InvalidInput), "kind: {:?}", blank_out_of_range.kind);
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "blank-page classification must not change the source PDF");
-        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }))));
+        outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }, no_packs()))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
         outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], position: Some("bottom-right".into()), pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_merge_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
@@ -2989,7 +2999,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), SplitPdfRequest { paths: vec![pdf.clone()], mode: SplitMode::EveryN { pages: 1 }.into(), output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_from_pdf", image_pdf.clone(), assert_success("extract images from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![image_pdf.clone()], ExtractMode::Images, None, location(&root, "extract images"))))));
         outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
-        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", run_ocr_pdf(RunEvents::silent(), OcrRequest { paths: vec![pdf.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr"), language_overrides: Default::default() }, OcrPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into()))))));
+        outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", run_ocr_pdf(RunEvents::silent(), OcrRequest { paths: vec![pdf.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr"), language_overrides: Default::default() }, no_packs()))));
         outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), output_location: location(&root, "extract pages") }))));
         outputs.extend(named(&mut naming, "compress_files", compressible_pdf.clone(), assert_success("compress files", compress_files(RunEvents::silent(), serde_json::from_value::<CompressFilesRequest>(serde_json::json!({ "paths": [compressible_pdf.clone()], "level": "medium", "stripExif": false, "outputLocation": location(&root, "compress files") })).expect("Compress Files view payload for compress_files")))));
         outputs.extend(named(&mut naming, "rotate_pdf", pdf.clone(), assert_success("rotate pdf", rotate_pdf(RunEvents::silent(), RotatePdfRequest { paths: vec![pdf.clone()], degrees: 90, pages: Some(vec![1]), output_location: location(&root, "rotate pdf") }))));
@@ -3467,7 +3477,7 @@ mod command_tests {
             { "sourceIndex": null, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] },
             { "sourceIndex": 0, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] }
         ] })).unwrap();
-        let (outcomes, events) = recorded(|events| run_export_pdf_scene(events, scene::ExportRequest { paths: vec![pdf.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }));
+        let (outcomes, events) = recorded(|events| run_export_pdf_scene(events, scene::ExportRequest { paths: vec![pdf.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }, no_packs()));
         assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
         let progress = events.iter().filter_map(|event| match event {
             FileEvent::Progress { index, completed, total } => Some((*index, *completed, *total)),
@@ -5059,7 +5069,7 @@ mod command_tests {
         let original = std::fs::read(&input).unwrap();
         let pages = [2, 0, 1].map(|index| serde_json::json!({ "sourceIndex": index, "width": 612, "height": 792, "rotation": 0, "crop": null, "objects": [] }));
         let scene = serde_json::from_value::<scene::PdfScene>(serde_json::json!({ "pages": pages })).unwrap();
-        let outputs = assert_success("scene alongside", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }));
+        let outputs = assert_success("scene alongside", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }, no_packs()));
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].parent(), Some(root.as_path()));
         assert!(outputs[0].exists(), "scene output must exist on disk");

@@ -697,7 +697,8 @@ mod tests {
     use std::{fs, path::Path, process::Command};
     use lopdf::{dictionary, Document, Object, Stream};
     use crate::kit::{common::OutputLocation, contracts::ErrorKind};
-    use super::super::{export, text_extractor, ExportRequest, PdfScene, ScenePage, TempDir};
+    use super::super::tests::export;
+    use super::super::{text_extractor, ExportRequest, PdfScene, ScenePage, TempDir};
     use super::*;
 
     fn rect(values: [f32; 4]) -> Object { Object::Array(values.iter().map(|value| Object::Real(*value)).collect()) }
