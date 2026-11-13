@@ -3,9 +3,14 @@
 //! Listing is read-only and local. It reads the catalog built into the app and the files under
 //! `<app data>/packs`, and never touches the network.
 //!
-//! Installed layout, one folder per pack:
-//! - `packs/<id>/installed.json` — `{ "version", "packFormat", "appVersions": { "from", "before"? } }`
-//! - `packs/<id>/<version>/manifest.json` — `{ "files": { "<relative path>": <bytes> } }`
+//! Installed layout, one folder per pack, in the per-user local app-data folder (non-roaming on
+//! Windows):
+//! - `packs/<id>/installed.json` — `{ "version", "packFormat", "appVersions": { "from", "before"? },
+//!   "files": { "<relative path>": <bytes> } }`, written last by [`install`].
+//! - `packs/<id>/<version>/manifest.json` — the signed pack manifest, a
+//!   [`crate::kit::resources::ResourceManifest`] that discovery reads as the installed pack root.
+
+pub mod install;
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -24,6 +29,13 @@ const CATALOG_OVERRIDE_ENV: &str = "TOOLBOX_PACK_CATALOG";
 const PACKS_DIR: &str = "packs";
 const INSTALLED_FILE: &str = "installed.json";
 const MANIFEST_FILE: &str = "manifest.json";
+
+/// The per-user app-data folder that holds `packs/`. Local, so packs never roam between Windows
+/// computers; on macOS this is `~/Library/Application Support/<identifier>`.
+pub fn app_data(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    app.path().app_local_data_dir().map_err(|error| error.to_string())
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,11 +59,11 @@ pub struct CatalogPack {
 }
 
 /// `from` is inclusive and `before` is exclusive. No `before` means every later version.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionRange {
     pub from: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<String>,
 }
 
@@ -62,6 +74,8 @@ pub struct Payload {
     pub target: String,
     pub download_bytes: u64,
     pub installed_bytes: u64,
+    /// Lowercase hex SHA-256 of the signed payload archive.
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -103,24 +117,20 @@ pub struct PackList {
     pub total_bytes: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct InstalledRecord {
-    version: String,
-    pack_format: u32,
-    app_versions: VersionRange,
-}
-
-#[derive(Deserialize)]
-struct Manifest {
-    files: std::collections::BTreeMap<String, u64>,
+    pub(crate) version: String,
+    pub(crate) pack_format: u32,
+    pub(crate) app_versions: VersionRange,
+    /// Every file in the version folder with its exact size, as verified at install.
+    pub(crate) files: std::collections::BTreeMap<String, u64>,
 }
 
 #[tauri::command]
 pub async fn list_packs(app: tauri::AppHandle) -> Result<PackList, String> {
-    use tauri::Manager;
     let catalog = load_catalog()?;
-    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let app_data = app_data(&app)?;
     Ok(list_packs_in(&catalog, &app_data, &current_target(), &app.package_info().version.to_string()))
 }
 
@@ -152,6 +162,14 @@ pub fn parse_catalog(text: &str) -> Result<Catalog, String> {
             if parse_version(version).is_none() {
                 return Err(format!("Pack {} has a bad version: {version:?}", pack.id));
             }
+        }
+        // The version names the installed folder, so it must be one plain path segment.
+        if !install::is_plain_segment(&pack.version) {
+            return Err(format!("Pack {} has a bad version: {:?}", pack.id, pack.version));
+        }
+        let valid_sha = |sha: &str| sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if let Some(payload) = pack.payloads.iter().find(|payload| !valid_sha(&payload.sha256)) {
+            return Err(format!("Pack {} has a bad checksum for {}", pack.id, payload.target));
         }
     }
     Ok(catalog)
@@ -210,7 +228,7 @@ fn installed_state(pack: &CatalogPack, folder: &Path, app_version: &str, offered
         return (PackStatus::Damaged, None);
     };
     let version = Some(record.version.clone());
-    if !files_intact(&folder.join(&record.version)) {
+    if !files_intact(&folder.join(&record.version), &record.files) {
         return (PackStatus::Damaged, version);
     }
     let newer_offered = offered && compare_versions(&pack.version, &record.version) == Some(Ordering::Greater);
@@ -223,14 +241,10 @@ fn installed_state(pack: &CatalogPack, folder: &Path, app_version: &str, offered
     (PackStatus::Installed, version)
 }
 
-/// Every file the manifest names exists inside the version folder with its recorded size.
+/// The version folder still has its manifest and every recorded file with its recorded size.
 /// Listing does not hash files; checksums are verified when a pack is installed or used.
-fn files_intact(version_folder: &Path) -> bool {
-    let Some(manifest) = std::fs::read_to_string(version_folder.join(MANIFEST_FILE)).ok()
-        .and_then(|text| serde_json::from_str::<Manifest>(&text).ok()) else {
-        return false;
-    };
-    manifest.files.iter().all(|(relative, bytes)| {
+fn files_intact(version_folder: &Path, files: &std::collections::BTreeMap<String, u64>) -> bool {
+    files.contains_key(MANIFEST_FILE) && files.iter().all(|(relative, bytes)| {
         let relative = Path::new(relative);
         let inside = relative.components().all(|component| matches!(component, Component::Normal(_)));
         inside && std::fs::symlink_metadata(version_folder.join(relative))
@@ -253,6 +267,15 @@ fn disk_usage(path: &Path) -> u64 {
         }
     }
     total
+}
+
+/// The folder discovery reads as the installed pack root for `id`: the recorded version's folder.
+/// `None` when nothing is recorded. Discovery verifies every file it uses against the manifest.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn installed_pack_root(app_data: &Path, id: &str) -> Option<PathBuf> {
+    let folder = app_data.join(PACKS_DIR).join(id);
+    let record: InstalledRecord = serde_json::from_str(&std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()?).ok()?;
+    install::is_plain_segment(&record.version).then(|| folder.join(record.version))
 }
 
 fn in_range(version: &str, range: &VersionRange) -> bool {
@@ -281,7 +304,7 @@ mod tests {
     const FIXTURE_CATALOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/pack-catalog.json");
     const MAC: &str = "macos-aarch64";
     const APP: &str = "1.0.14";
-    const MANIFEST_JSON: &str = r#"{"files":{"data/payload.bin":1000}}"#;
+    const MANIFEST_JSON: &str = r#"{"version":1,"architecture":"all","resources":{}}"#;
 
     fn sandbox(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("toolbox-packs-{name}-{}", std::process::id()));
@@ -294,19 +317,29 @@ mod tests {
         parse_catalog(&std::fs::read_to_string(FIXTURE_CATALOG).unwrap()).unwrap()
     }
 
-    /// Writes a complete install of `version` with one data file and returns its folder.
-    fn install(app_data: &Path, id: &str, version: &str, record: serde_json::Value) -> PathBuf {
+    /// Writes a complete install of `version` with one data file and returns its folder. The
+    /// record gains the file sizes unless it already names them.
+    fn install(app_data: &Path, id: &str, version: &str, mut record: serde_json::Value) -> PathBuf {
         let folder = app_data.join(PACKS_DIR).join(id);
         let version_folder = folder.join(version).join("data");
         std::fs::create_dir_all(&version_folder).unwrap();
         std::fs::write(version_folder.join("payload.bin"), vec![7u8; 1000]).unwrap();
         std::fs::write(folder.join(version).join(MANIFEST_FILE), MANIFEST_JSON).unwrap();
+        if let Some(fields) = record.as_object_mut() {
+            fields.entry("files").or_insert(serde_json::json!({ "data/payload.bin": 1000, "manifest.json": MANIFEST_JSON.len() }));
+        }
         std::fs::write(folder.join(INSTALLED_FILE), record.to_string()).unwrap();
         folder
     }
 
     fn record(version: &str) -> serde_json::Value {
         serde_json::json!({ "version": version, "packFormat": 1, "appVersions": { "from": "0.1.0" } })
+    }
+
+    fn record_size(version: &str) -> u64 {
+        let mut value = record(version);
+        value.as_object_mut().unwrap().insert("files".into(), serde_json::json!({ "data/payload.bin": 1000, "manifest.json": MANIFEST_JSON.len() }));
+        value.to_string().len() as u64
     }
 
     fn find<'a>(list: &'a PackList, id: &str) -> Option<&'a PackEntry> {
@@ -331,7 +364,7 @@ mod tests {
 
         let unicode = find(&list, "unicode-scripts").unwrap();
         assert_eq!((unicode.status, unicode.installed_version.as_deref()), (PackStatus::Installed, Some("1.0")));
-        assert_eq!(unicode.disk_bytes, 1000 + MANIFEST_JSON.len() as u64 + record("1.0").to_string().len() as u64);
+        assert_eq!(unicode.disk_bytes, 1000 + MANIFEST_JSON.len() as u64 + record_size("1.0"));
         assert_eq!(unicode.download_bytes, Some(52428800));
 
         let german = find(&list, "ocr-german").unwrap();
@@ -368,11 +401,15 @@ mod tests {
         std::fs::write(german.join("4.1/data/payload.bin"), b"short").unwrap();
         let french = install(&app_data, "ocr-french", "4.1", record("4.1"));
         std::fs::write(french.join(INSTALLED_FILE), "not json").unwrap();
-        let japanese = install(&app_data, "ocr-japanese", "4.1", record("4.1"));
-        std::fs::write(japanese.join("4.1").join(MANIFEST_FILE), r#"{"files":{"../installed.json":10}}"#).unwrap();
+        let mut escaping = record("4.1");
+        escaping.as_object_mut().unwrap().insert("files".into(), serde_json::json!({ "manifest.json": MANIFEST_JSON.len(), "../installed.json": 10 }));
+        install(&app_data, "ocr-japanese", "4.1", escaping);
+        let mut unlisted_manifest = record("1.0");
+        unlisted_manifest.as_object_mut().unwrap().insert("files".into(), serde_json::json!({ "data/payload.bin": 1000 }));
+        install(&app_data, "other-target-only", "1.0", unlisted_manifest);
 
         let list = list_packs_in(&fixture(), &app_data, MAC, APP);
-        for id in ["unicode-scripts", "ocr-german", "ocr-french", "ocr-japanese"] {
+        for id in ["unicode-scripts", "ocr-german", "ocr-french", "ocr-japanese", "other-target-only"] {
             assert_eq!(find(&list, id).unwrap().status, PackStatus::Damaged, "{id}");
         }
         assert_eq!(find(&list, "ocr-french").unwrap().installed_version, None);
@@ -439,7 +476,9 @@ mod tests {
             "id": id, "name": "n", "description": "d", "toolIds": [], "license": "l", "version": version,
             "minPackFormat": 1, "appVersions": { "from": "0.1" }, "payloads": []
         });
-        for packs in [vec![pack("../escape", "1")], vec![pack("a", "1"), pack("a", "1")], vec![pack("a", "one")]] {
+        let mut bad_checksum = pack("a", "1");
+        bad_checksum["payloads"] = serde_json::json!([{ "target": "all", "downloadBytes": 1, "installedBytes": 1, "sha256": "ABC" }]);
+        for packs in [vec![pack("../escape", "1")], vec![pack("a", "1"), pack("a", "1")], vec![pack("a", "one")], vec![pack("a", "1-/../x")], vec![bad_checksum]] {
             assert!(parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": packs }).to_string()).is_err());
         }
     }
