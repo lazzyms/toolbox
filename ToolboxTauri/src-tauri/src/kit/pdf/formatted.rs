@@ -1,15 +1,16 @@
 //! Formatted PDF: a document typed in Toolbox, sent as ordered blocks rather than markup, laid out into a new PDF.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::kit::common::limits::{self, ToolLimits};
 use crate::kit::common::{note_renamed, OutputLocation, OutputNaming};
 use crate::kit::contracts::{JobOutcome, LimitKind, ToolError};
+use crate::kit::images::source::{self, ImageFamily};
 use crate::kit::pdf::convert::{page_count, Margins, Orientation, PageSize};
 use crate::kit::pdf::font_resolver::{FontResolver, SystemFontLookup};
-use crate::kit::pdf::layout::{assemble, Align, Assembly, Block, FontBook, Flow, Geometry, Paragraph, Span, Style, Theme, PAGE_COUNT, PAGE_NUMBER};
+use crate::kit::pdf::layout::{assemble, Align, Assembly, Block, FontBook, Flow, Geometry, Paragraph, Picture, Span, Style, Theme, PAGE_COUNT, PAGE_NUMBER};
 use crate::packs::uninstall::RunPacks;
 
 pub const COMMAND: &str = "create_formatted_pdf";
@@ -45,7 +46,8 @@ pub struct ListItem {
 }
 
 /// One block of the document. Headings are drawn bold, so they carry plain text; paragraphs and list items carry runs.
-/// A table carries its rows of plain cell text, and with `header_row` its first row is the header.
+/// A table carries its rows of plain cell text, and with `header_row` its first row is the header. An image carries the
+/// path of a file on this device, read when the PDF is saved.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum DocumentBlock {
@@ -56,6 +58,7 @@ pub enum DocumentBlock {
     BulletedList { items: Vec<ListItem> },
     NumberedList { items: Vec<ListItem> },
     Table { header_row: bool, rows: Vec<Vec<String>> },
+    Image { path: PathBuf },
     PageBreak,
 }
 
@@ -67,12 +70,15 @@ impl DocumentBlock {
             Self::Paragraph { runs: paragraph } => runs(paragraph),
             Self::BulletedList { items } | Self::NumberedList { items } => items.iter().map(|item| runs(&item.runs)).sum(),
             Self::Table { rows, .. } => rows.iter().flatten().map(String::len).sum(),
+            Self::Image { path } => path.as_os_str().len(),
             Self::PageBreak => 0,
         }
     }
 
-    /// Refuses a table that is not a grid of rows with the same number of cells, or that holds more than a table may.
+    /// Refuses a table that is not a grid of rows with the same number of cells, or that holds more than a table may,
+    /// and an image that is not a file path on this device or not a kind of image a PDF can hold.
     fn check(&self) -> Result<(), ToolError> {
+        if let Self::Image { path } = self { return check_image_path(path); }
         let Self::Table { rows, .. } = self else { return Ok(()) };
         let columns = rows.first().map_or(0, Vec::len);
         if rows.is_empty() || columns == 0 { return Err(ToolError::invalid_input("A table needs at least one row and one column.")); }
@@ -91,6 +97,39 @@ impl DocumentBlock {
         }
         Ok(())
     }
+}
+
+/// The name an image is shown by in messages: its file name.
+fn image_name(path: &Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
+}
+
+/// Images are only read from this device, so a web address, or any path that is not a full path, is refused.
+fn check_image_path(path: &Path) -> Result<(), ToolError> {
+    if !path.is_absolute() {
+        return Err(ToolError::invalid_input(format!("Images are read from this device only, so {} can't be added. Save the image to your disk and choose it there.", path.display())));
+    }
+    if ImageFamily::of(path) == ImageFamily::Other {
+        return Err(ToolError::invalid_input(format!("{} can't be added. Choose a PNG, JPEG, WebP, HEIC, HEIF or TIFF image.", image_name(path))));
+    }
+    Ok(())
+}
+
+/// Reads an image block's file as the PDF is saved, turned upright by its orientation tag. A TIFF gives its first page.
+fn load_picture(path: &Path) -> Result<Picture, ToolError> {
+    let name = image_name(path);
+    if !path.is_file() {
+        return Err(ToolError::invalid_input(format!("{name} is missing. It was at {}. Nothing was written. Choose the image again or remove its block, then save.", path.display())));
+    }
+    limits::SIGNATURE_IMAGE.check(path).map_err(|error| ToolError { message: format!("{name} can't be added. {}", error.message), ..error })?;
+    let decoded = source::decode(path).map_err(|error| ToolError::invalid_input(format!("{name} can't be read as an image: {error}")))?;
+    let orientation = decoded.orientation;
+    let mut image = decoded.into_first_page();
+    if let Some(orientation) = orientation { image.apply_orientation(orientation); }
+    Picture::from_image(image, None).map_err(|_| ToolError::limit_exceeded(
+        LimitKind::Dimensions,
+        format!("{name} is too large to place in a PDF. The limit is 40 megapixels. Make it smaller and try again."),
+    ))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,7 +218,7 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
     let result = (|| {
         let document = &request.document;
         document.blocks.iter().try_for_each(DocumentBlock::check)?;
-        let blocks = layout_blocks(&document.blocks);
+        let (blocks, images) = layout_blocks(&document.blocks);
         if blocks.is_empty() { return Err(ToolError::invalid_input("The document is empty. Add some text and try again.")); }
         if document.font.family.trim().is_empty() { return Err(ToolError::invalid_input("Choose a font for the document.")); }
         if !document.font.size.is_finite() || !FONT_SIZES.contains(&document.font.size) {
@@ -194,6 +233,9 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
                 format!("The document is larger than the {} limit for one PDF. Split it into smaller documents and try again.", limits::bytes_label(limits.max_bytes)),
             ));
         }
+
+        // Each image file is read once, now, so a missing one fails the save before anything is written.
+        let pictures = images.iter().map(|path| load_picture(path)).collect::<Result<Vec<_>, _>>()?;
 
         let size = page.size();
         let theme = Theme::new(&document.font.family, CODE_FAMILY, document.font.size, false);
@@ -216,7 +258,7 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
             let bottom = edge(&page.footer_blocks(("9999", "9999")), "footer")?;
             Geometry { top, bottom, ..Geometry::uniform(size.0, size.1, margin) }
         };
-        let mut flow = Flow::new(&mut book, theme, &[], geometry);
+        let mut flow = Flow::new(&mut book, theme, &pictures, geometry);
         flow.blocks(&blocks)?;
         let footer = page.footer_blocks((&PAGE_NUMBER.to_string(), &PAGE_COUNT.to_string()));
         flow.bands(&header, &footer, inset, inset)?;
@@ -224,7 +266,7 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
         let count = laid.pages.len();
         limits.check_made_pages(count)?;
         let mut pdf = assemble(&book, Assembly {
-            size, pages: laid.pages, pictures: &[], bookmarks: &laid.bookmarks, anchors: &laid.anchors,
+            size, pages: laid.pages, pictures: &pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors,
             title: Some(&document.title), author: Some(&document.author),
         })?;
 
@@ -240,8 +282,10 @@ fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontR
 
 /// The document's blocks for layout, in order. Blank blocks, list items and table rows are left out, and so are page breaks
 /// with nothing before or after them. A numbered list that follows another across page breaks continues its numbering.
-fn layout_blocks(blocks: &[DocumentBlock]) -> Vec<Block> {
+/// The image files come back in the order the image blocks first name them, each once; `Block::Image` indexes them.
+fn layout_blocks(blocks: &[DocumentBlock]) -> (Vec<Block>, Vec<&Path>) {
     let mut laid: Vec<Block> = Vec::new();
+    let mut images: Vec<&Path> = Vec::new();
     let mut breaks = 0;
     // The next number of the last numbered list, while only page breaks have followed it.
     let mut continued: Option<u64> = None;
@@ -278,12 +322,16 @@ fn layout_blocks(blocks: &[DocumentBlock]) -> Vec<Block> {
                 if body.is_empty() && head.iter().all(Vec::is_empty) { continue; }
                 Block::Table { aligns: Vec::new(), head, rows: body }
             }
+            DocumentBlock::Image { path } => Block::Image(images.iter().position(|seen| *seen == path.as_path()).unwrap_or_else(|| {
+                images.push(path);
+                images.len() - 1
+            })),
         };
         laid.extend(std::iter::repeat_n(Block::PageBreak, std::mem::take(&mut breaks)));
         laid.push(made);
         continued = None;
     }
-    laid
+    (laid, images)
 }
 
 /// The runs as styled spans with trailing blank space removed, or nothing when they hold no text.
@@ -516,11 +564,15 @@ mod tests {
             json!([{ "kind": "table", "headerRow": true, "rows": [["Room"]], "caption": "Rooms" }]),
             json!([{ "kind": "table", "headerRow": true, "rows": [[{ "text": "Room", "bold": true, "italic": false }]] }]),
             json!([{ "kind": "table", "header_row": true, "rows": [["Room"]] }]),
+            json!([{ "kind": "image" }]),
+            json!([{ "kind": "image", "src": "https://example.com/floorplan.png" }]),
+            json!([{ "kind": "image", "path": "/Users/sam/floorplan.png", "width": 200 }]),
+            json!([{ "kind": "image", "path": "/Users/sam/floorplan.png", "data": "iVBORw0KGgo=" }]),
         ] {
             assert!(serde_json::from_value::<FormattedPdfRequest>(document(rejected.clone())).is_err(), "{rejected} must be refused");
         }
         let blank_title = request(short_blocks(), Path::new("/tmp/x.pdf"));
-        assert_eq!(layout_blocks(&blank_title.document.blocks).len(), 5);
+        assert_eq!(layout_blocks(&blank_title.document.blocks).0.len(), 5);
     }
 
     #[test]
@@ -942,6 +994,124 @@ mod tests {
         assert!(run(&request(json!([table(true, &most), table(false, &[&[full.as_str()]])]), &path)).error().is_none());
         let blank = run(&request(json!([table(true, &[&[" ", ""], &["", " "]])]), &root.join("blank.pdf")));
         assert!(blank.error().is_some_and(|error| error.message.contains("empty")), "{:?}", blank.error());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Writes a solid PNG of the given pixel size.
+    fn png(path: &Path, width: u32, height: u32) {
+        image::RgbImage::from_pixel(width, height, image::Rgb([30, 90, 160])).save(path).unwrap();
+    }
+
+    /// Where each image is drawn on a page, as its name and the width, height, left and bottom of its placement.
+    fn placed_images(document: &Document, page: u32) -> Vec<(String, [f32; 4])> {
+        let content = lopdf::content::Content::decode(&document.get_page_content(document.get_pages()[&page])).unwrap();
+        let mut placed = Vec::new();
+        let mut matrix = None;
+        for operation in content.operations {
+            match operation.operator.as_str() {
+                "cm" => {
+                    let values = operation.operands.iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>();
+                    matrix = Some([values[0], values[3], values[4], values[5]]);
+                }
+                "Do" => placed.push((String::from_utf8_lossy(operation.operands[0].as_name().unwrap()).into_owned(), matrix.take().unwrap())),
+                _ => {}
+            }
+        }
+        placed
+    }
+
+    /// The pixel width and height of every image XObject in the PDF, smallest first.
+    fn image_objects(document: &Document) -> Vec<(i64, i64)> {
+        let mut sizes = document.objects.values()
+            .filter_map(|object| object.as_stream().ok())
+            .filter(|stream| stream.dict.get(b"Subtype").and_then(Object::as_name).is_ok_and(|name| name == b"Image"))
+            .filter(|stream| stream.dict.get(b"ColorSpace").and_then(Object::as_name).is_ok_and(|name| name == b"DeviceRGB"))
+            .map(|stream| (stream.dict.get(b"Width").unwrap().as_i64().unwrap(), stream.dict.get(b"Height").unwrap().as_i64().unwrap()))
+            .collect::<Vec<_>>();
+        sizes.sort();
+        sizes
+    }
+
+    #[test]
+    fn an_image_block_is_embedded_once_scaled_to_fit_the_content_width_and_saves_byte_identical() {
+        let root = sandbox("images");
+        let wide = root.join("floorplan.png");
+        let small = root.join("key.png");
+        png(&wide, 2000, 500);
+        png(&small, 200, 100);
+        let blocks = json!([
+            paragraph("Floor plan"),
+            { "kind": "image", "path": wide },
+            { "kind": "image", "path": small },
+            { "kind": "image", "path": wide },
+        ]);
+        let path = root.join("plan.pdf");
+        let outcome = run(&request(blocks.clone(), &path));
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let document = Document::load(&path).unwrap();
+        // The same file is embedded once, at its full pixel size.
+        assert_eq!(image_objects(&document), [(200, 100), (2000, 500)]);
+        let placed = placed_images(&document, 1);
+        assert_eq!(placed.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["Im0", "Im1", "Im0"]);
+        let content_width = 595.28 - 2. * 72.;
+        // A4 with normal margins: the wide image fills the content width and keeps its shape; the small one keeps its size.
+        let [width, height, left, _] = placed[0].1;
+        assert!((width - content_width).abs() < 0.05 && (height - content_width / 4.).abs() < 0.05 && (left - 72.).abs() < 0.05, "{placed:?}");
+        let [width, height, left, _] = placed[1].1;
+        assert!((width - 150.).abs() < 0.05 && (height - 75.).abs() < 0.05 && (left - 72.).abs() < 0.05, "{placed:?}");
+        assert!(placed.iter().all(|(_, [width, _, left, _])| left + width <= 595.28 - 72. + 0.05), "{placed:?}");
+        assert!(document.extract_text(&[1]).unwrap().contains("Floor plan"));
+
+        // The same document with the same files saves the same bytes, and the image files are left as they were.
+        let again = root.join("again.pdf");
+        assert!(run(&request(blocks, &again)).error().is_none());
+        assert_eq!(fs::read(&path).unwrap(), fs::read(&again).unwrap());
+        assert_eq!(image::image_dimensions(&wide).unwrap(), (2000, 500));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_missing_image_fails_the_save_naming_the_image_and_writes_nothing() {
+        let root = sandbox("missing_image");
+        let present = root.join("key.png");
+        png(&present, 20, 20);
+        let missing = root.join("Move").join("floorplan.png");
+        let path = root.join("plan.pdf");
+        let outcome = run(&request(json!([paragraph("Floor plan"), { "kind": "image", "path": present }, { "kind": "image", "path": missing }]), &path));
+        let error = outcome.error().expect("a missing image fails the save");
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
+        assert!(error.message.starts_with("floorplan.png is missing."), "{error:?}");
+        assert!(error.message.contains(&missing.display().to_string()), "{error:?}");
+        assert!(outcome.output_paths().is_empty());
+        let mut left = fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().file_name()).collect::<Vec<_>>();
+        left.sort();
+        assert_eq!(left, ["key.png"], "nothing is written beside the image");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_are_only_read_from_this_device_and_must_be_images_a_pdf_can_hold() {
+        let root = sandbox("image_checks");
+        let path = root.join("plan.pdf");
+        let broken = root.join("broken.png");
+        fs::write(&broken, b"not a picture").unwrap();
+        let large = root.join("large.png");
+        fs::File::create(&large).unwrap().set_len(21 * 1024 * 1024).unwrap();
+        let gif = root.join("animation.gif");
+        png(&root.join("frame.png"), 4, 4);
+        fs::copy(root.join("frame.png"), &gif).unwrap();
+        for (image, kind, message) in [
+            (json!("https://example.com/floorplan.png"), ErrorKind::InvalidInput, "read from this device only, so https://example.com/floorplan.png"),
+            (json!("floorplan.png"), ErrorKind::InvalidInput, "read from this device only, so floorplan.png"),
+            (json!(gif), ErrorKind::InvalidInput, "animation.gif can't be added. Choose a PNG, JPEG, WebP, HEIC, HEIF or TIFF image."),
+            (json!(broken), ErrorKind::InvalidInput, "broken.png can't be read as an image"),
+            (json!(large), ErrorKind::LimitExceeded { limit: LimitKind::FileSize }, "large.png can't be added. Larger than the 20 MB limit"),
+        ] {
+            let outcome = run(&request(json!([paragraph("Floor plan"), { "kind": "image", "path": image }]), &path));
+            let error = outcome.error().unwrap_or_else(|| panic!("{image} must be refused"));
+            assert!(error.kind == kind && error.message.contains(message), "{image}: {error:?}");
+            assert!(!path.exists());
+        }
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDown, ArrowUp, List, ListOrdered, Plus, SeparatorHorizontal, Table, Trash2 } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { ArrowDown, ArrowUp, CircleX, Image as ImageIcon, ImageOff, List, ListOrdered, Plus, SeparatorHorizontal, Table, Trash2 } from "lucide-react";
 import type { JobOutcome, ToolDefinition } from "../contracts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -17,14 +18,15 @@ import { RunStateContext } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { chooseCreatedDocumentSavePath } from "../components/saveStep";
 import { failedOutcome, parseToolResult } from "../jobOutcome";
-import { formatKeyAria, formatKeyLabel, matchFormatKey, shortcutTarget, type FormatKeyId } from "../shortcuts";
+import { TOOL_DROP_EVENT, toolDrop, type DropPoint } from "../hooks/useShellBridge";
+import { formatKeyAria, formatKeyLabel, isWindows, matchFormatKey, shortcutTarget, type FormatKeyId } from "../shortcuts";
 import {
   RichField, insertIntoRuns, normalizeRuns, plainRuns, runsText, selectionOffsets, setSelectionOffsets, sliceRuns, splitRunLines, type Run,
 } from "./FormattedPdfRichField";
 
 type TextKind = "heading1" | "heading2" | "heading3" | "paragraph";
 type ListKind = "bulletedList" | "numberedList";
-export type BlockKind = TextKind | ListKind | "table" | "pageBreak";
+export type BlockKind = TextKind | ListKind | "table" | "image" | "pageBreak";
 
 /** A list item or a table cell: one field of text. */
 type Item = { id: number; runs: Run[] };
@@ -32,17 +34,19 @@ type Block =
   | { id: number; kind: TextKind; runs: Run[] }
   | { id: number; kind: ListKind; items: Item[] }
   | { id: number; kind: "table"; headerRow: boolean; rows: Item[][] }
+  /** A picture on the user's disk, read when the PDF is saved. */
+  | { id: number; kind: "image"; path: string }
   | { id: number; kind: "pageBreak" };
 type TableBlock = Extract<Block, { kind: "table" }>;
 
 const kindLabels: Record<BlockKind, string> = {
   heading1: "Heading 1", heading2: "Heading 2", heading3: "Heading 3", paragraph: "Paragraph",
-  bulletedList: "Bulleted list", numberedList: "Numbered list", table: "Table", pageBreak: "Page break",
+  bulletedList: "Bulleted list", numberedList: "Numbered list", table: "Table", image: "Image", pageBreak: "Page break",
 };
 const gutterLabels: Record<BlockKind, string> = {
-  heading1: "H1", heading2: "H2", heading3: "H3", paragraph: "Text", bulletedList: "List", numberedList: "List", table: "Table", pageBreak: "Break",
+  heading1: "H1", heading2: "H2", heading3: "H3", paragraph: "Text", bulletedList: "List", numberedList: "List", table: "Table", image: "Image", pageBreak: "Break",
 };
-const typeChoices: readonly (Exclude<BlockKind, "table" | "pageBreak"> & FormatKeyId)[] = ["paragraph", "heading1", "heading2", "heading3", "bulletedList", "numberedList"];
+const typeChoices: readonly (Exclude<BlockKind, "table" | "image" | "pageBreak"> & FormatKeyId)[] = ["paragraph", "heading1", "heading2", "heading3", "bulletedList", "numberedList"];
 
 type PageSize = "a4" | "letter" | "legal";
 type Orientation = "portrait" | "landscape";
@@ -76,15 +80,25 @@ const pageBreak = (): Block => ({ id: nextId(), kind: "pageBreak" });
 const MAX_TABLE_COLUMNS = 20;
 const MAX_TABLE_ROWS = 1000;
 /** A new table has three columns, a header row and two rows under it. */
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "heic", "heif", "tif", "tiff"];
+const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
+/** Whether a file is a picture create_formatted_pdf can place, judged by its extension as the native side judges it. */
+const isImagePath = (path: string) => {
+  const extension = fileName(path).split(".").slice(1).pop();
+  return extension !== undefined && IMAGE_EXTENSIONS.includes(extension.toLowerCase());
+};
+const imageBlock = (path: string): Block => ({ id: nextId(), kind: "image", path });
 const table = (): TableBlock => ({ id: nextId(), kind: "table", headerRow: true, rows: Array.from({ length: 3 }, () => Array.from({ length: 3 }, () => item())) });
 
 const isList = (block: Block): block is Extract<Block, { kind: ListKind }> => block.kind === "bulletedList" || block.kind === "numberedList";
 const isTable = (block: Block): block is TableBlock => block.kind === "table";
-const isText = (block: Block): block is Extract<Block, { kind: TextKind }> => block.kind !== "pageBreak" && !isList(block) && !isTable(block);
+/** A block with no text of its own: a page break or an image. */
+const isFixed = (block: Block): block is Extract<Block, { kind: "pageBreak" | "image" }> => block.kind === "pageBreak" || block.kind === "image";
+const isText = (block: Block): block is Extract<Block, { kind: TextKind }> => !isFixed(block) && !isList(block) && !isTable(block);
 const blank = (runs: readonly Run[]) => runsText(runs).trim() === "";
 /** A block's fields in order: a list's items, or a table's cells row by row. */
 const fieldsOf = (block: Extract<Block, { kind: ListKind | "table" }>) => isList(block) ? block.items : block.rows.flat();
-const blockIsBlank = (block: Block) => block.kind === "pageBreak" || (isText(block) ? blank(block.runs) : fieldsOf(block).every((entry) => blank(entry.runs)));
+const blockIsBlank = (block: Block) => block.kind === "pageBreak" || (block.kind !== "image" && (isText(block) ? blank(block.runs) : fieldsOf(block).every((entry) => blank(entry.runs))));
 const firstKey = (block: Block) => String(isList(block) || isTable(block) ? fieldsOf(block)[0].id : block.id);
 
 /** Where a field sits: the block, and the list item (or table cell, counted row by row) for list and table blocks. */
@@ -101,7 +115,7 @@ const locate = (blocks: readonly Block[], key: string | null): Place | null => {
 };
 const placeKey = ({ block, itemIndex }: Place) => String(isList(block) || isTable(block) ? fieldsOf(block)[itemIndex ?? 0].id : block.id);
 const placeRuns = (place: Place): Run[] =>
-  place.block.kind === "pageBreak" ? [] : isText(place.block) ? place.block.runs : fieldsOf(place.block)[place.itemIndex ?? 0].runs;
+  isFixed(place.block) ? [] : isText(place.block) ? place.block.runs : fieldsOf(place.block)[place.itemIndex ?? 0].runs;
 
 /** The first number each numbered list shows: numbering runs on across page breaks, as the PDF numbers it. */
 const listStarts = (blocks: readonly Block[]) => {
@@ -121,6 +135,7 @@ type RequestBlock =
   | { kind: "paragraph"; runs: Run[] }
   | { kind: ListKind; items: { runs: Run[] }[] }
   | { kind: "table"; headerRow: boolean; rows: string[][] }
+  | { kind: "image"; path: string }
   | { kind: "pageBreak" };
 
 /** A table's cell text, without its blank rows and columns; the header row stays only while its row is kept. */
@@ -135,6 +150,7 @@ const requestTable = (block: TableBlock): RequestBlock[] => {
 /** What create_formatted_pdf receives: blank blocks and items are left out, headings carry their text only. */
 const requestBlocks = (blocks: readonly Block[]) => blocks.flatMap((block): RequestBlock[] => {
   if (block.kind === "pageBreak") return [{ kind: "pageBreak" }];
+  if (block.kind === "image") return [{ kind: "image", path: block.path }];
   if (isTable(block)) return requestTable(block);
   if (isList(block)) {
     const items = block.items.filter((entry) => !blank(entry.runs)).map((entry) => ({ runs: normalizeRuns(entry.runs) }));
@@ -158,6 +174,14 @@ const spliceParts = (runs: readonly Run[], start: number, end: number, parts: re
 
 type Selection = { key: string; start: number; end: number };
 
+/** The image a failed save names as missing, by its path in the message ("… It was at {path}. …"). */
+const missingImage = (outcomes: readonly JobOutcome[], blocks: readonly Block[]) => {
+  const failure = outcomes.find((outcome) => outcome.state === "failed")?.failure;
+  if (failure?.kind !== "invalidInput") return null;
+  const paths = blocks.flatMap((block) => block.kind === "image" && failure.message.includes(`It was at ${block.path}.`) ? [block.path] : []);
+  return paths.sort((a, b) => b.length - a.length)[0] ?? null;
+};
+
 export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const [blocks, setBlocks] = useState<Block[]>(() => [textBlock()]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -167,6 +191,8 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const [page, setPage] = useState<PageSettings>(defaultPage);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<JobOutcome[] | null>(null);
+  /** The path of an image the last save couldn't find; it stays flagged while a block still points there. */
+  const [missing, setMissing] = useState<string | null>(null);
   const list = useRef<HTMLOListElement>(null);
   const focusNext = useRef<Selection | null>(null);
   const lastSelection = useRef<Selection | null>(null);
@@ -283,9 +309,9 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   };
 
   /** Applies a block type: headings and paragraphs keep the caret, lists take one item per line and give it back. */
-  const changeKind = (place: Place, start: number, end: number, kind: Exclude<BlockKind, "table" | "pageBreak">) => {
+  const changeKind = (place: Place, start: number, end: number, kind: Exclude<BlockKind, "table" | "image" | "pageBreak">) => {
     const { index, block, itemIndex } = place;
-    if (block.kind === "pageBreak" || isTable(block) || block.kind === kind) return;
+    if (isFixed(block) || isTable(block) || block.kind === kind) return;
     if (isList(block)) {
       if (kind === "bulletedList" || kind === "numberedList") {
         replace(index, [{ ...block, kind }], { key: placeKey(place), start, end });
@@ -312,7 +338,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
   const insertPageBreak = (place: Place, start: number, end: number) => {
     const { index, block, itemIndex } = place;
     const added = pageBreak();
-    if (block.kind === "pageBreak" || isTable(block)) { replace(index, [block, added], { key: String(added.id), start: 0, end: 0 }); return; }
+    if (isFixed(block) || isTable(block)) { replace(index, [block, added], { key: String(added.id), start: 0, end: 0 }); return; }
     const runs = placeRuns(place);
     const before = sliceRuns(runs, 0, start);
     const after = sliceRuns(runs, end);
@@ -341,6 +367,59 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     if (isText(block) && blockIsBlank(block)) replace(index, [added], focus);
     else replace(index, [block, added], focus);
   };
+
+  /**
+   * Adds images, in order, next to a block: after it, or before it when `before` is set. An empty paragraph is
+   * replaced. Without a block, they go after the block the caret was last in. Focus moves to the last image.
+   */
+  const insertImages = (paths: readonly string[], target: { index: number; before: boolean } | null = null) => {
+    if (paths.length === 0) return;
+    const remembered = lastSelection.current;
+    const { index, before } = target ?? { index: ((remembered && locate(blocks, remembered.key)) || currentPlace).index, before: false };
+    const block = blocks[index];
+    const added = paths.map(imageBlock);
+    focusNext.current = { key: String(added[added.length - 1].id), start: 0, end: 0 };
+    if (isText(block) && blockIsBlank(block)) { setBlocks([...blocks.slice(0, index), ...added, ...blocks.slice(index + 1)]); return; }
+    const at = before ? index : index + 1;
+    setBlocks([...blocks.slice(0, at), ...added, ...blocks.slice(at)]);
+  };
+
+  const pickImage = async () => {
+    const picked = await open({ multiple: false, directory: false, filters: [{ name: "Image", extensions: IMAGE_EXTENSIONS }] });
+    return typeof picked === "string" ? picked : null;
+  };
+
+  const addPickedImage = async () => {
+    const path = await pickImage();
+    if (path) insertImages([path]);
+  };
+
+  /** Points an image block at another file, as Choose image… on a missing image does. */
+  const replaceImage = async (index: number, block: Extract<Block, { kind: "image" }>) => {
+    const path = await pickImage();
+    if (path) replace(index, [{ ...block, path }], { key: String(block.id), start: 0, end: 0 });
+  };
+
+  /** Images dropped from Finder or File Explorer go where they were dropped: before the block under the upper half of it, after it otherwise. */
+  const dropImages = (paths: readonly string[], point: DropPoint | null) => {
+    const images = paths.filter(isImagePath);
+    if (saving || images.length === 0) return;
+    const under = point ? document.elementFromPoint(point.x, point.y)?.closest<HTMLElement>(".formatted-pdf-block") : null;
+    const index = under && list.current?.contains(under) ? Array.from(list.current.children).indexOf(under) : -1;
+    if (index === -1) { insertImages(images); return; }
+    const box = under!.getBoundingClientRect();
+    insertImages(images, { index, before: point!.y < box.top + box.height / 2 });
+  };
+  const dropRef = useRef(dropImages);
+  dropRef.current = dropImages;
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const drop = toolDrop(event);
+      if (drop) dropRef.current(drop.paths, drop.point);
+    };
+    window.addEventListener(TOOL_DROP_EVENT, listener);
+    return () => window.removeEventListener(TOOL_DROP_EVENT, listener);
+  }, []);
 
   /** Adds a row under a table's last row, or a column after its last column, with the caret in the first new cell. */
   const growTable = (index: number, block: TableBlock, add: "row" | "column") => {
@@ -421,7 +500,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
       act(id, place, offsets.start, offsets.end);
       return;
     }
-    if (place.block.kind === "pageBreak") {
+    if (isFixed(place.block)) {
       if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); remove(place.index); }
       return;
     }
@@ -441,10 +520,15 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     const outputPath = await chooseCreatedDocumentSavePath({ title: "Save the PDF", extension: "pdf" }, name, `${pageSizes[page.pageSize].name}${page.orientation === "landscape" ? " landscape" : ""}, Liberation Serif 11 pt`);
     if (!outputPath) return;
     setSaving(true);
+    setMissing(null);
     reportRunning?.(true);
     try {
       const request = { document: { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page, font: FONT }, outputPath };
-      setSaved(parseToolResult(await invoke("create_formatted_pdf", { request })));
+      const outcomes = parseToolResult(await invoke("create_formatted_pdf", { request }));
+      // A missing image keeps the draft open on the block to fix, as the board shows, with nothing to show in results.
+      const lost = missingImage(outcomes, blocks);
+      setMissing(lost);
+      setSaved(lost ? null : outcomes);
     } catch (error) {
       setSaved([failedOutcome(outputPath, "processing", error instanceof Error ? error.message : String(error))]);
     } finally {
@@ -461,11 +545,15 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     setAuthor("");
     setPage(defaultPage);
     setSaved(null);
+    setMissing(null);
     lastSelection.current = null;
     focusNext.current = { key: String(first.id), start: 0, end: 0 };
   };
 
   const richOff = saving || (current.kind !== "paragraph" && !isList(current));
+  const fixedKind = isFixed(current) || isTable(current);
+  const missingBlock = missing === null ? null : blocks.find((block) => block.kind === "image" && block.path === missing) ?? null;
+  const missingName = missing === null ? "" : fileName(missing);
   const keepFocus = (event: { preventDefault: () => void }) => event.preventDefault();
   const tool = (id: FormatKeyId, label: string, control: ReactNode) => (
     <Tooltip>
@@ -512,11 +600,11 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                     id="formatted-pdf-block-type"
                     size="sm"
                     value={current.kind}
-                    disabled={saving || current.kind === "pageBreak" || current.kind === "table"}
+                    disabled={saving || fixedKind}
                     onChange={(event) => fromToolbar(event.target.value as FormatKeyId)}
                   >
                     {typeChoices.map((kind) => <NativeSelectOption key={kind} value={kind}>{kindLabels[kind]}</NativeSelectOption>)}
-                    {(current.kind === "pageBreak" || current.kind === "table") && <NativeSelectOption value={current.kind} disabled>{kindLabels[current.kind]}</NativeSelectOption>}
+                    {fixedKind && <NativeSelectOption value={current.kind} disabled>{kindLabels[current.kind]}</NativeSelectOption>}
                   </NativeSelect>
                   <Separator orientation="vertical" className="formatted-pdf-toolbar-separator" />
                   {tool("bold", "Bold", (
@@ -527,18 +615,30 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                   ))}
                   <Separator orientation="vertical" className="formatted-pdf-toolbar-separator" />
                   {tool("bulletedList", "Bulleted list", (
-                    <Toggle size="sm" aria-label="Bulleted list" aria-keyshortcuts={formatKeyAria("bulletedList")} pressed={current.kind === "bulletedList"} disabled={saving || current.kind === "pageBreak" || current.kind === "table"} onMouseDown={keepFocus} onPressedChange={() => fromToolbar("bulletedList")}><List /></Toggle>
+                    <Toggle size="sm" aria-label="Bulleted list" aria-keyshortcuts={formatKeyAria("bulletedList")} pressed={current.kind === "bulletedList"} disabled={saving || fixedKind} onMouseDown={keepFocus} onPressedChange={() => fromToolbar("bulletedList")}><List /></Toggle>
                   ))}
                   {tool("numberedList", "Numbered list", (
-                    <Toggle size="sm" aria-label="Numbered list" aria-keyshortcuts={formatKeyAria("numberedList")} pressed={current.kind === "numberedList"} disabled={saving || current.kind === "pageBreak" || current.kind === "table"} onMouseDown={keepFocus} onPressedChange={() => fromToolbar("numberedList")}><ListOrdered /></Toggle>
+                    <Toggle size="sm" aria-label="Numbered list" aria-keyshortcuts={formatKeyAria("numberedList")} pressed={current.kind === "numberedList"} disabled={saving || fixedKind} onMouseDown={keepFocus} onPressedChange={() => fromToolbar("numberedList")}><ListOrdered /></Toggle>
                   ))}
                   <Separator orientation="vertical" className="formatted-pdf-toolbar-separator" />
                   <Button variant="ghost" size="sm" disabled={saving} onMouseDown={keepFocus} onClick={insertTable}><Table />Table</Button>
+                  <Button variant="ghost" size="sm" disabled={saving} onMouseDown={keepFocus} onClick={() => void addPickedImage()}><ImageIcon />Image…</Button>
                   {tool("pageBreak", "Page break", (
                     <Button variant="ghost" size="sm" aria-keyshortcuts={formatKeyAria("pageBreak")} disabled={saving} onMouseDown={keepFocus} onClick={() => fromToolbar("pageBreak")}><SeparatorHorizontal />Page break</Button>
                   ))}
                 </div>
               </TooltipProvider>
+              {missingBlock && (
+                <Card className="formatted-pdf-alert border-destructive py-0" role="alert">
+                  <CardContent className="formatted-pdf-alert-content">
+                    <CircleX aria-hidden="true" className="text-destructive" />
+                    <p>
+                      <strong>The PDF wasn't saved: {missingName} is missing</strong>
+                      <span>It was at {missing} when you added it. Nothing was written and your draft is kept. Choose the image again or remove its block, then save.</span>
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
               <ol ref={list} className="formatted-pdf-blocks" aria-label="Document blocks, in order">
                 {blocks.map((block, index) => {
                   const number = index + 1;
@@ -550,6 +650,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                       className="formatted-pdf-block"
                       data-kind={block.kind}
                       data-selected={index === currentPlace.index}
+                      data-missing={block === missingBlock || undefined}
                       aria-label={isList(block)
                         ? `Block ${number}, ${name}, ${block.items.length} ${block.items.length === 1 ? "item" : "items"}`
                         : isTable(block) ? `Block ${number}, ${name}, ${block.rows[0].length} ${block.rows[0].length === 1 ? "column" : "columns"}${block.headerRow ? ", header row" : ""}` : undefined}
@@ -566,6 +667,30 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                           onKeyDown={(event) => fieldKeyDown({ index, block, itemIndex: null }, String(block.id), event)}
                         >
                           {name}
+                        </div>
+                      ) : block.kind === "image" ? (
+                        <div
+                          className="formatted-pdf-image"
+                          role="group"
+                          aria-label={`Block ${number}, ${name}, ${fileName(block.path)}`}
+                          tabIndex={0}
+                          data-field-key={block.id}
+                          onFocus={() => { setSelectedKey(String(block.id)); lastSelection.current = { key: String(block.id), start: 0, end: 0 }; }}
+                          onKeyDown={(event) => { if (event.target === event.currentTarget) fieldKeyDown({ index, block, itemIndex: null }, String(block.id), event); }}
+                        >
+                          <span className="formatted-pdf-thumb" aria-hidden="true">{block === missingBlock && <ImageOff className="text-destructive" />}</span>
+                          <span className="formatted-pdf-image-text">
+                            <span className="formatted-pdf-image-name">{fileName(block.path)}</span>
+                            {block === missingBlock
+                              ? <span className="workspace-note text-destructive">Not found at {block.path}</span>
+                              : <span className="workspace-note">Fits the page width. Read from your disk when you save.</span>}
+                            {block === missingBlock && (
+                              <span className="formatted-pdf-image-actions">
+                                <Button variant="outline" size="sm" disabled={saving} onClick={() => void replaceImage(index, block)}>Choose image…</Button>
+                                <Button variant="ghost" size="sm" disabled={saving} onClick={() => remove(index)}>Remove block</Button>
+                              </span>
+                            )}
+                          </span>
                         </div>
                       ) : isList(block) ? (
                         <ListTag className="formatted-pdf-items" start={starts[index] ?? undefined}>
@@ -623,7 +748,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
                 })}
               </ol>
               <p id="formatted-pdf-typing-hint" className="workspace-note">
-                Enter starts a new paragraph or list item, and Enter on an empty item ends the list. Shift+Enter adds a line break. Pasted text keeps its paragraphs. A table cell holds one line, and its blank rows and columns are left out.
+                Enter starts a new paragraph or list item, and Enter on an empty item ends the list. Shift+Enter adds a line break. Pasted text keeps its paragraphs. A table cell holds one line, and its blank rows and columns are left out. Drop an image from {isWindows() ? "File Explorer" : "Finder"} to add it where you drop.
               </p>
             </section>
             <aside className="formatted-pdf-settings" aria-label="Document settings">
@@ -695,9 +820,15 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
           </div>
           <footer className="formatted-pdf-footer">
             {empty && <p id="formatted-pdf-blocker" className="workspace-note">Empty document. Add some text to save a PDF.</p>}
+            {missingBlock && (
+              <p id="formatted-pdf-status" className="formatted-pdf-status" role="status" aria-live="polite">
+                <strong className="text-destructive">Save failed, nothing written</strong>
+                <span className="workspace-note">Fix the image block, then save again</span>
+              </p>
+            )}
             <Button
               variant="default"
-              aria-describedby={empty ? "formatted-pdf-blocker" : undefined}
+              aria-describedby={empty ? "formatted-pdf-blocker" : missingBlock ? "formatted-pdf-status" : undefined}
               disabled={saving || empty}
               onClick={() => void save()}
               className="workspace-primary-action"

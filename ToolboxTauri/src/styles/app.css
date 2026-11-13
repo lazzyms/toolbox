@@ -2667,6 +2667,21 @@ ol.formatted-pdf-items { list-style: decimal; }
 .formatted-pdf-break::before, .formatted-pdf-break::after { content: ""; flex: 1; border-top: 1px dashed var(--border); }
 .formatted-pdf-break:focus-visible { box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
 .formatted-pdf-block-actions { display: flex; gap: 2px; }
+.formatted-pdf-image { display: flex; align-items: center; gap: 12px; min-height: 36px; padding: 4px 0; border-radius: 6px; outline: none; }
+.formatted-pdf-image:focus-visible { box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
+/* The board's placeholder: the picture itself is read only when the PDF is saved. */
+.formatted-pdf-thumb { display: flex; flex: none; align-items: center; justify-content: center; width: 96px; height: 64px; border: 1px solid var(--border); border-radius: 6px; background: repeating-linear-gradient(45deg, var(--muted) 0 6px, var(--background) 6px 12px); }
+.formatted-pdf-block[data-missing] .formatted-pdf-thumb { background: var(--background); }
+.formatted-pdf-thumb > svg { width: 16px; height: 16px; }
+.formatted-pdf-image-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.formatted-pdf-image-name { font-size: 13px; }
+.formatted-pdf-image-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.formatted-pdf-alert-content { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; font-size: 12px; color: var(--muted-foreground); }
+.formatted-pdf-alert-content > svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.formatted-pdf-alert-content p { display: flex; flex-direction: column; gap: 2px; margin: 0; overflow-wrap: anywhere; }
+.formatted-pdf-alert-content strong { color: var(--foreground); font-weight: 600; }
+.formatted-pdf-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0 auto 0 0; font-size: 12px; }
+.formatted-pdf-status strong { font-weight: 600; }
 .formatted-pdf-table { display: grid; gap: 4px; min-width: 0; overflow-x: auto; }
 .formatted-pdf-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .formatted-pdf-table th, .formatted-pdf-table td { border: 1px solid var(--border); padding: 0; text-align: left; vertical-align: top; }
