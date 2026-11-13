@@ -627,3 +627,73 @@ for (const theme of ["light", "dark"] as const) {
         await rows.nth(0).screenshot({ path: testInfo.outputPath(`format-notes-${theme}.png`), animations: "disabled" });
     });
 }
+
+const noChanges = "No changes. No copy was made.";
+const neutralTone = { tone: { brightness: 0, contrast: 0, saturation: 0, exposure: 0 } };
+
+test("a neutral tone step names the skip and the format that avoids it", async ({ page }) => {
+    await openTone(page, ["/photos/a.png"]);
+    await expect(page.getByRole("note").filter({
+        hasText: "This step changes nothing. With no other step, every image is Skipped as No changes, unless you choose another format below.",
+    })).toBeVisible();
+    await toneField(page, "Brightness").fill("10");
+    await expect(page.getByRole("note").filter({ hasText: "Skipped as No changes" })).toHaveCount(0);
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`files a neutral stack cannot change are Skipped as No changes with no Open or Reveal in the ${theme} theme`, async ({ page }, testInfo) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await openResize(page, ["/photos/wide.png", "/photos/large.png"]);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await page.evaluate((message) => {
+            (window as unknown as StackWindow).__processingResults = [
+                { inputPath: "/photos/wide.png", outputPaths: [], detail: message, state: "skipped", failure: null, reason: { code: "noEffectiveChange", message, pointer: null }, warnings: [] },
+                { inputPath: "/photos/large.png", outputPaths: ["/photos/large-resized.png"], detail: "Image saved", state: "succeeded", failure: null, reason: null, warnings: [] },
+            ] as JobOutcome[];
+        }, noChanges);
+        await page.getByRole("button", { name: "Run on 2 images" }).click();
+
+        const rows = page.locator(".result-row");
+        await expect(rows).toHaveCount(2);
+        const skipped = rows.nth(0);
+        await expect(skipped).toHaveAttribute("data-tone", "skip");
+        await expect(skipped).toHaveAttribute("data-state", "skipped");
+        await expect(skipped).toContainText("Skipped");
+        await expect(skipped).toContainText(noChanges);
+        await expect(skipped.getByRole("button")).toHaveCount(0);
+        await expect(page.getByRole("button", { name: /^Open wide/ })).toHaveCount(0);
+        await expect(rows.nth(1)).toHaveAttribute("data-tone", "ok");
+        await expect(page.getByRole("button", { name: "Open large-resized.png" })).toBeVisible();
+        await expect(rows.nth(1).getByRole("button", { name: "Show in Finder" })).toBeVisible();
+
+        const colors = await skipped.evaluate((row, message) => {
+            const text = Array.from(row.querySelectorAll("*")).find((node) => node.childElementCount === 0 && node.textContent?.includes(message));
+            return { row: getComputedStyle(row).backgroundColor, detail: text ? getComputedStyle(text).color : "" };
+        }, noChanges);
+        expect(colors.detail).not.toBe("");
+        expect(colors.detail).not.toBe(colors.row);
+        await skipped.screenshot({ path: testInfo.outputPath(`no-changes-skip-${theme}.png`), animations: "disabled" });
+    });
+}
+
+test("a neutral stack with another format runs as a success that opens the converted copy", async ({ page }) => {
+    await openTone(page, ["/photos/a.png"]);
+    await formatSelect(page).selectOption({ label: "JPEG" });
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-tone.jpg");
+    await page.evaluate(() => {
+        (window as unknown as StackWindow).__processingResults = [
+            { inputPath: "/photos/a.png", outputPaths: ["/photos/a-tone.jpg"], detail: "Image saved", state: "succeeded", failure: null, reason: null, warnings: [] },
+        ] as JobOutcome[];
+    });
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const request = await runRequest(page) as { steps: unknown; format?: unknown };
+    expect(request.steps).toEqual(neutralTone);
+    expect(request.format).toBe("jpg");
+
+    const row = page.locator(".result-row");
+    await expect(row).toHaveCount(1);
+    await expect(row).toHaveAttribute("data-tone", "ok");
+    await expect(row).not.toContainText("No changes");
+    await expect(page.getByRole("button", { name: "Open a-tone.jpg" })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Show in Finder" })).toBeVisible();
+});
