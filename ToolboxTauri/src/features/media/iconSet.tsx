@@ -1,33 +1,99 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import type { ImagePreview } from "../../contracts";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { MediaPanelProps, MediaTool } from "./types";
 
 /** How a non-square master becomes square: centred on a transparent square, or its centred square kept. */
 export type SquareRule = "pad" | "crop";
 
-export interface IconSetOptions {
-  preset: string;
+export type IconPreset = "macos" | "ios" | "android" | "favicon" | "custom";
+
+/** Whether a platform is ticked, and the sizes ticked for it. Its sizes are kept while it is unticked. */
+export interface IconPlatformChoice {
+  on: boolean;
   sizes: number[];
+}
+
+export interface IconSetOptions {
+  platforms: Record<IconPreset, IconPlatformChoice>;
   squareRule: SquareRule;
 }
 
-const iconSizesByPreset: Record<string, number[]> = {
-  macos: [16, 32, 128, 256, 512, 1024],
-  favicon: [16, 32, 48, 64, 128, 256],
-  ios: [20, 29, 40, 60, 76, 83, 1024],
-  android: [48, 72, 96, 144, 192, 512],
-  custom: [16, 32, 64, 128, 256, 512],
+interface PlatformInfo {
+  preset: IconPreset;
+  /** The row's name, which is also its checkbox's accessible name. */
+  label: string;
+  /** The name the contact sheet uses for this platform's sizes. */
+  sheetName: string;
+  /** The sizes the platform offers, as the design lists them. Custom sizes are typed in instead. */
+  offered: number[];
+  hint?: string;
+}
+
+const platforms: PlatformInfo[] = [
+  { preset: "macos", label: "macOS app", sheetName: "macOS", offered: [16, 32, 64, 128, 256, 512, 1024] },
+  { preset: "ios", label: "iPhone and iPad", sheetName: "iPhone and iPad", offered: [20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024] },
+  { preset: "android", label: "Android", sheetName: "Android", offered: [48, 72, 96, 144, 192, 512], hint: "Launcher sizes from mdpi to xxxhdpi, plus the 512 store icon." },
+  { preset: "favicon", label: "Website", sheetName: "Website", offered: [16, 32, 48, 64, 128, 256] },
+  { preset: "custom", label: "Custom sizes", sheetName: "custom", offered: [] },
+];
+
+const platformInfo = (preset: IconPreset) => platforms.find((platform) => platform.preset === preset)!;
+
+export const customSizeRange = { min: 1, max: 4096 } as const;
+
+const ascending = (sizes: Iterable<number>) => [...new Set(sizes)].sort((left, right) => left - right);
+
+const sizeCount = (count: number) => (count === 1 ? "1 size" : `${count} sizes`);
+
+const macosComplete = (sizes: number[]) => platformInfo("macos").offered.every((size) => sizes.includes(size));
+
+/** The summary beside a platform's name. */
+const platformSummary = (preset: IconPreset, sizes: number[]) => {
+  if (sizes.length === 0) return preset === "custom" ? "None yet" : "No sizes ticked";
+  if (preset === "macos") return `${sizeCount(sizes.length)}, ${macosComplete(sizes) ? "ICNS" : "PNGs only"}`;
+  return sizeCount(sizes.length);
+};
+
+/** The ticked platforms with the sizes ticked for each, in the design's order. */
+const tickedPlatforms = (options: IconSetOptions) =>
+  platforms.filter((platform) => options.platforms[platform.preset].on).map((platform) => ({ ...platform, sizes: options.platforms[platform.preset].sizes }));
+
+/** Why the run can't start yet, or null when it can. */
+const blockedReason = (options: IconSetOptions) => {
+  const ticked = tickedPlatforms(options);
+  if (ticked.length === 0) return "Tick at least one platform to make icons for.";
+  const empty = ticked.find((platform) => platform.sizes.length === 0);
+  return empty ? `Tick at least one size for ${empty.label}, or untick it.` : null;
+};
+
+/** A typed custom size, or why it can't be added. */
+export const parseCustomSize = (value: string, current: number[]): { size: number } | { error: string } => {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return { error: `Type a whole number of pixels from ${customSizeRange.min} to ${customSizeRange.max}.` };
+  const size = Number(trimmed);
+  if (size < customSizeRange.min || size > customSizeRange.max) return { error: `${size} pixels is outside the range. Use ${customSizeRange.min} to ${customSizeRange.max} pixels.` };
+  if (current.includes(size)) return { error: `${size} pixels is already in the list.` };
+  return { size };
 };
 
 const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 const appliesToAll = "Applies to every non-square image in this run. Images are never stretched.";
+
+const listSizes = (sizes: number[]) => sizes.length === 1 ? `${sizes[0]}` : `${sizes.slice(0, -1).join(", ")} and ${sizes[sizes.length - 1]}`;
+
+/** The side of the square every size is made from: the longer side when padded, the shorter when cropped. */
+const squareSide = (rule: SquareRule, size: { width: number; height: number }) =>
+  rule === "pad" ? Math.max(size.width, size.height) : Math.min(size.width, size.height);
 
 /** What the rule does to this master, for the preview's name, the rule's hint and the upscale warning. */
 const describeSquare = (name: string, rule: SquareRule, size: { width: number; height: number } | null, sizes: number[]) => {
@@ -41,27 +107,69 @@ const describeSquare = (name: string, rule: SquareRule, size: { width: number; h
     };
   }
   const { width, height } = size;
+  const side = squareSide(rule, size);
+  const upscaled = sizes.filter((value) => value > side);
+  const which = upscaled.length === 1 ? `the ${upscaled[0]} size` : `sizes above ${side}`;
+  const warning = (subject: string) => (upscaled.length === 0 ? null : `${subject} ${side} pixels, so ${which} will be upscaled.`);
   if (width === height) {
-    return { label: `${name}, already square`, hint: `${name} is already square, so it is used as it is. The rule applies to every non-square image in this run. Images are never stretched.`, warning: null };
+    return {
+      label: `${name}, already square`,
+      hint: `${name} is already square, so it is used as it is. The rule applies to every non-square image in this run. Images are never stretched.`,
+      warning: warning(`${name} is`),
+    };
   }
   if (rule === "pad") {
-    const side = Math.max(width, height);
-    return { label: `${name} padded to a transparent ${side}-pixel square`, hint: `The whole image is centred on a transparent square of ${side} pixels. ${appliesToAll}`, warning: null };
+    return {
+      label: `${name} padded to a transparent ${side}-pixel square`,
+      hint: `The whole image is centred on a transparent square of ${side} pixels. ${appliesToAll}`,
+      warning: warning("The padded square is"),
+    };
   }
-  const side = Math.min(width, height);
   const edges = width > height ? "left and right" : "top and bottom";
-  const upscaled = sizes.filter((value) => value > side);
   return {
     label: `${name} cropped to its centred ${side}-pixel square`,
     hint: `The centred ${side}-pixel square is kept. The ${edges} edges are cut off. ${appliesToAll}`,
-    warning: upscaled.length === 0
-      ? null
-      : `The crop is ${side} pixels, so ${upscaled.length === 1 ? `the ${upscaled[0]} size` : `sizes above ${side}`} will be upscaled.`,
+    warning: warning("The crop is"),
   };
 };
 
-/** The focused master with the run's square rule applied, and the control that picks the rule. */
-const SquarePreview = ({ utility, options, setOptions, files, selectedFileIndex }: MediaPanelProps<IconSetOptions>) => {
+/** The largest size the contact sheet shows at actual pixels; larger sizes are shown at 96. */
+const actualPixelsUpTo = 64;
+const scaledTile = 96;
+
+/** The focused master at each of one platform's ticked sizes, with upscaled sizes marked. */
+const ContactSheet = ({ name, platform, sizes, image, rule, side }: {
+  name: string;
+  platform: PlatformInfo;
+  sizes: number[];
+  image: ImagePreview | null;
+  rule: SquareRule;
+  side: number | null;
+}) => (
+  <div className="icon-contact">
+    <p className="icon-square-heading">
+      <span className="workspace-panel-label">Contact sheet, {platform.sheetName} sizes</span>
+      <span className="workspace-panel-copy">Actual pixels up to {actualPixelsUpTo}. Larger sizes are shown at {scaledTile}.</span>
+    </p>
+    <div className="icon-contact-sheet" role="img" aria-label={`${name} at ${listSizes(sizes)} pixels`} data-square-rule={rule}>
+      {sizes.map((size) => {
+        const tile = size > actualPixelsUpTo ? scaledTile : size;
+        const upscaled = side !== null && size > side;
+        return (
+          <div key={size} className="icon-contact-tile" data-size={size}>
+            <div className="icon-contact-image" style={{ width: tile, height: tile }}>
+              {image && <img src={image.dataUrl} alt="" />}
+            </div>
+            <span className={upscaled ? "icon-contact-size icon-contact-upscaled" : "icon-contact-size"}>{upscaled ? `${size} ↑` : size}</span>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+);
+
+/** The focused master with the run's square rule applied, the control that picks the rule, and the contact sheet. */
+const SquarePreview = ({ utility, options, setOptions, files, selectedFileIndex, sheetPreset }: MediaPanelProps<IconSetOptions> & { sheetPreset: IconPreset | null }) => {
   const focused = files[selectedFileIndex] ?? files[0] ?? null;
   const supportsPreview = utility.capability.supportsPreview;
   const [preview, setPreview] = useState<{ path: string; image: ImagePreview | null } | null>(null);
@@ -79,7 +187,9 @@ const SquarePreview = ({ utility, options, setOptions, files, selectedFileIndex 
 
   const image = focused && preview?.path === focused ? preview.image : null;
   const name = focused ? fileName(focused) : null;
-  const square = describeSquare(name ?? "", options.squareRule, image, options.sizes);
+  const allSizes = ascending(tickedPlatforms(options).flatMap((platform) => platform.sizes));
+  const square = describeSquare(name ?? "", options.squareRule, image, allSizes);
+  const sheetSizes = sheetPreset ? options.platforms[sheetPreset].sizes : [];
 
   return (
     <Card className="icon-square py-0" role="region" aria-label="Preview">
@@ -110,69 +220,197 @@ const SquarePreview = ({ utility, options, setOptions, files, selectedFileIndex 
             <ToggleGroupItem value="crop">Crop to centre</ToggleGroupItem>
           </ToggleGroup>
           <p className="workspace-panel-copy" id="icon-square-rule-hint">{square.hint}</p>
-          {name && square.warning && <p className="workspace-note" role="status">{square.warning}</p>}
+          {name && square.warning && <p className="workspace-note workspace-note-warning" role="status">{square.warning}</p>}
         </div>
+        {name && supportsPreview && sheetPreset && sheetSizes.length > 0 && (
+          <ContactSheet
+            name={name}
+            platform={platformInfo(sheetPreset)}
+            sizes={sheetSizes}
+            image={image}
+            rule={options.squareRule}
+            side={image ? squareSide(options.squareRule, image) : null}
+          />
+        )}
       </CardContent>
     </Card>
   );
 };
 
-const IconSetPanel = (props: MediaPanelProps<IconSetOptions>) => {
-  const { options, setOptions } = props;
+/** The typed sizes of the Custom row: a field to add one, and a chip to remove each. */
+const CustomSizes = ({ sizes, setSizes }: { sizes: number[]; setSizes: (sizes: number[]) => void }) => {
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const add = () => {
+    const parsed = parseCustomSize(draft, sizes);
+    if ("error" in parsed) {
+      setError(parsed.error);
+      return;
+    }
+    setSizes(ascending([...sizes, parsed.size]));
+    setDraft("");
+    setError(null);
+  };
   return (
-  <>
-    <SquarePreview {...props} />
-    <div className="workspace-field">
-      <Label htmlFor="icon-preset">Icon preset</Label>
-      <NativeSelect
-        id="icon-preset"
-        aria-label="Icon preset"
-        value={options.preset}
-        onChange={(event) => {
-          const preset = event.target.value;
-          setOptions((current) => ({ ...current, preset, sizes: iconSizesByPreset[preset] ?? iconSizesByPreset.custom }));
-        }}
-      >
-        <option value="macos">macOS</option>
-        <option value="favicon">Favicon</option>
-        <option value="ios">iOS</option>
-        <option value="android">Android</option>
-        <option value="custom">Custom</option>
-      </NativeSelect>
-    </div>
-    <fieldset className="workspace-fieldset">
-      <legend>Icon sizes</legend>
-      <div className="icon-size-grid" aria-label="Icon size presets">
-        {iconSizesByPreset[options.preset].map((size) => (
-          <Label key={size} className="workspace-check" htmlFor={`icon-size-${size}`}>
-            <Checkbox
-              id={`icon-size-${size}`}
-              aria-label={`Icon size ${size}px`}
-              checked={options.sizes.includes(size)}
-              onCheckedChange={(checked) => setOptions((current) => ({
-                ...current,
-                sizes: checked
-                  ? [...new Set([...current.sizes, size])].sort((left, right) => left - right)
-                  : current.sizes.filter((value) => value !== size),
-              }))}
-            />
-            <span>{size}px</span>
-          </Label>
-        ))}
+    <div className="icon-custom-sizes" role="group" aria-label="Sizes, pixels">
+      <div className="icon-custom-add">
+        <Input
+          className="icon-custom-input"
+          aria-label="Add a size in pixels"
+          placeholder={`${customSizeRange.min} to ${customSizeRange.max}`}
+          inputMode="numeric"
+          value={draft}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "icon-custom-error" : "icon-custom-hint"}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <Button type="button" variant="outline" size="sm" onClick={add}>Add size</Button>
       </div>
-    </fieldset>
-    <p className="workspace-panel-copy">Each image's icons are in one folder, with a folder per platform inside. A set is saved only when every size worked, so you never get half a set.</p>
-  </>
+      {error && <p className="workspace-note workspace-note-error" id="icon-custom-error" role="alert">{error}</p>}
+      {sizes.length > 0 && (
+        <ul className="icon-custom-chips" aria-label="Custom sizes added">
+          {sizes.map((size) => (
+            <li key={size}>
+              <Badge variant="outline" className="icon-custom-chip">
+                {size}
+                <Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${size}`} onClick={() => setSizes(sizes.filter((value) => value !== size))}>
+                  <X aria-hidden="true" />
+                </Button>
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="workspace-panel-copy" id="icon-custom-hint">Saved as custom-{sizes[0] ?? 300}.png and so on. Square, {customSizeRange.min} to {customSizeRange.max} pixels.</p>
+    </div>
   );
 };
 
+const IconSetPanel = (props: MediaPanelProps<IconSetOptions>) => {
+  const { options, setOptions } = props;
+  const [expanded, setExpanded] = useState<IconPreset | null>("macos");
+  const setPlatform = (preset: IconPreset, update: (choice: IconPlatformChoice) => IconPlatformChoice) =>
+    setOptions((current) => ({ ...current, platforms: { ...current.platforms, [preset]: update(current.platforms[preset]) } }));
+  // The contact sheet follows the open row while it is ticked, and otherwise the first ticked platform with sizes.
+  const ticked = tickedPlatforms(options).filter((platform) => platform.sizes.length > 0);
+  const sheetPreset = ticked.find((platform) => platform.preset === expanded)?.preset ?? ticked[0]?.preset ?? null;
+  const blocked = blockedReason(options);
+  const macosSizes = options.platforms.macos.sizes;
+  const missingMacos = platformInfo("macos").offered.filter((size) => !macosSizes.includes(size));
+
+  return (
+    <>
+      <SquarePreview {...props} sheetPreset={sheetPreset} />
+      <fieldset className="workspace-fieldset icon-platforms">
+        <legend>Make icons for</legend>
+        {platforms.map((platform) => {
+          const choice = options.platforms[platform.preset];
+          const open = expanded === platform.preset;
+          const groupId = `icon-sizes-${platform.preset}`;
+          return (
+            <div key={platform.preset} className="icon-platform">
+              <div className="icon-platform-row">
+                <Checkbox
+                  id={`icon-platform-${platform.preset}`}
+                  aria-label={platform.label}
+                  checked={choice.on}
+                  onCheckedChange={(checked) => setPlatform(platform.preset, (current) => ({ ...current, on: checked === true }))}
+                />
+                <Label htmlFor={`icon-platform-${platform.preset}`} className="icon-platform-name">{platform.label}</Label>
+                <span className="workspace-panel-copy icon-platform-summary">{platformSummary(platform.preset, choice.sizes)}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-expanded={open}
+                  aria-controls={open ? groupId : undefined}
+                  aria-label={`Sizes for ${platform.label}`}
+                  onClick={() => setExpanded(open ? null : platform.preset)}
+                >
+                  {open ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
+                </Button>
+              </div>
+              {open && platform.preset === "custom" && (
+                <div id={groupId} className="icon-platform-sizes">
+                  <CustomSizes sizes={choice.sizes} setSizes={(sizes) => setPlatform("custom", (current) => ({ ...current, sizes }))} />
+                </div>
+              )}
+              {open && platform.preset !== "custom" && (
+                <div id={groupId} className="icon-platform-sizes">
+                  <div className="icon-size-grid" role="group" aria-label="Sizes, pixels">
+                    {platform.offered.map((size) => (
+                      <Label key={size} className="workspace-check" htmlFor={`icon-size-${platform.preset}-${size}`}>
+                        <Checkbox
+                          id={`icon-size-${platform.preset}-${size}`}
+                          checked={choice.sizes.includes(size)}
+                          onCheckedChange={(checked) => setPlatform(platform.preset, (current) => ({
+                            ...current,
+                            sizes: checked === true ? ascending([...current.sizes, size]) : current.sizes.filter((value) => value !== size),
+                          }))}
+                        />
+                        <span>{size}</span>
+                      </Label>
+                    ))}
+                  </div>
+                  {platform.hint && <p className="workspace-panel-copy">{platform.hint}</p>}
+                  {platform.preset === "macos" && missingMacos.length > 0 && macosSizes.length > 0 && (
+                    <div className="workspace-note icon-platform-note">
+                      <p>The ICNS needs every macOS size, so it's off. Tick {listSizes(missingMacos)} to turn it back on.</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPlatform("macos", (current) => ({ ...current, sizes: [...platformInfo("macos").offered] }))}
+                      >
+                        Tick all macOS sizes
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {blocked && <p className="workspace-note workspace-note-error" role="alert">{blocked}</p>}
+      </fieldset>
+      <p className="workspace-panel-copy">Each image's icons are in one folder, with a folder per platform inside. A set is saved only when every size worked, so you never get half a set.</p>
+    </>
+  );
+};
+
+const allSizes = (preset: IconPreset, on: boolean): IconPlatformChoice => ({ on, sizes: [...platformInfo(preset).offered] });
+
 export const iconSetTool: MediaTool<IconSetOptions> = {
-  initialOptions: { preset: "macos", sizes: iconSizesByPreset.macos, squareRule: "pad" },
+  initialOptions: {
+    platforms: {
+      macos: allSizes("macos", true),
+      ios: allSizes("ios", true),
+      android: allSizes("android", false),
+      favicon: allSizes("favicon", true),
+      custom: { on: false, sizes: [] },
+    },
+    squareRule: "pad",
+  },
   Panel: IconSetPanel,
+  canRun: (options) => blockedReason(options) === null,
   // Each master makes its own set, so every chosen image is sent in one run.
-  buildRequest: ({ preset, sizes, squareRule }, { paths, outputLocation }) => ({
+  buildRequest: (options, { paths, outputLocation }) => ({
     command: "generate_icon_set",
-    request: { paths, preset, sizes, squareRule, outputLocation },
+    request: {
+      paths,
+      platforms: tickedPlatforms(options).map(({ preset, sizes }) => ({ preset, sizes })),
+      squareRule: options.squareRule,
+      outputLocation,
+    },
   }),
   runLabel: (_options, files) => files.length === 0 ? "Make icon sets" : files.length === 1 ? "Make 1 icon set" : `Make ${files.length} icon sets`,
 };

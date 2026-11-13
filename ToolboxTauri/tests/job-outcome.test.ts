@@ -58,6 +58,19 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   assert.deepEqual(flattened.warnings.map((warning) => warning.code), ["transparencyFlattened"]);
 });
 
+test("an upscaled icon set is a warning row that names both sizes, as the native side does", () => {
+  const native = { code: "upscaled", message: "Upscaled to 1024 from 512 pixels.", details: { from: 512, to: 1024 } };
+  const outcome = parseJobOutcome({ ...sample(0), inputPath: "brand-mark.png", outputPaths: ["brand-mark-icons"], detail: "7 files", warnings: [native] });
+  assert.deepEqual(outcome.warnings, [native]);
+  assert.equal(warningText(outcome.warnings[0]), native.message);
+  const row = rowView(outcome, "Made");
+  assert.equal(row.tone, "warn");
+  assert.equal(row.stateLabel, "Made", "the set was still made");
+  assert.equal(row.spokenState, "Made with a warning");
+  assert.deepEqual(row.detailLines, [{ text: "Upscaled to 1024 from 512 pixels.", tone: "warn" }, { text: "7 files", tone: null }]);
+  assert.throws(() => parseJobOutcome({ ...sample(0), warnings: [{ ...native, details: { from: 512 } }] }));
+});
+
 test("pages without text are a note that points at OCR, not a warning", () => {
   const withPages = (pages: number[], extra: unknown[] = []) =>
     parseJobOutcome({ ...sample(10), warnings: [{ code: "pagesWithoutText", message: "", details: { pages } }, ...extra] });

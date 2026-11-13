@@ -41,6 +41,7 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     if (path.includes("wide")) return { width: 1600, height: 900, dataUrl: blankImage };
                     if (path.includes("tall")) return { width: 300, height: 1400, dataUrl: blankImage };
                     if (path.includes("square")) return { width: 1024, height: 1024, dataUrl: blankImage };
+                    if (path.includes("small")) return { width: 512, height: 512, dataUrl: blankImage };
                     return { width: 640, height: 480, dataUrl: blankImage };
                 }
                 if (command === "inspect_tiff_pages") {
@@ -98,39 +99,129 @@ const selectRailTool = (page: Page, title: string) =>
 const runId = expect.any(String);
 
 test.describe("Media requests", () => {
-    test("App Icon Set sends the preset and its sizes", async ({ page }) => {
+    test("App Icon Set sends the ticked platforms with only their ticked sizes", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Generate App Icons");
         await choose(page, "/local/art/logo.png");
 
+        const platforms = page.getByRole("group", { name: "Make icons for" });
+        for (const [name, checked, summary] of [
+            ["macOS app", true, "7 sizes, ICNS"],
+            ["iPhone and iPad", true, "13 sizes"],
+            ["Android", false, "6 sizes"],
+            ["Website", true, "6 sizes"],
+            ["Custom sizes", false, "None yet"],
+        ] as const) {
+            const box = platforms.getByRole("checkbox", { name, exact: true });
+            await expect(box).toHaveAttribute("aria-checked", String(checked));
+            await expect(box.locator("xpath=..")).toContainText(summary);
+            await expect(platforms.getByRole("button", { name: `Sizes for ${name}` })).toBeVisible();
+        }
+        // macOS opens first, with each of its sizes a labelled checkbox.
+        await expect(platforms.getByRole("button", { name: "Sizes for macOS app" })).toHaveAttribute("aria-expanded", "true");
+        const sizes = platforms.getByRole("group", { name: "Sizes, pixels" });
+        await expect(sizes.getByRole("checkbox")).toHaveCount(7);
+        for (const size of [16, 32, 64, 128, 256, 512, 1024]) await expect(sizes.getByRole("checkbox", { name: String(size), exact: true })).toBeChecked();
+
         expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
             paths: ["/local/art/logo.png"],
-            preset: "macos",
-            sizes: [16, 32, 128, 256, 512, 1024],
+            platforms: [
+                { preset: "macos", sizes: [16, 32, 64, 128, 256, 512, 1024] },
+                { preset: "ios", sizes: [20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024] },
+                { preset: "favicon", sizes: [16, 32, 48, 64, 128, 256] },
+            ],
             squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
 
-        await page.getByLabel("Icon preset").selectOption("ios");
+        // Unticking a size removes exactly that size, and a partial macOS set has no ICNS.
+        await sizes.getByRole("checkbox", { name: "64", exact: true }).click();
+        await expect(platforms.getByRole("checkbox", { name: "macOS app" }).locator("xpath=..")).toContainText("6 sizes, PNGs only");
+        await expect(platforms).toContainText("The ICNS needs every macOS size, so it's off. Tick 64 to turn it back on.");
+        await platforms.getByRole("checkbox", { name: "iPhone and iPad" }).click();
+        await platforms.getByRole("checkbox", { name: "Android" }).click();
+        await platforms.getByRole("button", { name: "Sizes for Android" }).click();
+        await expect(platforms.getByRole("button", { name: "Sizes for macOS app" })).toHaveAttribute("aria-expanded", "false");
+        await expect(platforms).toContainText("Launcher sizes from mdpi to xxxhdpi, plus the 512 store icon.");
+        await sizes.getByRole("checkbox", { name: "512", exact: true }).click();
+        await platforms.getByRole("button", { name: "Sizes for Website" }).click();
+        await sizes.getByRole("checkbox", { name: "48", exact: true }).click();
         expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
             paths: ["/local/art/logo.png"],
-            preset: "ios",
-            sizes: [20, 29, 40, 60, 76, 83, 1024],
+            platforms: [
+                { preset: "macos", sizes: [16, 32, 128, 256, 512, 1024] },
+                { preset: "android", sizes: [48, 72, 96, 144, 192] },
+                { preset: "favicon", sizes: [16, 32, 64, 128, 256] },
+            ],
             squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
 
-        await page.getByLabel("Icon preset").selectOption("favicon");
-        await page.getByRole("checkbox", { name: "Icon size 48px" }).click();
-        await page.getByRole("checkbox", { name: "Icon size 16px" }).click();
-        await page.getByRole("checkbox", { name: "Icon size 16px" }).click();
-        expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
-            paths: ["/local/art/logo.png"],
-            preset: "favicon",
-            sizes: [16, 32, 64, 128, 256],
-            squareRule: "pad",
-            outputLocation: "alongsideInput",
-        } });
+        await platforms.getByRole("button", { name: "Sizes for macOS app" }).click();
+        await platforms.getByRole("button", { name: "Tick all macOS sizes" }).click();
+        await expect(platforms.getByRole("checkbox", { name: "macOS app" }).locator("xpath=..")).toContainText("7 sizes, ICNS");
+        await expect(platforms.getByRole("button", { name: "Tick all macOS sizes" })).toHaveCount(0);
+        expect(await runOnce(page, "generate_icon_set")).toMatchObject({ request: { platforms: [
+            { preset: "macos", sizes: [16, 32, 64, 128, 256, 512, 1024] },
+            { preset: "android", sizes: [48, 72, 96, 144, 192] },
+            { preset: "favicon", sizes: [16, 32, 64, 128, 256] },
+        ] } });
+    });
+
+    test("App Icon Set takes custom sizes from 1 to 4096 and blocks the run until the choice is complete", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, "/local/art/logo.png");
+        const platforms = page.getByRole("group", { name: "Make icons for" });
+        const action = page.locator(".workspace-primary-action");
+
+        await platforms.getByRole("checkbox", { name: "Custom sizes" }).click();
+        await expect(platforms.getByRole("alert")).toHaveText("Tick at least one size for Custom sizes, or untick it.");
+        await expect(action).toBeDisabled();
+
+        await platforms.getByRole("button", { name: "Sizes for Custom sizes" }).click();
+        const field = platforms.getByRole("textbox", { name: "Add a size in pixels" });
+        await expect(field).toHaveAttribute("placeholder", "1 to 4096");
+        const add = platforms.getByRole("button", { name: "Add size" });
+        for (const [typed, message] of [
+            ["5000", "5000 pixels is outside the range. Use 1 to 4096 pixels."],
+            ["0", "0 pixels is outside the range. Use 1 to 4096 pixels."],
+            ["12.5", "Type a whole number of pixels from 1 to 4096."],
+            ["big", "Type a whole number of pixels from 1 to 4096."],
+        ]) {
+            await field.fill(typed);
+            await add.click();
+            await expect(platforms.getByRole("alert").first()).toHaveText(message);
+            await expect(field).toHaveAttribute("aria-invalid", "true");
+            await expect(field).toHaveAccessibleDescription(message);
+            await expect(action).toBeDisabled();
+        }
+        await field.fill("300");
+        await field.press("Enter");
+        await field.fill("4096");
+        await add.click();
+        await field.fill("1");
+        await add.click();
+        await expect(field).toHaveValue("");
+        await expect(field).not.toHaveAttribute("aria-invalid", "true");
+        await field.fill("300");
+        await add.click();
+        await expect(platforms.getByRole("alert")).toHaveText("300 pixels is already in the list.");
+        await field.fill("");
+        await expect(platforms.getByRole("alert")).toHaveCount(0);
+        await expect(field).not.toHaveAttribute("aria-invalid", "true");
+        await expect(platforms.getByRole("checkbox", { name: "Custom sizes" }).locator("xpath=..")).toContainText("3 sizes");
+        await expect(platforms.getByRole("list", { name: "Custom sizes added" }).getByRole("listitem")).toHaveText(["1", "300", "4096"]);
+        await platforms.getByRole("button", { name: "Remove 4096" }).click();
+        await expect(action).toBeEnabled();
+        expect(await runOnce(page, "generate_icon_set")).toMatchObject({ request: { platforms: [
+            { preset: "macos" }, { preset: "ios" }, { preset: "favicon" }, { preset: "custom", sizes: [1, 300] },
+        ] } });
+
+        // With no platform ticked, nothing can run.
+        for (const name of ["macOS app", "iPhone and iPad", "Website", "Custom sizes"]) await platforms.getByRole("checkbox", { name }).click();
+        await expect(platforms.getByRole("alert")).toHaveText("Tick at least one platform to make icons for.");
+        await expect(action).toBeDisabled();
     });
 
     test("App Icon Set shows the bit-depth reduction warning on the HEIC result row", async ({ page }) => {
@@ -161,10 +252,8 @@ test.describe("Media requests", () => {
         await expect(page.locator(".workspace-primary-action")).toHaveText(/^Make 3 icon sets/);
         await expect(page.getByTestId("run-destination-example")).toHaveText("app-icon-icons");
         await expect(page.getByText("Each image's icons are in one folder, with a folder per platform inside. A set is saved only when every size worked, so you never get half a set.")).toBeVisible();
-        expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
+        expect(await runOnce(page, "generate_icon_set")).toMatchObject({ runId, request: {
             paths: ["/local/art/app-icon.png", "/local/art/brand-mark.png", "/local/art/launcher.webp"],
-            preset: "macos",
-            sizes: [16, 32, 128, 256, 512, 1024],
             squareRule: "pad",
             outputLocation: "alongsideInput",
         } });
@@ -179,7 +268,7 @@ test.describe("Media requests", () => {
         const rule = page.getByRole("radiogroup", { name: "Non-square images" });
         const pad = rule.getByRole("radio", { name: "Pad with transparency" });
         const crop = rule.getByRole("radio", { name: "Crop to centre" });
-        const square = preview.getByRole("img", { name: /brand-mark-wide\.png/ });
+        const square = preview.getByRole("img", { name: /^brand-mark-wide\.png (padded|cropped)/ });
         await expect(preview).toContainText("brand-mark-wide.png");
         await expect(pad).toHaveAttribute("aria-checked", "true");
         await expect(square).toHaveAccessibleName("brand-mark-wide.png padded to a transparent 1600-pixel square");
@@ -197,17 +286,15 @@ test.describe("Media requests", () => {
         await expect(square.locator("img")).toHaveCSS("object-fit", "cover");
         await expect(rule).toHaveAccessibleDescription("The centred 900-pixel square is kept. The left and right edges are cut off. Applies to every non-square image in this run. Images are never stretched.");
         await expect(preview.getByRole("status")).toHaveText("The crop is 900 pixels, so the 1024 size will be upscaled.");
-        expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
+        expect(await runOnce(page, "generate_icon_set")).toMatchObject({ runId, request: {
             paths: ["/local/art/brand-mark-wide.png", "/local/art/poster-tall.png", "/local/art/app-icon-square.png"],
-            preset: "macos",
-            sizes: [16, 32, 128, 256, 512, 1024],
             squareRule: "crop",
             outputLocation: "alongsideInput",
         } });
 
         // Focusing another master previews the same rule on it.
         await page.getByRole("listbox").getByRole("option", { name: /poster-tall\.png/ }).click();
-        const tall = preview.getByRole("img", { name: /poster-tall\.png/ });
+        const tall = preview.getByRole("img", { name: /^poster-tall\.png (padded|cropped)/ });
         await expect(tall).toHaveAccessibleName("poster-tall.png cropped to its centred 300-pixel square");
         await expect(rule).toHaveAccessibleDescription("The centred 300-pixel square is kept. The top and bottom edges are cut off. Applies to every non-square image in this run. Images are never stretched.");
         await expect(preview.getByRole("status")).toHaveText("The crop is 300 pixels, so sizes above 300 will be upscaled.");
@@ -218,7 +305,7 @@ test.describe("Media requests", () => {
 
         // A square master is used as it is, whichever rule is chosen.
         await page.getByRole("listbox").getByRole("option", { name: /app-icon-square\.png/ }).click();
-        const already = preview.getByRole("img", { name: /app-icon-square\.png/ });
+        const already = preview.getByRole("img", { name: /^app-icon-square\.png, already/ });
         await expect(already).toHaveAccessibleName("app-icon-square.png, already square");
         await crop.click();
         await expect(already).toHaveAccessibleName("app-icon-square.png, already square");
@@ -232,6 +319,38 @@ test.describe("Media requests", () => {
         ]));
     });
 
+    test("App Icon Set warns when a master is smaller than the largest size, and shows a contact sheet of the ticked sizes", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, ["/local/art/widget-small.png", "/local/art/brand-mark-wide.png"]);
+        const preview = page.getByRole("region", { name: "Preview" });
+        const platforms = page.getByRole("group", { name: "Make icons for" });
+
+        // A square 512 px master is upscaled to 1024 whichever rule is chosen.
+        await expect(preview.getByRole("status")).toHaveText("widget-small.png is 512 pixels, so the 1024 size will be upscaled.");
+        await expect(preview).toContainText("Contact sheet, macOS sizes");
+        await expect(preview).toContainText("Actual pixels up to 64. Larger sizes are shown at 96.");
+        const sheet = preview.getByRole("img", { name: "widget-small.png at 16, 32, 64, 128, 256, 512 and 1024 pixels" });
+        await expect(sheet.locator(".icon-contact-size")).toHaveText(["16", "32", "64", "128", "256", "512", "1024 ↑"]);
+        await expect(sheet.locator('[data-size="32"] .icon-contact-image')).toHaveCSS("width", "32px");
+        await expect(sheet.locator('[data-size="1024"] .icon-contact-image')).toHaveCSS("width", "96px");
+
+        // The sheet follows the open platform, and only its ticked sizes.
+        await platforms.getByRole("button", { name: "Sizes for Website" }).click();
+        await platforms.getByRole("group", { name: "Sizes, pixels" }).getByRole("checkbox", { name: "48", exact: true }).click();
+        await expect(preview).toContainText("Contact sheet, Website sizes");
+        await expect(preview.getByRole("img", { name: "widget-small.png at 16, 32, 64, 128 and 256 pixels" })).toBeVisible();
+
+        // Padding a wide master keeps every size within its 1600 px square; cropping it to 900 upscales 1024.
+        await page.getByRole("listbox").getByRole("option", { name: /brand-mark-wide\.png/ }).click();
+        await expect(preview.getByRole("status")).toHaveCount(0);
+        await page.getByRole("radiogroup", { name: "Non-square images" }).getByRole("radio", { name: "Crop to centre" }).click();
+        await expect(preview.getByRole("status")).toHaveText("The crop is 900 pixels, so the 1024 size will be upscaled.");
+        await platforms.getByRole("checkbox", { name: "macOS app" }).click();
+        await platforms.getByRole("checkbox", { name: "iPhone and iPad" }).click();
+        await expect(preview.getByRole("status")).toHaveCount(0);
+    });
+
     test("App Icon Set shows each master's own result, with its folder or the size that failed", async ({ page }) => {
         await start(page);
         await page.addInitScript(() => {
@@ -240,15 +359,16 @@ test.describe("Media requests", () => {
                 { inputPath: "/local/art/brand-mark.png", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "The macOS 1024 size failed: the image data is damaged. Nothing was saved for this image.", pointer: null }, reason: null, warnings: [] },
                 { inputPath: "/local/art/launcher.webp", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "Not a readable WebP image. The file may be damaged. Nothing was saved.", pointer: null }, reason: null, warnings: [] },
                 { inputPath: "/local/art/badge.png", outputPaths: ["/local/art/badge-icons-1"], detail: "7 files", state: "succeeded", failure: null, reason: null, warnings: [{ code: "renamedToAvoidReplacing", message: "", details: { chosenName: "badge-icons", finalName: "badge-icons-1" } }] },
+                { inputPath: "/local/art/widget-small.png", outputPaths: ["/local/art/widget-small-icons"], detail: "8 files", state: "succeeded", failure: null, reason: null, warnings: [{ code: "upscaled", message: "Upscaled to 1024 from 512 pixels.", details: { from: 512, to: 1024 } }] },
             ] };
         });
         await page.reload();
         await openToolBySearch(page, "Generate App Icons");
-        await choose(page, ["/local/art/app-icon.png", "/local/art/brand-mark.png", "/local/art/launcher.webp", "/local/art/badge.png"]);
+        await choose(page, ["/local/art/app-icon.png", "/local/art/brand-mark.png", "/local/art/launcher.webp", "/local/art/badge.png", "/local/art/widget-small.png"]);
         await runOnce(page, "generate_icon_set");
 
         const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
-        await expect(results).toHaveCount(4);
+        await expect(results).toHaveCount(5);
         await expect(results.nth(0)).toContainText("app-icon-icons");
         await expect(results.nth(0)).toContainText("7 files");
         await expect(results.nth(1)).toContainText("The macOS 1024 size failed: the image data is damaged. Nothing was saved for this image.");
@@ -256,6 +376,10 @@ test.describe("Media requests", () => {
         await expect(results.nth(1).getByRole("button", { name: /^Open|Show in Finder/ })).toHaveCount(0);
         await expect(results.nth(2)).toContainText("Not a readable WebP image. The file may be damaged. Nothing was saved.");
         await expect(results.nth(3)).toContainText("Saved as badge-icons-1.");
+        // An upscaled master is still made, and its row says which size was enlarged from what.
+        await expect(results.nth(4)).toContainText("Upscaled to 1024 from 512 pixels.");
+        await expect(results.nth(4)).toContainText("8 files");
+        await expect(results.nth(4)).not.toContainText("Failed");
 
         await results.nth(0).getByRole("button", { name: "Show in Finder: app-icon-icons" }).click();
         await expect.poll(() => invocationsOf(page, "reveal_output_path")).toEqual([{ path: "/local/art/app-icon-icons" }]);
@@ -375,15 +499,16 @@ test.describe("Media requests", () => {
         await page.getByRole("switch", { name: "Loop animation" }).click();
 
         await selectRailTool(page, "Generate App Icons");
-        await expect(page.getByLabel("Icon preset")).toBeVisible();
-        await page.getByLabel("Icon preset").selectOption("android");
+        const android = page.getByRole("group", { name: "Make icons for" }).getByRole("checkbox", { name: "Android" });
+        await expect(android).not.toBeChecked();
+        await android.click();
         await selectRailTool(page, "Create GIF");
         await expect(page.getByLabel("Frame delay in milliseconds")).toHaveValue("40");
         await expect(page.getByRole("switch", { name: "Loop animation" })).not.toBeChecked();
 
         expect(await runOnce(page, "create_gif", "frame-1-animated.gif")).toMatchObject({ request: { frameDelayMs: 40, loopForever: false } });
         await selectRailTool(page, "Generate App Icons");
-        await expect(page.getByLabel("Icon preset")).toHaveValue("android");
+        await expect(android).toBeChecked();
     });
 
     test("Extract GIF Frames sends only the GIF paths and output location", async ({ page }) => {
