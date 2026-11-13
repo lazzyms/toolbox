@@ -10,10 +10,10 @@ use serde::Deserialize;
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::common::limits;
-use crate::kit::contracts::{native_capabilities, OutcomePointer, SkipCode, SkipReason, ToolError};
+use crate::kit::contracts::{native_capabilities, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontResolver, FontSource, FontStyle, SystemFontLookup};
-use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Face, FontBook, Flow, Geometry, PageOut, PageSetup, Theme};
+use crate::kit::pdf::layout::{assemble, expand_tabs, Assembly, Block, Face, FontBook, Flow, Geometry, Omitted, PageOut, PageSetup, Theme};
 use crate::kit::pdf::{delimited, docx, markdown, rtf};
 
 pub const COMMAND: &str = "convert_to_pdf";
@@ -362,16 +362,73 @@ fn rich_text<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<J
     let document = assemble(&book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
 
-    let detail = format!("{}.{}", page_count(count), omitted_pictures(parsed.omitted_pictures));
-    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
+    let outcome = JobOutcome::succeeded(input.to_path_buf(), vec![path], format!("{}.", page_count(count))).with_fonts(book.reports());
+    Ok(with_notes(outcome, [omitted_content(Omitted { pictures: parsed.omitted_pictures, ..Omitted::default() })]))
 }
 
-fn omitted_pictures(count: usize) -> String {
-    match count {
-        0 => String::new(),
-        1 => " Omitted content: 1 picture couldn't be shown and was left out.".to_string(),
-        count => format!(" Omitted content: {count} pictures couldn't be shown and were left out."),
+fn with_notes(outcome: JobOutcome, notes: impl IntoIterator<Item = Option<OutcomeWarning>>) -> JobOutcome {
+    notes.into_iter().flatten().fold(outcome, JobOutcome::with_warning)
+}
+
+fn listed(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
+}
+
+fn counted(count: usize, one: &str, many: &str) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        count => Some(format!("{count} {many}")),
+    }
+}
+
+fn omitted_content(omitted: Omitted) -> Option<OutcomeWarning> {
+    let mut sentences = Vec::new();
+    let unstored = [
+        counted(omitted.charts, "chart", "charts"),
+        counted(omitted.diagrams, "diagram", "diagrams"),
+        counted(omitted.objects, "embedded object", "embedded objects"),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    if !unstored.is_empty() {
+        let single = omitted.charts + omitted.diagrams + omitted.objects == 1;
+        let (has, left) = if single { ("has", "it was") } else { ("have", "they were") };
+        sentences.push(format!("{} {has} no stored image, so {left} left out.", listed(&unstored)));
+    }
+    match omitted.pictures {
+        0 => {}
+        1 => sentences.push("1 picture couldn't be shown and was left out.".to_string()),
+        count => sentences.push(format!("{count} pictures couldn't be shown and were left out.")),
+    }
+    (!sentences.is_empty()).then(|| OutcomeWarning { kind: WarningKind::OmittedContent, message: format!("Omitted content: {}", sentences.join(" ")) })
+}
+
+fn approximate_layout(floats: &[usize]) -> Option<OutcomeWarning> {
+    let mut pages = floats.iter().map(|page| page + 1).collect::<Vec<_>>();
+    pages.sort_unstable();
+    pages.dedup();
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for page in pages {
+        match runs.last_mut() {
+            Some((_, end)) if *end + 1 == page => *end = page,
+            _ => runs.push((page, page)),
+        }
+    }
+    let spans = runs.iter().flat_map(|&(start, end)| match end - start {
+        0 => vec![start.to_string()],
+        1 => vec![start.to_string(), end.to_string()],
+        _ => vec![format!("{start}\u{2013}{end}")],
+    }).collect::<Vec<_>>();
+    let pages = match spans.as_slice() {
+        [] => return None,
+        [page] if !page.contains('\u{2013}') => format!("page {page}"),
+        _ => format!("pages {}", listed(&spans)),
+    };
+    let objects = if floats.len() == 1 { format!("1 floating object on {pages} was") } else { format!("{} floating objects on {pages} were", floats.len()) };
+    Some(OutcomeWarning { kind: WarningKind::ApproximateLayout, message: format!("Approximate layout: {objects} placed as close as possible.") })
 }
 
 fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<JobOutcome, ToolError> {
@@ -394,6 +451,7 @@ fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<J
     flow.bands(&parsed.header, &parsed.footer, parsed.header_distance.unwrap_or(BAND_DISTANCE), parsed.footer_distance.unwrap_or(BAND_DISTANCE))?;
     let laid = flow.finish();
     let count = laid.pages.len();
+    let layout = approximate_layout(&laid.floats);
     let assembly = Assembly { size: (geometry.width, geometry.height), pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: parsed.author.as_deref() };
     let document = assemble(&book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
@@ -404,8 +462,8 @@ fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<J
         let fonts = reports.iter().map(|report| report.font_used.as_str()).collect::<std::collections::BTreeSet<_>>().len();
         detail.push_str(&if fonts == 1 { " 1 font, embedded from the file.".to_string() } else { format!(" {fonts} fonts, all embedded from the file.") });
     }
-    detail.push_str(&omitted_pictures(parsed.omitted_pictures));
-    Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(reports))
+    let outcome = JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(reports);
+    Ok(with_notes(outcome, [omitted_content(parsed.omitted), layout]))
 }
 
 fn grouped(count: usize) -> String {
@@ -884,7 +942,8 @@ mod tests {
         let outcomes = convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "a4", "margins": "wide" } }));
         let outcome = &outcomes[0];
         assert!(succeeded(outcome), "{outcome:?}");
-        assert_eq!(outcome.detail, "2 pages. Omitted content: 1 picture couldn't be shown and was left out.");
+        assert_eq!(outcome.detail, "2 pages.");
+        assert_eq!(outcome.warnings, [OutcomeWarning { kind: WarningKind::OmittedContent, message: "Omitted content: 1 picture couldn't be shown and was left out.".into() }]);
         for family in ["Times New Roman", "Arial", "Courier New"] {
             assert!(outcome.fonts.iter().any(|font| font.requested_family == family && font.source == FontSource::BundledFallback), "{family} missing from {:?}", outcome.fonts);
         }
@@ -1012,7 +1071,8 @@ mod tests {
         let outcomes = convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "a4", "margins": "wide" } }));
         let outcome = &outcomes[0];
         assert!(succeeded(outcome), "{outcome:?}");
-        assert_eq!(outcome.detail, "2 pages. Omitted content: 1 picture couldn't be shown and was left out.");
+        assert_eq!(outcome.detail, "2 pages.");
+        assert_eq!(outcome.warnings, [OutcomeWarning { kind: WarningKind::OmittedContent, message: "Omitted content: 1 picture couldn't be shown and was left out.".into() }]);
         for family in ["Calibri", "Cambria"] {
             assert!(outcome.fonts.iter().any(|font| font.requested_family == family), "{family} missing from {:?}", outcome.fonts);
         }
@@ -1072,6 +1132,172 @@ mod tests {
         assert_eq!(outcome.detail, "1 page. 1 font, embedded from the file.");
         let text = Document::load(root.join("brand.pdf")).unwrap().extract_text(&[1]).unwrap();
         assert!(text.contains("ello from the brand"), "{text:?}");
+    }
+
+    fn png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(width, height, image::Rgb(rgb)).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        png
+    }
+
+    fn page_content(document: &Document, page: u32) -> String {
+        String::from_utf8_lossy(&document.get_page_content(document.get_pages()[&page])).into_owned()
+    }
+
+    fn page_images(document: &Document, page: u32) -> usize {
+        page_content(document, page).matches(" Do Q").count()
+    }
+
+    #[test]
+    fn word_draws_charts_from_their_stored_image_and_names_the_ones_left_out() {
+        let root = sandbox("docx_charts");
+        let input = root.join("charts.docx");
+        let chart = r#"<w:drawing><wp:inline><wp:extent cx="2540000" cy="1270000"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+        let stored = r#"<w:drawing><wp:inline><wp:extent cx="2540000" cy="1270000"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdStored"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+        let body = format!(
+            r#"<w:p><w:r><w:t>Revenue by region</w:t></w:r></w:p><w:p><w:r><mc:AlternateContent><mc:Choice Requires="c14">{chart}</mc:Choice><mc:Fallback>{stored}</mc:Fallback></mc:AlternateContent></w:r></w:p><w:p><w:r><w:t>Costs by region</w:t></w:r></w:p><w:p><w:r>{chart}</w:r></w:p><w:p><w:r><w:object><v:shape style="width:120pt;height:60pt"/><o:OLEObject ProgID="Excel.Sheet.12" r:id="rIdOle"/></w:object></w:r></w:p>"#
+        );
+        let chart_part = br#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"/>"#;
+        fs::write(&input, docx::fixtures::docx(&body, &[
+            ("rIdChart", "chart", "charts/chart1.xml", false),
+            ("rIdStored", "image", "media/chart1.png", false),
+            ("rIdOle", "oleObject", "embeddings/sheet.xlsx", false),
+        ], &[("word/charts/chart1.xml", chart_part), ("word/media/chart1.png", &png(20, 10, [10, 120, 60])), ("word/embeddings/sheet.xlsx", b"never opened")])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({}))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "1 page.");
+        assert_eq!(outcome.warnings, [OutcomeWarning {
+            kind: WarningKind::OmittedContent,
+            message: "Omitted content: 1 chart and 1 embedded object have no stored image, so they were left out.".into(),
+        }]);
+        let document = Document::load(root.join("charts.pdf")).unwrap();
+        assert_eq!(page_images(&document, 1), 1, "only the chart with a stored image is drawn");
+        assert!(page_content(&document, 1).contains("200.00 0 0 100.00"), "the stored image keeps the chart's size");
+        let text = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Revenue by region", "Costs by region"]), "{text}");
+    }
+
+    #[test]
+    fn omitted_content_and_layout_notes_count_what_they_name() {
+        let message = |omitted: Omitted| omitted_content(omitted).map(|warning| warning.message);
+        assert_eq!(message(Omitted::default()), None);
+        assert_eq!(message(Omitted { charts: 1, ..Omitted::default() }).unwrap(), "Omitted content: 1 chart has no stored image, so it was left out.");
+        assert_eq!(
+            message(Omitted { pictures: 2, charts: 2, diagrams: 1, objects: 3 }).unwrap(),
+            "Omitted content: 2 charts, 1 diagram and 3 embedded objects have no stored image, so they were left out. 2 pictures couldn't be shown and were left out.",
+        );
+        let note = |floats: &[usize]| approximate_layout(floats).map(|warning| (warning.kind, warning.message));
+        assert_eq!(note(&[]), None);
+        assert_eq!(note(&[0]).unwrap(), (WarningKind::ApproximateLayout, "Approximate layout: 1 floating object on page 1 was placed as close as possible.".into()));
+        assert_eq!(note(&[3, 0, 1, 2, 5]).unwrap().1, "Approximate layout: 5 floating objects on pages 1\u{2013}4 and 6 were placed as close as possible.");
+    }
+
+    #[test]
+    fn word_renders_tracked_changes_as_accepted_and_leaves_comments_out() {
+        let root = sandbox("docx_tracked");
+        let input = root.join("review.docx");
+        let body = concat!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Kept </w:t></w:r><w:ins w:id="1" w:author="A"><w:r><w:t>inserted words</w:t></w:r></w:ins><w:del w:id="2" w:author="A"><w:r><w:delText>deleted words</w:delText></w:r></w:del>"#,
+            r#"<w:commentRangeStart w:id="7"/><w:r><w:t xml:space="preserve"> commented</w:t></w:r><w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r></w:p>"#,
+            r#"<w:p><w:moveFrom w:id="3" w:author="A"><w:r><w:t>moved away</w:t></w:r></w:moveFrom><w:r><w:rPr><w:b/><w:rPrChange w:id="4" w:author="A"><w:rPr><w:vanish/></w:rPr></w:rPrChange></w:rPr><w:t>Reformatted</w:t></w:r></w:p>"#,
+            r#"<w:p><w:pPr><w:rPr><w:del w:id="5" w:author="A"/></w:rPr></w:pPr><w:r><w:t xml:space="preserve">Joined </w:t></w:r></w:p><w:p><w:r><w:t>sentence</w:t></w:r><w:moveTo w:id="6" w:author="A"><w:r><w:t xml:space="preserve"> moved here</w:t></w:r></w:moveTo></w:p>"#,
+            r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Kept row</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="8" w:author="A"/></w:trPr><w:tc><w:p><w:del w:id="9" w:author="A"><w:r><w:delText>Deleted row</w:delText></w:r></w:del></w:p></w:tc></w:tr><w:tr><w:trPr><w:ins w:id="10" w:author="A"/></w:trPr><w:tc><w:p><w:ins w:id="11" w:author="A"><w:r><w:t>Inserted row</w:t></w:r></w:ins></w:p></w:tc></w:tr></w:tbl>"#,
+        );
+        let comments = format!(r#"<w:comments {}><w:comment w:id="7" w:author="Reviewer"><w:p><w:r><w:annotationRef/></w:r><w:r><w:t>Secret reviewer remark</w:t></w:r></w:p></w:comment></w:comments>"#, docx::fixtures::W);
+        fs::write(&input, docx::fixtures::docx(body, &[("rIdComments", "comments", "comments.xml", false)], &[("word/comments.xml", comments.as_bytes())])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({}))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert!(outcome.warnings.is_empty(), "comments are left out without a warning: {:?}", outcome.warnings);
+        let text = Document::load(root.join("review.pdf")).unwrap().extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Kept", "inserted words", "commented", "Reformatted", "Joined sentence moved here", "Kept row", "Inserted row"]), "{text}");
+        for absent in ["deleted words", "moved away", "Deleted row", "Secret reviewer remark", "Reviewer"] {
+            assert!(!text.contains(absent), "{absent:?} should be left out: {text}");
+        }
+    }
+
+    #[test]
+    fn word_places_floating_objects_at_their_anchors_with_an_approximate_layout_note() {
+        let root = sandbox("docx_floating");
+        let input = root.join("brochure.docx");
+        let anchor = |horizontal: &str, vertical: &str, size: (u32, u32), wrap: &str, graphic: &str| format!(
+            r#"<w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="{}"><wp:posOffset>{}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="{}"><wp:posOffset>{}</wp:posOffset></wp:positionV><wp:extent cx="{}" cy="{}"/>{wrap}<a:graphic>{graphic}</a:graphic></wp:anchor></w:drawing>"#,
+            horizontal.split(':').next().unwrap(), horizontal.split(':').nth(1).unwrap(), vertical.split(':').next().unwrap(), vertical.split(':').nth(1).unwrap(), size.0, size.1,
+        );
+        let text_box = anchor("page:3810000", "page:1270000", (1905000, 635000), "<wp:wrapSquare wrapText=\"bothSides\"/>",
+            r#"<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="FFF2CC"/></a:solidFill><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>Boxed callout</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData>"#);
+        let shape = anchor("margin:0", "paragraph:0", (1270000, 254000), "<wp:wrapNone/>",
+            r#"<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="ellipse"/><a:solidFill><a:srgbClr val="2E75B6"/></a:solidFill></wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData>"#);
+        let picture = anchor("column:0", "paragraph:0", (1270000, 1270000), "<wp:wrapTopAndBottom/>",
+            r#"<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdPhoto"/></pic:blipFill></pic:pic></a:graphicData>"#);
+        let body = format!(concat!(
+            r#"<w:p><w:r>{}</w:r><w:r><w:t>Front page text</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r>{}</w:r><w:r><w:t>Banner paragraph</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#,
+            r#"<w:p><w:r>{}</w:r><w:r><w:t>Photo caption</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t>Text after the photo</w:t></w:r></w:p>"#,
+        ), text_box, shape, picture);
+        fs::write(&input, docx::fixtures::docx(&body, &[("rIdPhoto", "image", "media/photo.png", false)], &[("word/media/photo.png", &png(10, 10, [200, 40, 40]))])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "letter", "margins": "normal" } }))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.detail, "2 pages.");
+        assert_eq!(outcome.warnings, [OutcomeWarning {
+            kind: WarningKind::ApproximateLayout,
+            message: "Approximate layout: 3 floating objects on pages 1 and 2 were placed as close as possible.".into(),
+        }]);
+
+        let document = Document::load(root.join("brochure.pdf")).unwrap();
+        let first = page_content(&document, 1);
+        assert!(first.contains("1 0.9490196 0.8 rg 300.00 642.00 150.00 50.00 re f"), "the text box sits at its page offset: {first}");
+        assert!(first.contains("0 0 0 RG 0.75 w 300.00 642.00 150.00 50.00 re S"), "the text box keeps its outline");
+        assert!(first.contains("0.18039216 0.45882353 0.7137255 rg"), "the anchored shape is filled");
+        let text = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["Boxed callout", "Front page text", "Banner paragraph"]), "{text}");
+        assert_eq!(page_images(&document, 1), 0);
+        assert_eq!(page_images(&document, 2), 1, "the wrapped picture stays on its anchor's page");
+        let second = page_content(&document, 2);
+        let picture_bottom = second.split("100.00 0 0 100.00 ").nth(1).and_then(|rest| rest.split_whitespace().nth(1)).and_then(|value| value.parse::<f32>().ok()).expect(&second);
+        let second_text = document.extract_text(&[2]).unwrap();
+        assert!(in_order(&second_text, &["Photo caption", "Text after the photo"]), "{second_text}");
+        assert_eq!(picture_bottom, 792. - 72. - 100., "the picture sits at the top of its anchor paragraph on page 2");
+        let first_line = second.split(" Tm ").next().and_then(|head| head.split_whitespace().last()).and_then(|value| value.parse::<f32>().ok()).expect(&second);
+        assert!(first_line < picture_bottom, "wrapped text flows below the picture, not under it: {first_line}");
+    }
+
+    #[test]
+    fn word_reads_legacy_vml_pictures_inline_and_text_boxes_as_floats() {
+        let root = sandbox("docx_vml");
+        let input = root.join("legacy.docx");
+        let body = concat!(
+            r#"<w:p><w:r><w:pict><v:shape style="width:60pt;height:30pt"><v:imagedata r:id="rIdLogo"/></v:shape></w:pict></w:r><w:r><w:t>After the logo</w:t></w:r></w:p>"#,
+            r##"<w:p><w:r><w:pict><v:shape style="position:absolute;margin-left:200pt;margin-top:150pt;width:120pt;height:40pt;mso-position-horizontal-relative:page;mso-position-vertical-relative:page" fillcolor="#ffcc00"><v:textbox><w:txbxContent><w:p><w:r><w:t>Legacy box</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap type="none"/></v:shape></w:pict></w:r></w:p>"##,
+        );
+        fs::write(&input, docx::fixtures::docx(body, &[("rIdLogo", "image", "media/logo.png", false)], &[("word/media/logo.png", &png(6, 3, [0, 0, 255]))])).unwrap();
+
+        let outcome = &convert_paths(&[&input], json!({ "pageDefaults": { "pageSize": "letter", "margins": "normal" } }))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert_eq!(outcome.warnings, [OutcomeWarning {
+            kind: WarningKind::ApproximateLayout,
+            message: "Approximate layout: 1 floating object on page 1 was placed as close as possible.".into(),
+        }]);
+        let document = Document::load(root.join("legacy.pdf")).unwrap();
+        let content = page_content(&document, 1);
+        assert!(content.contains("60.00 0 0 30.00"), "the inline VML picture keeps its size: {content}");
+        assert!(content.contains("1 0.8 0 rg 200.00 602.00 120.00 40.00 re f"), "the VML text box sits at its page offset: {content}");
+        let text = document.extract_text(&[1]).unwrap();
+        assert!(in_order(&text, &["After the logo"]) && text.contains("Legacy box"), "{text}");
+    }
+
+    #[test]
+    fn word_without_floating_objects_carries_no_layout_note() {
+        let root = sandbox("docx_flowing");
+        let input = root.join("plain.docx");
+        fs::write(&input, docx::fixtures::docx("<w:p><w:r><w:t>Only flowing text</w:t></w:r></w:p>", &[], &[])).unwrap();
+        let outcome = &convert_paths(&[&input], json!({}))[0];
+        assert!(succeeded(outcome), "{outcome:?}");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
     }
 
     #[test]

@@ -27,7 +27,9 @@
       "pointer": { "kind": "tool", "toolId": "heic-convert" }
     },
     "warnings": [
-      { "code": "precisionReduced", "message": "The 16-bit source would be reduced to 8-bit." }
+      { "code": "precisionReduced", "message": "The 16-bit source would be reduced to 8-bit." },
+      { "code": "omittedContent", "message": "Omitted content: 1 chart has no stored image, so it was left out." },
+      { "code": "approximateLayout", "message": "Approximate layout: 1 floating object on page 2 was placed as close as possible." }
     ]
   },
   {

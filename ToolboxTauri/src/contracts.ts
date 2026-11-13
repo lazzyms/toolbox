@@ -164,7 +164,9 @@ export type OutcomeWarning =
   | { code: "renamedToAvoidReplacing"; message: string; details: { chosenName: string; finalName: string } }
   | { code: "precisionReduced"; message: string }
   | { code: "bookmarksNotCarried"; message: string; details: { into: string } }
-  | { code: "tagsNotCarried"; message: string; details: { into: string } };
+  | { code: "tagsNotCarried"; message: string; details: { into: string } }
+  | { code: "omittedContent"; message: string }
+  | { code: "approximateLayout"; message: string };
 
 export type WarningCode = OutcomeWarning["code"];
 
@@ -249,6 +251,7 @@ export interface ToolDefinition {
   title: string;
   shortTitle: string;
   resultVerb: string;
+  resultNoun?: string;
   runningVerb: string;
   runningDetail?: string;
   outputNoun?: string;

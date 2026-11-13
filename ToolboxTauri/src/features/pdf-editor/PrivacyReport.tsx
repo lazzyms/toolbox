@@ -305,7 +305,7 @@ const ExportButtons = ({ copyLabel, saveLabel, readable, home, busy, onSave }: {
 const FileReport = ({ outcome, home, actions, saving, onSave }: { outcome: JobOutcome; home: string | null; actions: ReportActions; saving: boolean; onSave: (entries: Readable[], format: ReportFormat) => void }) => {
   const headingId = useId();
   const report = parseReport(outcome);
-  const failure = report ? null : outcome.state === "succeeded" ? "The report couldn't be read." : rowView(outcome, "Checked").detailLines[0] ?? "This file couldn't be checked.";
+  const failure = report ? null : outcome.state === "succeeded" ? "The report couldn't be read." : rowView(outcome, "Checked").detailLines[0]?.text ?? "This file couldn't be checked.";
   const summary = report ? summaryOf(report) : null;
   const categories = summary?.categories ?? [];
   return (

@@ -234,12 +234,13 @@ test("an RTF file needs no format section, sends no RTF section, and its row lis
         { requestedFamily: "Arial", requestedStyle: "bold", fontUsed: "Liberation Sans", styleUsed: "bold", source: "bundled fallback" },
         { requestedFamily: "Brand Grotesk", requestedStyle: "regular", fontUsed: "DejaVu Sans", styleUsed: "regular", source: "bundled default" },
     ];
-    const note = "2 pages. Omitted content: 1 picture couldn't be shown and was left out.";
+    const note = "Omitted content: 1 picture couldn't be shown and was left out.";
     await page.evaluate(({ fonts, note }) => (window as unknown as ConvertWindow).__finish([
-        { inputPath: "/local/memo.rtf", outputPaths: ["/local/memo.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts },
+        { inputPath: "/local/memo.rtf", outputPaths: ["/local/memo.pdf"], detail: "2 pages.", state: "succeeded", failure: null, reason: null, warnings: [{ code: "omittedContent", message: note }], fonts },
     ]), { fonts, note });
     const saved = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") }).filter({ hasText: "memo.rtf" });
-    await expect(saved).toContainText(note);
+    await expect(saved.locator(".result-row-detail")).toHaveText([note, "2 pages."]);
+    await expect(saved).toHaveAttribute("data-tone", "warn");
     await saved.getByRole("button", { name: "Show fonts" }).click();
     await expect(page.getByRole("list", { name: "Fonts used in memo.rtf" }).getByRole("listitem")).toHaveText([
         /Times New Roman.*Liberation Serif.*Bundled fallback, same widths/,
@@ -276,6 +277,53 @@ test("a Word document needs no format section, and a password-protected one poin
     await expect(failed).toContainText(locked);
     await failed.getByRole("button", { name: "Open Lock & Unlock" }).click();
     await expect(page.getByRole("heading", { name: "Lock & Unlock" }).first()).toBeVisible();
+});
+
+test("Word rows show omitted content as a warning and approximate layout as a note, as the results board draws them", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/budget.docx", "/local/brochure.docx", "/local/review.docx", "/local/plain.docx"]);
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({ paths: ["/local/budget.docx", "/local/brochure.docx", "/local/review.docx", "/local/plain.docx"], outputLocation: "alongsideInput" });
+
+    const omitted = "Omitted content: 1 chart has no stored image, so it was left out.";
+    const layout = "Approximate layout: 3 floating objects on pages 1 and 2 were placed as close as possible.";
+    const saved = (name: string, detail: string, warnings: unknown[]) =>
+        ({ inputPath: `/local/${name}`, outputPaths: [`/local/${name.replace(".docx", ".pdf")}`], detail, state: "succeeded", failure: null, reason: null, warnings });
+    await page.evaluate((outcomes) => (window as unknown as ConvertWindow).__finish(outcomes), [
+        saved("budget.docx", "3 pages.", [{ code: "omittedContent", message: omitted }]),
+        saved("brochure.docx", "2 pages.", [{ code: "approximateLayout", message: layout }]),
+        saved("review.docx", "4 pages.", [{ code: "omittedContent", message: omitted }, { code: "approximateLayout", message: layout }]),
+        saved("plain.docx", "1 page.", []),
+    ]);
+
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    const budget = rows.filter({ hasText: "budget.docx" });
+    await expect(budget).toHaveAttribute("data-tone", "warn");
+    await expect(budget.locator(".result-row-icon svg")).toHaveClass(/lucide-triangle-alert/);
+    await expect(budget.locator(".result-row-detail")).toHaveText([omitted, "3 pages."]);
+    await expect(budget.locator(".result-row-detail").first()).toHaveAttribute("data-tone", "warn");
+    await expect(budget.locator(".result-row-state [aria-hidden]")).toHaveText("Saved");
+    await expect(budget.locator(".result-row-state .sr-only")).toHaveText("Saved with a warning");
+    await expect(budget.getByRole("button", { name: "Open budget.pdf", exact: true })).toBeVisible();
+
+    const brochure = rows.filter({ hasText: "brochure.docx" });
+    await expect(brochure).toHaveAttribute("data-tone", "note");
+    await expect(brochure.locator(".result-row-icon svg")).toHaveClass(/lucide-info/);
+    await expect(brochure.locator(".result-row-detail")).toHaveText([layout, "2 pages."]);
+    await expect(brochure.locator(".result-row-detail").first()).not.toHaveAttribute("data-tone", /.+/);
+    await expect(brochure.locator(".result-row-state [aria-hidden]")).toHaveText("Saved");
+    await expect(brochure.locator(".result-row-state .sr-only")).toHaveText("Saved with a note");
+    const muted = await brochure.locator(".result-row-detail").first().evaluate((line) => getComputedStyle(line).color);
+    const amber = await budget.locator(".result-row-detail").first().evaluate((line) => getComputedStyle(line).color);
+    expect(muted).not.toBe(amber);
+
+    const review = rows.filter({ hasText: "review.docx" });
+    await expect(review).toHaveAttribute("data-tone", "warn");
+    await expect(review.locator(".result-row-detail")).toHaveText([omitted, layout, "4 pages."]);
+    await expect(review.locator(".result-row-state .sr-only")).toHaveText("Saved with warnings");
+
+    await expect(rows.filter({ hasText: "plain.docx" })).toHaveAttribute("data-tone", "ok");
+    await expect(page.locator(".result-summary")).toContainText("3 PDFs have a warning or note.");
 });
 
 test("the Tables section appears only while a CSV or TSV is listed and picks the delimiter by file type", async ({ page }) => {

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Check, ChevronDown, ChevronRight, CircleMinus, CircleX, Clock, FileText, KeyRound, Layers, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleMinus, CircleX, Clock, FileText, Info, KeyRound, Layers, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -7,7 +7,7 @@ import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
 import { shortenHomePath, useHomeDir } from "../homePath";
 import type { CombinedResult } from "../registry/saveSteps";
 import { liveFiles, type LiveFile, type LiveRun } from "./liveRun";
-import { batchTotal, fileName, resultSummary, resultTally, rowView, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
+import { batchTotal, fileName, resultSummary, resultTally, rowView, warningDetail, warningText, type OutputGroup, type OutputGrouping, type RowTone } from "./resultRow";
 import { PasswordRetryForm } from "./PasswordFields";
 
 type RowAction = "open" | "reveal" | "retry";
@@ -22,6 +22,7 @@ const idleActionState: RowActionState = { pending: null, error: null };
 const toneIcons: Record<RowTone, typeof Check> = {
     ok: Check,
     warn: TriangleAlert,
+    note: Info,
     skip: CircleMinus,
     fail: CircleX,
 };
@@ -58,6 +59,7 @@ interface ResultListProps {
     progress: Progress;
     loading: boolean;
     resultVerb: string;
+    resultNoun?: string;
     runningVerb: string;
     runningDetail?: string;
     live: LiveRun | null;
@@ -76,7 +78,7 @@ interface ResultListProps {
     summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, resultNoun, runningVerb, runningDetail, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
     const namedByOutput = namedByOutputProp || combinedInputs !== null;
     const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
@@ -168,7 +170,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
         const baseView = rowView(result, resultVerb, namedByOutput, outputNoun);
         const view = group
-            ? { ...baseView, detailLines: [group.hint, ...result.warnings.map(warningText)], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
+            ? { ...baseView, detailLines: [{ text: group.hint, tone: null }, ...result.warnings.map(warningDetail)], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
             : baseView;
         const open = group !== null && expanded.has(index);
         const state = actionStates[index] ?? idleActionState;
@@ -192,7 +194,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                 <span className="result-row-text">
                     <span className="result-row-name" title={view.fullPath}>{name}</span>
                     {view.detailLines.map((line, lineIndex) => (
-                        <span key={lineIndex} className="result-row-detail">{line}</span>
+                        <span key={lineIndex} className="result-row-detail" data-tone={line.tone ?? undefined}>{line.text}</span>
                     ))}
                 </span>
                 <span className="result-row-state">
@@ -427,7 +429,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         );
     }
 
-    const summary = resultSummary(results, resultVerb);
+    const summary = resultSummary(results, resultVerb, resultNoun);
     const total = batchTotal(results, resultVerb);
     const extraHint = resultsHint?.(results) ?? null;
     return (

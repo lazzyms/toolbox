@@ -880,6 +880,9 @@ body {
   color: var(--muted-foreground);
   font-size: 12px;
 }
+.result-row-detail[data-tone="warn"] {
+  color: var(--warning);
+}
 .result-rows {
   margin: 0;
   padding: 0;
@@ -1096,6 +1099,7 @@ body {
 }
 .result-row[data-tone="ok"] { --result-tone: var(--foreground); }
 .result-row[data-tone="warn"] { --result-tone: var(--warning); }
+.result-row[data-tone="note"] { --result-tone: var(--foreground); }
 .result-row[data-tone="skip"] { --result-tone: var(--muted-foreground); }
 .result-row[data-tone="fail"] { --result-tone: var(--destructive); }
 .result-row-icon {

@@ -44,6 +44,8 @@ const warningDetailKeys: Record<WarningCode, readonly string[] | null> = {
   precisionReduced: null,
   bookmarksNotCarried: ["into"],
   tagsNotCarried: ["into"],
+  omittedContent: null,
+  approximateLayout: null,
 };
 
 const toolIds = new Set<string>(UtilityRegistry.map((utility) => utility.id));
