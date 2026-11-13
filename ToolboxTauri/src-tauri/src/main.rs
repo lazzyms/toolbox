@@ -743,7 +743,7 @@ mod command_tests {
     use crate::kit::common::OutputLocation;
     use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
     use crate::kit::contracts::{ErrorKind, LimitKind};
-    use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, RotateRequest, TiffMode, TiffRequest, ToneRequest, WatermarkRequest};
+    use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, TiffMode, TiffRequest, ToneRequest, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
     use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, EditPdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RangedPageScope, RedactPdfRequest, RotatePage, SignPdfRequest};
     use crate::kit::compress::CompressLevel;
@@ -3049,10 +3049,10 @@ mod command_tests {
         assert_eq!(std::fs::read(&pdf).unwrap(), pdf_bytes, "saving a report must not touch its PDF");
         outputs.extend(named(&mut naming, "convert_images", image.clone(), assert_success("convert", convert_images(RunEvents::silent(), ConvertImagesRequest { paths: vec![image.clone()], format: "jpg".into(), output_location: location(&root, "convert") }))));
         outputs.extend(named(&mut naming, "compress_images", image.clone(), assert_success("compress images", compress_images(RunEvents::silent(), serde_json::from_value::<CompressImagesRequest>(serde_json::json!({ "paths": [image.clone()], "quality": 80, "lossless": false, "outputLocation": location(&root, "compress images") })).expect("Compress Files view payload for compress_images")))));
-        outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128, output_location: location(&root, "resize") }))));
+        outputs.extend(named(&mut naming, "resize_images", image.clone(), assert_success("resize", resize_images(RunEvents::silent(), ResizeRequest { paths: vec![image.clone()], resize: ResizeStep { width: 128, height: 128, mode: "exact".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 128 }, output_location: location(&root, "resize") }))));
         outputs.extend(named(&mut naming, "rotate_images", image.clone(), assert_success("rotate", rotate_images(RunEvents::silent(), RotateRequest { paths: vec![image.clone()], degrees: 90, flip: "none".into(), output_location: location(&root, "rotate") }))));
         outputs.extend(named(&mut naming, "crop_images", image.clone(), assert_success("crop image", crop_images(RunEvents::silent(), CropRequest { paths: vec![image.clone()], crop: CropStep { x: 0, y: 0, width: 128, height: 128, mode: "rectangle".into(), aspect_width: 128, aspect_height: 128, anchor: "center".into() }, output_location: location(&root, "crop image") }))));
-        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack crop", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }) }, output_location: location(&root, "edit stack crop") }))));
+        outputs.extend(named(&mut naming, "export_image_edit_stack", image.clone(), assert_success("edit stack", export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest { paths: vec![image.clone()], steps: ImageEditSteps { crop: Some(CropStep { x: 0, y: 0, width: 0, height: 0, mode: "aspectRatio".into(), aspect_width: 4, aspect_height: 5, anchor: "center".into() }), resize: Some(ResizeStep { width: 0, height: 0, mode: "longestSide".into(), resampling: "lanczos".into(), keep_aspect_ratio: true, percentage: 100, longest_side: 64 }) }, output_location: location(&root, "edit stack") }))));
         outputs.extend(named(&mut naming, "generate_icon_set", image.clone(), assert_success("icons", generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone()], preset: "favicon".into(), sizes: vec![], output_location: location(&root, "icons") }))));
         outputs.extend(named(&mut naming, "create_gif", image.clone(), assert_aggregate_success("create gif", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, output_location: location(&root, "create gif"), output_path: None }))));
         outputs.extend(named(&mut naming, "extract_gif_frames", animated.clone(), assert_success("extract gif", extract_gif_frames(RunEvents::silent(), GifExtractRequest { paths: vec![animated.clone()], output_location: location(&root, "extract gif") }))));
@@ -3211,7 +3211,7 @@ mod command_tests {
         let originals = inputs.iter().map(|path| (Original::of(path), std::fs::read(path).unwrap())).collect::<Vec<_>>();
         let rectangle = CropStep { x: 10, y: 20, width: 64, height: 48, mode: "rectangle".into(), aspect_width: 0, aspect_height: 0, anchor: "custom".into() };
         let run = |folder: &str| tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
-            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()) }, output_location: OutputLocation::CustomFolder(root.join(folder)),
+            paths: inputs.clone(), steps: ImageEditSteps { crop: Some(rectangle.clone()), resize: None }, output_location: OutputLocation::CustomFolder(root.join(folder)),
         }));
         std::fs::create_dir_all(root.join("out")).unwrap();
         std::fs::create_dir_all(root.join("again")).unwrap();
@@ -3292,6 +3292,83 @@ mod command_tests {
         }
         assert_eq!(std::fs::read_dir(&root).unwrap().filter(|entry| entry.as_ref().unwrap().path().is_file()).count(), sources.len(), "nothing is written next to the originals");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn edit_stack_runs_crop_then_resize_in_one_encode_whatever_order_they_arrive_in() {
+        let root = sandbox("edit_stack_resize");
+        let jpeg = root.join("tall.jpg");
+        let png = root.join("wide.png");
+        let pattern = |width: u32, height: u32, seed: u8| image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| Rgba([seed, (x * 7) as u8, (y * 3) as u8, 255])));
+        pattern(200, 300, 1).to_rgb8().save(&jpeg).unwrap();
+        pattern(300, 200, 2).save(&png).unwrap();
+        let originals = [&jpeg, &png].map(|path| (Original::of(path), std::fs::read(path).unwrap()));
+        let run = |steps: &str, paths: Vec<PathBuf>, folder: &str| {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            tauri::async_runtime::block_on(export_image_edit_stack(RunEvents::silent(), ImageEditStackRequest {
+                paths, steps: serde_json::from_str::<ImageEditSteps>(steps).unwrap(), output_location: OutputLocation::CustomFolder(root.join(folder)),
+            }))
+        };
+        let crop = r#"{"mode":"rectangle","x":10,"y":20,"width":120,"height":160,"aspectWidth":0,"aspectHeight":0,"anchor":"custom"}"#;
+        let resize = r#"{"mode":"longestSide","longestSide":80,"width":0,"height":0,"percentage":100,"resampling":"lanczos","keepAspectRatio":true}"#;
+
+        let crop_first = run(&format!(r#"{{"crop":{crop},"resize":{resize}}}"#), vec![jpeg.clone(), png.clone()], "crop-first");
+        let resize_first = run(&format!(r#"{{"resize":{resize},"crop":{crop}}}"#), vec![jpeg.clone(), png.clone()], "resize-first");
+        for (index, name) in [(0, "tall-edited.jpg"), (1, "wide-edited.png")] {
+            assert!(crop_first[index].error().is_none(), "{:?}", crop_first[index].error());
+            assert_eq!(crop_first[index].output_paths(), [root.join("crop-first").join(name)], "more than one step is named -edited");
+            assert_eq!(resize_first[index].output_paths(), [root.join("resize-first").join(name)]);
+            assert_eq!(std::fs::read(&crop_first[index].output_paths()[0]).unwrap(), std::fs::read(&resize_first[index].output_paths()[0]).unwrap(), "the order steps were added never changes the output");
+        }
+
+        // Crop is measured in source pixels and runs first; resize then fits the 120 x 160 crop to 80 px on its longer side.
+        let edited = std::fs::read(&crop_first[0].output_paths()[0]).unwrap();
+        let cropped = crate::kit::images::decode(&jpeg).unwrap().into_first_page().crop_imm(10, 20, 120, 160);
+        let once = crate::kit::images::encode(&cropped.resize_exact(60, 80, image::imageops::FilterType::Lanczos3), crate::kit::images::OutputFormat::Jpeg, 90).unwrap();
+        assert_eq!(edited, once, "JPEG is decoded once, cropped, resized and encoded once at quality 90");
+        let chained_crop = image::load_from_memory(&crate::kit::images::encode(&cropped, crate::kit::images::OutputFormat::Jpeg, 90).unwrap()).unwrap();
+        let chained = crate::kit::images::encode(&chained_crop.resize_exact(60, 80, image::imageops::FilterType::Lanczos3), crate::kit::images::OutputFormat::Jpeg, 90).unwrap();
+        assert_ne!(edited, chained, "a stack is not two chained exports");
+
+        let resized = run(r#"{"resize":{"mode":"exact","width":150,"height":150,"keepAspectRatio":true,"resampling":"bicubic"}}"#, vec![jpeg.clone(), png.clone()], "resize-only");
+        assert_eq!(resized[0].output_paths(), [root.join("resize-only").join("tall-resized.jpg")], "a single Resize step is named -resized");
+        assert_eq!(resized[1].output_paths(), [root.join("resize-only").join("wide-resized.png")]);
+        assert_eq!(image::image_dimensions(&resized[0].output_paths()[0]).unwrap(), (100, 150), "the aspect lock fits each image inside the box");
+        assert_eq!(image::image_dimensions(&resized[1].output_paths()[0]).unwrap(), (150, 100));
+        let stretched = run(r#"{"resize":{"mode":"exact","width":150,"height":150,"keepAspectRatio":false}}"#, vec![png.clone()], "stretched");
+        assert_eq!(image::image_dimensions(&stretched[0].output_paths()[0]).unwrap(), (150, 150), "turning the lock off gives the exact size");
+
+        for (steps, message) in [
+            (r#"{"resize":{"mode":"exact","width":0,"height":150}}"#, "between 1 and 16384"),
+            (r#"{"resize":{"mode":"exact","width":16385,"height":150}}"#, "between 1 and 16384"),
+            (r#"{"resize":{"mode":"longestSide","longestSide":16385}}"#, "between 1 and 16384"),
+            (r#"{"resize":{"mode":"percentage","percentage":0}}"#, "between 1 and 1000"),
+            (r#"{"resize":{"mode":"percentage","percentage":1001}}"#, "between 1 and 1000"),
+        ] {
+            let outcomes = run(steps, vec![jpeg.clone(), png.clone()], "invalid");
+            assert_eq!(outcomes.len(), 2, "{steps}");
+            for outcome in &outcomes {
+                let error = outcome.error().unwrap_or_else(|| panic!("{steps} must fail"));
+                assert!(matches!(error.kind, ErrorKind::InvalidInput), "{steps}: {:?}", error.kind);
+                assert!(error.message.contains(message), "{steps}: {}", error.message);
+                assert!(outcome.output_paths().is_empty());
+            }
+        }
+        assert_eq!(std::fs::read_dir(root.join("invalid")).unwrap().count(), 0, "an invalid size never writes");
+
+        // A size that is only too large for one image fails that file and leaves the rest of the batch alone.
+        let strip = root.join("strip.png");
+        pattern(2000, 10, 3).save(&strip).unwrap();
+        let mixed = run(r#"{"resize":{"mode":"percentage","percentage":1000}}"#, vec![png.clone(), strip.clone()], "mixed");
+        assert_eq!(image::image_dimensions(&mixed[0].output_paths()[0]).unwrap(), (3000, 2000));
+        assert!(mixed[1].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)), "20000 px wide is past the limit");
+        assert!(mixed[1].output_paths().is_empty());
+
+        for (original, bytes) in &originals {
+            original.assert_untouched();
+            assert_eq!(&std::fs::read(&original.path).unwrap(), bytes);
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
