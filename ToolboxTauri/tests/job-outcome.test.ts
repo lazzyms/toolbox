@@ -58,6 +58,13 @@ test("native-shaped outcomes parse into the TypeScript contract for all three st
   assert.deepEqual(flattened.warnings.map((warning) => warning.code), ["transparencyFlattened"]);
 });
 
+test("an image PDF to EPUB left out says so, in the native side's words", () => {
+  const leftOut = { code: "imageUnsupported", message: "Page 63, image 2 — JBIG2 isn't supported in this version. Left out; the rest of the book converted.", details: { page: 63, image: 2, feature: "JBIG2" } };
+  const outcome = parseJobOutcome({ ...sample(0), inputPath: "field-guide.pdf", outputPaths: ["field-guide.epub"], detail: "186 pages, 240 of 241 images. 1 image couldn't be read.", warnings: [leftOut] });
+  assert.equal(warningText(outcome.warnings[0]), leftOut.message);
+  assert.equal(warningText({ ...leftOut, message: " " } as typeof outcome.warnings[0]), "Page 63, image 2 — JBIG2 isn't supported in this version. Not saved.", "a blank message falls back to Extract from PDF's words");
+});
+
 test("an upscaled icon set is a warning row that names both sizes, as the native side does", () => {
   const native = { code: "upscaled", message: "Upscaled to 1024 from 512 pixels.", details: { from: 512, to: 1024 } };
   const outcome = parseJobOutcome({ ...sample(0), inputPath: "brand-mark.png", outputPaths: ["brand-mark-icons"], detail: "7 files", warnings: [native] });

@@ -1134,7 +1134,7 @@ fn write_images(document: &Document, input: &Path, location: &OutputLocation, ca
             Ok(extracted) => extracted,
             Err(reason) => {
                 run.undecodable += 1;
-                run.warnings.push(not_saved_warning(page, image, reason));
+                run.warnings.push(not_saved_warning(page, image, reason, "Not saved."));
                 continue;
             }
         };
@@ -1175,7 +1175,8 @@ fn write_images(document: &Document, input: &Path, location: &OutputLocation, ca
     }
 }
 
-fn not_saved_warning(page: u32, image: u32, reason: NotSaved) -> OutcomeWarning {
+/// Names an image that couldn't be saved, why, and what happened instead, in `closing`.
+pub(super) fn not_saved_warning(page: u32, image: u32, reason: NotSaved, closing: &str) -> OutcomeWarning {
     let (kind, reason) = match reason {
         NotSaved::Unsupported(feature) => {
             let reason = format!("{feature} isn't supported in this version");
@@ -1187,7 +1188,7 @@ fn not_saved_warning(page: u32, image: u32, reason: NotSaved) -> OutcomeWarning 
             format!("Would be {} × {} px when decoded, over the size limit", grouped(width), grouped(height)),
         ),
     };
-    OutcomeWarning { kind, message: format!("Page {page}, image {image} — {reason}. Not saved.") }
+    OutcomeWarning { kind, message: format!("Page {page}, image {image} — {reason}. {closing}") }
 }
 
 fn colour_warning(colour: JpegColour, mut pages: Vec<u32>) -> OutcomeWarning {

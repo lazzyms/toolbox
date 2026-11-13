@@ -6,8 +6,9 @@
 //! larger or bolder than the body becomes headings, which split the book into chapter documents.
 //! The table of contents follows the PDF's bookmarks, or the headings when it has none. Links to
 //! pages become links into the book and web links are kept as written. Title and author come from
-//! the PDF unless the request replaces them, and the first page can be rendered as the cover. The
-//! package is built in memory with fixed timestamps and an identifier derived from the PDF's bytes,
+//! the PDF unless the request replaces them, and the first page can be rendered as the cover. Images
+//! drawn on the pages are kept as Extract from PDF saves them, each placed where it is drawn among the
+//! text and stored once however often it is drawn. The package is built in memory with fixed timestamps and an identifier derived from the PDF's bytes,
 //! so the same PDF always makes the same EPUB, then reopened and checked before it is published.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -23,8 +24,9 @@ use zip::{CompressionMethod, DateTime, System, ZipArchive, ZipWriter};
 use crate::kit::common::{note_renamed, JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::{OutcomeDetail, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use super::document_info;
-use super::page_text::{read_document_text, PageText, PageTextRun};
-use super::remaining::{pages_without_text, PDF_DAMAGED};
+use super::embedded_image::{self, Extracted, NotSaved};
+use super::page_text::{read_document_text, PageImageSource, PageText, PageTextRun};
+use super::remaining::{not_saved_warning, pages_without_text, PDF_DAMAGED};
 use super::resolve;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -61,12 +63,16 @@ pub enum EpubCover {
 pub const NO_SELECTABLE_TEXT: &str = "PDF contains no selectable text; scanned PDFs require OCR. No EPUB was made.";
 pub const PASSWORD_PROTECTED: &str = "This PDF is password-protected. Remove the password, then convert again.";
 pub const COVER_NOT_RENDERED: &str = "Omitted content: the cover, because the first page couldn't be rendered.";
+/// Closes the warning for an image that couldn't be read.
+pub const IMAGE_LEFT_OUT: &str = "Left out; the rest of the book converted.";
 
 const MIMETYPE: &str = "application/epub+zip";
 const PACKAGE_PATH: &str = "OEBPS/content.opf";
 const NAV_PATH: &str = "OEBPS/nav.xhtml";
 const COVER_IMAGE: &str = "cover.jpg";
 const COVER_PAGE: &str = "cover.xhtml";
+/// The folder, beside the content documents, that holds the book's images.
+const IMAGES: &str = "images";
 /// The cover's JPEG quality: the rendered page is mostly flat colour and text.
 const COVER_QUALITY: u8 = 85;
 /// Every EPUB carries this modification time, so output never depends on when it was made.
@@ -110,7 +116,8 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
     if request.remove_headers_and_footers { remove_running_text(&mut lines); }
     let stem = input.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
     let details = BookDetails::new(document_info::from_document(&document).merged(), request, &stem);
-    let chapters = chapters(blocks(&lines));
+    let images = book_images(&document, &pages);
+    let chapters = chapters(blocks(&lines, &images.placed));
     let homes = page_homes(&chapters, pages.len());
     let bookmarks = bookmarks(&document, &page_numbers);
     let (source, contents) = if bookmarks.is_empty() {
@@ -120,7 +127,7 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         (Source::Bookmarks, bookmarks.iter().map(|bookmark| (bookmark.level, page_href(bookmark.page, &homes), bookmark.title.clone())).collect())
     };
     let mut anchors = bookmarks.iter().map(|bookmark| bookmark.page).collect::<BTreeSet<_>>();
-    anchors.extend(chapters.iter().flat_map(|chapter| &chapter.items).flat_map(|item| &item.body().links).filter_map(|link| match link.target {
+    anchors.extend(chapters.iter().flat_map(|chapter| &chapter.items).filter_map(Item::body).flat_map(|body| &body.links).filter_map(|link| match link.target {
         Target::Page(page) => Some(page),
         Target::Uri(_) => None,
     }));
@@ -134,6 +141,7 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         homes,
         anchors,
         cover: cover.clone().flatten(),
+        images: images.files,
     };
     let epub = match package(&book).and_then(|epub| verify(&epub).map(|()| epub)) {
         Ok(epub) => epub,
@@ -145,24 +153,84 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
     };
     let chosen = path.with_file_name(format!("{stem}.epub"));
     let entries = book.contents.len();
-    let page_count = if pages.len() == 1 { "1 page.".to_string() } else { format!("{} pages.", pages.len()) };
-    let detail = format!("{page_count} {}", source.sentence(entries));
+    let page_count = count(pages.len(), "page", "pages");
+    let (kept, found) = (book.images.len(), book.images.len() + images.warnings.len());
+    let detail = match (kept, images.warnings.len()) {
+        (0, 0) => format!("{page_count}. {}", source.sentence(entries)),
+        (_, 0) => format!("{page_count}, {}. {}", count(kept, "image", "images"), source.sentence(entries)),
+        (_, unreadable) => format!("{page_count}, {kept} of {}. {} couldn't be read.", count(found, "image", "images"), count(unreadable, "image", "images")),
+    };
     let cover_detail = match &cover {
         Some(Some(_)) => "Page 1",
         Some(None) => "None; the first page couldn't be rendered",
         None => "None",
     };
-    let outcome = note_renamed(JobOutcome::succeeded(input, vec![path], detail), Some(&chosen)).with_page_details(vec![
+    let images_kept = (found > 0).then(|| OutcomeDetail { label: "Images kept".into(), value: format!("{kept} of {found}") });
+    let outcome = note_renamed(JobOutcome::succeeded(input, vec![path], detail), Some(&chosen)).with_page_details(images_kept.into_iter().chain([
         OutcomeDetail { label: "Contents".into(), value: source.detail(entries) },
         OutcomeDetail { label: "Cover".into(), value: cover_detail.into() },
         OutcomeDetail { label: "Title and author".into(), value: details.describe() },
-    ]);
+    ]).collect());
     let outcome = if matches!(cover, Some(None)) { outcome.with_warning(OutcomeWarning { kind: WarningKind::OmittedContent, message: COVER_NOT_RENDERED.into() }) } else { outcome };
+    let outcome = images.warnings.into_iter().fold(outcome, JobOutcome::with_warning);
     if blank.is_empty() { outcome } else { outcome.with_warning(pages_without_text(blank)) }
 }
 
 fn password_protected(input: PathBuf) -> JobOutcome {
     JobOutcome::failure(input, ToolError::invalid_input(PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }))
+}
+
+/// One image file in the book.
+#[derive(Debug, Clone, PartialEq)]
+struct BookImage { name: String, media_type: &'static str, data: Vec<u8> }
+
+/// The book's images: each distinct image once, where every page draws one (its top and its file, by
+/// page in draw order), and a warning for each image that couldn't be read.
+struct BookImages { files: Vec<BookImage>, placed: Vec<Vec<(f32, usize)>>, warnings: Vec<OutcomeWarning> }
+
+/// Reads every image the pages draw the way Extract from PDF saves it: JPEG data byte for byte and
+/// anything else as a lossless PNG. JPEG 2000 is left out, since EPUB readers needn't show it. An image
+/// object drawn again, or an image whose saved bytes match one already kept, is stored once. Images are
+/// numbered on each page in the order the page draws them; an unreadable one is reported once, where it is
+/// first drawn, and left out.
+fn book_images(document: &Document, pages: &[PageText]) -> BookImages {
+    let mut images = BookImages { files: Vec::new(), placed: Vec::new(), warnings: Vec::new() };
+    let mut by_object: HashMap<ObjectId, Option<usize>> = HashMap::new();
+    let mut by_content: HashMap<Vec<u8>, usize> = HashMap::new();
+    for (page, text) in pages.iter().enumerate() {
+        let mut placed = Vec::new();
+        for (number, drawn) in text.images.iter().enumerate() {
+            let object = match &drawn.source { PageImageSource::Object(id) => Some(*id), PageImageSource::Inline(_) => None };
+            let file = match object.and_then(|id| by_object.get(&id)) {
+                Some(known) => *known,
+                None => {
+                    let extracted = match &drawn.source {
+                        PageImageSource::Object(id) => document.get_object(*id).and_then(Object::as_stream).map_err(|_| NotSaved::Damaged).and_then(|stream| embedded_image::extract(document, stream)),
+                        PageImageSource::Inline(stream) => embedded_image::extract(document, stream),
+                    };
+                    let file = match extracted {
+                        Ok(Extracted::Jpeg2000(_)) => Err(NotSaved::Unsupported("JPEG 2000".into())),
+                        Ok(extracted) => {
+                            let key = [extracted.extension().as_bytes(), &[0], &Sha256::digest(extracted.bytes())].concat();
+                            Ok(*by_content.entry(key).or_insert_with(|| {
+                                let media_type = if matches!(extracted, Extracted::Jpeg { .. }) { "image/jpeg" } else { "image/png" };
+                                let name = format!("image-{}.{}", images.files.len() + 1, extracted.extension());
+                                images.files.push(BookImage { name, media_type, data: extracted.bytes().to_vec() });
+                                images.files.len() - 1
+                            }))
+                        }
+                        Err(reason) => Err(reason),
+                    };
+                    let file = file.map_err(|reason| images.warnings.push(not_saved_warning(page as u32 + 1, number as u32 + 1, reason, IMAGE_LEFT_OUT))).ok();
+                    if let Some(id) = object { by_object.insert(id, file); }
+                    file
+                }
+            };
+            if let Some(file) = file { placed.push((drawn.y, file)); }
+        }
+        images.placed.push(placed);
+    }
+    images
 }
 
 fn save(input: &Path, location: &OutputLocation, epub: &[u8]) -> Result<PathBuf, ToolError> {
@@ -451,6 +519,10 @@ fn style(line: &Line) -> Style { ((line.size * 2.).round() as i32, line.bold) }
 #[derive(Debug, Clone, PartialEq)]
 struct Block { heading: Option<Style>, body: Text }
 
+/// What the book reads in order: a block of text, or an image by its index among the book's images.
+#[derive(Debug, Clone, PartialEq)]
+enum Piece { Block(Block), Figure(usize) }
+
 /// A block being assembled from lines.
 struct Draft { heading: Option<Style>, body: Text, lines: usize, page: usize, top: f32, bottom: f32, left: f32, right: f32, widest: f32, size: f32 }
 
@@ -510,33 +582,56 @@ impl Draft {
 /// the body, or bold at about body size or larger when the body isn't bold. Lines of one style join
 /// into blocks, and paragraphs continue across page breaks. Every page is marked where its text
 /// starts; a page without text is marked where the next text starts, or at the end of the book.
-fn blocks(pages: &[Vec<Line>]) -> Vec<Block> {
+///
+/// `figures` holds each page's images by their top. An image goes before the first block that starts
+/// after the line it sits above, so it never splits a paragraph; images left after the last block close the book.
+fn blocks(pages: &[Vec<Line>], figures: &[Vec<(f32, usize)>]) -> Vec<Piece> {
     let mut weights: BTreeMap<Style, usize> = BTreeMap::new();
     for line in pages.iter().flatten() { *weights.entry(style(line)).or_default() += line.text.chars().count(); }
-    let Some((&(body_size, body_bold), _)) = weights.iter().max_by_key(|(_, weight)| **weight) else { return Vec::new() };
+    let Some((&(body_size, body_bold), _)) = weights.iter().max_by_key(|(_, weight)| **weight) else {
+        return figures.iter().flatten().map(|&(_, image)| Piece::Figure(image)).collect();
+    };
     let body_size = body_size as f32 / 2.;
     let heading = |line: &Line| (line.size >= body_size * 1.15 || (line.bold && !body_bold && line.size >= body_size * 0.95)).then(|| style(line));
     let words = inline_words(pages);
     let mut drafts: Vec<Draft> = Vec::new();
+    // Each draft's index among the pieces, and the images waiting for the next draft.
+    let mut order: Vec<Result<usize, usize>> = Vec::new();
+    let mut waiting: Vec<usize> = Vec::new();
     let mut unmarked = 0;
     for (page, lines) in pages.iter().enumerate() {
+        let mut page_figures = figures.get(page).cloned().unwrap_or_default();
+        page_figures.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut page_figures = page_figures.into_iter().peekable();
         for line in lines {
+            while let Some((_, image)) = page_figures.next_if(|(top, _)| *top <= line.top) { waiting.push(image); }
             let kind = heading(line);
             let continues = drafts.last().is_some_and(|draft| draft.heading == kind && if draft.page == page { draft.continues_on_page(line) } else { draft.continues_across_pages(line) });
             let offset = match drafts.last_mut() {
                 Some(draft) if continues => draft.push(page, line, &words),
-                _ => { drafts.push(Draft::start(kind, page, line)); 0 }
+                _ => {
+                    order.extend(waiting.drain(..).map(Err));
+                    order.push(Ok(drafts.len()));
+                    drafts.push(Draft::start(kind, page, line));
+                    0
+                }
             };
             let draft = drafts.last_mut().expect("a draft was just pushed or extended");
             draft.body.pages.extend((unmarked..=page).map(|marked| (marked, offset)));
             unmarked = unmarked.max(page + 1);
         }
+        waiting.extend(page_figures.map(|(_, image)| image));
     }
+    order.extend(waiting.into_iter().map(Err));
     if let Some(draft) = drafts.last_mut() {
         let end = draft.body.text.len();
         draft.body.pages.extend((unmarked..pages.len()).map(|marked| (marked, end)));
     }
-    drafts.into_iter().map(Draft::finish).collect()
+    let mut blocks = drafts.into_iter().map(Draft::finish);
+    order.into_iter().map(|piece| match piece {
+        Ok(_) => Piece::Block(blocks.next().expect("every draft has its place")),
+        Err(image) => Piece::Figure(image),
+    }).collect()
 }
 
 /// Every word that appears inside a line rather than at its end, case folded, so a hyphen at a
@@ -598,13 +693,14 @@ fn join(text: &mut String, next: &str, words: &HashSet<String>) {
     text.push_str(next);
 }
 
-/// A content document's text: headings carry their level and an anchor for the navigation.
+/// A content document's text and images: headings carry their level and an anchor for the navigation,
+/// and an image its index among the book's images.
 #[derive(Debug, Clone, PartialEq)]
-enum Item { Heading { level: usize, anchor: String, body: Text }, Paragraph(Text) }
+enum Item { Heading { level: usize, anchor: String, body: Text }, Paragraph(Text), Image(usize) }
 
 impl Item {
-    fn body(&self) -> &Text {
-        match self { Item::Heading { body, .. } | Item::Paragraph(body) => body }
+    fn body(&self) -> Option<&Text> {
+        match self { Item::Heading { body, .. } | Item::Paragraph(body) => Some(body), Item::Image(_) => None }
     }
 }
 
@@ -614,7 +710,7 @@ struct Chapter { number: usize, items: Vec<Item> }
 
 impl Chapter {
     fn title<'a>(&'a self, book: &'a str) -> &'a str {
-        self.items.iter().find_map(|item| match item { Item::Heading { body, .. } => Some(body.text.as_str()), Item::Paragraph(_) => None }).unwrap_or(book)
+        self.items.iter().find_map(|item| match item { Item::Heading { body, .. } => Some(body.text.as_str()), _ => None }).unwrap_or(book)
     }
 }
 
@@ -625,34 +721,37 @@ impl Chapter {
 /// level when none repeats) and of any level above it, so a lone title doesn't hold the whole book.
 /// A heading right after another heading stays in its chapter, and a long chapter continues in a
 /// new document at a paragraph.
-fn chapters(blocks: Vec<Block>) -> Vec<Chapter> {
-    let mut styles = blocks.iter().filter_map(|block| block.heading).collect::<Vec<_>>();
+fn chapters(pieces: Vec<Piece>) -> Vec<Chapter> {
+    let headings = || pieces.iter().filter_map(|piece| match piece { Piece::Block(block) => block.heading, Piece::Figure(_) => None });
+    let mut styles = headings().collect::<Vec<_>>();
     styles.sort_by_key(|&(size, bold)| (std::cmp::Reverse(size), std::cmp::Reverse(bold)));
     styles.dedup();
     let level = |style: &Style| (styles.iter().position(|known| known == style).unwrap_or(0) + 1).min(6);
     let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
-    for style in blocks.iter().filter_map(|block| block.heading.as_ref()) { *counts.entry(level(style)).or_default() += 1; }
+    for style in headings() { *counts.entry(level(&style)).or_default() += 1; }
     let split = counts.iter().find(|(_, count)| **count >= 2).or(counts.iter().next()).map_or(0, |(level, _)| *level);
 
     let mut chapters = vec![Chapter { number: 1, items: Vec::new() }];
     let mut length = 0;
     let mut anchors = 0;
-    for block in blocks {
+    for piece in pieces {
         let current = chapters.last().expect("there is always a chapter");
         let has_text = current.items.iter().any(|item| matches!(item, Item::Paragraph(_)));
-        let item = match block.heading {
-            Some(style) => { anchors += 1; Item::Heading { level: level(&style), anchor: format!("heading-{anchors}"), body: block.body } }
-            None => Item::Paragraph(block.body),
+        let item = match piece {
+            Piece::Block(Block { heading: Some(style), body }) => { anchors += 1; Item::Heading { level: level(&style), anchor: format!("heading-{anchors}"), body } }
+            Piece::Block(Block { heading: None, body }) => Item::Paragraph(body),
+            Piece::Figure(image) => Item::Image(image),
         };
         let breaks = match &item {
             Item::Heading { level, .. } => *level <= split && has_text,
             Item::Paragraph(_) => length > DOCUMENT_TEXT_LIMIT,
+            Item::Image(_) => false,
         };
         if breaks {
             chapters.push(Chapter { number: chapters.len() + 1, items: Vec::new() });
             length = 0;
         }
-        length += item.body().text.len();
+        length += item.body().map_or(0, |body| body.text.len());
         chapters.last_mut().expect("there is always a chapter").items.push(item);
     }
     chapters
@@ -662,7 +761,7 @@ fn chapters(blocks: Vec<Block>) -> Vec<Chapter> {
 fn page_homes(chapters: &[Chapter], pages: usize) -> Vec<usize> {
     let mut homes = vec![1; pages];
     for chapter in chapters {
-        for (page, _) in chapter.items.iter().flat_map(|item| &item.body().pages) {
+        for (page, _) in chapter.items.iter().filter_map(Item::body).flat_map(|body| &body.pages) {
             if let Some(home) = homes.get_mut(*page) { *home = chapter.number; }
         }
     }
@@ -673,7 +772,7 @@ fn page_homes(chapters: &[Chapter], pages: usize) -> Vec<usize> {
 fn heading_contents(chapters: &[Chapter]) -> Vec<(usize, String, String)> {
     chapters.iter().flat_map(|chapter| chapter.items.iter().filter_map(move |item| match item {
         Item::Heading { level, anchor, body } => Some((*level, format!("{}#{anchor}", chapter_name(chapter.number)), body.text.clone())),
-        Item::Paragraph(_) => None,
+        _ => None,
     })).collect()
 }
 
@@ -711,7 +810,7 @@ fn xhtml(title: &str, body: &str) -> String {
 
 /// Everything that goes into one EPUB. `contents` holds each table of contents entry's level, link
 /// and label; `homes` the chapter each page starts in; `anchors` the pages something links to.
-struct Book { title: String, author: Option<String>, identifier: String, chapters: Vec<Chapter>, contents: Vec<(usize, String, String)>, homes: Vec<usize>, anchors: BTreeSet<usize>, cover: Option<Vec<u8>> }
+struct Book { title: String, author: Option<String>, identifier: String, chapters: Vec<Chapter>, contents: Vec<(usize, String, String)>, homes: Vec<usize>, anchors: BTreeSet<usize>, cover: Option<Vec<u8>>, images: Vec<BookImage> }
 
 /// A block's text as XHTML: links become `a` elements, to the page's anchor in the book or to the
 /// URI as written, and each page something links to gets an anchor where its text starts.
@@ -747,6 +846,8 @@ fn chapter_document(book: &Book, chapter: &Chapter) -> String {
     let items = chapter.items.iter().map(|item| match item {
         Item::Heading { level, anchor, body } => format!("<h{level} id=\"{anchor}\">{}</h{level}>\n", inline(body, book)),
         Item::Paragraph(body) => format!("<p>{}</p>\n", inline(body, book)),
+        // The PDF carries no description of the image, so it is marked as having none.
+        Item::Image(image) => format!("<figure><img src=\"{IMAGES}/{}\" alt=\"\"/></figure>\n", book.images[*image].name),
     }).collect::<String>();
     xhtml(chapter.title(&book.title), &format!("<section id=\"chapter-{}\">\n{items}</section>\n", chapter.number))
 }
@@ -790,7 +891,9 @@ fn package_document(book: &Book) -> String {
     } else {
         Default::default()
     };
-    let items = book.chapters.iter().map(|chapter| format!("<item id=\"chapter-{0}\" href=\"{1}\" media-type=\"application/xhtml+xml\"/>\n", chapter.number, chapter_name(chapter.number))).collect::<String>();
+    let images = book.images.iter().enumerate().map(|(index, image)| format!("<item id=\"image-{}\" href=\"{IMAGES}/{}\" media-type=\"{}\"/>\n", index + 1, image.name, image.media_type));
+    let chapters = book.chapters.iter().map(|chapter| format!("<item id=\"chapter-{0}\" href=\"{1}\" media-type=\"application/xhtml+xml\"/>\n", chapter.number, chapter_name(chapter.number)));
+    let items = images.chain(chapters).collect::<String>();
     let spine = book.chapters.iter().map(|chapter| format!("<itemref idref=\"chapter-{}\"/>\n", chapter.number)).collect::<String>();
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"book-id\">\n<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n<dc:identifier id=\"book-id\">{}</dc:identifier>\n<dc:title>{}</dc:title>\n{creator}<dc:language>{LANGUAGE}</dc:language>\n<meta property=\"dcterms:modified\">{MODIFIED}</meta>\n{cover_meta}</metadata>\n<manifest>\n<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n{cover_items}{items}</manifest>\n<spine>\n{cover_spine}{spine}</spine>\n</package>\n",
@@ -801,7 +904,8 @@ fn package_document(book: &Book) -> String {
 
 const CONTAINER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n<rootfiles>\n<rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/>\n</rootfiles>\n</container>\n";
 
-/// Builds the package: `mimetype` first and stored, then the container, package, nav, cover and chapters.
+/// Builds the package: `mimetype` first and stored, then the container, package, nav, cover, images and chapters.
+/// Images are stored as they are, since JPEG and PNG data is already compressed.
 /// Every entry has the same fixed time, permissions and host system, so the bytes match on every platform.
 fn package(book: &Book) -> Result<Vec<u8>, String> {
     let fixed = SimpleFileOptions::default().last_modified_time(DateTime::default()).unix_permissions(0o644).system(System::Unix);
@@ -819,6 +923,9 @@ fn package(book: &Book) -> Result<Vec<u8>, String> {
     if let Some(cover) = &book.cover {
         entry(&format!("OEBPS/{COVER_IMAGE}"), stored, cover)?;
         entry(&format!("OEBPS/{COVER_PAGE}"), deflated, cover_document(&book.title).as_bytes())?;
+    }
+    for image in &book.images {
+        entry(&format!("OEBPS/{IMAGES}/{}", image.name), stored, &image.data)?;
     }
     for chapter in &book.chapters {
         entry(&format!("OEBPS/{}", chapter_name(chapter.number)), deflated, chapter_document(book, chapter).as_bytes())?;
@@ -890,13 +997,15 @@ mod tests {
 
     fn page(runs: Vec<PageTextRun>) -> PageText {
         let has_extractable_text = runs.iter().any(|run| run.reliable_unicode && !run.text.trim().is_empty());
-        PageText { runs, has_extractable_text }
+        PageText { runs, has_extractable_text, images: Vec::new() }
     }
 
     fn paragraph(text: &str) -> (Option<Style>, String) { (None, text.into()) }
 
     /// Each block's heading style and text.
-    fn shapes(blocks: Vec<Block>) -> Vec<(Option<Style>, String)> { blocks.into_iter().map(|block| (block.heading, block.body.text)).collect() }
+    fn shapes(pieces: Vec<Piece>) -> Vec<(Option<Style>, String)> {
+        pieces.into_iter().filter_map(|piece| match piece { Piece::Block(block) => Some((block.heading, block.body.text)), Piece::Figure(_) => None }).collect()
+    }
 
     fn lines(page: &PageText) -> Vec<Line> { page_lines(page, &[]) }
 
@@ -908,7 +1017,7 @@ mod tests {
             run("A new", 72., 150., 12.), run("paragraph", 72. + 5. * 6. + 4., 150., 12.),
             run("Heading", 72., 170., 24.),
         ]);
-        assert_eq!(shapes(blocks(&[lines(&text)])), [paragraph("The quick brown fox jumps over."), paragraph("A new paragraph"), (Some((48, false)), "Heading".into())]);
+        assert_eq!(shapes(blocks(&[lines(&text)], &[])), [paragraph("The quick brown fox jumps over."), paragraph("A new paragraph"), (Some((48, false)), "Heading".into())]);
     }
 
     #[test]
@@ -920,7 +1029,7 @@ mod tests {
             run("and fills the whole measure.", 72., 142., 12.),
             run("Indented one follows.", 90., 156., 12.),
         ]);
-        assert_eq!(shapes(blocks(&[lines(&text)])), [
+        assert_eq!(shapes(blocks(&[lines(&text)], &[])), [
             paragraph("A line that fills the measure ends here."),
             paragraph("Next paragraph starts flush and fills the whole measure."),
             paragraph("Indented one follows."),
@@ -934,7 +1043,7 @@ mod tests {
             lines(&page(vec![run("middle of a sentence.", 72., 100., 12.), run("Then text with an ending.", 72., 140., 12.)])),
             lines(&page(vec![run("Capitalised start.", 72., 100., 12.)])),
         ];
-        assert_eq!(shapes(blocks(&pages)), [
+        assert_eq!(shapes(blocks(&pages, &[])), [
             paragraph("Body text that stops in the middle of a sentence."),
             paragraph("Then text with an ending."),
             paragraph("Capitalised start."),
@@ -974,7 +1083,7 @@ mod tests {
         let mut garbled = run("\u{fffd}\u{fffd}", 72., 100., 12.);
         garbled.reliable_unicode = false;
         let text = page(vec![garbled, run("Bell\u{7} & <tags>", 200., 100., 12.)]);
-        assert_eq!(shapes(blocks(&[lines(&text)])), [paragraph("Bell & <tags>")]);
+        assert_eq!(shapes(blocks(&[lines(&text)], &[])), [paragraph("Bell & <tags>")]);
         assert_eq!(escape("Bell\u{7} & <tags>"), "Bell &amp; &lt;tags&gt;");
     }
 
@@ -992,7 +1101,7 @@ mod tests {
     #[test]
     fn verification_refuses_a_package_without_a_leading_stored_mimetype() {
         let chapters = vec![Chapter { number: 1, items: vec![Item::Paragraph(Text::plain("Text"))] }];
-        let book = Book { title: "Book".into(), author: None, identifier: identifier(b"x"), chapters, contents: Vec::new(), homes: vec![1], anchors: BTreeSet::new(), cover: None };
+        let book = Book { title: "Book".into(), author: None, identifier: identifier(b"x"), chapters, contents: Vec::new(), homes: vec![1], anchors: BTreeSet::new(), cover: None, images: Vec::new() };
         let good = package(&book).unwrap();
         assert_eq!(verify(&good), Ok(()));
         let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
@@ -1116,9 +1225,9 @@ mod tests {
     #[test]
     fn the_same_pdf_makes_byte_identical_epubs() {
         let root = folder("repeat");
-        for (name, pages) in [("handbook", &HANDBOOK[..]), ("guide", &FIELD_GUIDE[..])] {
+        for (name, pages) in [("handbook", &HANDBOOK[..]), ("guide", &FIELD_GUIDE[..]), ("illustrated", &ILLUSTRATED[..])] {
             let input = root.join(format!("{name}.pdf"));
-            pdf_with_pages(&input, pages);
+            if name == "illustrated" { illustrated_pdf(&input) } else { pdf_with_pages(&input, pages) }
             let outputs = (0..2).map(|index| {
                 let destination = root.join(format!("{name}-{index}"));
                 fs::create_dir_all(&destination).unwrap();
@@ -1278,6 +1387,132 @@ mod tests {
         assert_eq!((request.cover, request.title, request.author), (EpubCover::FirstPage, None, None));
         let request: PdfToEpubRequest = serde_json::from_str(r#"{"paths":["/a.pdf"],"outputLocation":"alongsideInput","cover":"none","title":"T","author":"A"}"#).unwrap();
         assert_eq!((request.cover, request.title.as_deref(), request.author.as_deref()), (EpubCover::NoCover, Some("T"), Some("A")));
+    }
+
+    /// A small RGB JPEG, as a camera or scanner would embed it.
+    fn jpeg() -> Vec<u8> {
+        let pixels = (0..8 * 8).flat_map(|index| [(index * 4) as u8, 128, 255 - (index * 4) as u8]).collect::<Vec<_>>();
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90).encode(&pixels, 8, 8, image::ExtendedColorType::Rgb8).unwrap();
+        bytes
+    }
+
+    fn jpeg_object(document: &mut Document, data: Vec<u8>) -> ObjectId {
+        use lopdf::{dictionary, Stream};
+        document.add_object(Stream::new(dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 8, "Height" => 8, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, data))
+    }
+
+    /// Gives a page of a `pdf_with` document these image XObjects.
+    fn page_images(document: &mut Document, page: ObjectId, images: &[(&str, ObjectId)]) {
+        let mut xobjects = Dictionary::new();
+        for (name, id) in images { xobjects.set(*name, *id); }
+        let resources = document.get_dictionary_mut(page).unwrap().get_mut(b"Resources").unwrap().as_dict_mut().unwrap();
+        resources.set("XObject", xobjects);
+    }
+
+    /// A paragraph, a JPEG drawn below it, and a paragraph below the JPEG.
+    const ILLUSTRATED: [&str; 1] = [
+        "BT /F1 12 Tf 72 700 Td (Before the picture.) Tj ET q 200 0 0 100 72 560 cm /Im1 Do Q BT /F1 12 Tf 72 520 Td (After the picture.) Tj ET",
+    ];
+
+    fn illustrated_pdf(path: &Path) {
+        pdf_with(path, &ILLUSTRATED, |document, pages, _| {
+            let image = jpeg_object(document, jpeg());
+            page_images(document, pages[0], &[("Im1", image)]);
+        });
+    }
+
+    fn bytes_of(epub: &Path, name: &str) -> Vec<u8> {
+        let mut archive = ZipArchive::new(fs::File::open(epub).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        archive.by_name(name).unwrap_or_else(|error| panic!("{name}: {error}")).read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn image_names(epub: &Path) -> Vec<String> {
+        names(epub).into_iter().filter(|name| name.starts_with("OEBPS/images/")).collect()
+    }
+
+    fn page_detail(outcome: &JobOutcome, label: &str) -> Option<String> {
+        outcome.page_details.iter().find(|detail| detail.label == label).map(|detail| detail.value.clone())
+    }
+
+    #[test]
+    fn an_embedded_jpeg_is_kept_byte_for_byte_between_the_text_around_it() {
+        let root = folder("jpeg");
+        let input = root.join("illustrated.pdf");
+        illustrated_pdf(&input);
+        let outcome = convert(&request(&input, true), input);
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        assert!(chapter.contains("<p>Before the picture.</p>\n<figure><img src=\"images/image-1.jpg\" alt=\"\"/></figure>\n<p>After the picture.</p>"), "{chapter}");
+        assert_eq!(bytes_of(&output_paths[0], "OEBPS/images/image-1.jpg"), jpeg());
+        let package = entry(&output_paths[0], PACKAGE_PATH);
+        assert!(package.contains("<item id=\"image-1\" href=\"images/image-1.jpg\" media-type=\"image/jpeg\"/>"), "{package}");
+        assert_eq!(outcome.detail, "1 page, 1 image. No bookmarks or headings, so the contents list the title only.");
+        assert_eq!(page_detail(&outcome, "Images kept").as_deref(), Some("1 of 1"));
+        assert_eq!(outcome.page_details[0].label, "Images kept");
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_image_used_again_or_with_the_same_content_is_stored_once() {
+        let root = folder("duplicates");
+        let input = root.join("repeated.pdf");
+        pdf_with(&input, &[
+            "BT /F1 12 Tf 72 700 Td (A logo on the first page.) Tj ET q 50 0 0 50 72 600 cm /Im1 Do Q \
+             BT /F1 12 Tf 72 560 Td (Then a small grey swatch.) Tj ET q 30 0 0 30 72 500 cm BI /W 2 /H 2 /CS /G /BPC 8 ID abcd EI Q \
+             BT /F1 12 Tf 72 460 Td (The end of the first page.) Tj ET",
+            "BT /F1 12 Tf 72 700 Td (The same logo again.) Tj ET q 50 0 0 50 72 600 cm /Im1 Do Q \
+             BT /F1 12 Tf 72 560 Td (And a copy of it.) Tj ET q 50 0 0 50 72 480 cm /Im2 Do Q \
+             BT /F1 12 Tf 72 440 Td (The end of the book.) Tj ET",
+        ], |document, pages, _| {
+            let logo = jpeg_object(document, jpeg());
+            let copy = jpeg_object(document, jpeg());
+            page_images(document, pages[0], &[("Im1", logo)]);
+            page_images(document, pages[1], &[("Im1", logo), ("Im2", copy)]);
+        });
+        let outcome = convert(&request(&input, true), input);
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        assert_eq!(image_names(&output_paths[0]), ["OEBPS/images/image-1.jpg", "OEBPS/images/image-2.png"]);
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        assert_eq!(chapter.matches("images/image-1.jpg").count(), 3, "{chapter}");
+        assert_eq!(chapter.matches("images/image-2.png").count(), 1, "{chapter}");
+        let swatch = image::load_from_memory(&bytes_of(&output_paths[0], "OEBPS/images/image-2.png")).unwrap().to_luma8();
+        assert_eq!(swatch.into_raw(), b"abcd", "the inline image is decoded losslessly");
+        assert_eq!(outcome.detail, "2 pages, 2 images. No bookmarks or headings, so the contents list the title only.");
+        assert_eq!(page_detail(&outcome, "Images kept").as_deref(), Some("2 of 2"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_image_that_cannot_be_decoded_is_named_and_the_rest_of_the_book_converts() {
+        use lopdf::{dictionary, Stream};
+        let root = folder("damaged");
+        let input = root.join("damaged.pdf");
+        pdf_with(&input, &[
+            "BT /F1 12 Tf 72 700 Td (Text before both pictures.) Tj ET q 50 0 0 50 72 600 cm /Im1 Do Q q 50 0 0 50 72 500 cm /Im2 Do Q \
+             BT /F1 12 Tf 72 460 Td (Text after both pictures.) Tj ET",
+        ], |document, pages, _| {
+            let good = jpeg_object(document, jpeg());
+            let damaged = document.add_object(Stream::new(
+                dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 2, "Height" => 2, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8, "Filter" => "FlateDecode" },
+                b"this is not zlib data".to_vec(),
+            ));
+            page_images(document, pages[0], &[("Im1", good), ("Im2", damaged)]);
+        });
+        let outcome = convert(&request(&input, true), input);
+        let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
+        assert_eq!(image_names(&output_paths[0]), ["OEBPS/images/image-1.jpg"]);
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        assert!(chapter.contains("<p>Text before both pictures.</p>\n<figure><img src=\"images/image-1.jpg\" alt=\"\"/></figure>\n<p>Text after both pictures.</p>"), "{chapter}");
+        assert_eq!(outcome.detail, "1 page, 1 of 2 images. 1 image couldn't be read.");
+        assert_eq!(page_detail(&outcome, "Images kept").as_deref(), Some("1 of 2"));
+        let warning = &outcome.warnings[0];
+        assert_eq!(warning.kind, WarningKind::ImageDamaged { page: 1, image: 2 });
+        assert_eq!(warning.message, "Page 1, image 2 — The image data is damaged. Left out; the rest of the book converted.");
+        let _ = fs::remove_dir_all(root);
     }
 
     fn request(input: &Path, remove_headers_and_footers: bool) -> PdfToEpubRequest {
