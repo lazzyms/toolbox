@@ -358,6 +358,48 @@ test("saved favorites and recents survive the startup id migration and only show
     expect(stored).toEqual({ favorites: ["pdf-merge"], recent: ["lock-unlock"], marker: String(RetiredToolIds.version) });
 });
 
+test("Merge PDF and Split PDF open in the PDF Editor view, from home, favorites and the rail", async ({ page }) => {
+    await page.addInitScript(() => {
+        if (localStorage.getItem("toolbox-favorites") === null) localStorage.setItem("toolbox-favorites", JSON.stringify(["pdf-merge", "pdf-split"]));
+    });
+    await page.goto("/");
+    await expandViews(page);
+    const section = (title: string) => page.locator(".view-section").filter({ has: page.getByRole("heading", { name: title, exact: true }) });
+    await expect(section("PDF Editor").locator('button[data-command-result="pdf-merge"]')).toHaveCount(1);
+    await expect(section("PDF Editor").locator('button[data-command-result="pdf-split"]')).toHaveCount(1);
+    await expect(section("PDF Conversion").locator('button[data-command-result="pdf-merge"], button[data-command-result="pdf-split"]')).toHaveCount(0);
+
+    const editorRail = page.getByRole("toolbar", { name: "PDF Editor tools" });
+    const expectInEditor = async (title: string) => {
+        await expect(page.locator(".workspace-title")).toHaveText("PDF Editor");
+        await expect(editorRail.getByRole("button", { name: title, exact: true })).toHaveAttribute("aria-pressed", "true");
+        await expect(page.getByRole("toolbar", { name: "PDF Conversion tools" })).toHaveCount(0);
+        // The PDF Conversion intro belongs to that view only.
+        await expect(page.getByText("Choose an output")).toHaveCount(0);
+    };
+
+    for (const title of ["Merge PDF", "Split PDF"]) {
+        await page.getByRole("group", { name: "Favorite tools" }).getByRole("button", { name: title, exact: true }).click();
+        await expectInEditor(title);
+        await page.getByRole("button", { name: "← All tools" }).first().click();
+    }
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("toolbox-recent") ?? "[]"))).toEqual(["pdf-split", "pdf-merge"]);
+
+    await page.reload();
+    await openToolBySearch(page, "Split PDF");
+    await expectInEditor("Split PDF");
+    await editorRail.getByRole("button", { name: "Merge PDF", exact: true }).click();
+    await expectInEditor("Merge PDF");
+
+    await page.getByRole("button", { name: "← All tools" }).first().click();
+    await openToolBySearch(page, "PDF to Images");
+    const conversionRail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
+    await expect(page.locator(".workspace-title")).toHaveText("PDF Conversion");
+    await expect(conversionRail.getByRole("button", { name: "PDF to Images", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(conversionRail.getByRole("button", { name: /^(Merge|Split) PDF$/ })).toHaveCount(0);
+    await expect(page.getByText("Choose an output")).toBeVisible();
+});
+
 test("all six home view sections list their tools and open their view", async ({ page }) => {
     await page.goto("/");
     const sections = page.locator(".view-section");
