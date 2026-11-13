@@ -1258,6 +1258,56 @@ test("Convert Image Format sends the batch with one target and shows Skipped, co
     await expect(failed.getByRole("button", { name: "Open broken.webp.out", exact: true })).toHaveCount(0);
 });
 
+test("Convert Image Format reports flattened transparency and reduced bit depth on the converted rows", async ({ page }) => {
+    await open(page, "Convert Image Format");
+    await drop(page, ["/local/logo.png", "/local/floorplan.heic", "/local/plain.png"]);
+    await page.evaluate(() => {
+        (window as unknown as IntakeWindow).__warnings = {
+            "/local/logo.png": [{ code: "transparencyFlattened", message: "Transparent areas were flattened onto white, because JPEG has none." }],
+            "/local/floorplan.heic": [{ code: "precisionReduced", message: "Reduced from 10-bit to 8-bit sRGB." }],
+        };
+    });
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "WebP", exact: true }).click();
+    await expect(page.getByText("Follows each source. PNG and TIFF stay lossless. JPEG and HEIC are lossy.")).toBeVisible();
+    await page.getByRole("radiogroup", { name: "Convert to" }).getByRole("radio", { name: "JPEG", exact: true }).click();
+    await run(page).click();
+
+    await expect(results(page)).toHaveCount(3);
+    const flattened = results(page).filter({ hasText: "logo.png" });
+    // Flattening says how the file was saved, so the row stays done rather than warned.
+    await expect(flattened).toHaveAttribute("data-tone", "ok");
+    await expect(flattened).toContainText("Transparent areas were flattened onto white, because JPEG has none.");
+    const reduced = results(page).filter({ hasText: "floorplan.heic" });
+    await expect(reduced).toHaveAttribute("data-tone", "warn");
+    await expect(reduced).toContainText("Reduced from 10-bit to 8-bit sRGB.");
+    const plain = results(page).filter({ hasText: "plain.png" });
+    await expect(plain).toHaveAttribute("data-tone", "ok");
+    await expect(plain).not.toContainText("flattened");
+});
+
+test("Convert Image Format keeps a GIF out of the list and its pointer opens Extract GIF Frames", async ({ page }) => {
+    await open(page, "Convert Image Format");
+    await drop(page, ["/local/party-invite.gif", "/local/a.png"]);
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    const gif = notAdded.locator("li").filter({ hasText: "party-invite.gif" });
+    await expect(gif).toContainText("Converting a GIF would drop its animation. Extract GIF Frames saves every frame.");
+    await expect(page.getByText("a.png", { exact: true })).toBeVisible();
+
+    await gif.getByRole("button", { name: "Extract GIF Frames", exact: true }).click();
+    await expect(page.locator(".workspace-title")).toHaveText("Media");
+    await expect(page.locator(".workspace-command").filter({ hasText: "Extract GIF Frames" })).toHaveAttribute("aria-pressed", "true");
+    expect(await requestFor(page, "convert_images")).toHaveLength(0);
+});
+
+test("only Convert Image Format points a refused GIF at Extract GIF Frames", async ({ page }) => {
+    await open(page, "Images to PDF");
+    await drop(page, ["/local/party-invite.gif"]);
+    const notAdded = page.getByRole("region", { name: "Not added" });
+    await expect(notAdded).toContainText("party-invite.gif");
+    await expect(notAdded).not.toContainText("Converting a GIF");
+    await expect(notAdded.getByRole("button", { name: "Extract GIF Frames" })).toHaveCount(0);
+});
+
 test("Images to PDF takes HEIC and HEIF, refuses GIF, sends no quality setting and shows the precision note", async ({ page }) => {
     await open(page, "Images to PDF");
     await drop(page, ["/local/IMG_0001.heic", "/local/IMG_0002.HEIF", "/local/receipt.jpg", "/local/animation.gif"]);

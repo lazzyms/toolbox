@@ -486,7 +486,7 @@ fn partition_capability_inputs(capability: &NativeCapability, paths: &[PathBuf])
         let error = if path.is_dir() {
             Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
         } else if !extension_accepted {
-            Some(ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}.")))
+            Some(unsupported_input(command, &path, &accepted_extensions))
         } else if unavailable_family {
             Some(ToolError::unavailable(format!("{} comes in a later update.", extension.to_ascii_uppercase())))
         } else {
@@ -498,6 +498,18 @@ fn partition_capability_inputs(capability: &NativeCapability, paths: &[PathBuf])
         }
     }
     Ok(validation)
+}
+
+pub const CONVERT_GIF_MESSAGE: &str = "Converting a GIF would drop its animation. Extract GIF Frames saves every frame.";
+
+/// A GIF sent to Convert Image Format is refused with a pointer to Extract GIF Frames, because
+/// converting it would keep one frame and drop the animation.
+fn unsupported_input(command: &str, path: &Path, accepted_extensions: &str) -> ToolError {
+    let gif = path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("gif"));
+    if command == "convert_images" && gif {
+        return ToolError::invalid_input(CONVERT_GIF_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "gif-extract".into() });
+    }
+    ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}."))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
