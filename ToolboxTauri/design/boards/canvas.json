@@ -183,7 +183,7 @@
 "y": 6120,
 "w": 1280,
 "h": 800,
-"title": "Split: page ranges or every N pages",
+"title": "Split: ranges or every N, fit preview, grouped results",
 "expand": "fill"
 },
 "Merge.dc.html": {
@@ -191,7 +191,7 @@
 "y": 6120,
 "w": 1280,
 "h": 800,
-"title": "Merge: ordered files and save dialog",
+"title": "Merge: ordered list, native save dialog, aggregate results",
 "expand": "fill"
 },
 "Bates.dc.html": {
@@ -264,22 +264,6 @@
 "w": 1280,
 "h": 800,
 "title": "Compress Files results: compressed, skipped, failed",
-"expand": "fill"
-},
-"ImageEditResults.dc.html": {
-"x": 5440,
-"y": 8440,
-"w": 1280,
-"h": 800,
-"title": "Edit Image results: progress, Skipped, failures",
-"expand": "fill"
-},
-"ImageEditNarrow.dc.html": {
-"x": 6800,
-"y": 8440,
-"w": 900,
-"h": 800,
-"title": "Edit Image below 1000 px: tools strip and More",
 "expand": "fill"
 },
 "AppIcons.dc.html": {
@@ -384,6 +368,22 @@
 "w": 1280,
 "h": 800,
 "title": "Results: every lock and unlock outcome",
+"expand": "fill"
+},
+"ImageEditResults.dc.html": {
+"x": 5440,
+"y": 8440,
+"w": 1280,
+"h": 800,
+"title": "Edit Image results: progress, Skipped, failures",
+"expand": "fill"
+},
+"ImageEditNarrow.dc.html": {
+"x": 6800,
+"y": 8440,
+"w": 900,
+"h": 800,
+"title": "Edit Image below 1000 px: tools strip and More",
 "expand": "fill"
 },
 "PackResults.dc.html": {
@@ -659,6 +659,54 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"ms1": {
+"x": 7600,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Merge and Split Q1. Reordering the Merge list\n\nEach row has a grip, its position, a first-page thumbnail, the page count and the size, so files with the same name can be told apart. A repeated file gets a 'Copy 1 of 2' tag (Merge, Files added).\n\nDrag a row by its grip. A 2px insertion line shows where it lands, and a live hint says 'Moving site-photos.pdf to position 2' (Merge, Reordering).\n\nMove up and Move down buttons sit on every row; they are disabled on the first and last row. The keyboard path is Cmd+Up or Down (Ctrl on Windows) on the focused row, shown in the hint and the tooltips. A Sort menu sets name or date order in one step.\n\nWith one file, Merge is disabled and says it needs at least 2 PDFs (Merge, One file)."
+},
+"ms2": {
+"x": 8000,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Merge and Split Q2. Where the output goes\n\nBoth boards share one Save to block: the default folder, 'Change for this run' and 'Reset to default' (Merge, Files added; Split, Files added).\n\nMerge makes one file, so Merge opens the native save dialog in that folder with a suggested name, lease-agreement-merged.pdf. Cancel writes nothing (Merge, Save dialog).\n\nSplit makes many files, so it saves straight to the folder with no dialog.\n\nNothing is ever replaced. An existing name gets -1, -2 and so on, and the result says so (Merge, Merged; Split, Results)."
+},
+"ms3": {
+"x": 8400,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Merge and Split Q3. Split options\n\nSplit has two modes in a segmented 'Split by' control: Page ranges and Every N pages. Only the field for the selected mode shows (Split, Files added; Split, Every N pages).\n\nRanges are typed as 1-3, 5, 8-. Each range becomes one file, and 8- runs to the last page.\n\nBad input gets one inline alert that names every problem and how to fix it, such as '3-1 runs backwards (write 1-3)'. Split stays disabled with the reason in the footer (Split, Invalid ranges).\n\nThe File names section shows example names, such as -pages-1-3 and -page-5."
+},
+"ms4": {
+"x": 8800,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Merge and Split Q4. Preview of the page spans\n\nYes. Each row shows the files it will make as chips before anything runs (Split, Files added; Split, Every N pages).\n\nA range past the last page is shortened (dashed chip) or dropped (struck chip). A PDF is skipped when nothing is left or the result would be the whole file, and the row says why.\n\nA password-protected PDF shows its page count as a dash and says the password must be removed first.\n\nThe toolbar and footer total the files to make and the PDFs that will be skipped."
+},
+"ms5": {
+"x": 9200,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Merge and Split Q5. Split results\n\nResults are grouped by input PDF, with the output files indented under each group (Split, Results).\n\nClean groups are folded with 'Show 3 files'. The group row carries the state and the reason: Split, Split with warnings (range dropped, signature removed, bookmarks not kept), Skipped, or Failed.\n\nA PDF that failed part-way lists the parts it saved and offers Retry. A password failure points to Remove Password.\n\nThe summary counts double as filter chips, and 'Show all in Finder' opens the folder.\n\nMerge has one output, so its result maps each input to its page range in the merged file (Merge, Merged). If one input fails, nothing is saved (Merge, Failed)."
+},
+"ms6": {
+"x": 9600,
+"y": 6120,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Merge and Split Q6. Pointer to Organize Pages\n\nMerge joins whole files in order. Removing, rotating or reordering single pages belongs to Organize Pages.\n\nThe Merge options panel ends with a short note and an 'Open Organize Pages' button (Merge, Files added). After a merge, open the merged file there to adjust pages.\n\nThe pointer stays out of the file list so it does not compete with the main action."
 },
 "ie1": {
 "x": 7780,

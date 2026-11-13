@@ -659,31 +659,101 @@
   },
   {
     "board": "Split.dc.html",
-    "title": "Split: page ranges or every N pages",
+    "title": "Split: ranges or every N, fit preview, grouped results",
     "state": "default",
     "query": "",
     "screen": "Split--default.jpg"
   },
   {
     "board": "Split.dc.html",
-    "title": "Split: page ranges or every N pages",
-    "state": "mode-every-n-pages",
-    "query": "mode=Every%20N%20pages",
-    "screen": "Split--mode-every-n-pages.jpg"
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "Split--state-empty.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-every-n-pages",
+    "query": "state=Every%20N%20pages",
+    "screen": "Split--state-every-n-pages.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-invalid-ranges",
+    "query": "state=Invalid%20ranges",
+    "screen": "Split--state-invalid-ranges.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-splitting",
+    "query": "state=Splitting",
+    "screen": "Split--state-splitting.jpg"
+  },
+  {
+    "board": "Split.dc.html",
+    "title": "Split: ranges or every N, fit preview, grouped results",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "Split--state-results.jpg"
   },
   {
     "board": "Merge.dc.html",
-    "title": "Merge: ordered files and save dialog",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
     "state": "default",
     "query": "",
     "screen": "Merge--default.jpg"
   },
   {
     "board": "Merge.dc.html",
-    "title": "Merge: ordered files and save dialog",
-    "state": "step-save-dialog",
-    "query": "step=Save%20dialog",
-    "screen": "Merge--step-save-dialog.jpg"
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "Merge--state-empty.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-reordering",
+    "query": "state=Reordering",
+    "screen": "Merge--state-reordering.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-one-file",
+    "query": "state=One%20file",
+    "screen": "Merge--state-one-file.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-save-dialog",
+    "query": "state=Save%20dialog",
+    "screen": "Merge--state-save-dialog.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-merging",
+    "query": "state=Merging",
+    "screen": "Merge--state-merging.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-merged",
+    "query": "state=Merged",
+    "screen": "Merge--state-merged.jpg"
+  },
+  {
+    "board": "Merge.dc.html",
+    "title": "Merge: ordered list, native save dialog, aggregate results",
+    "state": "state-failed",
+    "query": "state=Failed",
+    "screen": "Merge--state-failed.jpg"
   },
   {
     "board": "Bates.dc.html",
