@@ -40,12 +40,6 @@ const start = async (page: Page, settings: OutputSettings = { mode: "alongsideIn
                     const { path } = (args as { request: { path: string } }).request;
                     return Array.from({ length: path.endsWith("two-page.tiff") ? 2 : 1 }, () => ({ width: 640, height: 480, dataUrl: blankImage }));
                 }
-                if (command === "inspect_image_metadata") {
-                    // One report per requested path, in the shape ImageMetadataReport renders.
-                    return ((args as { request: { paths: string[] } }).request.paths).map((path) => ({
-                        status: "report", path, format: "jpeg", exif: true, gps: false, xmp: false, iptc: false, comments: false, icc: false, orientation: null,
-                    }));
-                }
                 if (command.startsWith("plugin:")) return null;
                 if (win.__outcomes[command]) return win.__outcomes[command];
                 const { request } = (args ?? {}) as { request?: { paths?: string[] } };
@@ -386,28 +380,5 @@ test.describe("Media requests", () => {
         await expect(failed.getByRole("button", { name: "Retry broken.tiff" })).toBeVisible();
 
         await expect(page.locator('.result-row[data-state="succeeded"]')).toContainText("two-page.tiff");
-    });
-
-    test("Image Metadata removes metadata and inspects with the same paths and output location", async ({ page }) => {
-        await start(page, customFolder);
-        await openToolBySearch(page, "Image Metadata");
-        await choose(page, ["/local/photos/a.jpg", "/local/photos/b.png"]);
-        await expect(page.locator(".workspace-primary-action")).toContainText("Remove metadata");
-
-        expect(await runOnce(page, "image_metadata")).toEqual({ runId, request: {
-            paths: ["/local/photos/a.jpg", "/local/photos/b.png"],
-            outputLocation: { customFolder: "/Users/test/Media out" },
-        } });
-
-        await page.getByRole("radio", { name: "Inspect metadata" }).click();
-        await expect(page.locator(".workspace-primary-action")).toBeDisabled();
-        await page.locator(".workspace-control-panel").getByRole("button", { name: "Inspect metadata", exact: true }).click();
-        const report = page.getByRole("region", { name: "Metadata found" });
-        await expect(report.getByRole("region")).toHaveCount(2);
-        await expect(report.getByRole("region", { name: "Metadata in a.jpg" }).locator(".image-metadata-row[data-present=true] dt")).toHaveText(["Camera"]);
-        expect(await invocationsOf(page, "inspect_image_metadata")).toEqual([{ request: {
-            paths: ["/local/photos/a.jpg", "/local/photos/b.png"],
-            outputLocation: { customFolder: "/Users/test/Media out" },
-        } }]);
     });
 });

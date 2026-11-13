@@ -41,7 +41,7 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("plugin:")) return null;
                 const request = (args as { request?: { paths?: string[]; steps?: Record<string, unknown> } }).request;
                 const stepNames = Object.keys(request?.steps ?? {});
-                const suffix = stepNames.length > 1 ? "-edited" : ({ resize: "-resized", rotate: "-rotated", tone: "-tone", watermark: "-watermarked" } as Record<string, string>)[stepNames[0]] ?? "-cropped";
+                const suffix = stepNames.length > 1 ? "-edited" : ({ resize: "-resized", rotate: "-rotated", tone: "-tone", watermark: "-watermarked", metadata: "-stripped" } as Record<string, string>)[stepNames[0]] ?? "-cropped";
                 return win.__processingResults ?? (request?.paths ?? []).map((inputPath) => ({
                     inputPath,
                     outputPaths: [inputPath.replace(/(\.\w+)$/, `${suffix}$1`)],
@@ -323,7 +323,7 @@ for (const theme of ["light", "dark"] as const) {
         await page.screenshot({ path: testInfo.outputPath(`resize-step-${theme}.png`), animations: "disabled" });
         await steps(page).getByRole("button", { name: "Add Crop step" }).click();
         const separators = page.locator(".image-edit-stack-separator");
-        await expect(separators).toHaveCount(4);
+        await expect(separators).toHaveCount(5);
         for (const separator of await separators.all()) await expect(separator).toHaveAttribute("aria-hidden", "true");
     });
 }
@@ -858,5 +858,125 @@ for (const theme of ["light", "dark"] as const) {
             expect(color).not.toBe(colors.surface);
         }
         await page.screenshot({ path: testInfo.outputPath(`watermark-step-${theme}.png`), animations: "disabled" });
+    });
+}
+
+const openMetadata = (page: Page, paths: string[]) => openTool(page, "Remove Image Metadata", paths);
+const noMetadata = "No metadata to remove. No copy was made.";
+const cleaned = "Cleaned without re-encoding. Removed: Camera details, GPS location, XMP. Kept: Orientation, colour profile.";
+const reEncodedToClean = "Re-encoded at quality 90. HEIC, WebP and TIFF can't be cleaned without it. Removed: Camera details. Kept: Orientation.";
+
+test("choosing Remove Image Metadata adds the last step, says what it removes and keeps, and runs every image in one request", async ({ page }) => {
+    await openMetadata(page, ["/photos/a.jpg", "/photos/b.heic"]);
+    await expect(steps(page).getByRole("button", { name: "Step 1 of 1, Remove Image Metadata, showing its options" })).toHaveText("1Remove Metadata");
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Remove Image Metadata", 1) })).toBeVisible();
+    const options = page.getByRole("region", { name: "Options" });
+    await expect(options.getByRole("heading", { name: "Remove Image Metadata" })).toBeVisible();
+    await expect(options.getByRole("list", { name: "Removes" }).getByRole("listitem")).toHaveText([
+        "Camera details (EXIF), including GPS location", "XMP", "IPTC", "Comments",
+    ]);
+    await expect(options.getByRole("list", { name: "Keeps" }).getByRole("listitem")).toHaveText([
+        "Orientation, so photos stay upright", "Colour profile, so colours look the same",
+    ]);
+    await expect(options.getByRole("note").filter({ hasText: "JPEG and PNG are cleaned without re-encoding. HEIC, WebP and TIFF are re-encoded at quality 90." })).toBeVisible();
+    await expect(options.getByRole("note").filter({ hasText: "Each copy is checked after saving. If anything removed is still there, that file fails and no copy is kept." })).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-stripped.jpg");
+
+    await page.evaluate(({ cleaned, reEncodedToClean }) => {
+        (window as unknown as StackWindow).__processingResults = [
+            { inputPath: "/photos/a.jpg", outputPaths: ["/photos/a-stripped.jpg"], detail: cleaned, state: "succeeded", failure: null, reason: null, warnings: [] },
+            { inputPath: "/photos/b.heic", outputPaths: ["/photos/b-stripped.heic"], detail: reEncodedToClean, state: "succeeded", failure: null, reason: null, warnings: [] },
+        ] as JobOutcome[];
+    }, { cleaned, reEncodedToClean });
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    const request = await runRequest(page);
+    expect(request.paths).toEqual(["/photos/a.jpg", "/photos/b.heic"]);
+    expect(request.steps).toEqual({ metadata: {} });
+    expect(await invocations(page, "image_metadata")).toEqual([]);
+
+    const rows = page.locator(".result-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText(cleaned);
+    await expect(rows.nth(1)).toContainText(reEncodedToClean);
+    await expect(page.getByRole("button", { name: "Open a-stripped.jpg" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open b-stripped.heic" })).toBeVisible();
+});
+
+test("Remove Image Metadata always runs last and the run is named -edited", async ({ page }) => {
+    await openMetadata(page, ["/photos/a.jpg"]);
+    await steps(page).getByRole("button", { name: "Add Resize step" }).click();
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Resize", 1) })).toBeVisible();
+    await steps(page).getByRole("button", { name: "Step 2 of 2, Remove Image Metadata" }).click();
+    await expect(page.getByText("Step 2 of 2. Runs after Resize.", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-edited.jpg");
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const request = await runRequest(page);
+    expect(Object.keys(request.steps)).toEqual(["resize", "metadata"]);
+    expect(request.steps).toMatchObject({ metadata: {} });
+});
+
+test("a copy that still holds location after cleaning fails on its own row", async ({ page }) => {
+    await openMetadata(page, ["/photos/a.jpg", "/photos/b.png"]);
+    await page.evaluate(() => {
+        (window as unknown as StackWindow).__processingResults = [
+            { inputPath: "/photos/a.jpg", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "Location details were still present after cleaning, so no copy was kept.", pointer: null }, reason: null, warnings: [] },
+            { inputPath: "/photos/b.png", outputPaths: ["/photos/b-stripped.png"], detail: "Cleaned without re-encoding.", state: "succeeded", failure: null, reason: null, warnings: [] },
+        ] as JobOutcome[];
+    });
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    await expect(page.locator(".result-row").filter({ hasText: "a.jpg" })).toContainText("Location details were still present after cleaning, so no copy was kept.");
+    await expect(page.getByRole("button", { name: /^Open a-stripped/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Open b-stripped.png" })).toBeVisible();
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`images with no metadata are Skipped with no Open or Reveal, and the step reads clearly, in the ${theme} theme`, async ({ page }, testInfo) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await openMetadata(page, ["/photos/clean.png", "/photos/tagged.jpg"]);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        const options = page.getByRole("region", { name: "Options" });
+        const colors = await options.evaluate((node) => {
+            const label = Array.from(node.querySelectorAll("p")).find((p) => p.textContent === "Removes");
+            const item = node.querySelector("li");
+            const note = Array.from(node.querySelectorAll("p")).find((p) => p.textContent?.startsWith("Each copy is checked"));
+            return {
+                surface: getComputedStyle(node).backgroundColor,
+                label: label ? getComputedStyle(label).color : "",
+                item: item ? getComputedStyle(item).color : "",
+                note: note ? getComputedStyle(note).color : "",
+            };
+        });
+        for (const color of [colors.label, colors.item, colors.note]) {
+            expect(color).not.toBe("");
+            expect(color).not.toBe(colors.surface);
+        }
+        await options.screenshot({ path: testInfo.outputPath(`metadata-step-${theme}.png`), animations: "disabled" });
+
+        await page.evaluate(({ message, cleaned }) => {
+            (window as unknown as StackWindow).__processingResults = [
+                { inputPath: "/photos/clean.png", outputPaths: [], detail: message, state: "skipped", failure: null, reason: { code: "noEffectiveChange", message, pointer: null }, warnings: [] },
+                { inputPath: "/photos/tagged.jpg", outputPaths: ["/photos/tagged-stripped.jpg"], detail: cleaned, state: "succeeded", failure: null, reason: null, warnings: [] },
+            ] as JobOutcome[];
+        }, { message: noMetadata, cleaned });
+        await page.getByRole("button", { name: "Run on 2 images" }).click();
+
+        const rows = page.locator(".result-row");
+        await expect(rows).toHaveCount(2);
+        const skipped = rows.nth(0);
+        await expect(skipped).toHaveAttribute("data-state", "skipped");
+        await expect(skipped).toContainText("Skipped");
+        await expect(skipped).toContainText(noMetadata);
+        await expect(skipped.getByRole("button")).toHaveCount(0);
+        await expect(page.getByRole("button", { name: /^Open clean/ })).toHaveCount(0);
+        await expect(rows.nth(1)).toContainText(cleaned);
+        await expect(page.getByRole("button", { name: "Open tagged-stripped.jpg" })).toBeVisible();
+
+        const skipColors = await skipped.evaluate((row, message) => {
+            const text = Array.from(row.querySelectorAll("*")).find((node) => node.childElementCount === 0 && node.textContent?.includes(message));
+            return { row: getComputedStyle(row).backgroundColor, detail: text ? getComputedStyle(text).color : "" };
+        }, noMetadata);
+        expect(skipColors.detail).not.toBe("");
+        expect(skipColors.detail).not.toBe(skipColors.row);
+        await skipped.screenshot({ path: testInfo.outputPath(`no-metadata-skip-${theme}.png`), animations: "disabled" });
     });
 }

@@ -28,14 +28,13 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
       "gif-create": setterFor("gif-create"),
       "gif-extract": setterFor("gif-extract"),
       "tiff-pages": setterFor("tiff-pages"),
-      "image-metadata": setterFor("image-metadata"),
       "heic-convert": setterFor("heic-convert"),
     };
   }, []);
 
   // Only Media tools reach this view (the vision tools in the Media rail are unavailable). Any other id runs as
-  // image metadata, which the old fallback branch also did.
-  const toolId: MediaToolId = isMediaToolId(activeUtility.id) ? activeUtility.id : "image-metadata";
+  // TIFF pages, which the old fallback branch also did.
+  const toolId: MediaToolId = isMediaToolId(activeUtility.id) ? activeUtility.id : "tiff-pages";
   const tool = mediaTools[toolId];
 
   const buildRequest = <Id extends MediaToolId>(id: Id, paths: string[], outputLocation: OutputLocation, outputPath: string | null) =>
@@ -87,7 +86,7 @@ export const MediaWorkspaceView = ({ utility: activeUtility, initialPaths, fileA
           <div>
             <h2 className="workspace-active-command">{activeUtility.title}</h2>
             <p className="workspace-panel-label">Specialized media outcome</p>
-            <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon, or explicit metadata result.</p>
+            <p className="workspace-panel-copy">Keep the same selected files while choosing a sequence, icon or page order.</p>
           </div>
 
           {renderPanel(toolId, { files, outputLocation, loading, selectedFileIndex, selectFile })}

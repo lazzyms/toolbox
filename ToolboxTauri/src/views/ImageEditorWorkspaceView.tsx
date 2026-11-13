@@ -54,9 +54,9 @@ import { UtilityRegistry, workspaceById } from "../registry";
 import { useToolAvailability } from "../ToolAvailabilityContext";
 
 // Tools that are steps in the shared edit stack, not drafts of the edit plan.
-const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate", "image-tone": "tone", "image-watermark": "watermark" };
-const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate", tone: "image-tone", watermark: "image-watermark" };
-const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep, tone: defaultImageToneStep, watermark: defaultImageWatermarkStep };
+const stackStepForTool: Partial<Record<string, ImageEditStackStep>> = { crop: "crop", resize: "resize", rotate: "rotate", "image-tone": "tone", "image-watermark": "watermark", "image-metadata": "metadata" };
+const toolForStackStep: Record<ImageEditStackStep, AtomicToolId> = { crop: "crop", resize: "resize", rotate: "rotate", tone: "image-tone", watermark: "image-watermark", metadata: "image-metadata" };
+const stackStepDefaults: { [Step in ImageEditStackStep]: () => NonNullable<ImageEditStack[Step]> } = { crop: defaultImageCropStep, resize: defaultImageResizeStep, rotate: defaultImageRotateStep, tone: defaultImageToneStep, watermark: defaultImageWatermarkStep, metadata: () => ({}) };
 
 
 const imageEditLabel = (edit: ImageEditOperation) => {
@@ -71,7 +71,7 @@ const imageEditLabel = (edit: ImageEditOperation) => {
 
 const editImageTabLabel: Partial<Record<AtomicToolId, string>> = { "image-tone": "Adjust" };
 
-/** Resize, Crop, Rotate, Adjust and Watermark share one edit plan and switch as tabs. */
+/** Resize, Crop, Rotate, Adjust, Watermark and Remove Metadata share one edit plan and switch as tabs. */
 const EditImageTabs = ({ activeId, onSelect }: { activeId: AtomicToolId; onSelect: (id: AtomicToolId) => void }) => {
   const availability = useToolAvailability();
   const tools = availability.filter(UtilityRegistry.filter((tool) => workspaceById("image-editor")?.editor?.toolIds.includes(tool.id)));
