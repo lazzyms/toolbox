@@ -2048,3 +2048,28 @@ kbd.shortcut-hint {
   align-items: end;
   gap: 8px;
 }
+
+/* Bates numbering: the numbers each file in the ordered list gets, and the identifier preview. */
+.bates-numbers {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bates-numbers[data-state="pending"],
+.bates-numbers[data-state="none"] { color: var(--muted-foreground); }
+.bates-numbers[data-state="unused"] s { color: var(--muted-foreground); }
+.bates-numbers-note { color: var(--warning); }
+.bates-example {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.bates-summary {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}

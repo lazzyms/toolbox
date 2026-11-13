@@ -117,10 +117,9 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   for (const capability of SharedCapabilityRegistry) {
     if (readOnly.has(capability.command) || capability.formatFamilies) assert.equal(capability.outputSuffix, "", capability.command);
     else assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
-    assert.equal(
-      capability.manyToOne,
-      capability.inputCardinality === "ordered",
-      `${capability.command} many-to-one must match its ordered inputs`,
+    assert.ok(
+      !capability.manyToOne || capability.inputCardinality === "ordered",
+      `${capability.command} many-to-one must take ordered inputs`,
     );
   }
   assert.deepEqual(
@@ -133,6 +132,8 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
     SharedCapabilityRegistry.map(({ command, outputSuffix }) => [command, outputSuffix]),
   );
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
+  assert.equal(suffixes.get("bates_number_pdfs"), "-bates");
+  assert.equal(SharedCapabilityRegistry.find(({ command }) => command === "bates_number_pdfs")?.inputCardinality, "ordered");
   assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-page");
   assert.equal(suffixes.get("convert_to_pdf"), "");
@@ -242,7 +243,7 @@ test("workspace entries group editor tools into one entry and list labelled grou
     "pdf-edit+pdf-watermark+pdf-sign+pdf-remove-pages",
     "pdf-organize", "pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-redact",
     "details:pdf-privacy", "details:pdf-properties",
-    "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages",
+    "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages", "more:pdf-bates",
   ]);
   assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark", "heic-convert", "image-metadata"]);
   assert.deepEqual(entryIds("image-editor", { groupEditor: false }), ["resize", "crop", "rotate", "image-tone", "image-watermark", "heic-convert", "image-metadata"]);

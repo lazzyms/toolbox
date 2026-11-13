@@ -14,7 +14,7 @@ const workspaceIds = [...workspaceSource.matchAll(/(?<!(?:editor:\s*\{|\{\s*labe
 
 const failures = [];
 const unique = (values) => new Set(values).size === values.length;
-const expectedAtomicToolCount = 37;
+const expectedAtomicToolCount = 38;
 if (atomicIds.length !== expectedAtomicToolCount || !unique(atomicIds)) failures.push(`expected ${expectedAtomicToolCount} unique atomic IDs, found ${atomicIds.length}`);
 if (workspaceIds.length !== atomicIds.length || !unique(workspaceIds)) failures.push("workspace membership must contain each atomic ID exactly once");
 if (atomicIds.some((id) => !workspaceIds.includes(id)) || workspaceIds.some((id) => !atomicIds.includes(id))) failures.push("workspace membership and atomic registry differ");
@@ -31,7 +31,7 @@ if (membersOf("compress-files").join() !== "compress-files,compress") failures.p
 if (!membersOf("pdf-convert").includes("pdf-ocr")) failures.push("pdf-ocr must belong to the PDF conversion workspace");
 if (!membersOf("pdf-convert").includes("convert-to-pdf")) failures.push("convert-to-pdf must belong to the PDF conversion workspace");
 if (membersOf("media-tools").includes("pdf-ocr")) failures.push("pdf-ocr must not belong to the media workspace");
-for (const id of ["pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-rotate", "pdf-repair", "pdf-compare", "pdf-redact", "pdf-privacy", "pdf-properties"]) {
+for (const id of ["pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-rotate", "pdf-repair", "pdf-compare", "pdf-redact", "pdf-privacy", "pdf-properties", "pdf-bates"]) {
   if (!membersOf("pdf-editor").includes(id)) failures.push(`${id} must belong to the PDF Editor`);
 }
 if (!membersOf("image-editor").includes("image-metadata")) failures.push("image-metadata must belong to the Image Editor");

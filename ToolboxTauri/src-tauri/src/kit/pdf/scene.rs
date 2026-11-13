@@ -2302,6 +2302,58 @@ pub fn find_text(path: &Path, query: &str, match_case: bool) -> Result<Vec<PdfTe
     }
     Ok(found)
 }
+/// Checks that a text box can be laid out in its bundled font, before any file is read.
+pub(crate) fn check_text(o: &SceneObject) -> Result<(), ToolError> { layout_text(o).map(|_| ()) }
+
+/// Draws one text box on each listed page in place, with the #494 text layout and bundled fonts. The page tree,
+/// annotations and structure are left as they are, so any readable PDF can be stamped. Rects are in the page's
+/// visible, top-left space, so rotated pages are stamped upright; the stamp is marked as an artifact.
+pub(crate) fn stamp_text(doc: &mut Document, stamps: &[(ObjectId, SceneObject)]) -> Result<(), ToolError> {
+    let processing = |error: String| ToolError::processing(error);
+    let mut layouts = HashMap::new();
+    for (index, (_, o)) in stamps.iter().enumerate() {
+        valid_rect(&o.rect).map_err(ToolError::invalid_input)?;
+        if !o.font_size.is_finite() || o.font_size <= 0. || o.font_size > 1000. { return Err(ToolError::invalid_input("Invalid font size")); }
+        layouts.insert((index, 0), layout_text(o)?);
+    }
+    let fonts = embed_text_fonts(doc, &layouts).map_err(processing)?;
+    // Original content may leave its graphics state changed, so it runs inside its own q/Q.
+    let save = doc.add_object(Stream::new(dictionary!{}, b"q\n".to_vec()));
+    let restore = doc.add_object(Stream::new(dictionary!{}, b"Q\n".to_vec()));
+    for (index, (page_id, o)) in stamps.iter().enumerate() {
+        let layout = &layouts[&(index, 0)];
+        let (font_id, remapper) = &fonts[layout.font.name];
+        let g = geometry(doc, *page_id).map_err(processing)?;
+        let effective = effective_resource_entries(doc, *page_id, b"Font").map_err(processing)?;
+        let name = next_resource_name(&effective, "Font", &format!("SceneText{}", layout.font.name.replace('-', ""))).map_err(processing)?;
+        let [r, gr, b] = rgb(&o.color).map_err(ToolError::invalid_input)?;
+        let content = format!("q\n/Artifact BMC\n{}{r} {gr} {b} rg\n{}EMC\nQ\n", cm(inverse_matrix(g.matrix)), text_content(&o.rect, o.align, o.font_size, layout, &name, remapper));
+        let stamp = doc.add_object(Stream::new(dictionary!{}, content.into_bytes()));
+        let mut font_resources = lopdf::Dictionary::new();
+        font_resources.set(name.as_str(), Object::Reference(*font_id));
+        let resources = scene_resources(doc, *page_id, lopdf::Dictionary::new(), font_resources, lopdf::Dictionary::new()).map_err(processing)?;
+        let original = match doc.get_dictionary(*page_id).map_err(|e| processing(err(e)))?.get(b"Contents").ok() {
+            Some(contents) => match resolve(doc, contents).map_err(processing)? {
+                Object::Array(contents) => contents.clone(),
+                _ => vec![contents.clone()],
+            },
+            None => Vec::new(),
+        };
+        let page = doc.get_dictionary_mut(*page_id).map_err(|e| processing(err(e)))?;
+        let mut contents = vec![Object::Reference(save)];
+        contents.extend(original);
+        contents.extend([Object::Reference(restore), Object::Reference(stamp)]);
+        page.set("Resources", resources);
+        page.set("Contents", contents);
+    }
+    Ok(())
+}
+
+/// The visible width and height of every page, in page order, or why they can't be read.
+pub(crate) fn page_sizes(doc: &Document) -> Result<Vec<(ObjectId, f32, f32)>, String> {
+    doc.get_pages().values().map(|id| geometry(doc, *id).map(|g| (*id, g.width, g.height))).collect()
+}
+
 pub const NOTHING_TO_EXPORT: &str = "Nothing to export: this document has no changes, so a copy would match the original.";
 
 /// The detail line for an export, counted against the source so a dropped page reads as removed.

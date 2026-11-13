@@ -1104,10 +1104,9 @@ mod tests {
                 capability.output_formats,
                 row.get("outputFormats").map(|formats| formats.as_array().unwrap().iter().map(|format| format.as_str().unwrap().to_string()).collect::<Vec<_>>())
             );
-            assert_eq!(
-                capability.many_to_one,
-                capability.input_cardinality == InputCardinality::Ordered,
-                "{command} many-to-one must match its ordered inputs"
+            assert!(
+                !capability.many_to_one || capability.input_cardinality == InputCardinality::Ordered,
+                "{command} many-to-one must take ordered inputs"
             );
         }
         let mut many_to_one = native_capabilities()

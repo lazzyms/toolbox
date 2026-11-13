@@ -65,7 +65,8 @@ const accepts = (extensions: readonly string[], path: string) =>
 
 const extensionList = (extensions: readonly string[]) => `${extensions.join(', ')} files`;
 
-export const allowsRepeats = (tool: ToolDefinition) => tool.capability.inputCardinality === 'ordered';
+// Only tools that join their inputs into one file can use the same file twice; ordered per-file tools run each file once.
+export const allowsRepeats = (tool: ToolDefinition) => tool.capability.manyToOne;
 
 export const intakePolicyFor = (label: string, tools: ToolDefinition[], active: ToolDefinition): IntakePolicy => ({
     label,
