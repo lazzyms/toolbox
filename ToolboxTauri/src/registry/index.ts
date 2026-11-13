@@ -16,6 +16,7 @@ const UtilityMetadata: Array<Omit<ToolDefinition, "capability" | "status">> = [
     { id: "images-to-pdf", title: "Images to PDF", shortTitle: "Images to PDF", resultVerb: "Converted", runningVerb: "Converting", blurb: "Turn photos and scans into one PDF.", symbol: "photo", category: "PDF", command: "images_to_pdf", verification: "images-to-pdf", view: "images-to-pdf" },
     { id: "pdf-to-images", title: "PDF to Images", shortTitle: "PDF to Images", resultVerb: "Converted", runningVerb: "Converting", outputNoun: "images", blurb: "Render PDF pages to JPEG, PNG or WebP images at 72 to 300 dpi.", symbol: "photo", category: "PDF", command: "pdf_to_images", verification: "pdf-to-images", view: "pdf-to-images" },
     { id: "pdf-extract", title: "Extract from PDF", shortTitle: "Extract from PDF", resultVerb: "Extracted", runningVerb: "Extracting", blurb: "Save the text, the images, or both from each PDF.", keywords: ["text", "txt", "images", "pictures", "photos", "extract", "pdf to text", "extract images"], symbol: "file-text", category: "PDF", command: "extract_from_pdf", verification: "pdf-extract", view: "pdf-extract" },
+    { id: "pdf-to-epub", title: "PDF to EPUB", shortTitle: "PDF to EPUB", resultVerb: "Converted", runningVerb: "Converting", outputNoun: "EPUB", blurb: "Turn each PDF into a reflowable eBook for phones and e-readers.", keywords: ["epub", "ebook", "e-book", "e-reader", "kindle", "kobo", "reflow", "pdf to epub", "book"], symbol: "book", category: "PDF", command: "pdf_to_epub", verification: "pdf-to-epub", view: "pdf-to-epub" },
     { id: "convert-to-pdf", title: "Convert to PDF", shortTitle: "Convert to PDF", resultVerb: "Saved", resultNoun: "PDF", runningVerb: "Converting", blurb: "Turn documents, spreadsheets, slides, eBooks and text into PDFs.", symbol: "file-text", category: "PDF", command: "convert_to_pdf", verification: "convert-to-pdf", view: "convert-to-pdf" },
     { id: "pdf-split", title: "Split PDF", shortTitle: "Split", resultVerb: "Split", runningVerb: "Splitting", blurb: "Break a PDF into separate page files.", symbol: "file-scissors", category: "PDF", command: "split_pdf", verification: "pdf-split", view: "pdf-split" },
     { id: "pdf-sign", title: "Sign PDF", shortTitle: "Sign", resultVerb: "Signed", runningVerb: "Signing", blurb: "Place a visible typed signature on a PDF page.", symbol: "signature", category: "PDF", command: "export_pdf_scene", verification: "pdf-sign", view: "pdf-sign" },
@@ -117,7 +118,7 @@ export const ToolWorkspaceRegistry: ToolWorkspaceDefinition[] = [
         symbol: "arrows-exchange",
         category: "PDF",
         categories: ["PDF"],
-        toolIds: ["pdf-to-images", "pdf-extract", "images-to-pdf", "pdf-ocr", "convert-to-pdf"],
+        toolIds: ["pdf-to-images", "pdf-extract", "pdf-to-epub", "images-to-pdf", "pdf-ocr", "convert-to-pdf"],
     },
     {
         id: "image-editor",

@@ -1237,6 +1237,11 @@ mod tests {
         assert!(extract.supports_page_selection && !extract.supports_preview);
         assert_eq!(extract.input_cardinality, InputCardinality::Multiple);
         assert!(native_capability("pdf_to_text").is_none() && native_capability("extract_pdf_images").is_none());
+        let epub = native_capability("pdf_to_epub").unwrap();
+        assert_eq!((epub.accepted_extensions.as_slice(), epub.input_cardinality, epub.output_suffix.as_str()), ([".pdf".to_string()].as_slice(), InputCardinality::Multiple, ""), "PDF to EPUB names each book stem.epub");
+        assert!(epub.native_available && !epub.many_to_one && !epub.supports_page_selection && !epub.supports_preview);
+        assert!(validate_command_inputs("pdf_to_epub", &[PathBuf::from("book.PDF")]).is_ok());
+        assert!(validate_command_inputs("pdf_to_epub", &[PathBuf::from("book.epub")]).is_err());
         let ocr = native_capability("ocr_pdf").unwrap();
         assert!(ocr.native_available);
         assert_eq!((ocr.input_cardinality, ocr.output_suffix.as_str()), (InputCardinality::Multiple, "-ocr"));

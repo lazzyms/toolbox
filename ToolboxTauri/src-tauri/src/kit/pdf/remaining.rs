@@ -890,7 +890,7 @@ enum PageSelection {
 }
 
 /// Pages the text helper read as blank while other pages had text: likely scanned, so OCR can read them.
-fn pages_without_text(pages: Vec<u32>) -> OutcomeWarning {
+pub(crate) fn pages_without_text(pages: Vec<u32>) -> OutcomeWarning {
     let message = if pages.len() == 1 { format!("{} has no selectable text. OCR can read it.", page_list(&pages)) } else { format!("{} have no selectable text. OCR can read them.", page_list(&pages)) };
     OutcomeWarning { kind: WarningKind::PagesWithoutText { pages }, message }
 }

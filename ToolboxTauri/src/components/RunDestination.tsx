@@ -24,6 +24,7 @@ export const sameLocation = (a: OutputLocation, b: OutputLocation) =>
 // An empty extension means the output is a folder.
 const FIXED_OUTPUT_EXTENSIONS: Partial<Record<ToolCommand, string>> = {
     extract_from_pdf: 'txt',
+    pdf_to_epub: 'epub',
     remove_image_background: 'png',
     blur_faces: 'png',
     generate_icon_set: '',

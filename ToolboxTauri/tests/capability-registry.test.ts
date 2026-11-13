@@ -91,6 +91,14 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("pdf_to_text"), undefined);
   assert.equal(capabilitiesByCommand.get("extract_pdf_images"), undefined);
   assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-extract")?.command, "extract_from_pdf");
+  assert.deepEqual(capabilitiesByCommand.get("pdf_to_epub")?.acceptedExtensions, [".pdf"]);
+  assert.equal(capabilitiesByCommand.get("pdf_to_epub")?.inputCardinality, "multiple");
+  assert.equal(capabilitiesByCommand.get("pdf_to_epub")?.supportsPageSelection, false);
+  assert.equal(capabilitiesByCommand.get("pdf_to_epub")?.supportsPreview, false);
+  assert.equal(capabilitiesByCommand.get("pdf_to_epub")?.manyToOne, false);
+  assert.equal(capabilitiesByCommand.get("pdf_to_epub")?.nativeAvailability, "available");
+  assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-to-epub")?.command, "pdf_to_epub");
+  assert.ok(ToolWorkspaceRegistry.find(({ id }) => id === "pdf-convert")?.toolIds.includes("pdf-to-epub"));
   assert.equal(capabilitiesByCommand.get("pdf_to_images")?.supportsPreview, false);
   assert.deepEqual(capabilitiesByCommand.get("pdf_to_images")?.outputFormats, [".jpg", ".png", ".webp"]);
   assert.equal(UtilityRegistry.find(({ command }) => command === "pdf_to_images")?.blurb, "Render PDF pages to JPEG, PNG or WebP images at 72 to 300 dpi.");
@@ -148,8 +156,10 @@ test("Convert Image Format writes TIFF, and only a TIFF target carries a compres
 test("every tool declares one output suffix and many-to-one tools take ordered inputs", () => {
   // Read-only tools write no file, so they declare an empty suffix.
   const readOnly = new Set(["inspect_pdf_privacy"]);
+  // A tool that always writes another file type keeps the original name: report.pdf becomes report.epub.
+  const newTypeSameName = new Set(["pdf_to_epub"]);
   for (const capability of SharedCapabilityRegistry) {
-    if (readOnly.has(capability.command) || capability.formatFamilies) assert.equal(capability.outputSuffix, "", capability.command);
+    if (readOnly.has(capability.command) || newTypeSameName.has(capability.command) || capability.formatFamilies) assert.equal(capability.outputSuffix, "", capability.command);
     else assert.match(capability.outputSuffix, /^-[a-z0-9]+(-[a-z0-9]+)*$/, capability.command);
     assert.ok(
       !capability.manyToOne || capability.inputCardinality === "ordered",
@@ -171,6 +181,7 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   assert.equal(suffixes.get("protect_files"), "-protected");
   assert.equal(suffixes.get("pdf_to_images"), "-page");
   assert.equal(suffixes.get("convert_to_pdf"), "");
+  assert.equal(suffixes.get("pdf_to_epub"), "");
   assert.equal(suffixes.get("split_pdf"), "-page");
 });
 

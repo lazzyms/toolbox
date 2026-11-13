@@ -13,7 +13,7 @@ use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::ImageProcessor;
 use crate::kit::images::tools;
 use crate::kit::compress::{compress_file, CompressFilesRequest};
-use crate::kit::pdf::{bates, convert, editor, metadata, privacy, properties, remaining, scene, PDFProcessor};
+use crate::kit::pdf::{bates, convert, editor, metadata, privacy, properties, remaining, scene, to_epub, PDFProcessor};
 use crate::kit::pdf::page_ranges::{require_page_ranges, validate_page_ranges};
 use crate::kit::vision;
 use crate::packs::uninstall::RunPacks;
@@ -377,6 +377,13 @@ async fn extract_from_pdf(events: RunEvents, request: remaining::ExtractFromPdfR
 }
 
 #[tauri::command]
+async fn pdf_to_epub(events: RunEvents, request: to_epub::PdfToEpubRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs("pdf_to_epub", &request.paths) { return outcomes; }
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "pdf_to_epub", request.paths.clone(), &request.output_location, &request, to_epub::convert)
+}
+
+#[tauri::command]
 async fn images_to_pdf(app: tauri::AppHandle, request: remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
     let outcomes = run_images_to_pdf(&request).await;
     settings::remember_chosen_save(&app, request.output_path.as_deref(), outcomes)
@@ -616,6 +623,7 @@ fn main() {
             split_pdf,
             pdf_to_images,
             extract_from_pdf,
+            pdf_to_epub,
             convert_to_pdf,
             convert_pasted_html,
             images_to_pdf,
@@ -2676,6 +2684,102 @@ mod command_tests {
         assert!(outcomes[2].error().is_none(), "the readable scan still runs: {:?}", outcomes[2].error());
         assert!(text.contains("Toolbox reads this scan"), "{text:?}");
         assert_eq!(written, 1, "only the readable scan writes a file");
+        assert_eq!(after, originals);
+    }
+
+    fn epub_request(paths: Vec<PathBuf>, output_location: OutputLocation) -> to_epub::PdfToEpubRequest {
+        to_epub::PdfToEpubRequest { paths, output_location }
+    }
+
+    fn epub_entries(path: &PathBuf) -> Vec<(String, zip::CompressionMethod, Vec<u8>)> {
+        use std::io::Read;
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        (0..archive.len()).map(|index| {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{} has a fixed timestamp", entry.name());
+            (entry.name().to_string(), entry.compression(), bytes)
+        }).collect()
+    }
+
+    #[test]
+    fn pdf_to_epub_writes_a_well_formed_epub3_named_after_each_pdf() {
+        let root = sandbox("pdf-to-epub");
+        let pdf = root.join("field notes.pdf");
+        make_pdf(&pdf, 3);
+        let original = std::fs::read(&pdf).unwrap();
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "books"))));
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
+        assert_eq!(outcomes[0].detail, "3 pages.");
+        assert!(outcomes[0].warnings.is_empty(), "{:?}", outcomes[0].warnings);
+        let epub = outcomes[0].output_paths()[0].clone();
+        assert_eq!(epub, root.join("books").join("field notes.epub"), "the chosen folder holds stem.epub");
+
+        let entries = epub_entries(&epub);
+        let names = entries.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, ["mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/page-1.xhtml", "OEBPS/page-2.xhtml", "OEBPS/page-3.xhtml"]);
+        assert_eq!((entries[0].1, entries[0].2.as_slice()), (zip::CompressionMethod::Stored, b"application/epub+zip".as_slice()), "mimetype comes first, uncompressed");
+        assert!(!names.iter().any(|name| [".ttf", ".otf", ".woff", ".woff2"].iter().any(|font| name.ends_with(font))), "no embedded fonts");
+        let part = |name: &str| String::from_utf8(entries.iter().find(|(entry, _, _)| entry == name).unwrap().2.clone()).unwrap();
+        let opf = part("OEBPS/content.opf");
+        assert!(opf.contains("version=\"3.0\"") && opf.contains("<dc:title>field notes</dc:title>") && opf.contains("properties=\"nav\""), "{opf}");
+        assert!(opf.contains("<dc:identifier id=\"book-id\">urn:uuid:"), "{opf}");
+        assert!(part("OEBPS/nav.xhtml").contains("<nav epub:type=\"toc\""));
+        for page in 1..=3 {
+            assert!(part(&format!("OEBPS/page-{page}.xhtml")).contains(&format!("<p>Toolbox page {page}</p>")), "page {page} keeps its text as a paragraph");
+        }
+        let book = crate::kit::pdf::epub::parse(&std::fs::read(&epub).unwrap(), u64::MAX, ToolError::processing("too big"), 1.).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!((book.chapters.len(), book.navigation.len(), book.title.as_deref()), (3, 3, Some("field notes")), "the EPUB reader opens the book in page order");
+
+        // A repeat run never replaces the first book, and the same PDF makes the same bytes.
+        let again = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "books"))));
+        let third = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "books"))));
+        assert_eq!(again[0].output_paths(), [root.join("books").join("field notes-1.epub")]);
+        assert_eq!(third[0].output_paths(), [root.join("books").join("field notes-2.epub")]);
+        assert!(again[0].warnings.iter().any(|warning| warning.message == "Saved as field notes-1.epub so the existing field notes.epub was not replaced."), "{:?}", again[0].warnings);
+        let first_bytes = std::fs::read(&epub).unwrap();
+        assert_eq!(std::fs::read(&again[0].output_paths()[0]).unwrap(), first_bytes, "repeat runs are byte-identical");
+        assert_eq!(std::fs::read(&third[0].output_paths()[0]).unwrap(), first_bytes, "repeat runs are byte-identical");
+
+        // Saved beside the original, the book takes the PDF's name too.
+        let beside = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], OutputLocation::AlongsideInput)));
+        assert_eq!(beside[0].output_paths(), [root.join("field notes.epub")]);
+        assert_eq!(std::fs::read(&beside[0].output_paths()[0]).unwrap(), first_bytes);
+        assert_eq!(std::fs::read(&pdf).unwrap(), original, "the original PDF is never changed");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pdf_to_epub_gives_each_pdf_its_own_outcome() {
+        use crate::kit::contracts::{OutcomePointer, SkipCode};
+        let root = sandbox("pdf-to-epub-batch");
+        let scan = root.join("scan.pdf");
+        let text_pdf = root.join("text.pdf");
+        let locked = root.join("locked.pdf");
+        let damaged = root.join("damaged.pdf");
+        scanned_pdf(&scan, &[&["Only pixels here"]]);
+        make_pdf(&text_pdf, 2);
+        remaining::tests::password_protected_pdf(&locked);
+        std::fs::write(&damaged, b"%PDF-1.7 not really").unwrap();
+        let paths = vec![scan.clone(), text_pdf.clone(), locked.clone(), damaged.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(paths.clone(), location(&root, "books"))));
+        let written = std::fs::read_dir(root.join("books")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let after = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        let OutcomeState::Skipped { reason } = &outcomes[0].state else { panic!("the scan needs OCR: {:?}", outcomes[0]) };
+        assert_eq!((reason.code, reason.message.as_str()), (SkipCode::NeedsOcr, to_epub::NO_SELECTABLE_TEXT));
+        assert_eq!(reason.pointer, Some(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
+        assert!(outcomes[1].error().is_none(), "the text PDF still converts: {:?}", outcomes[1]);
+        let locked_error = outcomes[2].error().unwrap();
+        assert_eq!((locked_error.message.as_str(), locked_error.pointer.clone()), (to_epub::PASSWORD_PROTECTED, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() })));
+        assert_eq!(outcomes[3].error().unwrap().message, remaining::PDF_DAMAGED);
+        assert_eq!(written, vec!["text.epub".to_string()], "only the text PDF makes a book");
         assert_eq!(after, originals);
     }
 
@@ -5193,6 +5297,10 @@ mod command_tests {
             assert_eq!(both, [root.join("extract both").join("mixed-text.txt"), root.join("extract both").join("mixed-images")], "Both saves the text file and the images folder together");
             outputs.extend(named(&mut naming, "extract_from_pdf", mixed_pdf.clone(), both));
         }
+        // PDF to EPUB reads text in-process, so it needs no helper or pack.
+        let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub") }));
+        assert_eq!(epub, [root.join("pdf to epub").join("document.epub")], "PDF to EPUB names its book after the PDF with no suffix");
+        outputs.extend(named(&mut naming, "pdf_to_epub", pdf.clone(), epub));
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
         assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
         outputs.extend(named(&mut naming, "convert_to_pdf", text.clone(), converted));
