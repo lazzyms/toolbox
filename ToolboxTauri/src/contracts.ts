@@ -172,7 +172,8 @@ export type OutcomeWarning =
   | { code: "imageDamaged"; message: string; details: { page: number; image: number } }
   | { code: "imageTooLarge"; message: string; details: { page: number; image: number; width: number; height: number } }
   | { code: "jpegColourKept"; message: string; details: { colour: JpegColour; pages: number[]; images: number } }
-  | { code: "pagesWithoutText"; message: string; details: { pages: number[] } };
+  | { code: "pagesWithoutText"; message: string; details: { pages: number[] } }
+  | { code: "transparencyFlattened"; message: string };
 
 export const jpegColours = ["cmyk", "inverted"] as const;
 export type JpegColour = (typeof jpegColours)[number];

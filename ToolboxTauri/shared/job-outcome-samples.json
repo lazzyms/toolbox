@@ -178,5 +178,16 @@
         "message": "Pages 30-33 have no selectable text. OCR can read them."
       }
     ]
+  },
+  {
+    "inputPath": "badge.png",
+    "state": "succeeded",
+    "outputPaths": ["badge-edited.jpg"],
+    "detail": "Image saved",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      { "code": "transparencyFlattened", "message": "Transparent areas were flattened onto white, because JPEG has none." }
+    ]
   }
 ]

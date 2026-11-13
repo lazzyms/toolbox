@@ -111,6 +111,8 @@ export const warningText = (warning: OutcomeWarning): string => {
             return warning.details.pages.length === 1
                 ? `${pageList(warning.details.pages)} has no selectable text. OCR can read it.`
                 : `${pageList(warning.details.pages)} have no selectable text. OCR can read them.`;
+        case "transparencyFlattened":
+            return "Transparent areas were flattened onto white, because JPEG has none.";
     }
 };
 
@@ -147,6 +149,8 @@ const jpegColourText = ({ colour, pages, images }: { colour: JpegColour; pages: 
 export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", damaged: "Repair", incompatible: "Update" };
 /** Notes tell what was approximated or what another tool can still do for a file; they don't say anything went wrong. */
 const isNote = (warning: OutcomeWarning) => warning.code === "approximateLayout" || warning.code === "pagesWithoutText";
+/** Saved-as notes say how a finished file was saved. They show on its row after the detail but leave it done, not warned. */
+const isSavedAs = (warning: OutcomeWarning) => warning.code === "transparencyFlattened";
 
 export const warningDetail = (warning: OutcomeWarning): RowDetail => ({ text: warningText(warning), tone: warning.code === "omittedContent" ? "warn" : null });
 
@@ -199,9 +203,12 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
     switch (outcome.state) {
         case "succeeded": {
             const first = outcome.outputPaths[0] ?? null;
-            const warned = warnings.length > 0;
-            const noted = warned && outcome.warnings.every(isNote);
-            const flagged = noted ? (warnings.length === 1 ? "a note" : "notes") : warnings.length === 1 ? "a warning" : "warnings";
+            const flaggedWarnings = outcome.warnings.filter((warning) => !isSavedAs(warning));
+            const cautions = flaggedWarnings.map(warningDetail);
+            const notes = outcome.warnings.filter(isSavedAs).map(warningText);
+            const warned = cautions.length > 0;
+            const noted = warned && flaggedWarnings.every(isNote);
+            const flagged = noted ? (cautions.length === 1 ? "a note" : "notes") : cautions.length === 1 ? "a warning" : "warnings";
             const pointsAtOcr = outcome.warnings.some((warning) => warning.code === "pagesWithoutText");
             const byOutput = namedByOutput && first !== null;
             const renamed = outcome.warnings.filter((warning): warning is RenamedWarning => warning.code === "renamedToAvoidReplacing");
@@ -227,7 +234,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 tone: noted ? "note" : warned ? "warn" : "ok",
                 stateLabel: resultVerb,
                 spokenState: warned ? `${resultVerb} with ${flagged}` : resultVerb,
-                detailLines: nonEmpty(warned ? [sizes, ...warnings, outcome.detail] : [sizes, first && !byOutput && !outputNoun ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
+                detailLines: nonEmpty(warned ? [sizes, ...cautions, outcome.detail, ...notes] : [sizes, first && !byOutput && !outputNoun ? outputSummary(outcome.outputPaths) : "", outcome.detail, ...notes]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
                 pointer: pointsAtOcr ? pointerView(ocrPointer) : null,
@@ -317,7 +324,7 @@ export const resultTally = (results: JobOutcome[], resultVerb: string): string =
 
 export const resultSummary = (results: JobOutcome[], resultVerb: string, resultNoun?: string): ResultSummary => {
     const verb = resultVerb.toLowerCase();
-    const flagged = results.filter((result) => result.state === "succeeded" && result.warnings.length > 0);
+    const flagged = results.filter((result) => result.state === "succeeded" && result.warnings.some((warning) => !isSavedAs(warning)));
     const warned = flagged.length;
     const noted = flagged.some((result) => result.warnings.some(isNote));
     const files = resultNoun ? (warned === 1 ? resultNoun : `${resultNoun}s`) : `${verb} ${warned === 1 ? "file" : "files"}`;
