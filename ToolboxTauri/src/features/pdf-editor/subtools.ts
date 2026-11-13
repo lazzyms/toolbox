@@ -13,7 +13,10 @@ export interface SubTool {
 export interface RedactionMark { pageIndex: number; rect: SceneRect; color: string }
 export interface SceneSections { scene: Pick<PdfScene, 'pages'>; formValues?: FormValue[]; textEdits?: PdfTextEdit[]; flatten?: PdfFlattenChoice; redactions?: RedactionMark[] }
 export interface SceneExportRequest extends SceneSections { paths: string[]; outputLocation: OutputLocation; outputPath?: string }
-export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; suffix: string | null }
+export interface SceneExportPlan { request: SceneExportRequest; contributors: SubToolId[]; summary: ExportStep[]; suffix: string | null }
+/** One row of the export summary: a stage of the native export and the sub-tools that feed it. */
+export interface ExportStep { stage: ExportStageId; label: string; tools: string[] }
+export type ExportStageId = 'fill-forms' | 'edit-text' | 'overlays' | 'flatten' | 'redact';
 
 export const combinedSuffix = '-edited';
 
@@ -45,6 +48,22 @@ export const subTools: readonly SubTool[] = [
     contributes: (scene) => scene.pages.some((page) => page.redactions?.length) },
 ];
 
+/** The native export's stages, in the fixed order it applies them. Each sub-tool feeds exactly one stage. */
+export const exportStages: readonly { id: ExportStageId; label: string; tools: readonly SubToolId[] }[] = [
+  { id: 'fill-forms', label: 'Fill form', tools: ['form'] },
+  { id: 'edit-text', label: 'Edit text', tools: ['edit-text'] },
+  { id: 'overlays', label: 'Add text, signatures and page marks', tools: ['text', 'highlight', 'shape', 'signature', 'watermark', 'pageNumbers', 'headerFooter', 'crop', 'organize'] },
+  { id: 'flatten', label: 'Flatten', tools: ['flatten'] },
+  { id: 'redact', label: 'Redact', tools: ['redact'] },
+];
+
+/** Lists the stages the contributors feed, in the fixed export order, each with its contributing sub-tools. */
+export const exportSummary = (contributors: readonly Pick<SubTool, 'id' | 'label'>[]): ExportStep[] =>
+  exportStages.flatMap(({ id, label, tools }) => {
+    const feeding = contributors.filter((tool) => tools.includes(tool.id)).map((tool) => tool.label);
+    return feeding.length ? [{ stage: id, label, tools: feeding }] : [];
+  });
+
 // Native requests carry form values, text edits, the flatten choice and redaction marks as their own stage sections, beside the scene;
 // marks leave the pages and travel in output page order.
 export const sceneSections = ({ pages, textEdits }: PdfScene, formValues: FormValue[] = [], flatten: PdfFlattenChoice | null = null): SceneSections => {
@@ -68,6 +87,7 @@ export function planSceneExport({ paths, scene, baseline, outputLocation, output
   return {
     request: { paths, ...sceneSections(scene, formValues, flatten), outputLocation, ...(outputPath ? { outputPath } : {}) },
     contributors: contributors.map((tool) => tool.id),
+    summary: exportSummary(contributors),
     suffix: exportSuffix(contributors),
   };
 }

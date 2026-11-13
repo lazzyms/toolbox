@@ -1298,6 +1298,21 @@ impl Stage {
             Stage::Redact => "-redacted",
         }
     }
+    /// The stage's name in the export summary, as the Edit PDF export board lists it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Stage::FillForms => "Fill form",
+            Stage::EditText => "Edit text",
+            Stage::Overlays => "Add text, signatures and page marks",
+            Stage::Flatten => "Flatten",
+            Stage::Redact => "Redact",
+        }
+    }
+}
+
+/// The export summary for a chained export: every contributing stage, in the order they ran.
+pub fn stage_summary(contributors: &[Stage]) -> Option<String> {
+    (contributors.len() > 1).then(|| format!("Changes applied in this fixed order: {}.", contributors.iter().map(|stage| stage.label()).collect::<Vec<_>>().join("; ")))
 }
 
 /// The output suffix for the stages that changed the document, or None when nothing did.
@@ -2329,19 +2344,21 @@ pub fn export(run:&SceneRun,input:PathBuf)->JobOutcome {
         file.write_all(&bytes).and_then(|_| file.sync_all()).map_err(|e| ToolError::processing(err(e)))?;
         drop(file);
         let path=reservation.publish().map_err(|e| ToolError::processing(err(e)))?;
-        Ok::<_,ToolError>((path,page_summary(&request.scene,source_pages),signed,warnings))
+        Ok::<_,ToolError>((path,page_summary(&request.scene,source_pages),contributors,signed,warnings))
     })();
     match result {
-        Ok((path,summary,signed,warnings))=>{
-            // Redaction adds what was rasterised and stripped after the page summary every export reports.
-            let detail=match &request.sections.redactions {
+        Ok((path,summary,contributors,signed,warnings))=>{
+            // The page summary every export reports, then the chained stages in the order they ran,
+            // then what redaction rasterised and stripped.
+            let redacted=match &request.sections.redactions {
                 Some(marks) if !marks.is_empty()=>{
                     let pages:Vec<usize>=marks.iter().map(|mark|mark.page_index).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
                     let image=if pages.len()==1 {"was redacted as a 300 dpi image"} else {"were redacted as 300 dpi images"};
-                    format!("{summary} {} {image}. Document metadata, XMP data and attachments were removed.",page_list(&pages).replacen('p',"P",1))
+                    Some(format!("{} {image}. Document metadata, XMP data and attachments were removed.",page_list(&pages).replacen('p',"P",1)))
                 }
-                _=>summary,
+                _=>None,
             };
+            let detail=[Some(summary),stage_summary(&contributors),redacted].into_iter().flatten().collect::<Vec<_>>().join(" ");
             super::note_signature_removed(note_renamed(warnings.into_iter().fold(JobOutcome::succeeded(input, vec![path], detail), JobOutcome::with_warning), chosen), signed)
         }
         Err(error)=>JobOutcome::failure(input,error),
@@ -4135,7 +4152,7 @@ mod tests {
         ] })),input.clone());
         assert!(outcome.error().is_none(),"{:?}",outcome.error());
         assert_eq!(outcome.output_paths()[0].file_name().unwrap(),"source-edited.pdf");
-        assert!(outcome.detail.ends_with("Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed."),"{:?}",outcome.detail);
+        assert!(outcome.detail.ends_with("Changes applied in this fixed order: Add text, signatures and page marks; Redact. Pages 1 and 3 were redacted as 300 dpi images. Document metadata, XMP data and attachments were removed."),"{:?}",outcome.detail);
         let bytes=fs::read(&outcome.output_paths()[0]).unwrap();
         assert!(!bytes.windows(6).any(|window|window==b"Staged"),"overlays are redacted too because redaction runs last");
     }
@@ -4875,6 +4892,13 @@ mod tests {
     }
 
     fn file_name(path: &Path) -> String { path.file_name().unwrap().to_string_lossy().into_owned() }
+
+    #[test]
+    fn the_export_summary_lists_chained_stages_in_the_order_they_ran() {
+        assert_eq!(stage_summary(&[]), None);
+        assert_eq!(stage_summary(&[Stage::Redact]), None, "a single stage keeps its own message");
+        assert_eq!(stage_summary(&STAGES).unwrap(), "Changes applied in this fixed order: Fill form; Edit text; Add text, signatures and page marks; Flatten; Redact.");
+    }
 
     #[test]
     fn export_suffix_names_the_single_contributing_stage_or_the_combined_edit() {
