@@ -141,6 +141,11 @@ async fn inspect_pdf_scene_page(request: InspectPdfScenePageRequest) -> Result<m
 }
 
 #[tauri::command]
+async fn inspect_pdf_watermark_image(request: InspectPdfRequest) -> Result<scene::WatermarkImageInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || scene::inspect_watermark_image(&request.path)).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn inspect_signature_image(request: InspectPdfRequest) -> Result<scene::SignatureSize, String> {
     tauri::async_runtime::spawn_blocking(move || scene::inspect_signature_image(&request.path)).await.map_err(|error| error.to_string())?
 }
@@ -563,6 +568,7 @@ fn main() {
             inspect_pdf,
             inspect_pdf_scene,
             inspect_pdf_scene_page,
+            inspect_pdf_watermark_image,
             inspect_pdf_form,
             inspect_signature_image,
             preview_pdf_scene,
@@ -2746,7 +2752,7 @@ mod command_tests {
                 { "kind": "highlight", "rect": { "x": 65, "y": 62, "width": 200, "height": 30 }, "text": "", "fontSize": 18, "color": "#FFD700", "opacity": 0.35 },
                 { "kind": "text", "rect": { "x": 72, "y": 150, "width": 360, "height": 40 }, "text": "Edited entirely on this device", "fontSize": 18, "color": "#1455AA", "opacity": 1 },
                 { "kind": "shape", "rect": { "x": 65, "y": 145, "width": 380, "height": 50 }, "text": "", "fontSize": 18, "color": "#1455AA", "opacity": 1 },
-                { "kind": "watermark", "rect": { "x": 120, "y": 340, "width": 370, "height": 80 }, "text": "PRIVATE DRAFT", "fontSize": 40, "color": "#AAAAAA", "opacity": 0.4 },
+                { "kind": "watermark", "rect": { "x": 0, "y": 0, "width": 612, "height": 792 }, "text": "", "fontSize": 18, "color": "#000000", "opacity": 1, "watermark": { "text": "PRIVATE DRAFT", "opacity": 40, "color": "#AAAAAA", "rotation": -45 }, "layer": "behind", "pageRange": "all" },
                 { "kind": "signature", "rect": { "x": 90, "y": 580, "width": 200, "height": 50 }, "text": "", "fontSize": 18, "color": "#202020", "opacity": 1, "signatureMode": "image", "signaturePath": image, "pageRange": "1-2" },
                 { "kind": "signature", "rect": { "x": 320, "y": 580, "width": 200, "height": 50 }, "text": "A. Signer", "fontSize": 18, "color": "#1A3A8F", "opacity": 1, "signatureMode": "text" }
             ] },

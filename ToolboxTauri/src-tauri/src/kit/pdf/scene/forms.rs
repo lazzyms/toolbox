@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream};
 use serde::Serialize;
 use crate::kit::contracts::ToolError;
-use super::{compress_bytes, embed_text_fonts, err, geometry, layout_text_for, load, resolve, text_content, Kind, Rect, SceneObject, TextAlign, TextLayout, TEXT_LINE_HEIGHT};
+use super::{compress_bytes, embed_text_fonts, err, geometry, layout_text_for, load, resolve, text_content, Kind, Layer, Rect, SceneObject, TextAlign, TextLayout, TEXT_LINE_HEIGHT};
 
 const READ_ONLY: i64 = 1;
 const REQUIRED: i64 = 1 << 1;
@@ -249,7 +249,7 @@ fn text_object(field: &FormField, text: &str, size: (f32, f32)) -> SceneObject {
     };
     SceneObject {
         kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1.,
-        shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark_pattern: None,
+        shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark: None, layer: Layer::Front,
         bold: false, italic: false, align: field.align, page_range: None,
     }
 }

@@ -28,8 +28,8 @@ import type { SubToolInspectorProps, UsedSignature } from '../features/pdf-edito
 import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
 import { proposedSaveName } from '../components/saveStep';
 import type { SaveDialog } from '../registry/saveSteps';
-import { movePagesBefore, removePages, rotatePages, sceneFromDocument, swapPage, visibleBounds } from '../features/pdf-editor/scene';
-import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, TextStyle, WatermarkPattern } from '../features/pdf-editor/scene';
+import { movePagesBefore, objectsOnPage, pagesInRange, removePages, rotatePages, sceneFromDocument, swapPage, visibleBounds } from '../features/pdf-editor/scene';
+import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, TextStyle } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
 import { ShortcutHint } from '../components/ShortcutHint';
@@ -68,7 +68,7 @@ const toolGuidance: Record<EditorTool, string> = {
   'edit-text': 'Click text with a dashed outline to change it. Text that is part of a picture can\'t be edited. Use OCR first.',
   text: 'Drag to add text. Double-click text to edit it.',
   highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
-  signature: 'Type your name or choose a picture of your signature, then click where it goes.', form: 'Type into the form fields on the page.', watermark: 'Choose a pattern, then add a watermark.',
+  signature: 'Type your name or choose a picture of your signature, then click where it goes.', form: 'Type into the form fields on the page.', watermark: 'Add one watermark to every page you choose.',
   crop: 'Drag a rectangle on the page to crop it.', redact: 'Drag over anything you want removed.',
 };
 const kindLabels: Record<SceneObject['kind'], string> = {
@@ -313,9 +313,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [signatureColor, setSignatureColor] = useState('#1f1f1f');
   const [signatureError, setSignatureError] = useState<string | null>(null);
   const [reusable, setReusable] = useState(usedSignatures);
-  const [watermarkText, setWatermarkText] = useState('DRAFT');
-  const [watermarkFontSize, setWatermarkFontSize] = useState(40);
-  const [watermarkPattern, setWatermarkPattern] = useState<WatermarkPattern>('across-page');
+  const [watermarkPictureError, setWatermarkPictureError] = useState<string | null>(null);
   const [redactionFill, setRedactionFill] = useState<string>(redactionFills.Black);
   const [reviewing, setReviewing] = useState(false);
   const [previewRedactions, setPreviewRedactions] = useState(true);
@@ -344,8 +342,9 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   });
   const scene = history.present;
   const page = scene.pages.find((item) => item.id === currentId) ?? scene.pages[0];
-  const selected = page?.objects.find((object) => object.id === selectedId);
   const currentIndex = scene.pages.findIndex((item) => item.id === page?.id);
+  const watermarks = page ? objectsOnPage(scene, currentIndex).filter(({ object }) => object.kind === 'watermark').map(({ object }) => object) : [];
+  const selected = page?.objects.find((object) => object.id === selectedId) ?? watermarks.find((object) => object.id === selectedId);
   const serializedScene = JSON.stringify(scene);
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
   const exactPreview = preview?.key === previewKey ? preview.value : null;
@@ -576,16 +575,20 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     focusMark.current = false;
     window.document.querySelector<SVGElement>(`[data-redaction="${selectedId}"]`)?.focus();
   }, [selectedId, currentId]);
-  const updateObject = (patch: Partial<SceneObject>, field: string) => {
-    if (!selected || !page || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
-    commit({ ...scene, pages: scene.pages.map((item) => item.id === page.id ? { ...page,
-      objects: page.objects.map((object) => object.id === selected.id ? { ...object, ...patch } : object),
-    } : item) }, `${selected.id}:${field}`);
+  // Patches or removes an object on whichever page stores it, so a range-applied watermark can be edited from any page.
+  const changeObject = (id: string, patch: Partial<SceneObject> | null, field: string) => {
+    const object = scene.pages.flatMap((item) => item.objects).find((item) => item.id === id);
+    if (!object || !availability.allows(toolFlagByObjectKind[object.kind])) return;
+    commit({ ...scene, pages: scene.pages.map((item) => item.objects.some((candidate) => candidate.id === id) ? { ...item,
+      objects: patch ? item.objects.map((candidate) => candidate.id === id ? { ...candidate, ...patch } : candidate) : item.objects.filter((candidate) => candidate.id !== id),
+    } : item) }, patch ? `${id}:${field}` : null);
+    if (!patch) setSelectedId(null);
   };
+  const updateObject = (patch: Partial<SceneObject>, field: string) => { if (selected) changeObject(selected.id, patch, field); };
   const makeObject = (kind: SceneObject['kind'], rect: SceneRect): SceneObject => ({
     id: crypto.randomUUID(), kind, rect,
-    text: kind === 'watermark' ? watermarkText : kind === 'signature' ? signatureText : text,
-    fontSize: kind === 'watermark' ? watermarkFontSize : kind === 'signature' ? Math.max(18, fontSize) : fontSize,
+    text: kind === 'signature' ? signatureText : text,
+    fontSize: kind === 'signature' ? Math.max(18, fontSize) : fontSize,
     color: kind === 'highlight' ? highlightColor : kind === 'signature' ? signatureColor : color,
     opacity: kind === 'highlight' ? highlightOpacity : kind === 'signature' ? 1 : opacity,
     shape: kind === 'shape' ? shape : undefined,
@@ -594,7 +597,6 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     signaturePath: kind === 'signature' && signatureMode === 'image' ? signaturePath : undefined,
     signaturePreview: kind === 'signature' && signatureMode === 'image' ? signaturePreview : undefined,
     ...(kind === 'text' ? textStyle : {}),
-    watermarkPattern: kind === 'watermark' ? watermarkPattern : undefined,
   });
   const chooseSignatureImage = async () => {
     if (!availability.allows('pdf-sign')) return;
@@ -624,13 +626,26 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     endGroup(); setTool('signature'); setSelectedId(null);
   };
   const clearUsedSignatures = () => { usedSignatures = []; setReusable(usedSignatures); };
-  const addFixedWatermark = () => {
+  const addWatermark = () => {
     if (!page || !availability.allows('pdf-watermark')) return;
-    const b = visibleBounds(page);
-    const rect: SceneRect = { x: b.x + b.width * 0.14, y: b.y + b.height * 0.33, width: b.width * 0.72, height: Math.max(40, Math.min(96, b.height * 0.18)) };
-    const object = makeObject('watermark', rect);
+    const color = readColorToken(colorTokens.documentWatermark);
+    const object: SceneObject = { ...makeObject('watermark', visibleBounds(page)), text: 'DRAFT', color, opacity: 1, fontFamily: 'Noto Sans', bold: true,
+      watermark: { text: 'DRAFT', opacity: 18, color, position: 'center', rotation: -45 }, layer: 'behind', pageRange: 'all' };
     commitPage({ ...page, objects: [...page.objects, object] });
-    setSelectedId(object.id);
+    setSelectedId(object.id); setWatermarkPictureError(null);
+  };
+  const chooseWatermarkPicture = async () => {
+    if (selected?.kind !== 'watermark' || !selected.watermark || !availability.allows('pdf-watermark')) return;
+    setWatermarkPictureError(null);
+    try {
+      const picked = await open({ multiple: false, filters: [{ name: 'Watermark picture', extensions: ['png', 'jpg', 'jpeg'] }] });
+      if (typeof picked !== 'string') return;
+      const size = await invoke<{ width: number; height: number }>('inspect_pdf_watermark_image', { request: { path: picked } });
+      let previewSource: string | null = null;
+      try { previewSource = convertFileSrc(picked); } catch { /* Keep the path for native export; the rendered preview still shows the picture. */ }
+      const { text: _text, color: _color, ...options } = selected.watermark;
+      updateObject({ watermark: { ...options, logoPath: picked, size: undefined }, watermarkPreview: previewSource, watermarkImageSize: size }, 'watermark-picture');
+    } catch (reason) { setWatermarkPictureError(reason instanceof Error ? reason.message : String(reason)); }
   };
   const selectPage = (id: string, additive = false, range = false) => {
     if (range && page) {
@@ -684,7 +699,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   useEffect(() => () => onChanges(0), [onChanges]);
   const placed = scene.pages.flatMap((item, index) => item.objects.map((object) => ({ pageId: item.id, number: index + 1, object })));
   const duplicate = () => {
-    if (!selected || !page || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
+    if (!selected || !page || selected.kind === 'watermark' || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
     const b = visibleBounds(page), r = selected.rect;
     const copy: SceneObject = { ...selected, id: crypto.randomUUID(), rect: { ...r,
       x: Math.max(b.x, Math.min(b.x + b.width - r.width, r.x + 10)), y: Math.max(b.y, Math.min(b.y + b.height - r.height, r.y + 10)) } };
@@ -752,11 +767,17 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     signatureMode, setSignatureMode, signaturePath, signaturePreview, signatureText, setSignatureText,
     signatureTextDraft, setSignatureTextDraft, signatureColor, setSignatureColor, signatureError, chooseSignatureImage,
     usedSignatures: reusable, reuseSignature, clearUsedSignatures,
-    watermarkText, setWatermarkText, watermarkFontSize, setWatermarkFontSize, watermarkPattern, setWatermarkPattern, addFixedWatermark,
+    pageCount: scene.pages.length, addWatermark, chooseWatermarkPicture, watermarkPictureError,
     form, formValue, goToField, switchToAddText: () => { endGroup(); setTool('text'); setSelectedId(null); },
     selectedRun: editRuns.find((run) => run.index === selectedRun), textEdits,
     pageNumberOf: (sourceIndex) => scene.pages.findIndex((item) => item.sourceIndex === sourceIndex) + 1, showEdit, revertEdit, chooseTool,
   } : null;
+  const watermarkCounts = new Array<number>(scene.pages.length).fill(0);
+  scene.pages.forEach((item, origin) => item.objects.forEach((object) => {
+    if (object.kind !== 'watermark') return;
+    try { for (const index of object.pageRange == null ? [origin] : pagesInRange(object.pageRange, scene.pages.length)) watermarkCounts[index] += 1; } catch { /* The inspector reports the range. */ }
+  }));
+  const markCount = (index: number) => scene.pages[index].objects.filter((object) => object.kind !== 'watermark').length + watermarkCounts[index];
   const Fields = selectedKind && selectedKind !== 'organize' ? subToolInspectors[selectedKind]?.Fields : undefined;
   const Guide = tool && tool !== 'organize' ? subToolInspectors[tool]?.Guide : undefined;
 
@@ -892,7 +913,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
               onDragStart={() => { if (availability.allows('pdf-organize')) draggedPage.current = item.id; }} onDragEnd={() => { draggedPage.current = null; }} onDragOver={(event) => { if (availability.allows('pdf-organize')) event.preventDefault(); }} onDrop={() => movePages(item.id)}
               onClick={(event) => selectPage(item.id, event.metaKey || event.ctrlKey, event.shiftKey)}>
               {thumb ? <img alt={`Thumbnail of page ${index + 1}`} src={thumb} /> : <span className="scene-thumb-placeholder" />}
-              <span>{index + 1}</span><small>{item.objects.length ? `${item.objects.length} marks` : ''}</small>
+              <span>{index + 1}</span><small>{markCount(index) ? `${markCount(index)} marks` : ''}</small>
             </Button>;
           })}
           </CardContent>
@@ -905,7 +926,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
             redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions}
             formFields={form?.unsupported ? [] : form?.fields} formValue={formValue}
             onFormValue={(field, value) => { if (availability.allows('pdf-edit') && !field.readOnly) setFormEntries((entries) => ({ ...entries, [field.name]: value })); }}
-            editRuns={editRuns} textEdits={pageEdits} selectedRun={selectedRun} onSelectRun={setSelectedRun} onEditRun={setTextEdit} />
+            editRuns={editRuns} textEdits={pageEdits} selectedRun={selectedRun} onSelectRun={setSelectedRun} onEditRun={setTextEdit}
+            watermarks={watermarks} onWatermarkChange={(id, patch) => { if (canEditCanvas) changeObject(id, patch, 'watermark-position'); }} />
         </div>
         <aside className="scene-inspector" aria-label="PDF editor inspector">
           <Card role="region" aria-label="Properties" className="scene-inspector-panel gap-4 overflow-y-auto py-4">
@@ -917,7 +939,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
               {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill}
                 onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks} />}
               {Fields && inspector && <Fields {...inspector} />}
-              {selectedKind !== 'signature' && (selected || (tool !== null && !['select', 'edit-text', 'crop', 'redact', 'form'].includes(tool))) && <>
+              {selectedKind !== 'watermark' && selectedKind !== 'signature' && (selected || (tool !== null && !['select', 'edit-text', 'crop', 'redact', 'form'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
                   <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);
@@ -930,9 +952,9 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
                 </div>
               </>}
               {selectedEnabled && selected && <div className="scene-inspector-actions">
-                <Button variant="outline" size="sm" onClick={duplicate}>Duplicate<ShortcutHint id="duplicate" /></Button>
-                <Button variant="destructive" size="sm" onClick={() => { if (!availability.allows(toolFlagByObjectKind[selected.kind])) return; commitPage({ ...page, objects: page.objects.filter((item) => item.id !== selected.id) }); setSelectedId(null); }}>Delete object<ShortcutHint id="deleteMark" /></Button>
-                <Button variant="outline" size="sm" onClick={() => { if (availability.allows(toolFlagByObjectKind[selected.kind])) commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] }); }}>Bring to front</Button>
+                {selected.kind !== 'watermark' && <Button variant="outline" size="sm" onClick={duplicate}>Duplicate<ShortcutHint id="duplicate" /></Button>}
+                <Button variant="destructive" size="sm" onClick={() => changeObject(selected.id, null, 'remove')}>{selected.kind === 'watermark' ? 'Remove watermark' : 'Delete object'}<ShortcutHint id="deleteMark" /></Button>
+                {selected.kind !== 'watermark' && <Button variant="outline" size="sm" onClick={() => { if (availability.allows(toolFlagByObjectKind[selected.kind])) commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] }); }}>Bring to front</Button>}
               </div>}
               {selectedEnabled && selected && selected.kind !== 'watermark' && <p className="scene-property-note">Arrow keys nudge it, Shift+arrow nudges further.</p>}
               {Guide && inspector && <Guide {...inspector} />}

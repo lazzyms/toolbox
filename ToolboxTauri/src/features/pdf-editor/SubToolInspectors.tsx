@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react';
+import { useState, type ComponentType } from 'react';
 import { TypedSignature } from './SceneCanvas';
 import { Bold, Check, Info, Italic, TextAlignCenter, TextAlignEnd, TextAlignStart, TriangleAlert } from 'lucide-react';
 import { Button } from '../../components/ui/button';
@@ -7,11 +7,13 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { NativeSelect } from '../../components/ui/native-select';
 import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
+import { Slider } from '../../components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import { useToolAvailability } from '../../ToolAvailabilityContext';
+import type { WatermarkOptions, WatermarkPlacement } from '../../contracts';
 import type { PdfEditRun, PdfFormField, PdfFormInspection, PdfTextEdit } from './contracts';
-import { notEditableReasons, textOverflowWords } from './scene';
-import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle, WatermarkPattern } from './scene';
+import { notEditableReasons, pagesInRange, textOverflowWords, WATERMARK_DEFAULT_SIZE } from './scene';
+import type { SceneObject, ScenePage, SceneShape, SceneTool, SignatureMode, TextAlign, TextFontFamily, TextStyle } from './scene';
 import type { SubToolId } from './subtools';
 
 export interface SubToolInspectorProps {
@@ -33,10 +35,10 @@ export interface SubToolInspectorProps {
   signatureError: string | null;
   chooseSignatureImage: () => Promise<void>;
   usedSignatures: UsedSignature[]; reuseSignature: (value: UsedSignature) => void; clearUsedSignatures: () => void;
-  watermarkText: string; setWatermarkText: (value: string) => void;
-  watermarkFontSize: number; setWatermarkFontSize: (value: number) => void;
-  watermarkPattern: WatermarkPattern; setWatermarkPattern: (value: WatermarkPattern) => void;
-  addFixedWatermark: () => void;
+  pageCount: number;
+  addWatermark: () => void;
+  chooseWatermarkPicture: () => Promise<void>;
+  watermarkPictureError: string | null;
   form: PdfFormInspection | null;
   formValue: (field: PdfFormField) => string | boolean;
   goToField: (field: PdfFormField) => void;
@@ -53,9 +55,15 @@ type Panel = ComponentType<SubToolInspectorProps>;
 // A signature placed earlier in this app session; see usedSignatures in the workspace.
 export interface UsedSignature { mode: SignatureMode; text: string; path: string | null; preview: string | null; color: string }
 const inks = [{ value: '#1f1f1f', label: 'Black' }, { value: '#1a3a8f', label: 'Dark blue' }];
-const watermarkFontSizes = [18, 24, 32, 40, 48, 56, 64, 72, 88, 104, 120];
+const watermarkAngles: Record<string, number> = { rising: -45, horizontal: 0, falling: 45 };
+const watermarkPlacements: { value: WatermarkPlacement; label: string }[] = [
+  { value: 'center', label: 'Centre' }, { value: 'top-left', label: 'Top left' }, { value: 'top-right', label: 'Top right' },
+  { value: 'bottom-left', label: 'Bottom left' }, { value: 'bottom-right', label: 'Bottom right' }, { value: 'tile', label: 'Tile across the page' },
+];
+const watermarkSizes = [0.05, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25, 0.3];
 
 const textFonts: TextFontFamily[] = ['Noto Sans', 'Noto Serif', 'Noto Sans Mono'];
+const watermarkFonts = textFonts.flatMap((family) => [`${family}|regular`, `${family}|bold`]);
 
 const TextFields: Panel = ({ selected, fontSize, setFontSize, textStyle, setTextStyle, updateObject, endGroup, pageNumber }) => {
   const style: TextStyle = selected ? {
@@ -183,27 +191,112 @@ const SignatureFields: Panel = (props) => {
   </>;
 };
 
-const WatermarkFields: Panel = (props) => {
-  const { selected, updateObject, endGroup } = props;
-  const fontSize = selected?.kind === 'watermark' ? selected.fontSize : props.watermarkFontSize;
+const WatermarkFields: Panel = ({ selected, updateObject, endGroup, pageNumber, pageCount, chooseWatermarkPicture, watermarkPictureError }) => {
+  const [rangeError, setRangeError] = useState<string | null>(null);
+  const [customAngle, setCustomAngle] = useState(false);
+  if (selected?.kind !== 'watermark' || !selected.watermark) return null;
+  const options = selected.watermark;
+  const picture = options.logoPath !== undefined;
+  const update = (patch: Partial<WatermarkOptions>, field: string) => updateObject({ watermark: { ...options, ...patch } }, field);
+  const rotation = options.rotation ?? 0;
+  const angle = customAngle ? 'custom' : Object.keys(watermarkAngles).find((key) => watermarkAngles[key] === rotation) ?? 'custom';
+  const position = typeof options.position === 'object' ? 'moved' : options.position ?? 'center';
+  const range = selected.pageRange ?? 'all';
+  const rangeChoice = range === 'all' ? 'all' : range === '2-' ? 'skip-first' : 'pages';
+  let shownOn: number | null = null;
+  try { shownOn = pagesInRange(range, pageCount).length; } catch { /* The range input reports the problem. */ }
+  const commitRange = (value: string) => {
+    const next = value.trim();
+    try { pagesInRange(next, pageCount); } catch (reason) { setRangeError(reason instanceof Error ? reason.message : String(reason)); return; }
+    setRangeError(null);
+    if (next !== range) updateObject({ pageRange: next }, 'page-range');
+  };
   return <>
-    <div className="scene-inspector-field"><Label htmlFor="scene-watermark-text">Watermark text</Label>
-      <Input id="scene-watermark-text" value={selected?.text ?? props.watermarkText} onChange={(event) => selected ? updateObject({ text: event.target.value }, 'watermark-text') : props.setWatermarkText(event.target.value)} onBlur={endGroup} />
+    <ToggleGroup type="single" variant="outline" size="sm" className="w-full" aria-label="Watermark type" value={picture ? 'picture' : 'text'}
+      onValueChange={(value) => {
+        if (value === 'text' && picture) updateObject({ watermark: { ...options, logoPath: undefined, size: options.size ?? WATERMARK_DEFAULT_SIZE, text: selected.text || 'DRAFT', color: selected.color }, watermarkPreview: null, watermarkImageSize: null }, 'watermark-type');
+        if (value === 'picture') void chooseWatermarkPicture();
+      }}>
+      <ToggleGroupItem value="text" className="flex-1">Text</ToggleGroupItem>
+      <ToggleGroupItem value="picture" className="flex-1">Picture</ToggleGroupItem>
+    </ToggleGroup>
+    {watermarkPictureError && <p role="alert" className="scene-error">{watermarkPictureError}</p>}
+    {picture ? <>
+      <Button variant="outline" size="sm" onClick={() => void chooseWatermarkPicture()}>Choose another picture</Button>
+      <p className="scene-property-note">{options.logoPath?.split(/[\\/]/).pop()}</p>
+    </> : <>
+      <div className="scene-inspector-field"><Label htmlFor="scene-watermark-text">Text</Label>
+        <Input id="scene-watermark-text" value={options.text ?? ''} onChange={(event) => updateObject({ text: event.target.value, watermark: { ...options, text: event.target.value } }, 'watermark-text')} onBlur={endGroup} />
+      </div>
+      <div className="scene-inspector-row">
+        <div className="scene-inspector-field"><Label htmlFor="scene-watermark-font">Font</Label>
+          <NativeSelect id="scene-watermark-font" size="sm" value={`${selected.fontFamily ?? 'Noto Sans'}|${selected.bold ? 'bold' : 'regular'}`}
+            onChange={(event) => { const [fontFamily, weight] = event.target.value.split('|'); updateObject({ fontFamily, bold: weight === 'bold' }, 'watermark-font'); }}>
+            {watermarkFonts.map((value) => <option key={value} value={value}>{value.replace('|regular', '').replace('|bold', ' Bold')}</option>)}
+          </NativeSelect>
+        </div>
+        <div className="scene-inspector-field"><Label htmlFor="scene-watermark-color">Colour</Label>
+          <input id="scene-watermark-color" type="color" value={options.color ?? '#000000'} onChange={(event) => updateObject({ color: event.target.value, watermark: { ...options, color: event.target.value } }, 'watermark-color')} onBlur={endGroup} />
+        </div>
+      </div>
+    </>}
+    <div className="scene-inspector-field">
+      <div className="scene-inspector-slider-label"><Label id="scene-watermark-opacity-label">Opacity</Label><output>{options.opacity}%</output></div>
+      <Slider aria-labelledby="scene-watermark-opacity-label" min={5} max={100} value={[options.opacity]}
+        onValueChange={([value]) => { if (value !== undefined) update({ opacity: value }, 'watermark-opacity'); }} onValueCommit={endGroup} />
     </div>
-    <div className="scene-inspector-field"><Label htmlFor="scene-watermark-size">Watermark font size</Label>
-      <NativeSelect id="scene-watermark-size" size="sm" value={String(fontSize)} onChange={(event) => {
-        const value = Number(event.target.value); selected ? updateObject({ fontSize: value }, 'watermark-font-size') : props.setWatermarkFontSize(value);
-      }}>{watermarkFontSizes.map((value) => <option key={value} value={value}>{value} pt</option>)}</NativeSelect>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-watermark-angle">Angle</Label>
+        <NativeSelect id="scene-watermark-angle" size="sm" value={angle}
+          onChange={(event) => { setCustomAngle(event.target.value === 'custom'); update({ rotation: watermarkAngles[event.target.value] ?? rotation }, 'watermark-angle'); }}>
+          <option value="rising">Diagonal, rising</option><option value="horizontal">Horizontal</option>
+          <option value="falling">Diagonal, falling</option><option value="custom">Custom</option>
+        </NativeSelect>
+      </div>
+      {angle === 'custom' && <div className="scene-inspector-field"><Label htmlFor="scene-watermark-rotation">Degrees</Label>
+        <Input id="scene-watermark-rotation" type="number" min="-180" max="180" value={rotation}
+          onChange={(event) => update({ rotation: Math.max(-180, Math.min(180, Number(event.target.value) || 0)) }, 'watermark-angle')} onBlur={endGroup} />
+      </div>}
     </div>
-    <div className="scene-inspector-field"><Label htmlFor="scene-watermark-pattern">Watermark pattern</Label>
-      <NativeSelect id="scene-watermark-pattern" size="sm" value={selected?.watermarkPattern ?? props.watermarkPattern}
-        onChange={(event) => selected ? updateObject({ watermarkPattern: event.target.value as WatermarkPattern }, 'watermark-pattern') : props.setWatermarkPattern(event.target.value as WatermarkPattern)}>
-        <option value="across-page">Across page</option><option value="bottom-right-to-top-left">Bottom-right to top-left</option>
-        <option value="top-right-to-bottom-left">Top-right to bottom-left</option><option value="center-horizontal">Centre horizontal</option>
-        <option value="center-vertical">Centre vertical</option>
-      </NativeSelect>
+    <div className="scene-inspector-row">
+      <div className="scene-inspector-field"><Label htmlFor="scene-watermark-position">Position</Label>
+        <NativeSelect id="scene-watermark-position" size="sm" value={position}
+          onChange={(event) => update({ position: event.target.value as WatermarkPlacement }, 'watermark-position')}>
+          {watermarkPlacements.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+          {position === 'moved' && <option value="moved" disabled>Moved by hand</option>}
+        </NativeSelect>
+      </div>
+      <div className="scene-inspector-field"><Label htmlFor="scene-watermark-size">Size</Label>
+        <NativeSelect id="scene-watermark-size" size="sm" value={options.size === undefined ? 'original' : String(options.size)}
+          onChange={(event) => update({ size: event.target.value === 'original' ? undefined : Number(event.target.value) }, 'watermark-size')}>
+          {picture && <option value="original">Original, up to 180 × 100 pt</option>}
+          {watermarkSizes.map((value) => <option key={value} value={String(value)}>{Math.round(value * 100)}% of the page</option>)}
+        </NativeSelect>
+      </div>
     </div>
-    {selected && <Button variant="outline" size="sm" onClick={props.addFixedWatermark}>Add fixed watermark</Button>}
+    <p className="scene-property-note">With the watermark selected, arrow keys move it and Shift+arrow moves it further.</p>
+    <div className="scene-inspector-field"><span className="text-sm font-medium" id="scene-watermark-layer">Layer</span>
+      <ToggleGroup type="single" variant="outline" size="sm" role="radiogroup" className="w-full" aria-labelledby="scene-watermark-layer" value={selected.layer ?? 'front'}
+        onValueChange={(value) => { if (value) updateObject({ layer: value as 'front' | 'behind' }, 'watermark-layer'); }}>
+        <ToggleGroupItem value="front" className="flex-1">Above content</ToggleGroupItem>
+        <ToggleGroupItem value="behind" className="flex-1">Behind content</ToggleGroupItem>
+      </ToggleGroup>
+    </div>
+    <fieldset className="scene-inspector-field">
+      <legend className="mb-1.5 text-sm font-medium">Pages</legend>
+      <RadioGroup className="gap-1.5" value={rangeChoice}
+        onValueChange={(value) => { setRangeError(null); updateObject({ pageRange: value === 'all' ? 'all' : value === 'skip-first' ? '2-' : String(pageNumber) }, 'page-range'); }}>
+        <span className="settings-radio"><RadioGroupItem id="scene-watermark-all" value="all" /><Label htmlFor="scene-watermark-all">All {pageCount} page{pageCount === 1 ? '' : 's'}</Label></span>
+        <span className="settings-radio"><RadioGroupItem id="scene-watermark-skip-first" value="skip-first" disabled={pageCount < 2} /><Label htmlFor="scene-watermark-skip-first">Skip the first page</Label></span>
+        <span className="settings-radio"><RadioGroupItem id="scene-watermark-pages" value="pages" /><Label htmlFor="scene-watermark-pages">These pages</Label></span>
+      </RadioGroup>
+      <Input key={`${selected.id}:${range}`} aria-label="Pages to include" placeholder="For example 2-10, 12" aria-invalid={Boolean(rangeError)}
+        defaultValue={rangeChoice === 'pages' ? range : ''} disabled={rangeChoice !== 'pages'}
+        onBlur={(event) => commitRange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') commitRange(event.currentTarget.value); }} />
+      {rangeError && <p role="alert" className="scene-error">{rangeError}</p>}
+    </fieldset>
+    {shownOn !== null && <p className="scene-property-note">{shownOn === pageCount ? `Watermark added to all ${pageCount} page${pageCount === 1 ? '' : 's'}.` : `Watermark added to ${shownOn} of ${pageCount} pages.`}</p>}
+    <p className="scene-property-note">The preview updates as you type. A watermark behind content may be hidden by full-page images.</p>
   </>;
 };
 
@@ -217,11 +310,11 @@ const SignatureGuide: Panel = ({ selected, signatureMode, signaturePath, signatu
   : <p className="scene-property-note">{signatureMode === 'image' ? signaturePath ? 'Click the page to place the picture, or drag to set its size.' : 'Choose a PNG or JPG before placing it.'
     : signatureText.trim() ? 'Click the page to place the signature, or drag to set its size.' : 'Type a name before placing it.'}</p>;
 
-const WatermarkGuide: Panel = ({ selected, addFixedWatermark }) => {
+const WatermarkGuide: Panel = ({ selected, addWatermark }) => {
   const availability = useToolAvailability();
   return availability.allows('pdf-watermark') && !selected ? <>
-    <p className="scene-property-note">Fixed placement: choose a pattern and add it to the page.</p>
-    <Button size="sm" onClick={addFixedWatermark}>Add fixed watermark</Button>
+    <p className="scene-property-note">One watermark, applied to every page in the range. Edit it once, on any page.</p>
+    <Button size="sm" onClick={addWatermark}>Add watermark</Button>
   </> : null;
 };
 
