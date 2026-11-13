@@ -57,14 +57,17 @@ const IconSetPanel = ({ options, setOptions }: MediaPanelProps<IconSetOptions>) 
         ))}
       </div>
     </fieldset>
+    <p className="workspace-panel-copy">Each image's icons are in one folder, with a folder per platform inside. A set is saved only when every size worked, so you never get half a set.</p>
   </>
 );
 
 export const iconSetTool: MediaTool<IconSetOptions> = {
   initialOptions: { preset: "macos", sizes: iconSizesByPreset.macos },
   Panel: IconSetPanel,
+  // Each master makes its own set, so every chosen image is sent in one run.
   buildRequest: ({ preset, sizes }, { paths, outputLocation }) => ({
     command: "generate_icon_set",
     request: { paths, preset, sizes, outputLocation },
   }),
+  runLabel: (_options, files) => files.length === 0 ? "Make icon sets" : files.length === 1 ? "Make 1 icon set" : `Make ${files.length} icon sets`,
 };

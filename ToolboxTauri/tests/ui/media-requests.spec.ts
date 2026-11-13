@@ -140,6 +140,56 @@ test.describe("Media requests", () => {
         await expect(row.locator(".result-row-state .sr-only")).toHaveText("Generated with a warning");
     });
 
+    test("App Icon Set takes several masters and sends them all in one run", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Generate App Icons");
+        await expect(page.locator(".workspace-primary-action")).toHaveText(/^Make icon sets/);
+        await choose(page, ["/local/art/app-icon.png", "/local/art/brand-mark.png"]);
+        await choose(page, "/local/art/launcher.webp");
+
+        await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(3);
+        await expect(page.locator(".workspace-primary-action")).toHaveText(/^Make 3 icon sets/);
+        await expect(page.getByTestId("run-destination-example")).toHaveText("app-icon-icons");
+        await expect(page.getByText("Each image's icons are in one folder, with a folder per platform inside. A set is saved only when every size worked, so you never get half a set.")).toBeVisible();
+        expect(await runOnce(page, "generate_icon_set")).toEqual({ runId, request: {
+            paths: ["/local/art/app-icon.png", "/local/art/brand-mark.png", "/local/art/launcher.webp"],
+            preset: "macos",
+            sizes: [16, 32, 128, 256, 512, 1024],
+            outputLocation: "alongsideInput",
+        } });
+    });
+
+    test("App Icon Set shows each master's own result, with its folder or the size that failed", async ({ page }) => {
+        await start(page);
+        await page.addInitScript(() => {
+            (window as unknown as MediaWindow).__outcomes = { generate_icon_set: [
+                { inputPath: "/local/art/app-icon.png", outputPaths: ["/local/art/app-icon-icons"], detail: "7 files", state: "succeeded", failure: null, reason: null, warnings: [] },
+                { inputPath: "/local/art/brand-mark.png", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "The macOS 1024 size failed: the image data is damaged. Nothing was saved for this image.", pointer: null }, reason: null, warnings: [] },
+                { inputPath: "/local/art/launcher.webp", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message: "Not a readable WebP image. The file may be damaged. Nothing was saved.", pointer: null }, reason: null, warnings: [] },
+                { inputPath: "/local/art/badge.png", outputPaths: ["/local/art/badge-icons-1"], detail: "7 files", state: "succeeded", failure: null, reason: null, warnings: [{ code: "renamedToAvoidReplacing", message: "", details: { chosenName: "badge-icons", finalName: "badge-icons-1" } }] },
+            ] };
+        });
+        await page.reload();
+        await openToolBySearch(page, "Generate App Icons");
+        await choose(page, ["/local/art/app-icon.png", "/local/art/brand-mark.png", "/local/art/launcher.webp", "/local/art/badge.png"]);
+        await runOnce(page, "generate_icon_set");
+
+        const results = page.getByRole("list", { name: "Results" }).getByRole("listitem");
+        await expect(results).toHaveCount(4);
+        await expect(results.nth(0)).toContainText("app-icon-icons");
+        await expect(results.nth(0)).toContainText("7 files");
+        await expect(results.nth(1)).toContainText("The macOS 1024 size failed: the image data is damaged. Nothing was saved for this image.");
+        await expect(results.nth(1)).toContainText("Failed");
+        await expect(results.nth(1).getByRole("button", { name: /^Open|Show in Finder/ })).toHaveCount(0);
+        await expect(results.nth(2)).toContainText("Not a readable WebP image. The file may be damaged. Nothing was saved.");
+        await expect(results.nth(3)).toContainText("Saved as badge-icons-1.");
+
+        await results.nth(0).getByRole("button", { name: "Show in Finder: app-icon-icons" }).click();
+        await expect.poll(() => invocationsOf(page, "reveal_output_path")).toEqual([{ path: "/local/art/app-icon-icons" }]);
+        await results.nth(3).getByRole("button", { name: "Open badge-icons-1" }).click();
+        await expect.poll(() => invocationsOf(page, "open_output_path")).toEqual([{ path: "/local/art/badge-icons-1" }]);
+    });
+
     test("Create GIF sends frame order, delay, loop, and the saved path", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Create GIF");
