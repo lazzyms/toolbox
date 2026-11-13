@@ -2,6 +2,7 @@ pub mod metadata;
 pub mod document_info;
 pub mod page_ranges;
 pub mod privacy;
+pub mod hidden_content;
 pub mod scene;
 pub mod text_edit;
 pub mod editor;

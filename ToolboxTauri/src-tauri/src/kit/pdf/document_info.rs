@@ -267,7 +267,7 @@ fn read_info(document: &Document, unsupported: &mut Vec<String>) -> PdfPropertie
     properties
 }
 
-fn decode_text(object: &Object) -> Option<String> {
+pub(crate) fn decode_text(object: &Object) -> Option<String> {
     let bytes = object.as_str().ok()?;
     if let Some(utf16) = bytes.strip_prefix(b"\xFE\xFF") {
         if utf16.len() % 2 != 0 {
@@ -465,7 +465,7 @@ impl Cursor<'_> {
     }
 }
 
-fn parse_pdf_date(text: &str) -> Option<PdfDate> {
+pub(crate) fn parse_pdf_date(text: &str) -> Option<PdfDate> {
     let text = text.trim();
     let mut cursor = Cursor(text.strip_prefix("D:").unwrap_or(text).as_bytes());
     let year = cursor.digits(4)?;

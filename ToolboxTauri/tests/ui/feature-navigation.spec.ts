@@ -163,7 +163,7 @@ if (command === "preview_pdf_scene_pages") return (args as { request: { pageIndi
                 }
                 if (command === "inspect_pdf_privacy") {
                     const none = { title: null, author: null, subject: null, keywords: null, creator: null, producer: null, creationDate: null, modificationDate: null };
-                    const report = { pageCount: 1, documentInformation: none, xmp: { summary: null, conflicts: [] }, encryption: null, identifiers: { documentId: null, producer: null }, unsupported: [] };
+                    const report = { pageCount: 1, documentInformation: none, xmp: { summary: null, conflicts: [] }, encryption: null, identifiers: { documentId: null, producer: null }, incrementalUpdates: 0, embeddedFiles: [], actions: [], annotations: [], filledFormFields: [], optionalContent: { layers: [], hidden: [] }, links: [], signatures: [], leftovers: { thumbnailPages: [], pagePieces: [] }, unsupported: [] };
                     return (args as { request: { paths: string[] } }).request.paths.map((inputPath) => ({ inputPath, outputPaths: [], detail: JSON.stringify(report), state: "succeeded", failure: null, reason: null, warnings: [] }));
                 }
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
@@ -2665,7 +2665,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await action.click();
     // A read-only report tool sends only the paths and shows a report instead of saved results.
     if (utility.capability.outputSuffix === "") {
-        await expect(page.getByRole("region", { name: pdfFixtureName, exact: true }).getByText("None found", { exact: true })).toHaveCount(5);
+        await expect(page.getByRole("region", { name: pdfFixtureName, exact: true }).getByText("None found", { exact: true })).toHaveCount(14);
         const reportRuns = await page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? []).filter((call) => call.command === command), utility.command);
         expect(reportRuns.map(({ args }) => (args as { request: unknown }).request)).toEqual([{ paths: [selectedFixturePath] }]);
         return;
