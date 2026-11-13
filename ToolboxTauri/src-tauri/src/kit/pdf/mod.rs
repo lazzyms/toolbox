@@ -4,6 +4,10 @@ pub mod page_ranges;
 pub mod scene;
 pub mod editor;
 pub mod remaining;
+#[cfg(test)]
+pub(crate) mod jbig2_fixtures;
+#[cfg(test)]
+mod jbig2_spike;
 pub(crate) mod qpdf;
 pub mod unicode_font;
 
