@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { PackEntry, PackFileSummary, PackInstallError, PackList } from "../../src/views/PacksSection";
+import type { PackEntry, PackFileSummary, PackInstallError, PackList, PackProgress } from "../../src/views/PacksSection";
 
 type Outcome<T> = { ok: T } | { error: PackInstallError };
 
@@ -10,6 +10,9 @@ type PacksWindow = Window & {
     __inspect: Outcome<PackFileSummary>;
     __install: Outcome<PackList>;
     __finishInstall?: () => void;
+    /** Downloads in the order Install was pressed, held until the test settles them. */
+    __downloads: Array<{ packId: string; runId: string; settle: (outcome: Outcome<PackList>) => void }>;
+    __progress: (payload: PackProgress) => void;
 };
 
 const MB = 1024 * 1024;
@@ -54,6 +57,15 @@ test.beforeEach(async ({ page }) => {
         const win = window as unknown as PacksWindow;
         win.__invocations = [];
         win.__dialog = [];
+        win.__downloads = [];
+        const callbacks = new Map<number, (event: unknown) => void>();
+        const listeners = new Map<number, { event: string; handler: number }>();
+        let nextId = 1;
+        win.__progress = (payload) => {
+            for (const [id, listener] of listeners) {
+                if (listener.event === "pack-progress") callbacks.get(listener.handler)?.({ event: "pack-progress", id, payload });
+            }
+        };
         Object.defineProperty(window.navigator, "platform", { configurable: true, value: "MacIntel" });
         window.__TAURI_INTERNALS__ = {
             metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
@@ -74,15 +86,42 @@ test.beforeEach(async ({ page }) => {
                     if ("error" in win.__install) throw win.__install.error;
                     return win.__install.ok;
                 }
+                if (command === "plugin:event|listen") {
+                    const { event, handler } = args as { event: string; handler: number };
+                    const id = nextId++;
+                    listeners.set(id, { event, handler });
+                    return id;
+                }
+                if (command === "plugin:event|unlisten") {
+                    listeners.delete((args as { eventId: number }).eventId);
+                    return null;
+                }
+                if (command === "install_pack") {
+                    const { packId, runId } = args as { packId: string; runId: string };
+                    return new Promise((resolve, reject) => {
+                        win.__downloads.push({ packId, runId, settle: (outcome) => "error" in outcome ? reject(outcome.error) : resolve(outcome.ok) });
+                    });
+                }
+                if (command === "cancel_run") {
+                    // As the native side does: a cancelled download ends with a cancelled error.
+                    const { runId } = args as { runId: string };
+                    win.__downloads.find((download) => download.runId === runId)?.settle({ error: { kind: "cancelled", message: "" } });
+                    return true;
+                }
                 if (command === "get_output_settings") return { mode: "alongsideInput", folder: "/Users/test/Documents/Toolbox" };
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command === "plugin:app|version") return "9.4.2";
                 return null;
             },
-            transformCallback: () => 0,
-            unregisterCallback: () => undefined,
+            transformCallback: (callback: (event: unknown) => void) => {
+                const id = nextId++;
+                callbacks.set(id, callback);
+                return id;
+            },
+            unregisterCallback: (id: number) => callbacks.delete(id),
             convertFileSrc: (path: string) => path,
         } as unknown as typeof window.__TAURI_INTERNALS__;
+        window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => undefined };
     });
 });
 
@@ -117,9 +156,10 @@ test("Packs shows every status with sizes, license, tools, total disk usage and 
 
     await expect(region.getByRole("status").last()).toHaveText("4 installed, 415 MB used.");
 
-    // Read-only: rows offer details and nothing that installs, updates, repairs or removes.
-    await expect(list.getByRole("button")).toHaveCount(5);
-    for (const button of await list.getByRole("button").all()) await expect(button).toHaveAccessibleName(/^Details for /);
+    // Only the pack that isn't installed offers an action: updating, repairing and removing arrive later.
+    await expect(list.getByRole("button")).toHaveCount(6);
+    await expect(list.getByRole("button", { name: /^Details for / })).toHaveCount(5);
+    await expect(rows.notInstalled.getByRole("button", { name: "Install Text recognition, Hindi" })).toBeEnabled();
 
     const details = rows.notInstalled.getByRole("button", { name: "Details for Text recognition, Hindi" });
     await expect(details).toHaveAttribute("aria-expanded", "false");
@@ -286,4 +326,168 @@ test("a file that isn't a pack is refused when it is inspected", async ({ page }
     const alert = page.getByRole("alertdialog", { name: notSigned.title });
     await expect(alert).toContainText(notSigned.text);
     await expect(alert.getByRole("definition")).toHaveText(["notes.toolboxpack"]);
+});
+
+const hindi = "Text recognition, Hindi";
+const downloads = (page: Page) => page.evaluate(() => (window as unknown as PacksWindow).__downloads.map(({ packId, runId }) => ({ packId, runId })));
+const progress = (page: Page, payload: PackProgress) => page.evaluate((payload) => (window as unknown as PacksWindow).__progress(payload), payload);
+const settle = (page: Page, index: number, outcome: Outcome<PackList>) =>
+    page.evaluate(({ index, outcome }) => (window as unknown as PacksWindow).__downloads[index].settle(outcome), { index, outcome });
+
+test("Install downloads a pack with live progress, checks it, and shows it installed", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Install ${hindi}` }).click();
+
+    const [started] = await downloads(page);
+    expect(started.packId).toBe("ocr-hindi");
+    expect(started.runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await calls(page, "install_pack")).toEqual([{ packId: "ocr-hindi", runId: started.runId }]);
+
+    const row = region.getByRole("listitem", { name: new RegExp(`^${hindi}, `) });
+    await expect(row.getByRole("status")).toHaveText("0 of 12 MB");
+    await expect(row.getByRole("button", { name: `Cancel ${hindi}` })).toBeVisible();
+    await expect(row.getByRole("button", { name: `Install ${hindi}` })).toHaveCount(0);
+
+    await progress(page, { runId: started.runId, packId: "ocr-hindi", phase: "downloading", receivedBytes: 7 * MB, totalBytes: 12 * MB });
+    await expect(row).toHaveAccessibleName(`${hindi}, 7 of 12 MB`);
+    await expect(row.getByRole("progressbar", { name: `Downloading ${hindi}` })).toHaveAttribute("aria-valuenow", "58");
+
+    // Events from another run are not this download's.
+    await progress(page, { runId: "another-run", packId: "ocr-hindi", phase: "downloading", receivedBytes: 11 * MB, totalBytes: 12 * MB });
+    await progress(page, { runId: started.runId, packId: "ocr-hindi", phase: "verifying", receivedBytes: 12 * MB, totalBytes: 12 * MB });
+    await expect(row.getByRole("status")).toHaveText("Checking the download…");
+    await expect(row.getByRole("progressbar", { name: `Checking ${hindi}` })).toHaveAttribute("aria-valuenow", "100");
+    await expect(row.getByRole("button", { name: `Cancel ${hindi}` })).toBeVisible();
+
+    await settle(page, 0, { ok: afterInstall });
+    const installed = region.getByRole("listitem", { name: `${hindi}, Installed, version 2.0` });
+    await expect(installed).toContainText("Used by OCR PDF. 31 MB on this disk.");
+    await expect(installed.getByRole("progressbar")).toHaveCount(0);
+    await expect(installed.getByRole("button", { name: /^(Install|Cancel|Try again) / })).toHaveCount(0);
+    await expect(region.getByRole("status").last()).toHaveText("5 installed, 446 MB used.");
+    expect(await calls(page, "cancel_run")).toEqual([]);
+});
+
+test("Cancel sends the download's run id and leaves the pack not installed", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Install ${hindi}` }).click();
+    const [started] = await downloads(page);
+    await progress(page, { runId: started.runId, packId: "ocr-hindi", phase: "downloading", receivedBytes: 3 * MB, totalBytes: 12 * MB });
+    await region.getByRole("button", { name: `Cancel ${hindi}` }).click();
+
+    expect(await calls(page, "cancel_run")).toEqual([{ runId: started.runId }]);
+    const row = region.getByRole("listitem", { name: `${hindi}, Not installed` });
+    await expect(row.getByRole("button", { name: `Install ${hindi}` })).toBeEnabled();
+    await expect(row.getByRole("progressbar")).toHaveCount(0);
+    await expect(region.getByRole("alert")).toHaveCount(0);
+});
+
+const threePacks: PackList = {
+    packs: [
+        pack({ id: "ocr-hindi", name: hindi, status: "notInstalled" }),
+        pack({ id: "ocr-gujarati", name: "Text recognition, Gujarati", status: "notInstalled", downloadBytes: 14 * MB }),
+        pack({ id: "ocr-french", name: "Text recognition, French", status: "notInstalled", downloadBytes: 6 * MB }),
+    ],
+    installedCount: 0,
+    totalBytes: 0,
+};
+
+test("downloads waiting their turn show as queued, and cancelling one leaves the others", async ({ page }) => {
+    const region = await openPacks(page, threePacks);
+    for (const entry of threePacks.packs) await region.getByRole("button", { name: `Install ${entry.name}` }).click();
+    const [hindiRun, gujaratiRun, frenchRun] = await downloads(page);
+    expect([hindiRun.packId, gujaratiRun.packId, frenchRun.packId]).toEqual(["ocr-hindi", "ocr-gujarati", "ocr-french"]);
+    expect(new Set([hindiRun.runId, gujaratiRun.runId, frenchRun.runId]).size).toBe(3);
+
+    await progress(page, { runId: hindiRun.runId, packId: "ocr-hindi", phase: "downloading", receivedBytes: 6 * MB, totalBytes: 12 * MB });
+    await progress(page, { runId: gujaratiRun.runId, packId: "ocr-gujarati", phase: "queued", receivedBytes: 0, totalBytes: 14 * MB });
+    await progress(page, { runId: frenchRun.runId, packId: "ocr-french", phase: "queued", receivedBytes: 0, totalBytes: 6 * MB });
+    const waiting = "Waiting. Starts after the downloads above.";
+    const gujarati = region.getByRole("listitem", { name: `Text recognition, Gujarati, ${waiting}` });
+    const french = region.getByRole("listitem", { name: `Text recognition, French, ${waiting}` });
+    await expect(gujarati.getByRole("progressbar")).toHaveCount(0);
+    await expect(french.getByRole("button", { name: "Cancel Text recognition, French" })).toBeVisible();
+
+    await gujarati.getByRole("button", { name: "Cancel Text recognition, Gujarati" }).click();
+    expect(await calls(page, "cancel_run")).toEqual([{ runId: gujaratiRun.runId }]);
+    await expect(region.getByRole("listitem", { name: "Text recognition, Gujarati, Not installed" })).toBeVisible();
+    await expect(region.getByRole("listitem", { name: `${hindi}, 6 of 12 MB` })).toBeVisible();
+    await expect(french).toBeVisible();
+
+    await progress(page, { runId: frenchRun.runId, packId: "ocr-french", phase: "downloading", receivedBytes: 2 * MB, totalBytes: 6 * MB });
+    await expect(region.getByRole("listitem", { name: "Text recognition, French, 2 of 6 MB" })).toBeVisible();
+});
+
+const rowErrors: Array<[string, PackInstallError, string]> = [
+    ["interrupted", { kind: "interrupted", message: "" }, "Download stopped before it finished. Nothing was installed."],
+    ["unavailable", { kind: "unavailable", message: "" }, "Download stopped before it finished. Nothing was installed."],
+    ["checksumMismatch", { kind: "checksumMismatch", message: "" }, "The download didn't pass its safety check, so it was deleted. Nothing was installed."],
+    ["badSignature", { kind: "badSignature", message: "" }, "The download didn't pass its safety check, so it was deleted. Nothing was installed."],
+    ["serverBlocked", { kind: "serverBlocked", message: "" }, "Couldn't reach the Toolbox release server."],
+    ["notEnoughSpace", { kind: "notEnoughSpace", details: { neededBytes: 310 * MB, freeBytes: 120 * MB }, message: "" }, "Needs 310 MB free. 120 MB is free on this disk."],
+];
+
+for (const [name, error, text] of rowErrors) {
+    test(`a download that fails with ${name} says so on its row and Try again starts a new download`, async ({ page }) => {
+        const region = await openPacks(page, everyStatus);
+        await region.getByRole("button", { name: `Install ${hindi}` }).click();
+        await settle(page, 0, { error });
+
+        const row = region.getByRole("listitem", { name: `${hindi}, ${text}` });
+        await expect(row.getByRole("status")).toHaveText(text);
+        await expect(row.getByRole("status")).toHaveCSS("color", await page.evaluate(() => {
+            const probe = document.createElement("span");
+            probe.style.color = "var(--destructive)";
+            document.body.append(probe);
+            const color = getComputedStyle(probe).color;
+            probe.remove();
+            return color;
+        }));
+        await expect(row.getByRole("progressbar")).toHaveCount(0);
+
+        await row.getByRole("button", { name: `Try again ${hindi}` }).click();
+        const [first, second] = await downloads(page);
+        expect(second.packId).toBe("ocr-hindi");
+        expect(second.runId).not.toBe(first.runId);
+        await expect(region.getByRole("listitem", { name: `${hindi}, 0 of 12 MB` })).toBeVisible();
+        await expect(region.getByRole("alert")).toHaveCount(0);
+    });
+}
+
+test("a blocked release server is explained above the list with a way to install from a file", async ({ page }) => {
+    await arrangeFile(page, [hindiFile], { ok: hindiSummary });
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Install ${hindi}` }).click();
+    await settle(page, 0, { error: { kind: "serverBlocked", message: "HTTP status 403 Forbidden" } });
+
+    const banner = region.getByRole("alert");
+    await expect(banner).toHaveText("Couldn't reach the Toolbox release server. Your internet works, but something on this network is blocking downloads from Toolbox. Try again later or on another network, or install from a pack file.Install from file…");
+    await banner.getByRole("button", { name: "Install from file…" }).click();
+    await expect(page.getByRole("dialog", { name: "Install this pack?" })).toBeVisible();
+});
+
+test("not enough free space names the pack and how much to free up", async ({ page }) => {
+    const region = await openPacks(page, everyStatus);
+    await region.getByRole("button", { name: `Install ${hindi}` }).click();
+    await settle(page, 0, { error: { kind: "notEnoughSpace", details: { neededBytes: 310 * MB, freeBytes: 120 * MB }, message: "" } });
+    await expect(region.getByRole("alert")).toHaveText(`Not enough space for ${hindi}. It needs 310 MB free and this disk has 120 MB. Free up at least 190 MB, then try again.`);
+});
+
+test("offline shows the offline note and holds Install until the network returns", async ({ page }) => {
+    const region = await openPacks(page, threePacks);
+    await region.getByRole("button", { name: `Install ${hindi}` }).click();
+    await settle(page, 0, { error: { kind: "offline", message: "dns error" } });
+
+    await expect(region.getByRole("status").first()).toHaveText("You're offline. Installed packs keep working. Connect to the internet to install or update packs, or use Install from file.");
+    for (const entry of threePacks.packs) {
+        const row = region.getByRole("listitem", { name: `${entry.name}, No internet connection.` });
+        await expect(row.getByRole("button", { name: `Install ${entry.name}` })).toBeDisabled();
+    }
+    await expect(region.getByRole("alert")).toHaveCount(0);
+    await expect(region.getByRole("button", { name: "Install from file…" })).toBeEnabled();
+
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(region.getByRole("button", { name: `Install ${hindi}` })).toBeEnabled();
+    await expect(region.getByRole("listitem", { name: `${hindi}, Not installed` })).toBeVisible();
+    await expect(region.getByText("You're offline.")).toHaveCount(0);
 });
