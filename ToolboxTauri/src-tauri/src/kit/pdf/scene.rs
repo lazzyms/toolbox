@@ -873,27 +873,41 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
             let changes_page_coordinates = page_geometry_changed(page, &geometry);
             navigation_geometry_edit |= changes_page_coordinates;
             if has_annotations && changes_page_coordinates {
-                return Err("This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output".into());
+                return Err("This PDF page has annotations or form widgets and the requested crop would change their coordinates; scene export was rejected before output".into());
             }
             if (page.crop.is_some() || changes_page_coordinates) && has_widget {
-                return Err("Cropping or rotating a PDF with form widgets is unsupported; remove the page operation or edit the source PDF first".into());
+                return Err("Cropping a PDF with form widgets is unsupported; remove the crop or edit the source PDF first".into());
             }
         }
     }
     if has_navigation && navigation_geometry_edit {
-        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after crop or rotation; scene export was rejected before output".into());
+        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after a crop; scene export was rejected before output".into());
     }
     Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
 }
 
 fn same_box(left: [f32; 4], right: [f32; 4]) -> bool { left.iter().zip(right).all(|(left, right)| (*left - right).abs() <= 0.1) }
 fn same_rect(left: &Rect, right: &Rect) -> bool { same_box([left.x, left.y, left.x + left.width, left.y + left.height], [right.x, right.y, right.x + right.width, right.y + right.height]) }
+/// Whether the scene crops or resizes the page, which moves its content in page space.
+/// Rotation is not a geometry change: it is added to the page's own /Rotate entry, which turns
+/// annotations, form widgets and destinations with the page and leaves their coordinates alone.
 fn page_geometry_changed(page: &ScenePage, geometry: &Geometry) -> bool {
     let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
     page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page))
         || (page.width - geometry.width).abs() > 0.1
         || (page.height - geometry.height).abs() > 0.1
-        || page.rotation.rem_euclid(360) != 0
+}
+/// The /Rotate a kept source page gets: its source rotation plus the scene's quarter turns.
+fn effective_rotation(document: &Document, page_id: ObjectId, page: &ScenePage) -> Result<i64, String> {
+    if page.rotation % 90 != 0 { return Err("Rotation must be a multiple of 90".into()); }
+    let source = inherited(document, page_id, b"Rotate")?.map(|value| value.as_i64().map_err(err)).transpose()?.unwrap_or(0);
+    Ok((source + i64::from(page.rotation)).rem_euclid(360))
+}
+fn rotate_kept_page(document: &mut Document, page_id: ObjectId, page: &ScenePage) -> Result<(), String> {
+    if page.rotation.rem_euclid(360) == 0 { return Ok(()); }
+    let rotation = effective_rotation(document, page_id, page)?;
+    document.get_dictionary_mut(page_id).map_err(err)?.set("Rotate", rotation);
+    Ok(())
 }
 fn inverse_matrix([a, b, c, d, e, f]: [f32; 6]) -> [f32; 6] {
     let determinant = a * d - b * c;
@@ -1121,6 +1135,7 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
             let index = page.source_index.ok_or_else(|| "Pure page reorder is missing a source page".to_string())?;
             sources.get(index).copied().ok_or_else(|| "Scene source page is outside the document".to_string())
         }).collect::<Result<Vec<_>, String>>()?;
+        for (page, id) in scene.pages.iter().zip(&order) { rotate_kept_page(doc, *id, page)?; }
         let root = doc.get_dictionary_mut(preflight.pages_root).map_err(err)?;
         root.set("Kids", order.iter().map(|page| Object::Reference(*page)).collect::<Vec<_>>());
         root.set("Count", order.len() as i64);
@@ -1167,7 +1182,9 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
         }).transpose()?;
         let preserve_source_page = source_geometry.as_ref().is_some_and(|geometry| !page_geometry_changed(page, geometry));
         if preserve_source_page && placed.is_empty() {
-            kids.push(Object::Reference(sources[page.source_index.unwrap()]));
+            let id = sources[page.source_index.unwrap()];
+            rotate_kept_page(doc, id, page)?;
+            kids.push(Object::Reference(id));
             continue;
         }
         let mut effective_fonts = source_index.map(|index| effective_resource_entries(&doc, sources[index], b"Font")).transpose()?.unwrap_or_default();
@@ -1304,6 +1321,7 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
                 let original_contents = page_dict.get(b"Contents").ok().cloned();
                 page_dict.set("Resources",resources);
                 page_dict.set("Contents",layer_contents(behind,original_contents,front));
+                rotate_kept_page(doc, id, page)?;
             } else {
                 let stream=doc.add_object(Stream::new(dictionary!{},format!("{header}{behind}{original}{front}Q\n").into_bytes()));
                 super::set_page_box_family(doc, id, [0., 0., crop.width, crop.height], false)?;
@@ -2223,7 +2241,7 @@ mod tests {
         assert_eq!(fs::read(&input).unwrap(),original);
     }
     #[test]
-    fn export_sets_absolute_scene_rotation_and_bakes_source_rotation_into_content() {
+    fn export_adds_scene_rotation_to_each_reordered_source_page_rotation() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let original=fs::read(&input).unwrap();
         let scene=PdfScene{pages:vec![
@@ -2237,9 +2255,8 @@ mod tests {
         assert_eq!(pages.len(),2);
         assert_eq!(inherited(&output,pages[0],b"Rotate").unwrap().unwrap().as_i64().unwrap(),90);
         assert_eq!(bounds(&output,&inherited(&output,pages[0],b"MediaBox").unwrap().unwrap()).unwrap(),[0.,0.,612.,792.]);
-        assert_eq!(inherited(&output,pages[1],b"Rotate").unwrap().unwrap().as_i64().unwrap(),180);
-        assert_eq!(bounds(&output,&inherited(&output,pages[1],b"MediaBox").unwrap().unwrap()).unwrap(),[0.,0.,300.,200.]);
-        assert!(String::from_utf8_lossy(&output.get_page_content(pages[1])).contains("0 1 1 0 -30 -20 cm"));
+        assert_eq!(inherited(&output,pages[1],b"Rotate").unwrap().unwrap().as_i64().unwrap(),270);
+        assert_eq!(bounds(&output,&inherited(&output,pages[1],b"MediaBox").unwrap().unwrap()).unwrap(),[10.,20.,250.,360.]);
         assert_eq!(fs::read(&input).unwrap(),original);
     }
     #[test]
@@ -2644,6 +2661,70 @@ mod tests {
             assert_eq!(output.get_dictionary(acro_form).unwrap().get(b"Fields").unwrap().as_array().unwrap().len(), 6);
             assert_eq!(fs::read(&input).unwrap(), original_bytes);
         }
+    }
+
+    #[test]
+    fn each_quarter_turn_adds_to_the_source_rotation_and_keeps_annotations_fields_and_destinations() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("annotated-rotated-offset.pdf");
+        annotated_rotated_offset_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        let page = original.get_pages().values().next().copied().unwrap();
+        let original_annots = original.get_dictionary(page).unwrap().get(b"Annots").unwrap().clone();
+        // The source page is /Rotate 90, inherited from its page tree. Each scene quarter turn is added to it.
+        for (rotation, expected) in [(90, 180), (180, 270), (270, 0), (-90, 0)] {
+            let scene = PdfScene { pages: vec![ScenePage {
+                source_index: Some(0), width: 300., height: 200., rotation, crop: None,
+                source_rotation: Some(90), source_box: Some(Rect { x: 20., y: 30., width: 200., height: 300. }), objects: vec![],
+            }] };
+            let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }, input.clone());
+            assert!(outcome.error().is_none(), "rotation {rotation}: {:?}", outcome.error());
+            let output = Document::load(&outcome.output_paths()[0]).unwrap();
+            let output_page = output.get_pages().values().next().copied().unwrap();
+            assert_eq!(output_page, page, "rotation {rotation} replaced the source page");
+            assert_eq!(inherited(&output, output_page, b"Rotate").unwrap().unwrap().as_i64().unwrap(), expected, "rotation {rotation}");
+            // Lossless: same content, same boxes, and the notes, link and form field stay on the page with their own coordinates.
+            assert_eq!(output.get_page_content(output_page), original.get_page_content(page));
+            assert_eq!(bounds(&output, &inherited(&output, output_page, b"CropBox").unwrap().unwrap()).unwrap(), [20., 30., 220., 330.]);
+            let page_dictionary = output.get_dictionary(output_page).unwrap();
+            assert_eq!(page_dictionary.get(b"Annots").unwrap(), &original_annots);
+            for annotation in original_annots.as_array().unwrap() {
+                let id = annotation.as_reference().unwrap();
+                assert_eq!(output.get_object(id).unwrap(), original.get_object(id).unwrap());
+            }
+            let catalog = output.get_dictionary(output.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap();
+            for key in [b"AcroForm".as_slice(), b"Names", b"Outlines"] { assert!(catalog.has(key), "rotation {rotation} lost {key:?}"); }
+            assert_eq!(fs::read(&input).unwrap(), original_bytes, "rotation {rotation} changed the original");
+        }
+    }
+
+    #[test]
+    fn rotating_reordered_pages_only_sets_their_rotate_entry() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("six.pdf");
+        six_page_linked_form_fixture(&input);
+        let original_bytes = fs::read(&input).unwrap();
+        let original = Document::load(&input).unwrap();
+        let pages: Vec<_> = original.get_pages().values().copied().collect();
+        let order = [5, 4, 3, 2, 1, 0];
+        let rotations = [0, 90, 180, 270, 0, 0];
+        let scene = PdfScene { pages: order.iter().zip(rotations).map(|(&index, rotation)| ScenePage {
+            source_index: Some(index), width: 612., height: 792., rotation, crop: None,
+            source_rotation: Some(0), source_box: Some(Rect { x: 0., y: 0., width: 612., height: 792. }), objects: vec![],
+        }).collect() };
+        let composed = compose(&input, &scene).expect("a rotated reorder should compose");
+        let output_pages: Vec<_> = composed.get_pages().values().copied().collect();
+        assert_eq!(output_pages, order.iter().map(|&index| pages[index]).collect::<Vec<_>>());
+        assert_eq!(composed.objects.len(), original.objects.len(), "rotation added objects");
+        for (position, &index) in order.iter().enumerate() {
+            let mut expected = original.get_dictionary(pages[index]).unwrap().clone();
+            if rotations[position] != 0 { expected.set("Rotate", rotations[position] as i64); }
+            assert_eq!(composed.get_dictionary(pages[index]).unwrap(), &expected, "page {} changed beyond its rotation", index + 1);
+        }
+        let outcome = export(&ExportRequest { paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }, input.clone());
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert_eq!(fs::read(&input).unwrap(), original_bytes);
     }
 
     #[test]

@@ -819,3 +819,131 @@ test('dragging into the band at the grid edge scrolls the grid and says which pa
   await expect(band).toHaveCount(0);
   expect(await order(page)).toEqual([1, 2, 3, 4, 5]);
 });
+
+// Orientation. Turns add to each selected page's rotation; thumbnails turn in CSS and export sends the turn.
+const orientation = (page: Page) => pageActions(page).getByRole('group', { name: 'Orientation' });
+const orientationFact = (page: Page) => focusPreview(page).locator('.scene-organize-facts dd').nth(2);
+const exportButton = (page: Page) => page.getByRole('button', { name: 'Export PDF' });
+async function exportedRotations(page: Page) {
+  await exportButton(page).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'export_pdf_scene'))).toBe(true);
+  const scene = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').at(-1).args.request.scene);
+  return scene.pages.map((item: any) => [item.sourceIndex + 1, item.rotation]);
+}
+async function orientationMenu(page: Page, item: string | RegExp) {
+  await orientation(page).getByRole('button', { name: 'More orientation options' }).click();
+  await page.getByRole('menu', { name: 'Orientation' }).getByRole('menuitem', { name: item }).click();
+}
+
+test('the orientation controls are off until pages are selected', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await option(page, 1).click();
+  await page.keyboard.press('Escape');
+  await expect(count(page)).toHaveText('No pages selected');
+  for (const name of ['Rotate left (⇧⌘R)', 'Rotate right (⌘R)', 'More orientation options'])
+    await expect(orientation(page).getByRole('button', { name, exact: true })).toBeDisabled();
+  await option(page, 1).click();
+  for (const name of ['Rotate left (⇧⌘R)', 'Rotate right (⌘R)', 'More orientation options'])
+    await expect(orientation(page).getByRole('button', { name, exact: true })).toBeEnabled();
+  await expect(orientation(page).getByRole('button', { name: 'Rotate right (⌘R)' })).toHaveAttribute('aria-keyshortcuts', 'Meta+R');
+  await expect(orientation(page).getByRole('button', { name: 'Rotate left (⇧⌘R)' })).toHaveAttribute('aria-keyshortcuts', 'Shift+Meta+R');
+});
+
+test('each orientation control turns the selected pages, says so, and exports the turn', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(exportButton(page)).toBeDisabled();
+  await selectRun(page, 2, 4);
+  await orientation(page).getByRole('button', { name: 'Rotate right (⌘R)' }).click();
+  await expect(liveStatus(page)).toHaveText('Pages 2 to 4 rotated 90° right');
+  await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, rotated 90° right, selected');
+  await orientation(page).getByRole('button', { name: 'Rotate left (⇧⌘R)' }).click();
+  await expect(liveStatus(page)).toHaveText('Pages 2 to 4 rotated 90° left. It’s back to how it was opened.');
+  // A turn and its opposite is no change: there is nothing to export.
+  await expect(exportButton(page)).toBeDisabled();
+  await orientationMenu(page, 'Rotate 180°');
+  await expect(liveStatus(page)).toHaveText('Pages 2 to 4 rotated 180°');
+  await option(page, 5).click();
+  await orientationMenu(page, /^Rotate left 90°/);
+  await expect(liveStatus(page)).toHaveText('Page 5 rotated 90° left');
+  await option(page, 1).click();
+  await orientationMenu(page, /^Rotate right 90°/);
+  await expect(option(page, 1)).toHaveAccessibleName('Position 1, original page 1, rotated 90° right, selected');
+  await expect(exportButton(page)).toBeEnabled();
+  expect(await exportedRotations(page)).toEqual([[1, 90], [2, 180], [3, 180], [4, 180], [5, 270]]);
+});
+
+for (const [platform, modifier, right, left] of [['MacIntel', 'Meta', 'Meta+R', 'Shift+Meta+R'], ['Win32', 'Control', 'Control+R', 'Control+Shift+R']] as const) {
+  test(`${modifier}+R turns the selected pages right and ${modifier}+Shift+R turns them left on ${platform}`, async ({ page }) => {
+    await setPlatform(page, platform);
+    await openReport(page);
+    await option(page, 4).click();
+    await page.keyboard.press(right);
+    await expect(liveStatus(page)).toHaveText('Page 4 rotated 90° right');
+    await page.keyboard.press(right);
+    await option(page, 2).click();
+    await page.keyboard.press(left);
+    await expect(liveStatus(page)).toHaveText('Page 2 rotated 90° left');
+    await expect(orientation(page).getByRole('button', { name: /^Rotate right/ })).toHaveAttribute('aria-keyshortcuts', right);
+    expect(await exportedRotations(page)).toEqual([[1, 0], [2, 270], [3, 0], [4, 180], [5, 0]]);
+  });
+}
+
+test('a turned page shows its turn on the thumbnail and in the focus view, with no new render', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(option(page, 2).locator('img')).toBeVisible();
+  await option(page, 2).click();
+  const badge = option(page, 2).locator('.scene-organize-orientation-badge');
+  await expect(badge).toHaveCount(0);
+  await expect(orientationFact(page)).toHaveText('As in the original');
+  await page.keyboard.press('Meta+R');
+  await expect(badge).toHaveText('↻ 90°');
+  await expect(option(page, 2).locator('.scene-organize-thumb img')).toHaveCSS('transform', /matrix\(/);
+  const turned = focusPreview(page).getByRole('img', { name: 'Preview of page 2' });
+  await expect(turned).toHaveCSS('transform', /matrix\(/);
+  await expect(focusPreview(page).locator('.scene-organize-focus-page')).toHaveAttribute('data-shape', 'wide');
+  await expect(orientationFact(page)).toHaveText('Rotated 90° right');
+  await page.keyboard.press('Meta+R');
+  await expect(badge).toHaveText('↻ 180°');
+  await expect(orientationFact(page)).toHaveText('Rotated 180°');
+  await page.keyboard.press('Meta+R');
+  await expect(badge).toHaveText('↺ 90°');
+  await expect(orientationFact(page)).toHaveText('Rotated 90° left');
+  await page.keyboard.press('Meta+R');
+  await expect(badge).toHaveCount(0);
+  expect((await thumbnailRequests(page)).flat().filter((index) => index === 1)).toHaveLength(1);
+});
+
+test('Reset orientation turns only the selected pages back and keeps the new order', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await selectRun(page, 1, 3);
+  await page.keyboard.press('Meta+R');
+  await pageActions(page).getByRole('button', { name: 'Move later (⌘+→)' }).click();
+  expect(await order(page)).toEqual([4, 1, 2, 3, 5]);
+  await option(page, 2).click();
+  await option(page, 3).click({ modifiers: ['Meta'] });
+  await orientationMenu(page, /^Reset orientation of 2 pages/);
+  await expect(liveStatus(page)).toHaveText('Pages 2 and 3 turned back to how they were in the original');
+  await orientationMenu(page, /^Reset orientation of 2 pages/);
+  await expect(liveStatus(page)).toHaveText('Pages 2 and 3 are already as in the original');
+  // The reset is one undo step; the reset that changed nothing is none.
+  await undoButton(page).click();
+  expect(await order(page)).toEqual([4, 1, 2, 3, 5]);
+  await expect(option(page, 2)).toHaveAccessibleName(/rotated 90° right/);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await exportedRotations(page)).toEqual([[4, 0], [1, 0], [2, 0], [3, 90], [5, 0]]);
+});
+
+test('resetting the only turn leaves nothing to export', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await option(page, 3).click();
+  await page.keyboard.press('Meta+R');
+  await expect(exportButton(page)).toBeEnabled();
+  await orientationMenu(page, /^Reset orientation of 1 page/);
+  await expect(liveStatus(page)).toHaveText('Page 3 turned back to how it was in the original. It’s back to how it was opened.');
+  await expect(exportButton(page)).toBeDisabled();
+});
