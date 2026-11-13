@@ -876,24 +876,80 @@
   },
   {
     "board": "OCR.dc.html",
-    "title": "OCR: language packs and output",
+    "title": "OCR: modes, languages, pages and results",
     "state": "default",
     "query": "",
     "screen": "OCR--default.jpg"
   },
   {
     "board": "OCR.dc.html",
-    "title": "OCR: language packs and output",
+    "title": "OCR: modes, languages, pages and results",
     "state": "pack-downloading",
     "query": "pack=Downloading",
     "screen": "OCR--pack-downloading.jpg"
   },
   {
     "board": "OCR.dc.html",
-    "title": "OCR: language packs and output",
+    "title": "OCR: modes, languages, pages and results",
     "state": "pack-picker-open",
     "query": "pack=Picker%20open",
     "screen": "OCR--pack-picker-open.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "OCR--state-empty.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-text-file-and-force",
+    "query": "state=Text%20file%20and%20Force",
+    "screen": "OCR--state-text-file-and-force.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-pick-pages",
+    "query": "state=Pick%20pages",
+    "screen": "OCR--state-pick-pages.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-recognizing",
+    "query": "state=Recognizing",
+    "screen": "OCR--state-recognizing.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "OCR--state-results.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-text-results",
+    "query": "state=Text%20results",
+    "screen": "OCR--state-text-results.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-engine-missing",
+    "query": "state=Engine%20missing",
+    "screen": "OCR--state-engine-missing.jpg"
+  },
+  {
+    "board": "OCR.dc.html",
+    "title": "OCR: modes, languages, pages and results",
+    "state": "state-opened-from-extract",
+    "query": "state=Opened%20from%20Extract",
+    "screen": "OCR--state-opened-from-extract.jpg"
   },
   {
     "board": "ImagesToPdf.dc.html",

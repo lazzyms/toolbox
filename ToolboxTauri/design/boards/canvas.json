@@ -215,7 +215,7 @@
 "y": 7280,
 "w": 1280,
 "h": 800,
-"title": "OCR: language packs and output",
+"title": "OCR: modes, languages, pages and results",
 "expand": "fill"
 },
 "ImagesToPdf.dc.html": {
@@ -530,7 +530,7 @@
 "y": 7020,
 "text": "PDF Conversion",
 "kind": "title1",
-"maxW": 9900
+"maxW": "14000"
 },
 "conv": {
 "x": 5440,
@@ -539,6 +539,86 @@
 "maxH": 560,
 "fill": "blue",
 "text": "One file from many\n\nImages to PDF, Merge, Create GIF, App Icon Set, combining a TIFF and Formatted PDF all make one output. Their run button ends in an ellipsis and opens the native save dialog.\n\nTools that make one file per input use 'Save to' with an example name. A clash gets -1, -2 and so on, and errors stay per file."
+},
+"oc1": {
+"x": 10000,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "OCR 1. Mode, Force and languages\n\nOptions run top to bottom: Save as, Languages, Pages, Force, Save to.\n\nSave as is a two-option segmented radiogroup: Searchable PDF (default) or Text file, with a one-line hint under it.\n\nLanguages is an ordered list, numbered by priority, with move and remove buttons. English is the default; the last choice is remembered. 'Add a language' is the #445 combobox.\n\nForce is a checkbox, off by default: 'Force: redo earlier OCR text'. Its hint says visible text is always skipped."
+},
+"oc2": {
+"x": 10400,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "OCR 2. Packs in the picker\n\nSame as #445 (pack=Picker open): one listbox in two groups, 'Installed' and 'Download to use', each pack with its size. English is 'Added' and disabled.\n\nChoosing a pack adds it to the list as 'Not installed' and shows the note 'Hindi needs a 12 MB download.' with Install Hindi. Downloading shows 'Downloading 62%' in the list row (role=status).\n\nA remembered language that is no longer installed is dropped with a notice (state=Pick pages): 'Tamil was removed from your languages.'"
+},
+"oc3": {
+"x": 10800,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "OCR 3. Pages, thumbnails, mixed lists\n\nPages is a segmented control: All pages (default) or Range, with the shared syntax '1-3, 5, 8-'. One range applies to every PDF and multi-page TIFF and is clamped to each file.\n\nWith exactly one PDF, the list becomes a thumbnail listbox (state=Pick pages). Each page carries a class tag: Scan, Text or Earlier OCR. Picks write the range ('1-4, 9', badge 'Set by the page picks'); typing a range updates the picks.\n\nMixed lists show a Type column (PDF, HEIC photo, TIFF) and a Pages column, and say what each file will do."
+},
+"oc4": {
+"x": 11200,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "OCR 4. Save to\n\nThe shared shell block: 'Save to: Next to each original' with 'Change for this run'. After a change (state=Text file and Force) it shows the folder, the 'This run only' badge, Change and 'Reset to default'.\n\nThe Example box follows the mode: site-survey-scan-ocr.pdf or -ocr.txt. Clashes get -1, -2; nothing is replaced."
+},
+"oc5": {
+"x": 11600,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "OCR 5. Progress\n\nThe header counts files and the current page: 'Recognizing file 2 of 9' / 'board-minutes-q3.pdf, page 4 of 9'.\n\nThe overall bar counts pages, not files ('35 of 541 pages done'), so a 480-page scan doesn't look stuck.\n\nThe active row has its own minibar ('Page 4 of 9'). Waiting rows show their page count. Options lock; Cancel (Esc) keeps finished files."
+},
+"oc6": {
+"x": 12000,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "OCR 6. Result wording\n\nSearchable / Saved as text: '31 pages recognized. English and Hindi.'\nPage detail (toggle, aria-expanded): Recognized: Pages 1-4 and 9 / Skipped, visible text: Pages 5-7 / Skipped, earlier OCR text: Page 8. Turn on Force to replace it.\nWarning: 'Signature removed. Adding text removes the digital signature, so the copy isn't signed. The original still is.' (PDF mode only)\nNote: 'Saved as 8-bit colour, because the photo is 10-bit.'\nSkipped: 'Every page already has text: pages 1-3 visible, page 4 from an earlier OCR run. Nothing was made. Turn on Force…' / 'No pages left in 2-. It has 1 page, so nothing was made.'\nNo text found: 'OCR completed but found no readable text.' (existing message, kept)"
+},
+"oc7": {
+"x": 12400,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "orange",
+"text": "OCR 7. Errors\n\nInvalidInput (locked): 'It's password-protected. Remove its password in File Security, then run OCR again.' + Remove Password button.\nLimitExceeded, state 'Over limit': 'Stopped at page 212 of 480: it reached the time limit for one file. Nothing was saved. Split it into smaller PDFs, then try again.' Limit values are set at implementation.\nUnavailable (state=Engine missing): every row 'Unavailable' with 'The text recognition engine is missing. Reinstall Toolbox.' plus one role=alert card. A missing pack is 'Needs a pack' in #445's PackResults.\nEach failure stays on its own row."
+},
+"oc8": {
+"x": 12800,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "OCR 8. Hand-off and shortcuts\n\nExtract from PDF marks a scan 'Needs OCR' with an 'Open in OCR' button. OCR opens with that file queued, a note 'Opened from Extract from PDF' with 'Back to Extract from PDF', and Save as preset to Text file (state=Opened from Extract).\n\nShortcuts are the shell's: ⌘O / Ctrl+O add files, ⌘↵ / Ctrl+Enter runs, Esc cancels, ⌘K / Ctrl+K, ⌘, / Ctrl+,. No mode shortcut: Tab to Save as, then arrow keys. ⌘A / Ctrl+A picks all thumbnails."
+},
+"oc9": {
+"x": 13200,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "OCR 9. Playwright states\n\nEmpty: run disabled, 'Add files to start'.\nFiles added: 9 rows, 'loading-spinner.gif wasn't added.', estimate 'This will make up to 7 searchable PDFs'.\nText file and Force: example -ocr.txt, 'Will be skipped' rows, This run only.\nPick pages: listbox aria-multiselectable, range '1-4, 9'.\nOpened from Extract, Recognizing (progressbar values, locked fieldset), Results, Text results, Engine missing (role=alert).\nPacks: Not installed, Downloading, Picker open (aria-expanded)."
+},
+"oc10": {
+"x": 13600,
+"y": 7280,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "OCR 10. New patterns\n\nNamed new patterns: page class tags on thumbnails (Scan / Text / Earlier OCR), the per-row page minibar during a run, the hand-off note from another tool, and the removed-language notice.\n\nAll else is the shared shell: grouped rail, Save to, Example, estimate (role=status), ResultList with Skipped and an .outs page-detail sublist.\n\nmacOS and Windows differ only in key caps, paths and 'Show in Finder' / 'Show in Explorer'."
 },
 "row8": {
 "x": 0,
