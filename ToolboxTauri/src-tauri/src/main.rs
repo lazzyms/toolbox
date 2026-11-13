@@ -4852,8 +4852,7 @@ mod command_tests {
         assert_eq!(both[0].detail, "Saved the text and 1 image.");
         assert!(matches!(both[1].state, OutcomeState::Succeeded { .. }), "an image-only PDF succeeds in Both: {:?}", both[1]);
         assert_eq!(both[1].output_paths(), [folder.join("scanned-images")]);
-        assert_eq!(both[1].detail, BOTH_WITHOUT_TEXT);
-        assert!(both[1].detail.contains("No selectable text"));
+        assert_eq!(both[1].detail, format!("{BOTH_WITHOUT_TEXT} Saved 1 image."));
         assert!(matches!(both[2].state, OutcomeState::Succeeded { .. }));
         assert_eq!(both[2].output_paths(), [folder.join("plain-text.txt")]);
         assert_eq!(both[2].detail, BOTH_WITHOUT_IMAGES);
@@ -4886,6 +4885,7 @@ mod command_tests {
         small.min_image_size = Some(5);
         let small = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), small));
         assert_eq!(small[0].output_paths(), [root.join("small").join("mixed-text.txt")]);
+        assert_eq!(small[0].detail, "The 1 image is smaller than the minimum size, so only the text file was saved.");
 
         for original in &originals { original.assert_untouched(); }
         let _ = std::fs::remove_dir_all(root);

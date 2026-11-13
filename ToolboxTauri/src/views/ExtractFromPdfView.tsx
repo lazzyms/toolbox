@@ -79,7 +79,7 @@ export const ExtractFromPdfView = ({ utility, initialPaths = [], onFilesChange }
           pageRange: pageScope === "range" ? pageRange.trim() : null,
           outputLocation,
           preserveLayout: wantsText && preserveLayout,
-          minImageSize: wantsImages && skipSmallImages ? minSize : null,
+          ...(wantsImages && skipSmallImages ? { minImageSize: minSize } : {}),
         },
       })}
     >
@@ -178,7 +178,7 @@ export const ExtractFromPdfView = ({ utility, initialPaths = [], onFilesChange }
                     <span>Skip small images</span>
                   </Label>
                   <p id="extract-min-hint" className="workspace-note">
-                    {skipSmallImages ? "Leaves out bullets, lines and spacers." : "Off saves every image at its original size."}
+                    {skipSmallImages ? "Leaves out bullets, lines and spacers. The result counts what was left out." : "Off saves every image at its original size."}
                   </p>
                   {skipSmallImages && (
                     <div className="flex items-center gap-2">

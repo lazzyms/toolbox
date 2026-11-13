@@ -15,6 +15,7 @@ use crate::kit::contracts::{JpegColour, LimitKind, OutcomePointer, OutcomeWarnin
 use crate::kit::images::source::{self, ImageFamily};
 use crate::kit::images::{self, OutputFormat};
 use super::embedded_image::{self, Extracted, NotSaved};
+use super::inline_image;
 use super::metadata::{page_bounds, page_rotation};
 use super::page_ranges::{pages_label, PageRanges};
 use super::{has_signed_signature_field, mutation_preflight, note_signature_removed, remove_signatures, resolve, PdfMutationIntent};
@@ -848,16 +849,18 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
             }
         }
     } else { ImageRun::default() };
-    let not_saved = images.not_saved();
+    let tally = images.tally();
+    let all_small = images.all_small();
+    let skipped = |message: String| JobOutcome::skipped(input.clone(), SkipReason::new(SkipCode::NoEffectiveChange, message));
     let outcome = match (request.mode, text, images.saved) {
         (ExtractMode::Text, Some(text), _) => JobOutcome::succeeded(input, vec![text], if request.preserve_layout { "PDF text extracted with its layout preserved" } else { "PDF text extracted in reading order" }),
         (ExtractMode::Text, None, _) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NeedsOcr, NEEDS_OCR_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() })),
-        (ExtractMode::Images, _, None) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NO_EMBEDDED_IMAGES)),
-        (ExtractMode::Images, _, Some(saved)) => JobOutcome::succeeded(input, vec![saved.folder], format!("Saved {}.{not_saved}", image_count(saved.count))),
-        (ExtractMode::Both, Some(text), Some(saved)) => JobOutcome::succeeded(input, vec![text, saved.folder], format!("Saved the text and {}.{not_saved}", image_count(saved.count))),
-        (ExtractMode::Both, Some(text), None) => JobOutcome::succeeded(input, vec![text], BOTH_WITHOUT_IMAGES),
-        (ExtractMode::Both, None, Some(saved)) => JobOutcome::succeeded(input, vec![saved.folder], format!("{BOTH_WITHOUT_TEXT}{not_saved}")),
-        (ExtractMode::Both, None, None) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NoEffectiveChange, NOTHING_TO_EXTRACT)),
+        (ExtractMode::Images, _, None) => skipped(all_small.map_or(NO_EMBEDDED_IMAGES.to_string(), |lead| format!("{lead}. No folder was made."))),
+        (ExtractMode::Images, _, Some(saved)) => JobOutcome::succeeded(input, vec![saved.folder], format!("Saved {tally}.")),
+        (ExtractMode::Both, Some(text), Some(saved)) => JobOutcome::succeeded(input, vec![text, saved.folder], format!("Saved the text and {tally}.")),
+        (ExtractMode::Both, Some(text), None) => JobOutcome::succeeded(input, vec![text], all_small.map_or(BOTH_WITHOUT_IMAGES.to_string(), |lead| format!("{lead}, so only the text file was saved."))),
+        (ExtractMode::Both, None, Some(saved)) => JobOutcome::succeeded(input, vec![saved.folder], format!("{BOTH_WITHOUT_TEXT} Saved {tally}.")),
+        (ExtractMode::Both, None, None) => skipped(all_small.map_or(NOTHING_TO_EXTRACT.to_string(), |lead| format!("No selectable text, and {}{}. Nothing was saved.", lead[..1].to_lowercase(), &lead[1..]))),
     };
     images.warnings.into_iter().fold(outcome, JobOutcome::with_warning)
 }
@@ -925,49 +928,75 @@ fn normalize_pdf_text(text: &str) -> String {
     text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
-/// One embedded image found in the selected pages, in discovery order.
-/// The writer reads page, index, object and size; the rest is for the deduplication work in #426.
+/// Where one discovered image's data lives: an image XObject, or an inline image copied out of a content stream.
 #[derive(Debug)]
-#[allow(dead_code)]
-struct ImageCandidate<'a> {
+enum ImageSource {
+    Object(ObjectId),
+    Inline(Stream),
+}
+
+/// One image found in the selected pages, in discovery order.
+#[derive(Debug)]
+struct ImageCandidate {
     /// One-based page number.
     page: u32,
     /// Position among the page's images.
     index: usize,
-    object_id: ObjectId,
-    filters: Option<Vec<String>>,
+    source: ImageSource,
+    /// Zero when the image doesn't state its size.
     width: i64,
     height: i64,
-    color_space: Option<String>,
-    soft_mask: Option<ObjectId>,
-    mask: Option<ObjectId>,
-    data: &'a [u8],
 }
 
-/// Lists the embedded images of the selected one-based pages, in page order and then
-/// in each page's resource order.
-fn discover_images<'a>(document: &'a Document, pages: &[u32]) -> Result<Vec<ImageCandidate<'a>>, String> {
+/// Form XObjects nested deeper than this are not searched.
+const MAX_FORM_DEPTH: usize = 16;
+
+/// Lists the images of the selected one-based pages in page order. Within a page, the image XObjects in its
+/// resources come first in resource order, with each form XObject's images in its place, then the page's
+/// inline images in content order. A form lists its own resources' images and then its inline images.
+fn discover_images(document: &Document, pages: &[u32]) -> Result<Vec<ImageCandidate>, String> {
     let mut candidates = Vec::new();
     for (page_number, page_id) in document.get_pages() {
         if !pages.contains(&page_number) { continue; }
-        let images = document.get_page_images(page_id).map_err(|error| error.to_string())?;
-        for (index, image) in images.into_iter().enumerate() {
-            let reference = |key: &[u8]| image.origin_dict.get(key).and_then(Object::as_reference).ok();
-            candidates.push(ImageCandidate {
-                page: page_number,
-                index,
-                object_id: image.id,
-                soft_mask: reference(b"SMask"),
-                mask: reference(b"Mask"),
-                filters: image.filters,
-                width: image.width,
-                height: image.height,
-                color_space: image.color_space,
-                data: image.content,
-            });
-        }
+        let (direct, inherited) = document.get_page_resources(page_id).map_err(|error| error.to_string())?;
+        let resources = direct.or_else(|| inherited.first().and_then(|id| document.get_dictionary(*id).ok()));
+        let content = document.get_page_content_with_limit(page_id, embedded_image::MAX_DECODED_BYTES as usize).unwrap_or_default();
+        let mut found = Vec::new();
+        let resources = resources.into_iter().collect::<Vec<_>>();
+        collect_images(document, &resources, &resources, &content, &mut Vec::new(), &mut found);
+        candidates.extend(found.into_iter().enumerate().map(|(index, (source, width, height))| ImageCandidate { page: page_number, index, source, width, height }));
     }
     Ok(candidates)
+}
+
+fn collect_images(document: &Document, own: &[&lopdf::Dictionary], scope: &[&lopdf::Dictionary], content: &[u8], open_forms: &mut Vec<ObjectId>, found: &mut Vec<(ImageSource, i64, i64)>) {
+    let side = |dict: &lopdf::Dictionary, key: &[u8]| dict.get(key).and_then(Object::as_i64).unwrap_or(0);
+    let xobjects = own.iter().filter_map(|resources| resources.get(b"XObject").ok().and_then(|xobjects| document.dereference(xobjects).ok()).and_then(|(_, xobjects)| xobjects.as_dict().ok()));
+    for (_, value) in xobjects.flat_map(|xobjects| xobjects.iter()) {
+        let Ok(id) = value.as_reference() else { continue };
+        let Ok(stream) = document.get_object(id).and_then(Object::as_stream) else { continue };
+        match stream.dict.get(b"Subtype").and_then(Object::as_name) {
+            Ok(b"Image") => found.push((ImageSource::Object(id), side(&stream.dict, b"Width"), side(&stream.dict, b"Height"))),
+            Ok(b"Form") if !open_forms.contains(&id) && open_forms.len() < MAX_FORM_DEPTH => {
+                let form = stream.dict.get(b"Resources").ok().and_then(|resources| document.dereference(resources).ok()).and_then(|(_, resources)| resources.as_dict().ok());
+                let form = form.into_iter().collect::<Vec<_>>();
+                let scope = form.iter().chain(scope).copied().collect::<Vec<_>>();
+                let content = stream.decompressed_content_with_limit(embedded_image::MAX_DECODED_BYTES as usize).unwrap_or_default();
+                open_forms.push(id);
+                collect_images(document, &form, &scope, &content, open_forms, found);
+                open_forms.pop();
+            }
+            _ => {}
+        }
+    }
+    let named_space = |name: &[u8]| scope.iter().find_map(|resources| {
+        let (_, spaces) = document.dereference(resources.get(b"ColorSpace").ok()?).ok()?;
+        spaces.as_dict().ok()?.get(name).ok().cloned()
+    });
+    for image in inline_image::inline_images(content, named_space) {
+        let (width, height) = (side(&image.dict, b"Width"), side(&image.dict, b"Height"));
+        found.push((ImageSource::Inline(image), width, height));
+    }
 }
 
 /// One PDF's images folder and how many images were published into it.
@@ -981,21 +1010,35 @@ fn image_count(count: usize) -> String {
     format!("{count} {}", if count == 1 { "image" } else { "images" })
 }
 
-/// One PDF's images run: the folder saved, how many images were found, and a warning for each image
-/// not saved, followed by one per kind of JPEG kept with colours some viewers get wrong.
+/// One PDF's images run: the folder saved, the images left out as duplicates, as smaller than the minimum size
+/// or as undecodable, and a warning for each undecodable image followed by one per kind of JPEG kept with
+/// colours some viewers get wrong.
 #[derive(Debug, Default)]
 struct ImageRun {
     saved: Option<SavedImages>,
-    found: usize,
+    duplicates: usize,
+    small: usize,
+    undecodable: usize,
     warnings: Vec<OutcomeWarning>,
 }
 
 impl ImageRun {
-    fn not_saved(&self) -> String {
-        match self.found - self.saved.as_ref().map_or(0, |saved| saved.count) {
-            0 => String::new(),
-            1 => " 1 image wasn't saved.".to_string(),
-            count => format!(" {count} images weren't saved."),
+    /// "17 images · 4 duplicates · 6 small left out · 2 couldn't be saved", leaving out counts of zero.
+    fn tally(&self) -> String {
+        let saved = self.saved.as_ref().map_or(0, |saved| saved.count);
+        let mut parts = vec![image_count(saved)];
+        if self.duplicates > 0 { parts.push(format!("{} {}", self.duplicates, if self.duplicates == 1 { "duplicate" } else { "duplicates" })); }
+        if self.small > 0 { parts.push(format!("{} small left out", self.small)); }
+        if self.undecodable > 0 { parts.push(format!("{} couldn't be saved", self.undecodable)); }
+        parts.join(" · ")
+    }
+
+    /// Why no images were saved when every image found was smaller than the minimum size.
+    fn all_small(&self) -> Option<String> {
+        match self.small {
+            0 => None,
+            1 => Some("The 1 image is smaller than the minimum size".to_string()),
+            count => Some(format!("All {count} images are smaller than the minimum size")),
         }
     }
 }
@@ -1007,54 +1050,76 @@ struct ImageFailure {
     warnings: Vec<OutcomeWarning>,
 }
 
-/// Saves each candidate at least `min_size` on both sides into one new "{stem}-images" folder: JPEG and
-/// JPEG 2000 data as it is, every other image as a lossless PNG. An image that can't be decoded is reported
-/// with its page and left out; the rest are still saved. No folder is made when nothing is saved, and it fails
-/// when images were found but none could be saved. On failure nothing is published, except the images
-/// published before a later publish failed, whose folder is then reported with the error.
+/// Saves each distinct candidate at least `min_size` on both sides into one new "{stem}-images" folder: JPEG and
+/// JPEG 2000 data as it is, every other image as a lossless PNG. An image object used again, and an image whose
+/// saved bytes match one already saved, is a duplicate and saved once, under the first page where it appears.
+/// A small image is counted once however often it is used. An image that can't be decoded is reported with its
+/// page and left out; the rest are still saved. No folder is made when nothing is saved, and it fails when
+/// images were found but none could be saved. On failure nothing is published, except the images published
+/// before a later publish failed, whose folder is then reported with the error.
 fn write_images(document: &Document, input: &Path, location: &OutputLocation, candidates: &[ImageCandidate], min_size: Option<u32>) -> Result<ImageRun, ImageFailure> {
-    let kept = candidates.iter().filter(|candidate| !min_size.is_some_and(|min| candidate.width < i64::from(min) || candidate.height < i64::from(min))).collect::<Vec<_>>();
-    let mut not_saved = Vec::new();
+    use sha2::{Digest, Sha256};
+    let mut run = ImageRun::default();
+    let mut seen_objects = std::collections::HashSet::new();
+    let mut seen_bytes = std::collections::HashSet::new();
     let mut colours = [(JpegColour::Cmyk, Vec::new()), (JpegColour::Inverted, Vec::new())];
     let mut folder = None;
     let mut reservations = Vec::new();
-    for candidate in &kept {
+    for candidate in candidates {
+        let first_use = match candidate.source { ImageSource::Object(id) => seen_objects.insert(id), ImageSource::Inline(_) => true };
+        let small = min_size.is_some_and(|min| (candidate.width > 0 && candidate.width < i64::from(min)) || (candidate.height > 0 && candidate.height < i64::from(min)));
+        if small {
+            if first_use { run.small += 1; }
+            continue;
+        }
+        if !first_use { run.duplicates += 1; continue; }
         let (page, image) = (candidate.page, candidate.index as u32 + 1);
-        let stream = document.get_object(candidate.object_id).and_then(Object::as_stream).map_err(|_| NotSaved::Damaged);
+        let stream = match &candidate.source {
+            ImageSource::Object(id) => document.get_object(*id).and_then(Object::as_stream).map_err(|_| NotSaved::Damaged),
+            ImageSource::Inline(stream) => Ok(stream),
+        };
         let extracted = match stream.and_then(|stream| embedded_image::extract(document, stream)) {
             Ok(extracted) => extracted,
-            Err(reason) => { not_saved.push(not_saved_warning(page, image, reason)); continue; }
+            Err(reason) => {
+                run.undecodable += 1;
+                run.warnings.push(not_saved_warning(page, image, reason));
+                continue;
+            }
         };
+        if !seen_bytes.insert(Sha256::new().chain_update(extracted.extension()).chain_update([0]).chain_update(extracted.bytes()).finalize()) {
+            run.duplicates += 1;
+            continue;
+        }
         if let Extracted::Jpeg { cmyk, inverted, .. } = extracted {
             if cmyk { colours[0].1.push(page); }
             if inverted { colours[1].1.push(page); }
         }
-        let fail = |message: String, not_saved: Vec<OutcomeWarning>| ImageFailure { folder: None, message, warnings: not_saved };
+        let fail = |message: String, warnings: Vec<OutcomeWarning>| ImageFailure { folder: None, message, warnings };
         let folder = match &mut folder {
             Some(folder) => folder,
             None => match OutputNaming::reserve_folder(input, location, "-images") {
                 Ok(reserved) => folder.insert(reserved),
-                Err(error) => return Err(fail(format!("Could not create the images folder: {error}"), not_saved)),
+                Err(error) => return Err(fail(format!("Could not create the images folder: {error}"), run.warnings)),
             },
         };
         let name = format!("page-{page}-image-{image}.{}", extracted.extension());
         let reservation = match OutputNaming::reserve_named_candidate(&folder.path().join(&name)) {
             Ok(Some(reservation)) => reservation,
-            Ok(None) => return Err(fail(format!("Could not reserve extracted image output: {name} already exists"), not_saved)),
-            Err(error) => return Err(fail(format!("Could not reserve extracted image output: {error}"), not_saved)),
+            Ok(None) => return Err(fail(format!("Could not reserve extracted image output: {name} already exists"), run.warnings)),
+            Err(error) => return Err(fail(format!("Could not reserve extracted image output: {error}"), run.warnings)),
         };
-        if let Err(error) = fs::write(reservation.path(), extracted.bytes()) { return Err(fail(format!("Could not write extracted image: {error}"), not_saved)); }
+        if let Err(error) = fs::write(reservation.path(), extracted.bytes()) { return Err(fail(format!("Could not write extracted image: {error}"), run.warnings)); }
         reservations.push(reservation);
     }
-    let warnings = not_saved.into_iter().chain(colours.into_iter().filter(|(_, pages)| !pages.is_empty()).map(|(colour, pages)| colour_warning(colour, pages))).collect::<Vec<_>>();
+    run.warnings.extend(colours.into_iter().filter(|(_, pages)| !pages.is_empty()).map(|(colour, pages)| colour_warning(colour, pages)));
     let Some(folder) = folder else {
-        if kept.is_empty() { return Ok(ImageRun::default()); }
-        let message = if kept.len() == 1 { "The image couldn't be decoded, so nothing was saved.".to_string() } else { format!("None of the {} could be decoded, so nothing was saved.", image_count(kept.len())) };
-        return Err(ImageFailure { folder: None, message, warnings });
+        if run.undecodable == 0 { return Ok(run); }
+        let message = if run.undecodable == 1 { "The image couldn't be decoded, so nothing was saved.".to_string() } else { format!("None of the {} could be decoded, so nothing was saved.", image_count(run.undecodable)) };
+        return Err(ImageFailure { folder: None, message, warnings: run.warnings });
     };
     match publish_extracted_images(folder, reservations) {
-        Ok(saved) => Ok(ImageRun { saved: Some(saved), found: kept.len(), warnings }),
-        Err((folder, message)) => Err(ImageFailure { folder, message, warnings }),
+        Ok(saved) => Ok(ImageRun { saved: Some(saved), ..run }),
+        Err((folder, message)) => Err(ImageFailure { folder, message, warnings: run.warnings }),
     }
 }
 
@@ -2202,7 +2267,7 @@ pub(crate) mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    struct DiscoveryFixture { document: Document, photo: ObjectId, scan: ObjectId, soft_mask: ObjectId, stencil: ObjectId, logo: ObjectId }
+    struct DiscoveryFixture { document: Document, photo: ObjectId, scan: ObjectId, logo: ObjectId, form: ObjectId, in_form: ObjectId }
 
     fn image_discovery_fixture() -> DiscoveryFixture {
         let mut document=Document::with_version("1.7");
@@ -2210,68 +2275,70 @@ pub(crate) mod tests {
         let soft_mask=document.add_object(Stream::new(dictionary! {
             "Type"=>"XObject", "Subtype"=>"Image", "Width"=>4, "Height"=>3, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8
         },vec![0;12]));
-        let stencil=document.add_object(Stream::new(dictionary! {
-            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>2, "Height"=>2, "ImageMask"=>true, "BitsPerComponent"=>1
-        },vec![0;2]));
         let photo=document.add_object(Stream::new(dictionary! {
             "Type"=>"XObject", "Subtype"=>"Image", "Width"=>4, "Height"=>3,
             "ColorSpace"=>"DeviceCMYK", "BitsPerComponent"=>8, "Filter"=>"DCTDecode", "SMask"=>soft_mask
         },b"photo".to_vec()));
         let scan=document.add_object(Stream::new(dictionary! {
-            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>2, "Height"=>2,
-            "ColorSpace"=>vec![Object::Name(b"ICCBased".to_vec()), Object::Integer(0)], "BitsPerComponent"=>8,
-            "Filter"=>vec![Object::Name(b"FlateDecode".to_vec()), Object::Name(b"DCTDecode".to_vec())], "Mask"=>stencil
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>2, "Height"=>2, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8
         },b"scan".to_vec()));
         let logo=document.add_object(Stream::new(dictionary! {
-            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>7, "Height"=>5, "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8,
-            "Mask"=>vec![Object::Integer(0), Object::Integer(0)]
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>7, "Height"=>5, "ColorSpace"=>"DeviceRGB", "BitsPerComponent"=>8
         },b"logo".to_vec()));
-        let form=document.add_object(Stream::new(dictionary! { "Type"=>"XObject", "Subtype"=>"Form", "BBox"=>vec![0.into(),0.into(),1.into(),1.into()] },Vec::new()));
+        let in_form=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Image", "Width"=>6, "Height"=>1, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8
+        },vec![9;6]));
+        let form_id=document.new_object_id();
+        document.objects.insert(form_id,Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Form", "BBox"=>vec![0.into(),0.into(),1.into(),1.into()],
+            "Resources"=>dictionary! { "XObject"=>dictionary! { "Inner"=>in_form, "Loop"=>form_id }, "ColorSpace"=>dictionary! { "Cs9"=>"DeviceRGB" } }
+        },b"/Inner Do BI /W 1 /H 1 /BPC 8 /CS /Cs9 ID \x01\x02\x03 EI".to_vec()).into());
         let mut kids=Vec::new();
-        for xobjects in [
-            dictionary! { "Im1"=>photo, "Fm1"=>form, "Im2"=>scan },
-            dictionary! {},
-            dictionary! { "Logo"=>logo },
+        for (xobjects,content) in [
+            (dictionary! { "Im1"=>photo, "Fm1"=>form_id, "Im2"=>scan },b"/Im1 Do /Fm1 Do /Im2 Do".to_vec()),
+            (dictionary! {},b"q BI /W 2 /H 2 /BPC 8 /CS /G ID \x05\x06\x07\x08 EI Q".to_vec()),
+            (dictionary! { "Logo"=>logo },b"/Logo Do".to_vec()),
         ] {
+            let contents=document.add_object(Stream::new(dictionary! {},content));
             let page_id=document.add_object(dictionary! {
                 "Type"=>"Page", "Parent"=>pages_id, "MediaBox"=>vec![0.into(),0.into(),1.into(),1.into()],
-                "Resources"=>dictionary! { "XObject"=>xobjects }
+                "Resources"=>dictionary! { "XObject"=>xobjects }, "Contents"=>contents
             });
             kids.push(Object::Reference(page_id));
         }
         document.objects.insert(pages_id,dictionary! { "Type"=>"Pages", "Kids"=>kids, "Count"=>3 }.into());
         let catalog_id=document.add_object(dictionary! { "Type"=>"Catalog", "Pages"=>pages_id });
         document.trailer.set("Root",catalog_id);
-        DiscoveryFixture { document, photo, scan, soft_mask, stencil, logo }
+        DiscoveryFixture { document, photo, scan, logo, form: form_id, in_form }
+    }
+
+    fn listed(candidates: &[ImageCandidate]) -> Vec<(u32, usize, Option<ObjectId>, i64, i64)> {
+        candidates.iter().map(|candidate| {
+            let id=match candidate.source { ImageSource::Object(id) => Some(id), ImageSource::Inline(_) => None };
+            (candidate.page,candidate.index,id,candidate.width,candidate.height)
+        }).collect()
     }
 
     #[test]
-    fn image_discovery_lists_candidates_in_page_then_resource_order_with_their_properties() {
+    fn image_discovery_lists_page_form_and_inline_images_in_page_then_resource_order() {
         let fixture=image_discovery_fixture();
 
         let candidates=discover_images(&fixture.document,&[1,2,3]).unwrap();
 
-        let order=candidates.iter().map(|candidate| (candidate.page,candidate.index,candidate.object_id)).collect::<Vec<_>>();
-        assert_eq!(order,vec![(1,0,fixture.photo),(1,1,fixture.scan),(3,0,fixture.logo)]);
-
-        let photo=&candidates[0];
-        assert_eq!(photo.filters,Some(vec!["DCTDecode".to_string()]));
-        assert_eq!((photo.width,photo.height),(4,3));
-        assert_eq!(photo.color_space.as_deref(),Some("DeviceCMYK"));
-        assert_eq!((photo.soft_mask,photo.mask),(Some(fixture.soft_mask),None));
-        assert_eq!(photo.data,b"photo");
-
-        let scan=&candidates[1];
-        assert_eq!(scan.filters,Some(vec!["FlateDecode".to_string(),"DCTDecode".to_string()]));
-        assert_eq!((scan.width,scan.height),(2,2));
-        assert_eq!(scan.color_space.as_deref(),Some("ICCBased"));
-        assert_eq!((scan.soft_mask,scan.mask),(None,Some(fixture.stencil)));
-
-        let logo=&candidates[2];
-        assert_eq!(logo.filters,Some(Vec::new()));
-        assert_eq!((logo.width,logo.height),(7,5));
-        assert_eq!(logo.color_space.as_deref(),Some("DeviceRGB"));
-        assert_eq!((logo.soft_mask,logo.mask),(None,None),"a colour-key mask array is not a mask reference");
+        assert_eq!(listed(&candidates),vec![
+            (1,0,Some(fixture.photo),4,3),
+            (1,1,Some(fixture.in_form),6,1),
+            (1,2,None,1,1),
+            (1,3,Some(fixture.scan),2,2),
+            (2,0,None,2,2),
+            (3,0,Some(fixture.logo),7,5),
+        ]);
+        assert!(!listed(&candidates).iter().any(|(_,_,id,_,_)| *id==Some(fixture.form)),"a form is searched, not listed");
+        let ImageSource::Inline(in_form)=&candidates[2].source else { panic!("expected an inline image") };
+        assert_eq!(in_form.dict.get(b"ColorSpace").unwrap().as_name().unwrap(),b"DeviceRGB","a named colour space resolves through the form's resources");
+        assert_eq!(in_form.content,b"\x01\x02\x03");
+        let ImageSource::Inline(on_page)=&candidates[4].source else { panic!("expected an inline image") };
+        assert_eq!(on_page.content,b"\x05\x06\x07\x08");
     }
 
     #[test]
@@ -2279,8 +2346,8 @@ pub(crate) mod tests {
         let fixture=image_discovery_fixture();
 
         let third=discover_images(&fixture.document,&[3]).unwrap();
-        assert_eq!(third.iter().map(|candidate| (candidate.page,candidate.index,candidate.object_id)).collect::<Vec<_>>(),vec![(3,0,fixture.logo)]);
-        assert!(discover_images(&fixture.document,&[2]).unwrap().is_empty());
+        assert_eq!(listed(&third),vec![(3,0,Some(fixture.logo),7,5)]);
+        assert_eq!(listed(&discover_images(&fixture.document,&[2]).unwrap()),vec![(2,0,None,2,2)]);
         assert!(discover_images(&fixture.document,&[]).unwrap().is_empty());
     }
 
@@ -2295,7 +2362,7 @@ pub(crate) mod tests {
         assert_eq!(candidates.iter().map(|candidate| candidate.page).collect::<Vec<_>>(),vec![3]);
     }
 
-    fn image_stream(entries: lopdf::Dictionary, data: impl Into<Vec<u8>>) -> Stream {
+    pub(super) fn image_stream(entries: lopdf::Dictionary, data: impl Into<Vec<u8>>) -> Stream {
         let mut dict=dictionary! { "Type"=>"XObject", "Subtype"=>"Image" };
         for (key,value) in entries { dict.set(key,value); }
         Stream::new(dict,data.into())
@@ -2336,7 +2403,7 @@ pub(crate) mod tests {
     }
 
     /// Saves a PDF whose pages each hold the images `build` adds, in the order given.
-    fn image_pdf(path: &Path, build: impl FnOnce(&mut Document) -> Vec<Vec<Stream>>) {
+    pub(super) fn image_pdf(path: &Path, build: impl FnOnce(&mut Document) -> Vec<Vec<Stream>>) {
         let mut document=Document::with_version("1.7");
         let pages_id=document.new_object_id();
         let pages=build(&mut document);
@@ -2447,7 +2514,7 @@ pub(crate) mod tests {
     fn every_supported_filter_chain_is_undone_before_decoding() {
         let temp=split_fixture_root("images-filters");
         let input=temp.join("filters.pdf");
-        let pixel=[1u8,2,3];
+        let pixel=|image: u8| vec![image,2,3];
         let hex=|data: &[u8]| { let mut text=data.iter().map(|byte| format!("{byte:02X}")).collect::<String>(); text.push('>'); text.into_bytes() };
         image_pdf(&input,|_| {
             let rgb=|extra: lopdf::Dictionary,data: Vec<u8>| {
@@ -2457,15 +2524,15 @@ pub(crate) mod tests {
             };
             let name=|name: &str| Object::Name(name.as_bytes().to_vec());
             vec![vec![
-                rgb(dictionary! {},pixel.to_vec()),
-                rgb(dictionary! { "Filter"=>"ASCIIHexDecode" },hex(&pixel)),
-                rgb(dictionary! { "Filter"=>"RunLengthDecode" },vec![2,1,2,3,128]),
-                rgb(dictionary! { "Filter"=>"LZWDecode" },lzw_literals(&pixel)),
-                rgb(dictionary! { "Filter"=>"ASCII85Decode" },ascii85(&pixel)),
+                rgb(dictionary! {},pixel(1)),
+                rgb(dictionary! { "Filter"=>"ASCIIHexDecode" },hex(&pixel(2))),
+                rgb(dictionary! { "Filter"=>"RunLengthDecode" },[vec![2],pixel(3),vec![128]].concat()),
+                rgb(dictionary! { "Filter"=>"LZWDecode" },lzw_literals(&pixel(4))),
+                rgb(dictionary! { "Filter"=>"ASCII85Decode" },ascii85(&pixel(5))),
                 rgb(dictionary! {
                     "Filter"=>vec![name("AHx"),name("Fl")],
                     "DecodeParms"=>vec![Object::Null,dictionary! { "Predictor"=>15, "Colors"=>3, "Columns"=>1 }.into()]
-                },hex(&flate(&[0,1,2,3]))),
+                },hex(&flate(&[vec![0],pixel(6)].concat()))),
             ]]
         });
 
@@ -2473,8 +2540,8 @@ pub(crate) mod tests {
 
         let folder=temp.join("filters-images");
         assert_eq!(outcome.detail,"Saved 6 images.","{:?}",outcome.warnings);
-        for index in 1..=6 {
-            assert_eq!(decoded(folder.join(format!("page-1-image-{index}.png"))).as_rgb8().unwrap().as_raw(),&pixel.to_vec(),"image {index}");
+        for index in 1..=6u8 {
+            assert_eq!(decoded(folder.join(format!("page-1-image-{index}.png"))).as_rgb8().unwrap().as_raw(),&pixel(index),"image {index}");
         }
         fs::remove_dir_all(temp).unwrap();
     }
@@ -2483,19 +2550,19 @@ pub(crate) mod tests {
     fn jpeg_and_jpeg_2000_are_copied_byte_for_byte_with_one_colour_warning_per_kind() {
         let temp=split_fixture_root("images-copied");
         let input=temp.join("copied.pdf");
-        let jpeg=jpeg_bytes([10,20,30]);
+        let jpegs=[[10,20,30],[60,90,120],[200,40,80],[30,160,60]].map(jpeg_bytes);
         let jp2=b"\x00\x00\x00\x0cjP  \r\n\x87\nnot decoded".to_vec();
         let decode=|count: usize| (0..count).flat_map(|_| [Object::from(1),Object::from(0)]).collect::<Vec<_>>();
         image_pdf(&input,|_| {
-            let dct=|space: &str,extra: Option<Vec<Object>>| {
+            let dct=|jpeg: &Vec<u8>,space: &str,extra: Option<Vec<Object>>| {
                 let mut entries=dictionary! { "Width"=>2, "Height"=>2, "ColorSpace"=>space, "BitsPerComponent"=>8, "Filter"=>"DCTDecode" };
                 if let Some(decode)=extra { entries.set("Decode",decode); }
                 image_stream(entries,jpeg.clone())
             };
             vec![
-                vec![dct("DeviceRGB",None),image_stream(dictionary! { "Width"=>2, "Height"=>2, "Filter"=>"JPXDecode" },jp2.clone())],
-                vec![dct("DeviceCMYK",None)],
-                vec![dct("DeviceCMYK",Some(decode(4))),dct("DeviceGray",Some(decode(1)))],
+                vec![dct(&jpegs[0],"DeviceRGB",None),image_stream(dictionary! { "Width"=>2, "Height"=>2, "Filter"=>"JPXDecode" },jp2.clone())],
+                vec![dct(&jpegs[1],"DeviceCMYK",None)],
+                vec![dct(&jpegs[2],"DeviceCMYK",Some(decode(4))),dct(&jpegs[3],"DeviceGray",Some(decode(1)))],
             ]
         });
 
@@ -2505,7 +2572,7 @@ pub(crate) mod tests {
         assert_eq!(outcome.detail,"Saved 5 images.");
         assert_eq!(sorted_names(&folder),vec!["page-1-image-1.jpg","page-1-image-2.jp2","page-2-image-1.jpg","page-3-image-1.jpg","page-3-image-2.jpg"]);
         assert_eq!(fs::read(folder.join("page-1-image-2.jp2")).unwrap(),jp2);
-        for name in ["page-1-image-1.jpg","page-2-image-1.jpg","page-3-image-1.jpg","page-3-image-2.jpg"] { assert_eq!(fs::read(folder.join(name)).unwrap(),jpeg,"{name}"); }
+        for (name,jpeg) in ["page-1-image-1.jpg","page-2-image-1.jpg","page-3-image-1.jpg","page-3-image-2.jpg"].iter().zip(&jpegs) { assert_eq!(&fs::read(folder.join(name)).unwrap(),jpeg,"{name}"); }
         assert_eq!(warning_kinds(&outcome),vec![
             WarningKind::JpegColourKept { colour:JpegColour::Cmyk, pages:vec![2,3], images:2 },
             WarningKind::JpegColourKept { colour:JpegColour::Inverted, pages:vec![3], images:2 },
@@ -2546,7 +2613,7 @@ pub(crate) mod tests {
         assert!(matches!(outcome.state,crate::kit::contracts::OutcomeState::Succeeded { .. }));
         assert_eq!(outcome.output_paths(),[folder.clone()]);
         assert_eq!(sorted_names(&folder),vec!["page-1-image-1.jpg"]);
-        assert_eq!(outcome.detail,"Saved 1 image. 6 images weren't saved.");
+        assert_eq!(outcome.detail,"Saved 1 image · 6 couldn't be saved.");
         assert_eq!(fs::read(folder.join("page-1-image-1.jpg")).unwrap(),jpeg);
         assert_eq!(warning_kinds(&outcome),vec![
             WarningKind::ImageDamaged { page:1, image:2 },
@@ -2656,6 +2723,70 @@ pub(crate) mod tests {
         fs::remove_dir_all(temp).unwrap();
     }
 
+    fn reuse_fixture(path: &Path) {
+        let mut document=Document::with_version("1.7");
+        let pages_id=document.new_object_id();
+        let mut image=|width: i64, fill: u8| document.add_object(image_stream(dictionary! { "Width"=>width, "Height"=>width, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8 },vec![fill;(width*width) as usize]));
+        let (shared,twin_a,twin_b,tiny,in_form)=(image(8,10),image(8,20),image(8,20),image(2,30),image(8,40));
+        let broken=document.add_object(image_stream(dictionary! { "Width"=>8, "Height"=>8, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8, "Filter"=>"FlateDecode" },b"broken".to_vec()));
+        let form=document.add_object(Stream::new(dictionary! {
+            "Type"=>"XObject", "Subtype"=>"Form", "BBox"=>vec![0.into(),0.into(),1.into(),1.into()],
+            "Resources"=>dictionary! { "XObject"=>dictionary! { "Inner"=>in_form } }
+        },b"/Inner Do".to_vec()));
+        let inline=[b"q BI /W 8 /H 8 /BPC 8 /CS /G ID ".to_vec(),vec![50;64],b" EI Q".to_vec()].concat();
+        let mut kids=Vec::new();
+        for (xobjects,content) in [
+            (dictionary! { "S"=>shared, "T"=>twin_a, "Tiny"=>tiny },b"BI /W 1 /H 1 /BPC 8 /CS /G ID \x09 EI".to_vec()),
+            (dictionary! { "S"=>shared, "T"=>twin_b, "F"=>form },Vec::new()),
+            (dictionary! { "S"=>shared, "Tiny"=>tiny, "X"=>broken },inline),
+        ] {
+            let contents=document.add_object(Stream::new(dictionary! {},content));
+            kids.push(Object::Reference(document.add_object(dictionary! {
+                "Type"=>"Page", "Parent"=>pages_id, "MediaBox"=>vec![0.into(),0.into(),1.into(),1.into()],
+                "Resources"=>dictionary! { "XObject"=>xobjects }, "Contents"=>contents
+            })));
+        }
+        document.objects.insert(pages_id,dictionary! { "Type"=>"Pages", "Kids"=>kids, "Count"=>3 }.into());
+        let catalog_id=document.add_object(dictionary! { "Type"=>"Catalog", "Pages"=>pages_id });
+        document.trailer.set("Root",catalog_id);
+        document.save(path).unwrap();
+    }
+
+    #[test]
+    fn reused_and_identical_images_are_saved_once_under_their_first_page_and_small_ones_are_counted_once() {
+        let temp=split_fixture_root("images-reuse");
+        let input=temp.join("reuse.pdf");
+        reuse_fixture(&input);
+        let original=fs::read(&input).unwrap();
+        let request=|min_image_size| ExtractFromPdfRequest { paths:vec![input.clone()], mode:ExtractMode::Images, page_range:None, output_location:OutputLocation::AlongsideInput, preserve_layout:false, min_image_size };
+
+        let filtered=extract(&request(Some(4)),input.clone());
+
+        let folder=temp.join("reuse-images");
+        assert_eq!(filtered.detail,"Saved 4 images · 3 duplicates · 2 small left out · 1 couldn't be saved.");
+        assert_eq!(sorted_names(&folder),vec!["page-1-image-1.png","page-1-image-2.png","page-2-image-3.png","page-3-image-4.png"]);
+        let gray=|name: &str| decoded(folder.join(name)).as_luma8().unwrap().as_raw().clone();
+        assert_eq!(gray("page-1-image-1.png"),vec![10;64]);
+        assert_eq!(gray("page-1-image-2.png"),vec![20;64]);
+        assert_eq!(gray("page-2-image-3.png"),vec![40;64],"an image inside a form object");
+        assert_eq!(gray("page-3-image-4.png"),vec![50;64],"an inline image");
+        assert_eq!(warning_kinds(&filtered),vec![WarningKind::ImageDamaged { page:3, image:3 }]);
+
+        let everything=extract(&request(None),input.clone());
+
+        let folder=temp.join("reuse-images-1");
+        assert_eq!(everything.detail,"Saved 6 images · 4 duplicates · 1 couldn't be saved.");
+        assert_eq!(sorted_names(&folder),vec!["page-1-image-1.png","page-1-image-2.png","page-1-image-3.png","page-1-image-4.png","page-2-image-3.png","page-3-image-4.png"]);
+        assert_eq!(gray_in(&folder,"page-1-image-3.png"),vec![30;4]);
+        assert_eq!(gray_in(&folder,"page-1-image-4.png"),vec![9]);
+        assert_eq!(fs::read(&input).unwrap(),original);
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    fn gray_in(folder: &Path, name: &str) -> Vec<u8> {
+        decoded(folder.join(name)).as_luma8().unwrap().as_raw().clone()
+    }
+
     #[test]
     fn no_images_folder_is_made_when_no_image_is_written() {
         let temp=split_fixture_root("images-folder-none");
@@ -2666,8 +2797,8 @@ pub(crate) mod tests {
         let imageless_page=extract(&request("2",None),input.clone());
         let all_too_small=extract(&request("1-3",Some(3)),input.clone());
 
-        for outcome in [imageless_page,all_too_small] {
-            assert!(matches!(&outcome.state,crate::kit::contracts::OutcomeState::Skipped { reason } if reason.message==NO_EMBEDDED_IMAGES),"{outcome:?}");
+        for (outcome,message) in [(imageless_page,NO_EMBEDDED_IMAGES),(all_too_small,"All 3 images are smaller than the minimum size. No folder was made.")] {
+            assert!(matches!(&outcome.state,crate::kit::contracts::OutcomeState::Skipped { reason } if reason.message==message),"{outcome:?}");
         }
         assert_eq!(sorted_names(&temp),vec!["report.pdf"]);
         fs::remove_dir_all(temp).unwrap();
@@ -3839,6 +3970,27 @@ mod text_extraction_tests {
         let images = extract_with(&request(&input, ExtractMode::Images, None, false), input.clone(), &helper);
         assert!(matches!(&images.state, crate::kit::contracts::OutcomeState::Skipped { reason } if reason.message == NO_EMBEDDED_IMAGES), "{images:?}");
         assert_eq!(files_in(&root), ["missing.pdf"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn when_every_image_is_too_small_the_result_says_so_in_each_mode() {
+        let root = sandbox("all_small");
+        let input = root.join("small.pdf");
+        super::tests::image_pdf(&input, |_| vec![vec![super::tests::image_stream(dictionary! { "Width"=>2, "Height"=>2, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8 }, vec![0; 4])]]);
+        let small = |mode| ExtractFromPdfRequest { min_image_size: Some(64), ..request(&input, mode, None, false) };
+        let skipped = |outcome: &JobOutcome| match &outcome.state { crate::kit::contracts::OutcomeState::Skipped { reason } => reason.message.clone(), state => format!("{state:?}") };
+        let blank = stand_in(&root, "printf '\\f'\n");
+
+        assert_eq!(skipped(&extract_with(&small(ExtractMode::Images), input.clone(), &blank)), "The 1 image is smaller than the minimum size. No folder was made.");
+        assert_eq!(skipped(&extract_with(&small(ExtractMode::Both), input.clone(), &blank)), "No selectable text, and the 1 image is smaller than the minimum size. Nothing was saved.");
+        assert_eq!(files_in(&root), ["pdftotext-stand-in", "small.pdf"]);
+
+        let words = stand_in(&root, "printf 'Words\\n\\f'\n");
+        let outcome = extract_with(&small(ExtractMode::Both), input.clone(), &words);
+        assert_eq!(outcome.detail, "The 1 image is smaller than the minimum size, so only the text file was saved.");
+        assert_eq!(text_of(&outcome), "Words\n");
         let _ = fs::remove_dir_all(root);
     }
 
