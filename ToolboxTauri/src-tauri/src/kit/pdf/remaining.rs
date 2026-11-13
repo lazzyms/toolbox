@@ -258,7 +258,7 @@ pub struct RotatePdfRequest {
     pub output_location: OutputLocation,
 }
 
-/// A merge reports one combined outcome for the run's limits and, once it succeeds, one outcome per entry.
+/// A many-to-one job reports one combined outcome for the run's limits and, when each input needs its own row, one outcome per entry.
 pub struct Merged {
     pub combined: JobOutcome,
     pub entries: Vec<JobOutcome>,
@@ -1248,18 +1248,28 @@ fn selected_pdf_pages(document: &Document, requested: Option<&Vec<usize>>) -> Re
     Ok(pages.into_iter().filter(|page| requested.contains(page)).collect())
 }
 
-pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
-    let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()); };
-    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &first, &request.output_location, "-combined", "pdf") {
-        Ok(output) => output,
-        Err(error) => return failure(first, format!("Could not reserve combined PDF output: {error}")),
-    };
+/// Combines every readable image into one PDF, in list order. An image that can't be read is left out and
+/// reported on its own entry, so one bad file doesn't lose the rest; the combine fails only when no image can
+/// be read. With nothing left out the result is the one combined outcome; otherwise each input also gets its
+/// own entry, and the first added image's entry carries the warning that names what was left out. When no image
+/// can be read, every entry fails with its own reason.
+pub fn images_to_pdf(request: &ImagesToPdfRequest) -> Merged {
+    let Some(first) = request.paths.first().cloned() else { return failure(PathBuf::new(), "Select at least one image.".to_string()).into(); };
     let mut document = Document::with_version("1.5");
     let pages_id = document.new_object_id();
     let mut kids = Vec::new();
     let mut reduced = Vec::new();
+    // Each input's page span once added, or why it was left out.
+    let mut added: Vec<Result<(usize, usize), String>> = Vec::with_capacity(request.paths.len());
     for path in &request.paths {
-        let images = match embed_images(&mut document, path) { Ok(value) => value, Err(error) => return failure(path.clone(), format!("Could not process {}: {error}", path.display())) };
+        let images = match embed_images(&mut document, path) {
+            Ok(images) => images,
+            Err(error) => {
+                added.push(Err(error));
+                continue;
+            }
+        };
+        let start = kids.len() + 1;
         for image in images {
             if let Some(bits) = image.reduced_from_bits { reduced.push(format!("page {} ({bits}-bit)", kids.len() + 1)); }
             let placement = request.layout.place(image.width, image.height);
@@ -1268,25 +1278,53 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> JobOutcome {
             let page_id = document.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![0.into(), 0.into(), page_width.into(), page_height.into()], "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image.id } }, "Contents" => content_id });
             kids.push(page_id.into());
         }
+        added.push(Ok((start, kids.len())));
     }
+    let Some(readable) = request.paths.iter().zip(&added).find_map(|(path, added)| added.is_ok().then(|| path.clone())) else {
+        // Each row gives its own reason; the combined outcome says why nothing was saved.
+        let entries = request.paths.iter().zip(added).map(|(path, added)| JobOutcome::failure(path.clone(), ToolError::invalid_input(added.err().unwrap_or_default()))).collect();
+        return Merged { combined: JobOutcome::failure(first, ToolError::invalid_input("None of the images could be read, so nothing was saved.")), entries };
+    };
+    // The PDF is named after the first image it holds, so a skipped first file never names it.
+    let output = match OutputNaming::reserve_single_output(request.output_path.as_deref(), &readable, &request.output_location, "-combined", "pdf") {
+        Ok(output) => output,
+        Err(error) => return failure(readable, format!("Could not reserve combined PDF output: {error}")).into(),
+    };
     let count = kids.len() as i64;
     document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => count }.into());
     let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
     document.trailer.set("Root", catalog_id);
-    match document.save(output.path()) {
-        Ok(_) => match output.publish() {
-            Ok(path) => {
-                let outcome = JobOutcome::succeeded(first, vec![path], "Images combined into PDF");
-                if reduced.is_empty() { return outcome; }
-                outcome.with_warning(OutcomeWarning {
-                    kind: WarningKind::PrecisionReduced,
-                    message: format!("Reduced to 8-bit sRGB to fit in the PDF: {}.", reduced.join(", ")),
-                })
-            }
-            Err(error) => failure(first, format!("Could not publish combined PDF: {error}")),
-        },
-        Err(error) => failure(first, format!("Save failed: {error}")),
+    if let Err(error) = document.save(output.path()) { return failure(readable, format!("Save failed: {error}")).into(); }
+    let combined_path = match output.publish() {
+        Ok(path) => path,
+        Err(error) => return failure(readable, format!("Could not publish combined PDF: {error}")).into(),
+    };
+    let mut warnings = Vec::new();
+    if !reduced.is_empty() {
+        warnings.push(OutcomeWarning { kind: WarningKind::PrecisionReduced, message: format!("Reduced to 8-bit sRGB to fit in the PDF: {}.", reduced.join(", ")) });
     }
+    let left_out = request.paths.iter().zip(&added).filter(|(_, added)| added.is_err()).map(|(path, _)| display_name(path)).collect::<Vec<_>>();
+    if !left_out.is_empty() {
+        let (count, them) = if left_out.len() == 1 { ("1 image".to_string(), "it") } else { (format!("{} images", left_out.len()), "they") };
+        warnings.push(OutcomeWarning { kind: WarningKind::OmittedContent, message: format!("{count} left out because {them} couldn't be read: {}.", left_out.join(", ")) });
+    }
+    let combined = warnings.iter().cloned().fold(JobOutcome::succeeded(readable.clone(), vec![combined_path.clone()], "Images combined into PDF"), JobOutcome::with_warning);
+    if left_out.is_empty() { return combined.into(); }
+    let combined_name = display_name(&combined_path);
+    let mut warnings = Some(warnings);
+    let entries = request.paths.iter().zip(added).map(|(path, added)| match added {
+        Ok((start, end)) => {
+            let span = if start == end { format!("Page {start}") } else { format!("Pages {start}–{end}") };
+            let entry = JobOutcome::succeeded(path.clone(), vec![combined_path.clone()], format!("{span} of {combined_name}."));
+            warnings.take().unwrap_or_default().into_iter().fold(entry, JobOutcome::with_warning)
+        }
+        Err(error) => JobOutcome::failure(path.clone(), ToolError::invalid_input(format!("Left out of {combined_name}. {error}"))),
+    }).collect();
+    Merged { combined, entries }
+}
+
+fn display_name(path: &Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
 
 // Width and height are the upright size; orientation is what the page
@@ -1304,6 +1342,15 @@ struct EmbeddedImage {
 // Flate samples, with any alpha kept as a soft mask. A TIFF gives one image
 // per page, in page order, and its orientation tag applies to every page.
 fn embed_images(document: &mut Document, path: &Path) -> Result<Vec<EmbeddedImage>, String> {
+    // An image that fails part way leaves nothing behind in the document.
+    let max_id = document.max_id;
+    embed_image_pages(document, path).inspect_err(|_| {
+        document.objects.retain(|id, _| id.0 <= max_id);
+        document.max_id = max_id;
+    })
+}
+
+fn embed_image_pages(document: &mut Document, path: &Path) -> Result<Vec<EmbeddedImage>, String> {
     if !matches!(ImageFamily::of(path), ImageFamily::Jpeg | ImageFamily::Png | ImageFamily::WebP | ImageFamily::Heif | ImageFamily::Tiff) {
         return Err("Only PNG, JPEG, WebP, HEIC, HEIF and TIFF images can be combined into a PDF.".to_string());
     }

@@ -311,21 +311,31 @@ async fn merge_pdfs(app: tauri::AppHandle, request: remaining::MergePdfRequest) 
 async fn run_merge_pdfs(request: &remaining::MergePdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("merge_pdfs", &request.paths) { return outcomes; }
     let request = request.clone();
-    let paths = request.paths.clone();
-    let chosen = request.output_path.clone();
-    let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let sink = Arc::clone(&entries);
-    let outcomes = aggregate_outcomes("merge_pdfs", &paths, move || {
-        let merged = remaining::merge(&request);
-        *sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = merged.entries;
-        merged.combined
+    aggregate_entries("merge_pdfs", &request.paths.clone(), request.output_path.clone(), move || remaining::merge(&request))
+}
+
+/// Runs a many-to-one job under its recorded limits. The combined outcome stands for the run, but when the job
+/// also reports one entry per input, each input gets its own row with its own notes or reason instead.
+fn aggregate_entries<F>(command: &str, paths: &[std::path::PathBuf], chosen: Option<std::path::PathBuf>, job: F) -> Vec<JobOutcome>
+where
+    F: FnOnce() -> remaining::Merged + Send + 'static,
+{
+    let reported = Arc::new(std::sync::Mutex::new(None));
+    let sink = Arc::clone(&reported);
+    let aggregate = run_aggregate(command, paths, move || {
+        let merged = job();
+        let combined = merged.combined.clone();
+        *sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(merged);
+        combined
     });
-    let mut entries = std::mem::take(&mut *entries.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-    // The combined file is one result, but each entry gets its own row with its page span and its own notes.
-    if !matches!(outcomes.as_slice(), [combined] if matches!(combined.state, OutcomeState::Succeeded { .. })) || entries.len() != paths.len() {
-        return outcomes;
+    let reported = reported.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    // Entries count only when the job's own outcome is the run's, not a limit that stopped it.
+    let Some(remaining::Merged { mut entries, .. }) = reported.filter(|merged| merged.combined == aggregate && merged.entries.len() == paths.len()) else {
+        return combine_aggregate(paths, note_renamed(aggregate, chosen.as_deref()));
+    };
+    if let Some(first_added) = entries.iter_mut().find(|entry| matches!(entry.state, OutcomeState::Succeeded { .. })) {
+        *first_added = note_renamed(first_added.clone(), chosen.as_deref());
     }
-    entries[0] = note_renamed(entries[0].clone(), chosen.as_deref());
     entries
 }
 
@@ -444,7 +454,7 @@ async fn images_to_pdf(app: tauri::AppHandle, request: remaining::ImagesToPdfReq
 async fn run_images_to_pdf(request: &remaining::ImagesToPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("images_to_pdf", &request.paths) { return outcomes; }
     let request = request.clone();
-    aggregate_outcomes("images_to_pdf", &request.paths.clone(), move || note_renamed(remaining::images_to_pdf(&request), request.output_path.as_deref()))
+    aggregate_entries("images_to_pdf", &request.paths.clone(), request.output_path.clone(), move || remaining::images_to_pdf(&request))
 }
 
 #[tauri::command]
@@ -542,11 +552,17 @@ fn aggregate_outcomes<F>(command: &str, paths: &[std::path::PathBuf], job: F) ->
 where
     F: FnOnce() -> JobOutcome + Send + 'static,
 {
-    let aggregate = match crate::kit::common::limits::recorded(command) {
+    combine_aggregate(paths, run_aggregate(command, paths, job))
+}
+
+fn run_aggregate<F>(command: &str, paths: &[std::path::PathBuf], job: F) -> JobOutcome
+where
+    F: FnOnce() -> JobOutcome + Send + 'static,
+{
+    match crate::kit::common::limits::recorded(command) {
         Some(limits) => limits.run_all(paths, job),
         None => JobOutcome::failure(paths.first().cloned().unwrap_or_default(), ToolError::processing(format!("No processing limits are recorded for {command}."))),
-    };
-    combine_aggregate(paths, aggregate)
+    }
 }
 
 /// One output from many inputs: success is one outcome, failure is one outcome per entry so every row explains itself.
@@ -1171,24 +1187,71 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    const PLIST_HEIC: &[u8] = b"bplist00\xd4\x01\x02\x03X$versionY$archiverT$top";
+    const NOT_A_HEIC: &str = "This file isn't a HEIC image. It looks like an Apple property list, not a photo. Export the original from Photos and try again.";
+
     #[test]
-    fn images_to_pdf_fails_the_combine_and_publishes_nothing_when_one_image_is_unreadable() {
+    fn images_to_pdf_leaves_out_an_unreadable_first_image_and_names_the_pdf_after_the_first_included_one() {
+        use crate::kit::contracts::OutcomeWarning;
         let root = sandbox("images-to-pdf-unreadable");
-        let first = root.join("first.png"); write_png(&first, 16, 30);
-        let broken = root.join("broken.heic"); std::fs::write(&broken, b"not really a HEIC file").unwrap();
-        let last = root.join("last.png"); write_png(&last, 16, 90);
-        let paths = vec![first.clone(), broken.clone(), last.clone()];
+        let broken = root.join("HEIF Image-44FF.heic"); std::fs::write(&broken, PLIST_HEIC).unwrap();
+        let photo = root.join("photo.png"); write_png(&photo, 16, 30);
+        let paths = vec![broken.clone(), photo.clone()];
         let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
         let out = location(&root, "out");
         let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
         let folder = folder.clone();
 
-        assert_aggregate_failure("images to pdf unreadable", &paths, &broken, run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: paths.clone(), output_location: out, output_path: None,
         }));
 
-        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no PDF and no partial file is left behind");
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "one row per input, in input order");
+        let combined = folder.join("photo-combined.pdf");
+        assert_eq!(outcomes[0].output_paths(), Vec::<PathBuf>::new());
+        assert_eq!(outcomes[0].error().map(|error| error.message.clone()), Some(format!("Left out of photo-combined.pdf. {NOT_A_HEIC}")));
+        assert!(outcomes[1].error().is_none(), "{:?}", outcomes[1].error());
+        assert_eq!(outcomes[1].output_paths(), [combined.clone()]);
+        assert_eq!(outcomes[1].detail, "Page 1 of photo-combined.pdf.");
+        assert_eq!(outcomes[1].warnings, [OutcomeWarning {
+            kind: WarningKind::OmittedContent,
+            message: "1 image left out because it couldn't be read: HEIF Image-44FF.heic.".into(),
+        }]);
+        assert_eq!(pdf_images(&combined).len(), 1, "the PDF has the one readable image");
+        assert_eq!(lopdf::Document::load(&combined).unwrap().get_pages().len(), 1);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 1, "only the combined PDF is written");
+        let again = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
+            paths: paths.clone(), output_location: location(&root, "out"), output_path: None,
+        }));
+        assert_eq!(again[1].output_paths(), [folder.join("photo-combined-1.pdf")], "a second run never replaces the first PDF");
+        let chosen = root.join("scans.pdf");
+        let picked = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
+            paths: paths.clone(), output_location: location(&root, "out"), output_path: Some(chosen.clone()),
+        }));
+        assert_eq!(picked[1].output_paths(), [chosen.clone()], "a chosen path is used as given");
+        assert_eq!(picked[0].error().map(|error| error.message.clone()), Some(format!("Left out of scans.pdf. {NOT_A_HEIC}")));
         for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn images_to_pdf_fails_with_each_reason_and_publishes_nothing_when_no_image_can_be_read() {
+        let root = sandbox("images-to-pdf-none-readable");
+        let plist = root.join("HEIF Image-1.heic"); std::fs::write(&plist, PLIST_HEIC).unwrap();
+        let text = root.join("notes.heic"); std::fs::write(&text, b"not really a HEIC file").unwrap();
+        let paths = vec![plist.clone(), text.clone()];
+        let out = location(&root, "out");
+        let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
+        let folder = folder.clone();
+
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
+            paths: paths.clone(), output_location: out, output_path: None,
+        }));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths);
+        assert!(outcomes.iter().all(|outcome| outcome.output_paths().is_empty()));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.error().unwrap().message.clone()).collect::<Vec<_>>(), [NOT_A_HEIC, "This file isn't a valid HEIC image."]);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no PDF and no partial file is left behind");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1358,7 +1421,7 @@ mod command_tests {
     }
 
     #[test]
-    fn images_to_pdf_names_the_tiff_page_it_cannot_read_and_publishes_nothing() {
+    fn images_to_pdf_leaves_out_a_tiff_with_an_unreadable_page_and_names_the_page() {
         let root = sandbox("images-to-pdf-tiff-bad-page");
         let first = root.join("first.png"); write_png(&first, 16, 30);
         let scan = root.join("scan.tiff");
@@ -1369,13 +1432,15 @@ mod command_tests {
         let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
         let folder = folder.clone();
 
-        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: paths.clone(), output_location: out.clone(), output_path: None, layout: Default::default() }));
-        let failed = outcomes.iter().find(|outcome| outcome.input_path == scan).unwrap();
-        let message = &failed.error().unwrap().message;
-        assert!(message.contains(&scan.display().to_string()) && message.contains("TIFF page 2 of 3 can't be read"), "{message}");
-        assert_aggregate_failure("images to pdf tiff bad page", &paths, &scan, run_images_to_pdf(&ImagesToPdfRequest { paths: paths.clone(), output_location: out, output_path: None, layout: Default::default() }));
+        let outcomes = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { paths: paths.clone(), output_location: out, output_path: None, layout: Default::default() }));
 
-        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0, "no PDF and no partial file is left behind");
+        assert_eq!(outcomes.len(), 2);
+        let message = &outcomes[1].error().unwrap().message;
+        assert!(message.starts_with("Left out of first-combined.pdf. TIFF page 2 of 3 can't be read"), "{message}");
+        let combined = folder.join("first-combined.pdf");
+        assert_eq!(outcomes[0].output_paths(), [combined.clone()]);
+        assert_eq!(outcomes[0].warnings[0].message, "1 image left out because it couldn't be read: scan.tiff.");
+        assert_eq!(pdf_images(&combined).len(), 1, "none of the TIFF's pages are in the PDF");
         for (path, original) in paths.iter().zip(&originals) { assert_eq!(&std::fs::read(path).unwrap(), original); }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1909,9 +1974,15 @@ mod command_tests {
         assert_aggregate_success("images-to-pdf valid inputs", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images-valid"), output_path: None,
         }));
-        assert_aggregate_failure("images-to-pdf missing later input", &[image.clone(), missing_image.clone()], &missing_image, run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
+        let images_missing = tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(),
             paths: vec![image.clone(), missing_image.clone()], output_location: location(&root, "images-missing"), output_path: None,
         }));
+        assert_eq!(images_missing.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [image.clone(), missing_image.clone()]);
+        let combined = root.join("images-missing").join("first-combined.pdf");
+        assert_eq!(images_missing[0].output_paths(), [combined.clone()], "images-to-pdf keeps the readable image when a later one is missing");
+        assert_eq!(images_missing[0].warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>(), ["1 image left out because it couldn't be read: missing.png."]);
+        assert_eq!(images_missing[1].error().map(|error| error.message.as_str()), Some("Left out of first-combined.pdf. This file can't be found. It may have been moved or deleted."));
+        assert_eq!(lopdf::Document::load(&combined).unwrap().get_pages().len(), 1);
         assert_aggregate_success("GIF valid inputs", &[image.clone(), image_two.clone()], run_create_gif(&GifCreateRequest {
             paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: location(&root, "gif-valid"), output_path: None,
         }));
