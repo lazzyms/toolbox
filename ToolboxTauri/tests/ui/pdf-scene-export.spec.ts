@@ -286,6 +286,10 @@ test('a password-protected export result reads plainly and points to Lock & Unlo
   await expect(row).toContainText("Failed, the input can't be used");
   await expect(row.getByRole('link', { name: /scene-fixture-edited/ })).toHaveCount(0);
   await row.getByRole('button', { name: 'Open Lock & Unlock', exact: true }).click();
+  // The edit that failed to export is still unexported, so leaving for Lock & Unlock asks first.
+  const prompt = page.getByRole('alertdialog', { name: 'Export your changes before closing?' });
+  await expect(prompt).toBeVisible();
+  await prompt.getByRole('button', { name: 'Discard changes' }).click();
   await expect(page.getByRole('heading', { name: 'Lock & Unlock', exact: true })).toBeVisible();
 });
 

@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { TriangleAlert } from 'lucide-react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { ToolScaffold } from '../components/ToolScaffold';
-import type { RunDestinationControl, WorkspaceSourceAction } from '../components/ToolScaffold';
+import type { DiscardGuard, RunDestinationControl, WorkspaceSourceAction } from '../components/ToolScaffold';
 import { ExportDestination, ExportProgress } from '../components/ExportControls';
 import type { FileProgress } from '../components/liveRun';
 import { fileName } from '../components/resultRow';
@@ -35,7 +35,7 @@ import { isPdfSceneTool } from '../registry';
 import { pdfEditorBatchTools, type PdfEditorBatchTools } from '../features/pdf-editor/batchTools';
 import { PdfEditorBatchSurface } from '../features/pdf-editor/BatchSurface';
 import { PDFConversionWorkspaceView } from './PDFConversionWorkspaceView';
-import { shortcutLabel, shortcutTarget } from '../shortcuts';
+import { matchShortcut, pressShortcutTarget, shortcutLabel, shortcutTarget } from '../shortcuts';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
@@ -67,6 +67,12 @@ const toolGuidance: Record<EditorTool, string> = {
   signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Choose a pattern, then add a watermark.',
   crop: 'Drag a rectangle on the page to crop it.',
 };
+const kindLabels: Record<SceneObject['kind'], string> = {
+  text: 'Text box', highlight: 'Highlight', shape: 'Shape', signature: 'Signature', watermark: 'Watermark',
+};
+const objectText = (object: SceneObject) => object.kind === 'shape' ? object.shape ?? 'square'
+  : object.kind === 'highlight' ? 'highlighted area'
+    : object.kind === 'signature' && object.signatureMode === 'image' ? 'signature image' : object.text;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type History = { past: PdfScene[]; present: PdfScene; future: PdfScene[] };
 export type ExistingPdfUtilityId = 'pdf-merge' | 'pdf-split' | 'pdf-redact' | 'lock-unlock';
@@ -116,6 +122,7 @@ type PDFEditorWorkspaceProps = {
   utility: ToolDefinition;
   initialPaths?: readonly string[];
   onNavigate?: PdfEditorNavigation;
+  onLeaveGuard?: (guard: DiscardGuard | null) => void;
   onWorkspaceSourceAction?: (action: WorkspaceSourceAction | null) => void;
   fileActivation?: Extract<ShellEvent, { kind: 'files' }>;
   onActivationAccepted?: (activationId: string) => void;
@@ -139,27 +146,50 @@ const PDFSceneEditor = ({
   fileActivation,
   onActivationAccepted,
   onFilesChange,
+  onLeaveGuard,
 }: PDFEditorWorkspaceProps) => {
   const availability = useToolAvailability();
   const session = useRef<{ path: string; scene: PdfScene; baseline: PdfScene } | null>(null);
+  const [exported, setExported] = useState<{ path: string; scene: PdfScene } | null>(null);
+  const [changes, setChanges] = useState(0);
+  const pending = useRef(0);
+  const reportChanges = useCallback((count: number) => { pending.current = count; setChanges(count); }, []);
+  const [confirm, setConfirm] = useState<{ proceed: () => void; cancel?: () => void } | null>(null);
+  const confirmDiscard: DiscardGuard = useCallback((proceed, cancel) => {
+    if (pending.current > 0) setConfirm({ proceed, cancel }); else proceed();
+  }, []);
+  useEffect(() => {
+    onLeaveGuard?.(confirmDiscard);
+    return () => onLeaveGuard?.(null);
+  }, [confirmDiscard, onLeaveGuard]);
+  const settle = (choice: 'discard' | 'cancel' | 'export') => {
+    const pendingChoice = confirm;
+    setConfirm(null);
+    if (!pendingChoice) return;
+    if (choice === 'discard') { pending.current = 0; pendingChoice.proceed(); return; }
+    pendingChoice.cancel?.();
+    if (choice === 'export') pressShortcutTarget(window.document, 'run');
+  };
   const requestedTool: EditorTool = utility.id === 'pdf-organize' ? 'organize' : utility.id === 'pdf-crop' ? 'crop' : utility.id === 'pdf-watermark' ? 'watermark' : utility.id === 'pdf-sign' ? 'signature' : 'select';
   const initialTool = availability.allows(toolFlagBySceneTool[requestedTool])
     ? requestedTool
     : tools.find((item) => availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
   // The export name follows the sub-tools that change the document, so the destination's example tracks the edits.
   const [suffix, setSuffix] = useState<string | null>(null);
-  return <ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange}
+  return <><ToolScaffold utility={utility} variant="workspace" sessionKey="pdf-editor-scene" initialPaths={initialPaths} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} confirmDiscard={confirmDiscard}
     exampleName={(inputPath) => proposedSaveName(inputPath, suffix ?? combinedSuffix, 'pdf')}
     onRun={async (paths, outputLocation, { runId, outputPath }) => {
       const [inputPath] = paths;
       if (!inputPath || !session.current || session.current.path !== inputPath) throw new Error('Select exactly one open PDF before exporting.');
-      const { request } = planSceneExport({ paths, scene: session.current.scene, baseline: session.current.baseline, outputLocation, outputPath });
+      const { scene } = session.current;
+      const { request } = planSceneExport({ paths, scene, baseline: session.current.baseline, outputLocation, outputPath });
       const results = await invoke<ToolResult>('export_pdf_scene', { runId, request });
+      if (results.length && results.every((result) => result.state === 'succeeded')) setExported({ path: inputPath, scene });
       return results.map((result) => result.failure ? { ...result, failure: { ...result.failure, message: pdfEditorErrorMessage(result.failure.message, 'export') } } : result);
     }}>
     {({ files, run, runSavingAs, loading, runDestination, live, browse, replaceFiles }) => <PDFSceneFiles files={files} title={utility.shortTitle ?? utility.title} replaceFiles={replaceFiles} onNavigate={onNavigate}>
       {(inputPath) => <PDFSceneSession key={inputPath ?? 'empty'} path={inputPath} initialTool={initialTool}
-        exporting={loading} exportStep={live?.steps[0]} destination={runDestination} onExport={run}
+        exporting={loading} exportStep={live?.steps[0]} destination={runDestination} onExport={run} exported={exported} onChanges={reportChanges}
         onExportAs={() => runSavingAs({ dialog: exportAsDialog, suffix: suffix ?? combinedSuffix, summary: exportAsSummary })} onBrowse={browse}
         onNavigate={onNavigate}
         onScene={(path, scene, baseline) => {
@@ -167,7 +197,21 @@ const PDFSceneEditor = ({
           setSuffix(scene && baseline ? exportSuffix(sceneContributors(scene, baseline)) : null);
         }} />}
     </PDFSceneFiles>}
-  </ToolScaffold>;
+  </ToolScaffold>
+    <Dialog open={confirm !== null} onOpenChange={(open) => { if (!open) settle('cancel'); }}>
+      <DialogContent role="alertdialog" showCloseButton={false} className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>Export your changes before closing?</DialogTitle>
+          <DialogDescription>{session.current ? fileName(session.current.path) : 'This PDF'} has {changes} {changes === 1 ? 'change' : 'changes'} that haven't been exported. If you close now, they're lost.</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="destructive" onClick={() => settle('discard')}>Discard changes</Button>
+          <Button variant="outline" onClick={() => settle('cancel')}>Cancel</Button>
+          <Button onClick={() => settle('export')}>Export…</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>;
 };
 
 /**
@@ -217,16 +261,18 @@ function PDFSceneFiles({ files, title, replaceFiles, onNavigate, children }: {
   </>;
 }
 
-function PDFSceneSession({ path, initialTool, exporting, exportStep, destination, onExport, onExportAs, onBrowse, onNavigate, onScene }: {
+function PDFSceneSession({ path, initialTool, exporting, exportStep, destination, onExport, onExportAs, onBrowse, exported, onChanges, onNavigate, onScene }: {
   path: string | null; initialTool: EditorTool | null; exporting: boolean; exportStep: FileProgress | undefined;
   destination: RunDestinationControl; onExport: () => Promise<void>; onExportAs: () => Promise<void>;
-  onBrowse: () => Promise<void>; onNavigate?: PdfEditorNavigation;
+  onBrowse: () => Promise<void>; exported: { path: string; scene: PdfScene } | null; onChanges: (count: number) => void;
+  onNavigate?: PdfEditorNavigation;
   onScene: (path: string | null, scene: PdfScene | null, baseline: PdfScene | null) => void;
 }) {
   const availability = useToolAvailability();
   const [document, setDocument] = useState<PdfDocument | null>(null);
   const [signatureNoticeDismissedFor, setSignatureNoticeDismissedFor] = useState<string | null>(null);
   const [history, setHistory] = useState<History>({ past: [], present: { pages: [] }, future: [] });
+  const [saved, setSaved] = useState<{ scene: PdfScene; index: number } | null>(null);
   const [tool, setTool] = useState<EditorTool | null>(initialTool);
   const [thumbnailSize, setThumbnailSize] = useState<ThumbnailSize>('medium');
   const [visiblePages, setVisiblePages] = useState<number[]>([]);
@@ -277,7 +323,9 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const serializedScene = JSON.stringify(scene);
   const previewKey = path ? previewCacheKey(path, currentIndex, serializedScene, PREVIEW_RENDER_SETTINGS) : null;
   const exactPreview = preview?.key === previewKey ? preview.value : null;
-  const dirty = document !== null && sceneContributors(scene, sceneFromDocument(document)).length > 0;
+  const baseline = document ? sceneFromDocument(document) : null;
+  const contributors = baseline ? sceneContributors(scene, baseline) : [];
+  const dirty = contributors.length > 0;
   const canExport = Boolean(page) && dirty && !exporting && !renderError && !rendering && Boolean(exactPreview);
   // Why Export is off, said next to it: a copy with no changes would match the original, and a stale preview can't be verified.
   const exportReason = !page || exporting || renderError ? null
@@ -535,6 +583,36 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     return { ...item, objects: [...item.objects, { ...makeObject('text', { x: b.x + b.width / 2 - 20, y: b.y + Math.max(0, b.height - 30), width: Math.min(40, b.width), height: Math.min(20, b.height) }), text: String(index + 1), fontSize: 12 }] };
     }) });
   };
+  const savedScene = saved?.scene ?? baseline;
+  const changes = !savedScene || same(scene, savedScene) ? 0 : Math.max(1, Math.abs(history.past.length - (saved?.index ?? 0)));
+  useEffect(() => {
+    if (!exported || exported.path !== path) return;
+    const states = [...history.past, history.present].map((item) => JSON.stringify(item));
+    const index = states.lastIndexOf(JSON.stringify(exported.scene));
+    setSaved({ scene: exported.scene, index: index >= 0 ? index : history.past.length });
+  }, [exported]);
+  useEffect(() => onChanges(changes), [changes, onChanges]);
+  useEffect(() => () => onChanges(0), [onChanges]);
+  const placed = scene.pages.flatMap((item, index) => item.objects.map((object) => ({ pageId: item.id, number: index + 1, object })));
+  const duplicate = () => {
+    if (!selected || !page || !availability.allows(toolFlagByObjectKind[selected.kind])) return;
+    const b = visibleBounds(page), r = selected.rect;
+    const copy: SceneObject = { ...selected, id: crypto.randomUUID(), rect: { ...r,
+      x: Math.max(b.x, Math.min(b.x + b.width - r.width, r.x + 10)), y: Math.max(b.y, Math.min(b.y + b.height - r.height, r.y + 10)) } };
+    group.current = null;
+    commitPage({ ...page, objects: [...page.objects, copy] });
+    setSelectedId(copy.id);
+  };
+  useEffect(() => {
+    const onDuplicate = (event: KeyboardEvent) => {
+      if (event.shiftKey || matchShortcut(event, 'editor') !== 'duplicate') return;
+      if (window.document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      event.preventDefault();
+      duplicate();
+    };
+    window.addEventListener('keydown', onDuplicate);
+    return () => window.removeEventListener('keydown', onDuplicate);
+  });
   const pageViewTool = tools.find((item) => item.id !== 'organize' && availability.allows(toolFlagBySceneTool[item.id]))?.id ?? null;
   const focusGridPage = (index: number) => {
     const target = scene.pages[Math.max(0, Math.min(scene.pages.length - 1, index))];
@@ -572,7 +650,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
 
   return <section className="pdf-scene-workspace" aria-label="PDF editing session" onKeyDown={(event) => {
     const input = event.target instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable);
-    if (!input && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
+    if (input || !(event.metaKey || event.ctrlKey)) return;
+    const key = event.key.toLowerCase();
+    if (key === 'z') { event.preventDefault(); event.shiftKey ? redo() : undo(); }
+    else if (key === 'y' && !event.shiftKey) { event.preventDefault(); redo(); }
   }}>
     <div ref={toolsToolbar} className="scene-tools" role="toolbar" aria-label="PDF editor tools" aria-orientation="horizontal" onFocusCapture={handleToolbarFocus} onKeyDown={handleToolbarKeyDown}>
       {tools.filter((item) => availability.allows(toolFlagBySceneTool[item.id])).map((item) => <Button key={item.id} variant={tool === item.id ? "secondary" : "ghost"} size="sm" aria-label={item.label} aria-description={toolGuidance[item.id]} title={toolGuidance[item.id]} aria-pressed={tool === item.id}
@@ -582,8 +663,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
         title={dirty ? 'Export or reset your edits before redacting' : 'Black out private details in a copy of this PDF'}
         disabled={!page || !path || Boolean(dirty)} onClick={() => { if (path) onNavigate({ utilityId: 'pdf-redact', initialPaths: [path] }); }}><span aria-hidden="true">▮</span>Redact</Button>}
       <span className="scene-toolbar-divider" />
-      <Button variant="ghost" size="icon-sm" aria-label="Undo" title="Undo (⌘Z / Ctrl+Z)" disabled={!history.past.length} onClick={undo}>↶</Button>
-      <Button variant="ghost" size="icon-sm" aria-label="Redo" title="Redo (⇧⌘Z / Ctrl+Shift+Z)" disabled={!history.future.length} onClick={redo}>↷</Button>
+      <Button variant="ghost" size="icon-sm" aria-label="Undo" title={`Undo (${shortcutLabel('undo')})`} disabled={!history.past.length} onClick={undo}>↶</Button>
+      <Button variant="ghost" size="icon-sm" aria-label="Redo" title={`Redo (${shortcutLabel('redo')})`} disabled={!history.future.length} onClick={redo}>↷</Button>
       <Button variant="destructive" size="sm" aria-label="Reset edits" disabled={!dirty} onClick={reset}>Reset</Button>
       <ExportDestination destination={destination} inputPath={path} />
       {exporting ? <ExportProgress step={exportStep} fileName={path ? fileName(path) : 'PDF'} /> : <>
@@ -727,10 +808,30 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
                 </div>
               </>}
               {selectedEnabled && selected && <div className="scene-inspector-actions">
-                <Button variant="destructive" size="sm" onClick={() => { if (!availability.allows(toolFlagByObjectKind[selected.kind])) return; commitPage({ ...page, objects: page.objects.filter((item) => item.id !== selected.id) }); setSelectedId(null); }}>Delete object</Button>
+                <Button variant="outline" size="sm" onClick={duplicate}>Duplicate<ShortcutHint id="duplicate" /></Button>
+                <Button variant="destructive" size="sm" onClick={() => { if (!availability.allows(toolFlagByObjectKind[selected.kind])) return; commitPage({ ...page, objects: page.objects.filter((item) => item.id !== selected.id) }); setSelectedId(null); }}>Delete object<ShortcutHint id="deleteMark" /></Button>
                 <Button variant="outline" size="sm" onClick={() => { if (availability.allows(toolFlagByObjectKind[selected.kind])) commitPage({ ...page, objects: [...page.objects.filter((item) => item.id !== selected.id), selected] }); }}>Bring to front</Button>
               </div>}
+              {selectedEnabled && selected && selected.kind !== 'watermark' && <p className="scene-property-note">Arrow keys nudge it, Shift+arrow nudges further.</p>}
               {Guide && inspector && <Guide {...inspector} />}
+              {placed.length > 0 && <section className="scene-inspector-section" aria-labelledby="scene-object-list-title">
+                <h3 id="scene-object-list-title" className="scene-inspector-heading">Objects in this document<span>{placed.length}</span></h3>
+                <ul className="scene-object-list">
+                  {placed.map(({ pageId, number, object }) => <li key={object.id}>
+                    <Button variant={selectedId === object.id ? 'secondary' : 'ghost'} size="sm" className="scene-object-list-item w-full justify-start"
+                      aria-label={`${kindLabels[object.kind]}, page ${number}: ${objectText(object)}`} aria-pressed={selectedId === object.id}
+                      onClick={() => { selectPage(pageId); setSelectedId(object.id); }}>
+                      <span className="scene-object-list-page">Page {number}</span><span className="truncate">{objectText(object)}</span>
+                    </Button>
+                  </li>)}
+                </ul>
+              </section>}
+              <section className="scene-inspector-section" aria-labelledby="scene-export-summary-title">
+                <h3 id="scene-export-summary-title" className="scene-inspector-heading">Export summary</h3>
+                {contributors.length ? <ol className="scene-export-summary" aria-label="Changes, applied in this fixed order">
+                  {contributors.map((item) => <li key={item.id}>{item.label}</li>)}
+                </ol> : <p className="scene-property-note">No changes to export yet.</p>}
+              </section>
               {tool === 'select' && !selected && <p className="scene-property-note">Select an object on the page to move it or adjust its properties.</p>}
               <p className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : exactPreview ? 'Export preview · on device' : 'Local document'}</p>
             </CardContent>
@@ -748,7 +849,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
         {availability.allows('pdf-organize') && <><Button variant="ghost" size="sm" aria-label="Rotate selected pages" onClick={() => { if (availability.allows('pdf-organize')) commit(rotatePages(scene, targets)); }}>Rotate ↻</Button>
         <Button variant="ghost" size="sm" aria-label="Move page earlier" disabled={currentIndex <= 0} onClick={() => shiftPage(-1)}>Move ←</Button>
         <Button variant="ghost" size="sm" aria-label="Move page later" disabled={currentIndex >= scene.pages.length - 1} onClick={() => shiftPage(1)}>Move →</Button></>}
-        {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note">Original unchanged</span>
+        {availability.allows('pdf-page-numbers') && <Button variant="ghost" size="sm" onClick={pageNumbers}>Page numbers</Button>}<span className="scene-original-note"><span role="status">{changes ? `${changes} ${changes === 1 ? 'change' : 'changes'} not exported · ` : ''}</span>Original unchanged</span>
       </div>
     </>}
   </section>;
