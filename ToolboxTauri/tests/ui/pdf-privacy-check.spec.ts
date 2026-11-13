@@ -200,7 +200,7 @@ test("Privacy Check sends the paths with no password and shows one report or err
   await expect(clean.getByRole("list", { name: "Report categories" }).getByRole("heading")).toHaveText(categoryNames);
   await expectNoneFound(clean, categoryNames);
   await expect(clean.getByText("14 categories with none found. Everything was checked.")).toBeVisible();
-  await expect(clean.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown"]);
+  await expect(clean.getByRole("button")).toHaveText(["Copy⇧⌘C", "Save as JSON", "Save as Markdown"]);
   await expect(clean.getByRole("alert")).toHaveCount(0);
 
   const leaky = report(page, "lease.pdf");
@@ -259,7 +259,7 @@ test("Privacy Check sends the paths with no password and shows one report or err
     ]],
   ]);
   await expectNoneFound(leaky, ["Digital signatures"]);
-  await expect(leaky.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown", "Open Edit Properties", "Open Edit Properties", "Open Edit PDF"]);
+  await expect(leaky.getByRole("button")).toHaveText(["Copy⇧⌘C", "Save as JSON", "Save as Markdown", "Open Edit Properties", "Open Edit Properties", "Open Edit PDF"]);
   await expect(category(leaky, "Filled form fields").getByRole("button", { name: "Open Edit PDF" })).toBeVisible();
   for (const name of ["Document information", "XMP metadata"]) await expect(category(leaky, name).getByRole("button", { name: "Open Edit Properties" })).toBeVisible();
 
@@ -282,7 +282,7 @@ test("Privacy Check sends the paths with no password and shows one report or err
   await expect(unchecked).toHaveText("Earlier versions (incremental updates)Couldn't be read. See Unsupported items.");
   await expect(unchecked).toHaveAttribute("data-found", "unchecked");
   await expectNoneFound(nda, ["Document information", "XMP metadata", "Embedded files", "JavaScript and automatic actions", "Filled form fields", "Encryption and permissions", "Document IDs", "Thumbnails and page piece data"]);
-  await expect(nda.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown"]);
+  await expect(nda.getByRole("button")).toHaveText(["Copy⇧⌘C", "Save as JSON", "Save as Markdown"]);
 
   const broken = report(page, "broken.pdf");
   await expect(broken.getByText("~/Documents · Not read")).toBeVisible();

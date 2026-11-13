@@ -89,3 +89,27 @@ export const matchShortcut = (event: KeyboardEvent, scope: ShortcutScope): Short
   if (!match || (!match.firesInTextFields && isTextField(event.target))) return null;
   return match.id;
 };
+
+// Keys inside the PDF Details reports (PdfPrivacy and PdfDetailsNarrow boards). They act on the report that has
+// focus, so they are not window shortcuts and are not listed on the Shortcuts board.
+export type ReportKeyId = "previousReport" | "nextReport" | "copyReport";
+
+const reportKeys: Record<ReportKeyId, { label: Record<Platform, string>; aria: Record<Platform, string> }> = {
+  previousReport: { label: { macos: "⌥↑", windows: "Alt+↑" }, aria: { macos: "Alt+ArrowUp", windows: "Alt+ArrowUp" } },
+  nextReport: { label: { macos: "⌥↓", windows: "Alt+↓" }, aria: { macos: "Alt+ArrowDown", windows: "Alt+ArrowDown" } },
+  copyReport: { label: { macos: "⇧⌘C", windows: "Ctrl+Shift+C" }, aria: { macos: "Meta+Shift+C", windows: "Control+Shift+C" } },
+};
+
+export const reportKeyLabel = (id: ReportKeyId) => reportKeys[id].label[currentPlatform()];
+export const reportKeyAria = (id: ReportKeyId) => reportKeys[id].aria[currentPlatform()];
+
+export const matchReportKey = (event: KeyboardEvent): ReportKeyId | null => {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || isTextField(event.target)) return null;
+  const primary = event.metaKey || event.ctrlKey;
+  if (event.altKey && !primary && !event.shiftKey) {
+    if (event.key === "ArrowUp") return "previousReport";
+    if (event.key === "ArrowDown") return "nextReport";
+  }
+  if (primary && event.shiftKey && !event.altKey && event.key.toLowerCase() === "c") return "copyReport";
+  return null;
+};
