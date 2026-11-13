@@ -930,6 +930,7 @@ test.describe("Media requests", () => {
             ],
             outputLocation: { customFolder: "/Users/test/Media out" },
             outputPath: "/Users/test/Media out/two-page-combined.tif",
+            compression: "lzw",
         } });
 
         // The keyboard moves the selected page to the front, keeping focus on it.
@@ -979,6 +980,7 @@ test.describe("Media requests", () => {
             pages: [{ path: "/local/tiff/two-page.tiff", page: 1 }],
             outputLocation: "alongsideInput",
             outputPath: "/local/tiff/two-page-combined.tif",
+            compression: "lzw",
         } });
 
         // With every page left out there is nothing to combine.
@@ -1063,6 +1065,7 @@ test.describe("Media requests", () => {
             ],
             outputLocation: "alongsideInput",
             outputPath: "/local/tiff/two-page-combined.tif",
+            compression: "lzw",
         } });
     });
 
@@ -1137,8 +1140,47 @@ test.describe("Media requests", () => {
             mode: "split",
             paths: ["/local/tiff/two-page.tiff", "/local/tiff/scan-0043.tiff"],
             outputLocation: { customFolder: "/Users/test/Media out" },
+            compression: "lzw",
         } });
         await expect(page.getByRole("dialog")).toHaveCount(0);
+    });
+
+    test("TIFF Pages sends the chosen output compression in Split and Combine", async ({ page }) => {
+        await start(page);
+        await openToolBySearch(page, "Split and Combine TIFF");
+        const compression = page.getByLabel("Compression");
+        await expect(compression).toHaveValue("lzw");
+        await expect(page.getByText("The source compression isn't kept.", { exact: false })).toBeVisible();
+        await choose(page, ["/local/tiff/two-page.tiff"]);
+        await compression.selectOption({ label: "Deflate, lossless" });
+        expect(await runOnce(page, "process_tiff_pages")).toMatchObject({ request: { mode: "split", compression: "deflate" } });
+
+        await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
+        await expect(compression).toHaveValue("deflate");
+        await compression.selectOption({ label: "None, largest files" });
+        await expect(page.getByRole("listbox", { name: "Pages, in order" }).getByRole("option")).toHaveCount(2);
+        expect(await runOnce(page, "process_tiff_pages", "two-page-combined.tif")).toMatchObject({ request: { mode: "combine", compression: "none" } });
+    });
+
+    test("TIFF Pages Split shows an unsupported TIFF variant on its own row and splits the rest", async ({ page }) => {
+        await start(page);
+        const message = "Could not process /local/tiff/maps-1998.tiff: TIFF page 1 of 2 can't be read. Old-style JPEG compression isn't supported in TIFF pages.";
+        await page.addInitScript((message) => {
+            (window as unknown as MediaWindow).__outcomesByPath = {
+                "/local/tiff/maps-1998.tiff": { inputPath: "/local/tiff/maps-1998.tiff", outputPaths: [], detail: "", state: "failed", failure: { kind: "processing", message, pointer: null }, reason: null, warnings: [] },
+            };
+        }, message);
+        await page.reload();
+        await openToolBySearch(page, "Split and Combine TIFF");
+        await choose(page, ["/local/tiff/two-page.tiff", "/local/tiff/maps-1998.tiff"]);
+        await runOnce(page, "process_tiff_pages");
+
+        const failed = page.locator('.result-row[data-state="failed"]');
+        await expect(failed).toHaveCount(1);
+        await expect(failed).toHaveAttribute("data-tone", "fail");
+        await expect(failed).toContainText("maps-1998.tiff");
+        await expect(failed).toContainText("Old-style JPEG compression isn't supported in TIFF pages.");
+        await expect(page.locator('.result-row[data-state="succeeded"]')).toContainText("two-page.tiff");
     });
 
     test("TIFF Pages Split shows a skipped one-page TIFF apart from a failed one, with its reason", async ({ page }) => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Plus, X } from "lucide-react";
-import type { ImagePreview } from "../../contracts";
+import type { ImagePreview, TiffCompression } from "../../contracts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,6 +29,8 @@ export interface TiffPagesState {
   leftOut: string[];
   /** The selected page's key. */
   selected: string | null;
+  /** How every written page is compressed, in both modes. The source compression isn't kept. */
+  compression: TiffCompression;
 }
 
 /** One page in the combined order. */
@@ -42,7 +44,7 @@ export interface TiffPage {
   preview: ImagePreview | null;
 }
 
-export const initialTiffPagesState: TiffPagesState = { mode: "split", sources: {}, order: [], leftOut: [], selected: null };
+export const initialTiffPagesState: TiffPagesState = { mode: "split", sources: {}, order: [], leftOut: [], selected: null, compression: "lzw" };
 
 const pageKey = (fileKey: string, page: number) => `${fileKey}\u0000${page}`;
 
