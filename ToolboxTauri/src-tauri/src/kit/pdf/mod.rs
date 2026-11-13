@@ -228,7 +228,6 @@ pub(crate) fn read_preview_png(path: &Path) -> Result<(Vec<u8>, u32, u32), Strin
 pub(crate) struct PdfMutationPreflight {
     pub(crate) pages_root: ObjectId,
     pub(crate) pages: Vec<ObjectId>,
-    pub(crate) annotated_pages: HashSet<ObjectId>,
     pub(crate) has_navigation: bool,
     pub(crate) has_form_structure: bool,
     pub(crate) has_tagged_structure: bool,
@@ -237,7 +236,6 @@ pub(crate) struct PdfMutationPreflight {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PdfMutationIntent {
     General,
-    ReorderOnly,
     ValidateOnly,
 }
 
@@ -898,14 +896,14 @@ fn preflight(document: &Document, intent: PdfMutationIntent, allow_signed: bool)
     if document_has_signature(document, catalog, &pages)? && !(allow_signed && has_signed_signature_field(document)) {
         return Err("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy".to_string());
     }
-    let annotated_pages = validate_page_annotations(document, &pages)?;
+    validate_page_annotations(document, &pages)?;
     let page_navigation = pages.iter().map(|page| page_has_internal_navigation(document, *page)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = [b"Outlines".as_slice(), b"Names", b"Dests", b"PageLabels", b"OpenAction"]
         .into_iter().map(|key| has_catalog_entry(document, catalog, key)).collect::<Result<Vec<_>, _>>()?.into_iter().any(|present| present);
     let has_navigation = has_navigation || page_navigation;
     let has_form_structure = has_catalog_entry(document, catalog, b"AcroForm")?;
     let has_tagged_structure = has_catalog_entry(document, catalog, b"StructTreeRoot")?;
-    let preflight = PdfMutationPreflight { pages_root, pages, annotated_pages, has_navigation, has_form_structure, has_tagged_structure };
+    let preflight = PdfMutationPreflight { pages_root, pages, has_navigation, has_form_structure, has_tagged_structure };
     preflight.enforce_policy(intent)?;
     Ok(preflight)
 }
