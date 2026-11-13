@@ -247,3 +247,70 @@ test("an RTF file needs no format section, sends no RTF section, and its row lis
         /Brand Grotesk.*DejaVu Sans.*Bundled default font/,
     ]);
 });
+
+test("the Tables section appears only while a CSV or TSV is listed and picks the delimiter by file type", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/sales-export.csv"]);
+    await expect(fileRow(page, "sales-export.csv")).not.toContainText("Not available yet");
+    const tables = page.getByRole("region", { name: "Tables options" });
+    await expect(tables).toBeVisible();
+    await expect(tables).toContainText("Applies to sales-export.csv");
+    await expect(page.getByText("Options for each format appear here when a file of that format is in the list.", { exact: true })).toHaveCount(0);
+    const delimiter = tables.getByLabel("Delimiter");
+    await expect(delimiter).toHaveValue("auto");
+    await expect(delimiter.locator("option:checked")).toHaveText("By file type");
+    await expect(delimiter).toHaveAccessibleDescription("Comma for CSV and tab for TSV, unless you pick one.");
+    await expect(tables.getByLabel("Encoding")).toHaveValue("detect");
+    await expect(tables.getByRole("checkbox", { name: "First row is a header, repeated on each page" })).toBeChecked();
+    await expect(tables.getByLabel("Orientation")).toHaveValue("landscape");
+    await expect(tables.getByLabel("Fit")).toHaveValue("width");
+
+    await drop(page, ["/local/people.TSV", "/local/notes.txt"]);
+    await expect(tables).toContainText("Applies to 2 table files");
+    await expect(page.getByRole("region", { name: "Plain text options" })).toBeVisible();
+
+    await fileRow(page, "sales-export.csv").getByRole("button", { name: /Remove/ }).click();
+    await expect(tables).toContainText("Applies to people.TSV");
+    await fileRow(page, "people.TSV").getByRole("button", { name: /Remove/ }).click();
+    await expect(page.getByRole("region", { name: "Tables options" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Plain text options" })).toBeVisible();
+});
+
+test("a table run carries the chosen table options and only the sections in the list", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/ledger.csv", "/local/people.tsv"]);
+    const tables = page.getByRole("region", { name: "Tables options" });
+    await tables.getByLabel("Delimiter").selectOption("semicolon");
+    await tables.getByLabel("Encoding").selectOption("windows1252");
+    await tables.getByRole("checkbox", { name: "First row is a header, repeated on each page" }).click();
+    await tables.getByLabel("Orientation").selectOption("portrait");
+    await tables.getByLabel("Fit").selectOption("none");
+    await page.locator(".workspace-primary-action").click();
+
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/ledger.csv", "/local/people.tsv"],
+        outputLocation: "alongsideInput",
+        tables: { delimiter: "semicolon", headerRow: false, encoding: "windows1252", orientation: "portrait", fit: "none" },
+    });
+
+    const note = "4 pages. 1,240 rows, semicolon. Read as Windows-1252.";
+    await page.evaluate((note) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/ledger.csv", outputPaths: ["/local/ledger.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+        { inputPath: "/local/people.tsv", outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "This table has no rows, so no PDF was made.", pointer: null }, reason: null, warnings: [] },
+    ]), note);
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    await expect(rows.filter({ hasText: "ledger.csv" })).toContainText(note);
+    await expect(rows.filter({ hasText: "people.tsv" })).toContainText("This table has no rows, so no PDF was made.");
+});
+
+test("a TSV run with default table options sends the by-file-type delimiter", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/people.tsv", "/local/notes.txt"]);
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/people.tsv", "/local/notes.txt"],
+        outputLocation: "alongsideInput",
+        plainText: { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true },
+        tables: { delimiter: "auto", headerRow: true, encoding: "detect", orientation: "landscape", fit: "width" },
+    });
+});

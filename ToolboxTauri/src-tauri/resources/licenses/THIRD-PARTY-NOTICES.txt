@@ -2334,6 +2334,8 @@ crypto-common 0.1.7 - MIT OR Apache-2.0 - https://github.com/RustCrypto/traits
 crypto-common 0.2.2 - MIT OR Apache-2.0 - https://github.com/RustCrypto/traits
 cssparser 0.36.0 - MPL-2.0 - https://github.com/servo/rust-cssparser
 cssparser-macros 0.6.1 - MPL-2.0 - https://github.com/servo/rust-cssparser
+csv 1.4.0 - Unlicense/MIT - https://github.com/BurntSushi/rust-csv
+csv-core 0.1.13 - Unlicense/MIT - https://github.com/BurntSushi/rust-csv
 ctor 0.8.0 - Apache-2.0 OR MIT - https://github.com/mmastrac/rust-ctor
 ctor-proc-macro 0.0.7 - Apache-2.0 OR MIT - https://github.com/mmastrac/rust-ctor
 ctutils 0.4.2 - Apache-2.0 OR MIT - https://github.com/RustCrypto/utils
@@ -2579,6 +2581,7 @@ rustls-pki-types 1.15.1 - MIT OR Apache-2.0 - https://github.com/rustls/pki-type
 rustls-platform-verifier 0.7.0 - MIT OR Apache-2.0 - https://github.com/rustls/rustls-platform-verifier
 rustls-webpki 0.103.15 - ISC - https://github.com/rustls/webpki
 rustybuzz 0.20.1 - MIT - https://github.com/harfbuzz/rustybuzz
+ryu 1.0.23 - Apache-2.0 OR BSL-1.0 - https://github.com/dtolnay/ryu
 safetensors 0.8.0 - Apache-2.0 - https://github.com/huggingface/safetensors
 same-file 1.0.6 - Unlicense/MIT - https://github.com/BurntSushi/same-file
 scan_fmt 0.2.6 - MIT - https://github.com/wlentz/scan_fmt
@@ -3305,7 +3308,7 @@ DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------
 
-Used by: aho-corasick 1.1.5 (COPYING), byteorder 1.5.0 (COPYING), jiff 0.2.35 (COPYING), jiff-core 0.1.0 (COPYING), jiff-static 0.2.35 (COPYING), jiff-tzdb 0.1.8 (COPYING), jiff-tzdb-platform 0.1.3 (COPYING), memchr 2.8.3 (COPYING), same-file 1.0.6 (COPYING), walkdir 2.5.0 (COPYING), winapi-util 0.1.11 (COPYING)
+Used by: aho-corasick 1.1.5 (COPYING), byteorder 1.5.0 (COPYING), csv 1.4.0 (COPYING), csv-core 0.1.13 (COPYING), jiff 0.2.35 (COPYING), jiff-core 0.1.0 (COPYING), jiff-static 0.2.35 (COPYING), jiff-tzdb 0.1.8 (COPYING), jiff-tzdb-platform 0.1.3 (COPYING), memchr 2.8.3 (COPYING), same-file 1.0.6 (COPYING), walkdir 2.5.0 (COPYING), winapi-util 0.1.11 (COPYING)
 
 This project is dual-licensed under the Unlicense and MIT licenses.
 
@@ -3313,7 +3316,7 @@ You may use this code under the terms of either license.
 
 ------------------------------------------------------------------------
 
-Used by: aho-corasick 1.1.5 (LICENSE-MIT), byteorder 1.5.0 (LICENSE-MIT), byteorder-lite 0.1.0 (LICENSE-MIT), jiff 0.2.35 (LICENSE-MIT), jiff-core 0.1.0 (LICENSE-MIT), jiff-static 0.2.35 (LICENSE-MIT), jiff-tzdb 0.1.8 (LICENSE-MIT), jiff-tzdb-platform 0.1.3 (LICENSE-MIT), memchr 2.8.3 (LICENSE-MIT), walkdir 2.5.0 (LICENSE-MIT)
+Used by: aho-corasick 1.1.5 (LICENSE-MIT), byteorder 1.5.0 (LICENSE-MIT), byteorder-lite 0.1.0 (LICENSE-MIT), csv 1.4.0 (LICENSE-MIT), csv-core 0.1.13 (LICENSE-MIT), jiff 0.2.35 (LICENSE-MIT), jiff-core 0.1.0 (LICENSE-MIT), jiff-static 0.2.35 (LICENSE-MIT), jiff-tzdb 0.1.8 (LICENSE-MIT), jiff-tzdb-platform 0.1.3 (LICENSE-MIT), memchr 2.8.3 (LICENSE-MIT), walkdir 2.5.0 (LICENSE-MIT)
 
 The MIT License (MIT)
 
@@ -3339,7 +3342,7 @@ THE SOFTWARE.
 
 ------------------------------------------------------------------------
 
-Used by: aho-corasick 1.1.5 (UNLICENSE), byteorder 1.5.0 (UNLICENSE), byteorder-lite 0.1.0 (UNLICENSE), jiff 0.2.35 (UNLICENSE), jiff-core 0.1.0 (UNLICENSE), jiff-static 0.2.35 (UNLICENSE), jiff-tzdb 0.1.8 (UNLICENSE), jiff-tzdb-platform 0.1.3 (UNLICENSE), memchr 2.8.3 (UNLICENSE), same-file 1.0.6 (UNLICENSE), walkdir 2.5.0 (UNLICENSE), winapi-util 0.1.11 (UNLICENSE)
+Used by: aho-corasick 1.1.5 (UNLICENSE), byteorder 1.5.0 (UNLICENSE), byteorder-lite 0.1.0 (UNLICENSE), csv 1.4.0 (UNLICENSE), csv-core 0.1.13 (UNLICENSE), jiff 0.2.35 (UNLICENSE), jiff-core 0.1.0 (UNLICENSE), jiff-static 0.2.35 (UNLICENSE), jiff-tzdb 0.1.8 (UNLICENSE), jiff-tzdb-platform 0.1.3 (UNLICENSE), memchr 2.8.3 (UNLICENSE), same-file 1.0.6 (UNLICENSE), walkdir 2.5.0 (UNLICENSE), winapi-util 0.1.11 (UNLICENSE)
 
 This is free and unencumbered software released into the public domain.
 
@@ -3647,7 +3650,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 ------------------------------------------------------------------------
 
-Used by: allocator-api2 0.2.21 (LICENSE-APACHE), anyhow 1.0.104 (LICENSE-APACHE), dtoa 1.0.11 (LICENSE-APACHE), dyn-clone 1.0.20 (LICENSE-APACHE), dyn-hash 1.0.0 (LICENSE-APACHE), erased-serde 0.4.10 (LICENSE-APACHE), inventory 0.3.24 (LICENSE-APACHE), itoa 1.0.18 (LICENSE-APACHE), libc 0.2.189 (LICENSE-APACHE), osakit 0.3.1 (LICENSE-APACHE), paste 1.0.15 (LICENSE-APACHE), pastey 0.1.1 (LICENSE-APACHE), pastey 0.2.3 (LICENSE-APACHE), proc-macro2 1.0.107 (LICENSE-APACHE), quote 1.0.47 (LICENSE-APACHE), ref-cast 1.0.27 (LICENSE-APACHE), ref-cast-impl 1.0.27 (LICENSE-APACHE), rustc-hash 2.1.3 (LICENSE-APACHE), semver 1.0.28 (LICENSE-APACHE), serde 1.0.229 (LICENSE-APACHE), serde-untagged 0.1.9 (LICENSE-APACHE), serde_core 1.0.229 (LICENSE-APACHE), serde_derive 1.0.229 (LICENSE-APACHE), serde_derive_internals 0.29.1 (LICENSE-APACHE), serde_json 1.0.151 (LICENSE-APACHE), serde_repr 0.1.21 (LICENSE-APACHE), subsetter 0.2.6 (LICENSE-APACHE), syn 2.0.119 (LICENSE-APACHE), syn 3.0.4 (LICENSE-APACHE), thiserror 1.0.69 (LICENSE-APACHE), thiserror 2.0.20 (LICENSE-APACHE), thiserror-impl 1.0.69 (LICENSE-APACHE), thiserror-impl 2.0.20 (LICENSE-APACHE), typed-path 0.12.3 (LICENSE-APACHE), typeid 1.0.3 (LICENSE-APACHE), unicode-ident 1.0.24 (LICENSE-APACHE)
+Used by: allocator-api2 0.2.21 (LICENSE-APACHE), anyhow 1.0.104 (LICENSE-APACHE), dtoa 1.0.11 (LICENSE-APACHE), dyn-clone 1.0.20 (LICENSE-APACHE), dyn-hash 1.0.0 (LICENSE-APACHE), erased-serde 0.4.10 (LICENSE-APACHE), inventory 0.3.24 (LICENSE-APACHE), itoa 1.0.18 (LICENSE-APACHE), libc 0.2.189 (LICENSE-APACHE), osakit 0.3.1 (LICENSE-APACHE), paste 1.0.15 (LICENSE-APACHE), pastey 0.1.1 (LICENSE-APACHE), pastey 0.2.3 (LICENSE-APACHE), proc-macro2 1.0.107 (LICENSE-APACHE), quote 1.0.47 (LICENSE-APACHE), ref-cast 1.0.27 (LICENSE-APACHE), ref-cast-impl 1.0.27 (LICENSE-APACHE), rustc-hash 2.1.3 (LICENSE-APACHE), ryu 1.0.23 (LICENSE-APACHE), semver 1.0.28 (LICENSE-APACHE), serde 1.0.229 (LICENSE-APACHE), serde-untagged 0.1.9 (LICENSE-APACHE), serde_core 1.0.229 (LICENSE-APACHE), serde_derive 1.0.229 (LICENSE-APACHE), serde_derive_internals 0.29.1 (LICENSE-APACHE), serde_json 1.0.151 (LICENSE-APACHE), serde_repr 0.1.21 (LICENSE-APACHE), subsetter 0.2.6 (LICENSE-APACHE), syn 2.0.119 (LICENSE-APACHE), syn 3.0.4 (LICENSE-APACHE), thiserror 1.0.69 (LICENSE-APACHE), thiserror 2.0.20 (LICENSE-APACHE), thiserror-impl 1.0.69 (LICENSE-APACHE), thiserror-impl 2.0.20 (LICENSE-APACHE), typed-path 0.12.3 (LICENSE-APACHE), typeid 1.0.3 (LICENSE-APACHE), unicode-ident 1.0.24 (LICENSE-APACHE)
 
 Apache License
                         Version 2.0, January 2004
@@ -15769,6 +15772,34 @@ SOFTWARE.
 
 ------------------------------------------------------------------------
 
+Used by: ryu 1.0.23 (LICENSE-BOOST)
+
+Boost Software License - Version 1.0 - August 17th, 2003
+
+Permission is hereby granted, free of charge, to any person or organization
+obtaining a copy of the software and accompanying documentation covered by
+this license (the "Software") to use, reproduce, display, distribute,
+execute, and transmit the Software, and to prepare derivative works of the
+Software, and to permit third-parties to whom the Software is furnished to
+do so, all subject to the following:
+
+The copyright notices in the Software and this entire statement, including
+the above license grant, this restriction and the following disclaimer,
+must be included in all copies of the Software, in whole or in part, and
+all derivative works of the Software, unless such copies or derivative
+works are solely in the form of machine-executable object code generated by
+a source language processor.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+------------------------------------------------------------------------
+
 Used by: same-file 1.0.6 (LICENSE-MIT), winapi-util 0.1.11 (LICENSE-MIT)
 
 The MIT License (MIT)
@@ -21730,6 +21761,18 @@ Redistribution and use in source and binary forms, with or without modification,
 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+BSL-1.0
+=======
+
+Boost Software License - Version 1.0 - August 17th, 2003
+
+Permission is hereby granted, free of charge, to any person or organization obtaining a copy of the software and accompanying documentation covered by this license (the "Software") to use, reproduce, display, distribute, execute, and transmit the Software, and to prepare derivative works of the Software, and to permit third-parties to whom the Software is furnished to do so, all subject to the following:
+
+The copyright notices in the Software and this entire statement, including the above license grant, this restriction and the following disclaimer, must be included in all copies of the Software, in whole or in part, and all derivative works of the Software, unless such copies or derivative works are solely in the form of machine-executable object code generated by a source language processor.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 bzip2-1.0.6

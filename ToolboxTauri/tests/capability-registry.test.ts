@@ -359,7 +359,7 @@ test("format families derive accepted extensions and per-family flags like the n
   assert.deepEqual(convert.acceptedExtensions, convert.formatFamilies!.flatMap(({ extensions }) => extensions));
   assert.deepEqual(
     convert.formatFamilies!.filter(({ nativeAvailability }) => nativeAvailability === "available").map(({ id }) => id),
-    ["plain-text", "pdf", "rich-text", "markdown"],
+    ["plain-text", "pdf", "rich-text", "markdown", "tables"],
   );
 });
 
