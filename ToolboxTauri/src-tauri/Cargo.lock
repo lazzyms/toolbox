@@ -5919,6 +5919,7 @@ dependencies = [
  "base64 0.22.1",
  "cbc 0.1.2",
  "cfb",
+ "encoding_rs",
  "fax",
  "flate2",
  "fontdue",

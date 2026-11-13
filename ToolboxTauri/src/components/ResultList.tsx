@@ -78,6 +78,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
     const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [fontRows, setFontRows] = useState<ReadonlySet<number>>(new Set());
     const [expandedRows, setExpandedRows] = useState<ReadonlySet<number>>(new Set());
     const resultSetGeneration = useRef(0);
 
@@ -87,6 +88,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         setActionStates({});
         setExpanded(new Set());
         setPasswordRow(null);
+        setFontRows(new Set());
         setExpandedRows(new Set());
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
@@ -151,6 +153,13 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         );
     });
 
+    const toggleFonts = (row: number) =>
+        setFontRows((rows) => {
+            const next = new Set(rows);
+            if (!next.delete(row)) next.add(row);
+            return next;
+        });
+
     const finishedRow = (result: JobOutcome, index: number) => {
         const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
         const baseView = rowView(result, resultVerb, namedByOutput, outputNoun);
@@ -165,6 +174,8 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         const listedOutputs = outputNoun && result.state === "succeeded" && result.outputPaths.length > 1 ? result.outputPaths : null;
         const outputsListed = listedOutputs !== null && expandedRows.has(index);
         const outputListId = `result-outputs-${index}`;
+        const fontsOpen = fontRows.has(index);
+        const fontListId = `result-fonts-${index}`;
         return (
             <Fragment key={`${index}:${result.inputPath}`}>
             <li className="result-row" data-tone={view.tone} data-state={result.state}>
@@ -185,6 +196,11 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                     <span className="sr-only">{view.spokenState}</span>
                 </span>
                 <span className="result-row-actions">
+                    {view.fonts.length > 0 && (
+                        <Button variant="ghost" size="xs" aria-expanded={fontsOpen} aria-controls={fontListId} onClick={() => toggleFonts(index)}>
+                            {fontsOpen ? "Hide fonts" : "Show fonts"}
+                        </Button>
+                    )}
                     {listedOutputs && (
                         <Button variant="outline" size="xs" aria-expanded={outputsListed} aria-controls={outputListId} onClick={() => toggleOutputs(index)}>
                             {outputsListed ? `Hide ${outputNoun}` : `Show ${listedOutputs.length} ${outputNoun}`}
@@ -243,6 +259,19 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                         onRetry={(password) => void runAction(index, "retry", () => onRetryWithPassword(result.inputPath, password))}
                         onCancel={() => setPasswordRow(null)}
                     />
+                )}
+                {fontsOpen && view.fonts.length > 0 && (
+                    <ul id={fontListId} className="result-row-fonts" aria-label={`Fonts used in ${name}`}>
+                        {view.fonts.map((font, fontIndex) => (
+                            <li key={fontIndex}>
+                                <span className="result-row-font-requested">{font.requested}</span>
+                                <span aria-hidden="true">→</span>
+                                <span className="sr-only">used</span>
+                                <span>{font.used}</span>
+                                <span className="result-row-detail">{font.source}</span>
+                            </li>
+                        ))}
+                    </ul>
                 )}
                 {listedOutputs && outputsListed && (
                     <ul id={outputListId} className="result-outputs" aria-label={`${outputNoun?.replace(/^./, (letter) => letter.toUpperCase())} from ${name}`}>

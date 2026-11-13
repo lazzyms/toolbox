@@ -46,7 +46,7 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         "remove_password" | "protect_files" | "export_pdf_scene" | "crop_pdf" | "sign_pdf" | "edit_pdf" | "edit_pdf_session"
         | "add_page_numbers" | "watermark_pdf" | "compress_files"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
-        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" => PDF,
+        | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" => PDF,
         "compress_images" | "convert_images" | "export_image_edit_plan" | "export_image_edit_stack" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
@@ -121,7 +121,8 @@ impl Format {
         let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
         match extension.as_str() {
             "pdf" => Self::Pdf,
-            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" => Self::Document,
+            "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "rtf" | "txt" | "md" | "markdown" | "html" | "htm"
+            | "csv" | "tsv" | "epub" | "mobi" => Self::Document,
             "gif" => Self::Gif,
             "tif" | "tiff" => Self::Tiff,
             _ => Self::Image,

@@ -4,6 +4,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+pub use crate::kit::pdf::font_resolver::FontReport;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OutputLocation {
@@ -440,13 +442,16 @@ fn partition_capability_inputs(capability: &NativeCapability, paths: &[PathBuf])
     let accepted_extensions = capability.accepted_extensions.join(", ");
     let mut validation = ValidatedCommandInputs { accepted: Vec::new(), rejected: Vec::new() };
     for (index, path) in paths.iter().cloned().enumerate() {
-        let extension_accepted = path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
-            capability.accepted_extensions.iter().any(|accepted| accepted.trim_start_matches('.').eq_ignore_ascii_case(extension))
-        });
+        let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default();
+        let matches = |accepted: &String| !extension.is_empty() && accepted.trim_start_matches('.').eq_ignore_ascii_case(extension);
+        let extension_accepted = capability.accepted_extensions.iter().any(matches);
+        let unavailable_family = capability.format_families.iter().any(|family| !family.native_available && family.extensions.iter().any(matches));
         let error = if path.is_dir() {
             Some(ToolError::invalid_input("Folders aren't processed. Add the files inside the folder instead."))
         } else if !extension_accepted {
             Some(ToolError::invalid_input(format!("Unsupported input format. Accepted extensions: {accepted_extensions}.")))
+        } else if unavailable_family {
+            Some(ToolError::unavailable(format!("{} comes in a later update.", extension.to_ascii_uppercase())))
         } else {
             None
         };
@@ -524,6 +529,7 @@ pub struct JobOutcome {
     pub input_path: PathBuf,
     pub detail: String,
     pub warnings: Vec<OutcomeWarning>,
+    pub fonts: Vec<FontReport>,
     pub state: OutcomeState,
     pub original_bytes: Option<u64>,
     pub output_bytes: Option<u64>,
@@ -547,7 +553,12 @@ impl JobOutcome {
     }
 
     fn new(input_path: PathBuf, detail: String, state: OutcomeState) -> Self {
-        Self { input_path, detail, warnings: Vec::new(), state, original_bytes: None, output_bytes: None }
+        Self { input_path, detail, warnings: Vec::new(), fonts: Vec::new(), state, original_bytes: None, output_bytes: None }
+    }
+
+    pub fn with_fonts(mut self, fonts: Vec<FontReport>) -> Self {
+        self.fonts = fonts;
+        self
     }
 
     pub fn with_sizes(self, original_bytes: u64, output_bytes: u64) -> Self {
@@ -592,6 +603,8 @@ struct JobOutcomeWire {
     failure: Option<ToolError>,
     reason: Option<SkipReason>,
     warnings: Vec<OutcomeWarning>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<FontReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     original_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -605,7 +618,7 @@ impl From<JobOutcome> for JobOutcomeWire {
             OutcomeState::Skipped { reason } => (OutcomeStateTag::Skipped, Vec::new(), None, Some(reason)),
             OutcomeState::Failed { output_paths, error } => (OutcomeStateTag::Failed, output_paths, Some(error), None),
         };
-        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes }
+        Self { input_path: outcome.input_path, state, output_paths, detail: outcome.detail, failure, reason, warnings: outcome.warnings, fonts: outcome.fonts, original_bytes: outcome.original_bytes, output_bytes: outcome.output_bytes }
     }
 }
 
@@ -619,7 +632,7 @@ impl TryFrom<JobOutcomeWire> for JobOutcome {
             (OutcomeStateTag::Failed, Some(error), None) => OutcomeState::Failed { output_paths: wire.output_paths, error },
             (state, _, _) => return Err(format!("Inconsistent {state:?} job outcome for {}.", wire.input_path.display())),
         };
-        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes })
+        Ok(Self { input_path: wire.input_path, detail: wire.detail, warnings: wire.warnings, fonts: wire.fonts, state, original_bytes: wire.original_bytes, output_bytes: wire.output_bytes })
     }
 }
 
@@ -665,6 +678,7 @@ mod tests {
 
     use super::*;
     use crate::kit::office::OfficeProcessor;
+    use crate::kit::pdf::font_resolver::{FontSource, FontStyle};
 
     #[test]
     fn ipc_result_uses_the_frontend_field_names() {
@@ -835,6 +849,13 @@ mod tests {
             JobOutcome::succeeded(PathBuf::from("minutes.pdf"), vec![PathBuf::from("board-merged.pdf")], "Pages 3–5 of board-merged.pdf.")
                 .with_warning(OutcomeWarning { kind: WarningKind::BookmarksNotCarried { into: "the merged file".into() }, message: "Bookmarks weren't carried into the merged file.".into() })
                 .with_warning(OutcomeWarning { kind: WarningKind::TagsNotCarried { into: "the merged file".into() }, message: "Accessibility tags weren't carried into the merged file.".into() }),
+            JobOutcome::succeeded(PathBuf::from("notes.txt"), vec![PathBuf::from("notes.pdf")], "1 page. Read as Windows-1252.").with_fonts(vec![FontReport {
+                requested_family: "Courier New".into(),
+                requested_style: FontStyle::Regular,
+                font_used: "Liberation Mono".into(),
+                style_used: FontStyle::Regular,
+                source: FontSource::BundledFallback,
+            }]),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);
@@ -979,12 +1000,12 @@ mod tests {
         for row in rows {
             let command = row["command"].as_str().unwrap();
             let capability = native_capability(command).unwrap_or_else(|| panic!("Missing native capability for {command}"));
-            let accepted_extensions = row["acceptedExtensions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|extension| extension.as_str().unwrap())
-                .collect::<Vec<_>>();
+            let accepted_extensions = match row["acceptedExtensions"].as_array() {
+                Some(extensions) => extensions.iter().map(|extension| extension.as_str().unwrap()).collect::<Vec<_>>(),
+                None => row["formatFamilies"].as_array().unwrap().iter()
+                    .flat_map(|family| family["extensions"].as_array().unwrap().iter().map(|extension| extension.as_str().unwrap()))
+                    .collect(),
+            };
             assert_eq!(capability.accepted_extensions, accepted_extensions);
             assert_eq!(
                 capability.input_cardinality,
@@ -1162,7 +1183,8 @@ mod tests {
             }))
             .collect::<Vec<_>>();
         assert_eq!(serde_json::Value::Array(families), valid["families"]);
-        assert!(native_capabilities().iter().all(|capability| capability.format_families.is_empty()));
+        let with_families = native_capabilities().iter().filter(|capability| !capability.format_families.is_empty()).map(|capability| capability.command.as_str()).collect::<Vec<_>>();
+        assert_eq!(with_families, ["convert_to_pdf"]);
     }
 
     #[test]
@@ -1176,6 +1198,30 @@ mod tests {
             assert!(parse_capability_registry(&format!("[{row}]")).is_err(), "{name} must be rejected");
         }
         assert!(parse_capability_registry(&format!("[{base}]")).unwrap_err().contains("either accepted extensions or format families"));
+    }
+
+    #[test]
+    fn convert_to_pdf_declares_its_format_families_and_turns_away_unshipped_ones() {
+        let convert = native_capability("convert_to_pdf").unwrap();
+        let families = convert.format_families.iter().map(|family| (family.id.as_str(), family.native_available, family.basic_fidelity)).collect::<Vec<_>>();
+        assert_eq!(families, [
+            ("plain-text", true, false), ("pdf", true, false), ("documents", false, false), ("spreadsheets", false, false),
+            ("presentations", false, false), ("markdown", false, false), ("web-pages", false, false), ("tables", false, false),
+            ("ebooks", false, false), ("legacy-office", false, true), ("mobi", false, false),
+        ]);
+        assert!(convert.native_available && convert.output_suffix.is_empty() && !convert.many_to_one);
+        assert_eq!(convert.input_cardinality, InputCardinality::Multiple);
+
+        let paths = ["/in/notes.txt", "/in/report.PDF", "/in/book.mobi", "/in/sheet.xlsx", "/in/photo.png"].map(PathBuf::from);
+        let validation = partition_command_inputs("convert_to_pdf", &paths).unwrap();
+        assert_eq!(validation.accepted.iter().map(|(index, _)| *index).collect::<Vec<_>>(), [0, 1]);
+        let rejected = validation.rejected.iter().map(|(index, outcome)| {
+            let error = outcome.error().unwrap();
+            (*index, error.kind.clone(), error.message.as_str())
+        }).collect::<Vec<_>>();
+        assert_eq!(rejected[0], (2, ErrorKind::Unavailable, "MOBI comes in a later update."));
+        assert_eq!(rejected[1], (3, ErrorKind::Unavailable, "XLSX comes in a later update."));
+        assert_eq!((rejected[2].0, &rejected[2].1), (4, &ErrorKind::InvalidInput));
     }
 
     #[test]

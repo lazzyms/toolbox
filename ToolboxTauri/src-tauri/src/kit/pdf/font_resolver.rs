@@ -23,7 +23,7 @@ use crate::kit::contracts::ToolError;
 use crate::kit::pdf::unicode_font::UnicodeFont;
 use crate::kit::resources::{self, ResourceSpec};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FontStyle { Regular, Bold, Italic, BoldItalic }
 
@@ -59,7 +59,7 @@ impl FontStyle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FontSource {
     #[serde(rename = "embedded")]
     Embedded,
@@ -72,8 +72,8 @@ pub enum FontSource {
 }
 
 /// One entry of the per-file font detail: what was asked for, what was used and where it came from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FontReport {
     pub requested_family: String,
     pub requested_style: FontStyle,

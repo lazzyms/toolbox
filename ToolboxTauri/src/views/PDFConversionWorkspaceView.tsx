@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Badge } from "@/components/ui/badge";
 import { ToolScaffold } from "../components/ToolScaffold";
@@ -30,6 +30,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const combinesImages = activeUtility.id === "images-to-pdf";
   const [tiffPages, setTiffPages] = useState<ReadonlyMap<string, number | null>>(() => new Map());
   const { exampleName, exampleHint } = tool;
+  const intakeCopy = useMemo(() => tool.intakeCopy?.(activeUtility), [tool, activeUtility]);
 
   const listChanged = useCallback((paths: readonly string[]) => {
     setListedPaths(paths);
@@ -81,6 +82,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       utility={activeUtility}
       initialPaths={initialPaths}
       onFilesChange={listChanged}
+      intakeCopy={intakeCopy}
       sortOptions={tool.sortOptions}
       entryFacts={describesFiles ? (path) => facts.get(path) : undefined}
       renderFileExtra={combinesImages ? (path) => {

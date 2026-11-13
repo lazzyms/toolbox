@@ -12,6 +12,7 @@ export type AtomicToolId =
   | "images-to-pdf"
   | "pdf-to-images"
   | "pdf-extract"
+  | "convert-to-pdf"
   | "pdf-split"
   | "pdf-sign"
   | "pdf-ocr"
@@ -106,6 +107,7 @@ export type ToolCommand =
   | "pdf_to_images"
   | "extract_from_pdf"
   | "images_to_pdf"
+  | "convert_to_pdf"
   | "ocr_pdf"
   | "blur_faces"
   | "remove_image_background"
@@ -164,10 +166,23 @@ export type OutcomeWarning =
 
 export type WarningCode = OutcomeWarning["code"];
 
+export type FontStyle = "regular" | "bold" | "italic" | "boldItalic";
+
+export type FontSource = "embedded" | "system" | "bundled fallback" | "bundled default";
+
+export interface FontUse {
+  requestedFamily: string;
+  requestedStyle: FontStyle;
+  fontUsed: string;
+  styleUsed: FontStyle;
+  source: FontSource;
+}
+
 interface JobOutcomeBase {
   inputPath: string;
   detail: string;
   warnings: OutcomeWarning[];
+  fonts?: FontUse[];
   originalBytes?: number;
   outputBytes?: number;
 }
@@ -265,6 +280,7 @@ export interface ToolDefinition {
     | "pdf-to-images"
     | "pdf-extract"
     | "images-to-pdf"
+    | "convert-to-pdf"
     | "pdf-ocr"
     | "image-blur-faces"
     | "image-remove-bg"

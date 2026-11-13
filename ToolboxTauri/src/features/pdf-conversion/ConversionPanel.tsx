@@ -256,6 +256,7 @@ export const ConversionPanel = ({
           choosePageRange={choosePageRange}
           picks={picks}
           pageCounts={pageCounts}
+          loading={loading}
           onSelectTool={onSelectTool}
         />
       )}

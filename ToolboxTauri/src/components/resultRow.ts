@@ -1,4 +1,4 @@
-import type { ErrorKind, JobOutcome, OutcomePointer, OutcomeWarning, SucceededJobOutcome, ToolError } from "../contracts";
+import type { ErrorKind, FontSource, JobOutcome, OutcomePointer, OutcomeWarning, SucceededJobOutcome, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 import { formatBatchSaving, formatBytes, formatSizeChange } from "../shared/fileSize";
 
@@ -18,7 +18,17 @@ export interface RowView {
     pointer: RowPointer | null;
     canRetry: boolean;
     canRetryWithPassword: boolean;
+    fonts: RowFont[];
 }
+
+export type RowFont = { requested: string; used: string; source: string };
+
+const fontSources: Record<FontSource, string> = {
+    embedded: "Embedded in the file",
+    "bundled fallback": "Bundled fallback, same widths",
+    system: "System font on this device",
+    "bundled default": "Bundled default font",
+};
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
@@ -125,6 +135,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
             const warned = warnings.length > 0;
             const byOutput = namedByOutput && first !== null;
             const renamed = outcome.warnings.filter((warning): warning is RenamedWarning => warning.code === "renamedToAvoidReplacing");
+            const fonts = (outcome.fonts ?? []).map((font) => ({ requested: font.requestedFamily, used: font.fontUsed, source: fontSources[font.source] }));
             if (outputNoun && renamed.length > 0 && renamed.length === outcome.warnings.length) {
                 return {
                     ...input,
@@ -137,6 +148,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                     pointer: null,
                     canRetry: false,
                     canRetryWithPassword: false,
+                    fonts,
                 };
             }
             return {
@@ -150,6 +162,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 pointer: null,
                 canRetry: false,
                 canRetryWithPassword: false,
+                fonts,
             };
         }
         case "skipped":
@@ -164,6 +177,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 pointer: pointerView(outcome.reason.pointer),
                 canRetry: false,
                 canRetryWithPassword: false,
+                fonts: [],
             };
         case "failed": {
             const unavailable = outcome.failure.kind === "unavailable";
@@ -180,6 +194,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 // A retry reuses the run's output location, so it cannot fix a failure that points at that location.
                 canRetry: isRetryable(outcome.failure) && outcome.failure.pointer?.kind !== "outputFolder",
                 canRetryWithPassword: wrongPassword,
+                fonts: [],
             };
         }
     }

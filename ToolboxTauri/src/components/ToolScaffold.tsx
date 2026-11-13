@@ -738,7 +738,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                                     {describesEntries && copies > 1 && <Badge variant="secondary" className="file-selection-badge">Copy {occurrence} of {copies}</Badge>}
                                     {pages && <span className="file-selection-fact">{pages}</span>}
                                     {facts?.sizeBytes != null && <span className="file-selection-fact">{fileSizeLabel(facts.sizeBytes)}</span>}
-                                    {flag && <Badge variant="outline" className="file-selection-badge">Won't run</Badge>}
+                                    {flag && <Badge variant="outline" className="file-selection-badge">{flag.label ?? "Won't run"}</Badge>}
                                     {!flag && renderFileExtra?.(entry.path, isSelected, loading)}
                                     {ordered && !describesEntries && occurrence > 1 && <Badge variant="outline" className="file-selection-badge" data-tone="warning">{repeatLabel(occurrence)}</Badge>}
                                     {ordered && (

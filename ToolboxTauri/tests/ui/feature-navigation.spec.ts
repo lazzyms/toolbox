@@ -422,7 +422,7 @@ test("home marks tools this build cannot run and keeps them out of the search hi
 test(`search finds and opens all ${UtilityRegistry.length} registered tool actions`, async ({ page }) => {
     await page.goto("/");
     const search = page.getByRole("textbox", { name: "Search tools" });
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         await search.fill(utility.title);
@@ -2625,7 +2625,9 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && utility.id !== "image-metadata" && utility.id !== "heic-convert" && utility.id !== "crop";
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
-    const selectedFixturePath = accepts(".pdf")
+    const selectedFixturePath = utility.id === "convert-to-pdf"
+        ? "/local/notes.txt"
+        : accepts(".pdf")
         ? pdfFixturePath
         : accepts(".png")
             ? fixturePath
@@ -2664,7 +2666,8 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await expect(action).toBeEnabled();
     await action.click();
     // A read-only report tool sends only the paths and shows a report instead of saved results.
-    if (utility.capability.outputSuffix === "") {
+    // (Convert to PDF also has no suffix, since the output changes extension, but it saves files.)
+    if (utility.capability.outputSuffix === "" && !utility.capability.formatFamilies) {
         await expect(page.getByRole("region", { name: pdfFixtureName, exact: true }).getByText("None found", { exact: true })).toHaveCount(14);
         const reportRuns = await page.evaluate((command) => ((window as TestWindow).__toolboxInvocations ?? []).filter((call) => call.command === command), utility.command);
         expect(reportRuns.map(({ args }) => (args as { request: unknown }).request)).toEqual([{ paths: [selectedFixturePath] }]);
@@ -2692,7 +2695,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
 };
 
 test.describe("registered feature actions", () => {
-    expect(UtilityRegistry).toHaveLength(35);
+    expect(UtilityRegistry).toHaveLength(36);
 
     for (const utility of UtilityRegistry) {
         test(`${utility.id} accepts the fixture and runs with the Settings default`, async ({ page }) => {

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { RunContext } from "../../components/ToolScaffold";
 import type { AtomicToolId, OutputLocation, ToolDefinition, ToolResult } from "../../contracts";
-import type { EntrySortOption } from "../../components/intake";
+import type { EntrySortOption, IntakeCopy } from "../../components/intake";
 import type { PdfDocument } from "../pdf-editor";
 
 export type PageSelection = { document: PdfDocument | null; selectedPages: number[]; pageRange: string; picks: PagePicks };
@@ -30,6 +30,8 @@ export type OptionsPanelProps<Options> = {
   choosePageRange: (value: string) => void;
   picks: PagePicks;
   pageCounts: Record<string, PageCount>;
+  /** True while a run is in flight, so a panel can disable its inputs. */
+  loading: boolean;
   onSelectTool?: (id: AtomicToolId) => void;
 };
 
@@ -37,6 +39,8 @@ export interface ConversionTool<Options = unknown> {
   initialOptions?: Options;
   inspectsPdf: boolean;
   sortOptions?: readonly EntrySortOption[];
+  /** Intake wording for a tool whose list flags files that will be skipped or aren't available yet. */
+  intakeCopy?(utility: ToolDefinition): IntakeCopy;
   initialPages?(document: PdfDocument): number[];
   outputPreview(options: Options, selectedPages: number[]): string;
   exportBlocked?(options: Options, files: string[], pageRange: string): boolean;

@@ -1,6 +1,9 @@
 import type {
   AtomicToolId,
   ErrorKind,
+  FontSource,
+  FontStyle,
+  FontUse,
   JobOutcome,
   LimitKind,
   OutcomePointer,
@@ -14,6 +17,10 @@ import type {
 import { UtilityRegistry } from "./registry";
 
 const errorKinds: readonly ErrorKind[] = ["invalidInput", "unavailable", "limitExceeded", "processing", "wrongPassword", "cancelled"];
+
+const fontStyles: readonly FontStyle[] = ["regular", "bold", "italic", "boldItalic"];
+
+const fontSources: readonly FontSource[] = ["embedded", "system", "bundled fallback", "bundled default"];
 
 const limitKinds: readonly LimitKind[] = ["fileSize", "pageCount", "time", "decompression", "textLength"];
 
@@ -112,6 +119,17 @@ const parseWarning = (value: unknown, path: string): OutcomeWarning => {
   } as OutcomeWarning;
 };
 
+const parseFontUse = (value: unknown, path: string): FontUse => {
+  const font = record(value, path);
+  return {
+    requestedFamily: text(font.requestedFamily, `${path}.requestedFamily`),
+    requestedStyle: member(font.requestedStyle, fontStyles, `${path}.requestedStyle`),
+    fontUsed: text(font.fontUsed, `${path}.fontUsed`),
+    styleUsed: member(font.styleUsed, fontStyles, `${path}.styleUsed`),
+    source: member(font.source, fontSources, `${path}.source`),
+  };
+};
+
 export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome => {
   const outcome = record(value, path);
   const base = {
@@ -120,6 +138,13 @@ export const parseJobOutcome = (value: unknown, path = "outcome"): JobOutcome =>
     warnings: Array.isArray(outcome.warnings)
       ? outcome.warnings.map((warning, index) => parseWarning(warning, `${path}.warnings[${index}]`))
       : fail(`${path}.warnings`, "an array"),
+    ...(outcome.fonts === undefined
+      ? {}
+      : {
+          fonts: Array.isArray(outcome.fonts)
+            ? outcome.fonts.map((font, index) => parseFontUse(font, `${path}.fonts[${index}]`))
+            : fail(`${path}.fonts`, "an array"),
+        }),
     ...byteSizes(outcome, path),
   };
   const outputPaths = texts(outcome.outputPaths, `${path}.outputPaths`);
