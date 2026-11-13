@@ -190,6 +190,36 @@ test("shared capability parsing rejects drift-prone shapes", () => {
   );
 });
 
+test("shared capability samples parse the same as the native contract parser", () => {
+  // The Rust contracts test reads the same samples, so both parsers agree on every row.
+  const samples = JSON.parse(
+    readFileSync(new URL("../shared/tool-capability-samples.json", import.meta.url), "utf8"),
+  ) as {
+    accepted: Record<string, unknown>[];
+    rejected: { name: string; capability: Record<string, unknown> }[];
+  };
+
+  for (const row of samples.accepted) {
+    const [parsed] = parseCapabilityRegistry([row]);
+    assert.equal(parsed.inputCardinality, row.inputCardinality, String(row.command));
+    assert.deepEqual(parsed.acceptedExtensions, row.acceptedExtensions, String(row.command));
+  }
+  for (const { name, capability } of samples.rejected) {
+    assert.throws(() => parseCapabilityRegistry([capability]), /accepted extension/, name);
+  }
+
+  const creation = samples.accepted.find(({ command }) => command === "sample_create_document")!;
+  assert.equal(parseCapabilityRegistry([creation])[0].inputCardinality, "none");
+  assert.throws(
+    () => parseCapabilityRegistry([{ ...creation, acceptedExtensions: [".pdf"] }]),
+    /takes no input files, so it cannot declare accepted extensions/,
+  );
+  assert.throws(
+    () => parseCapabilityRegistry([{ ...creation, inputCardinality: "zero" }]),
+    /invalid input cardinality/,
+  );
+});
+
 const familySamples = JSON.parse(
   readFileSync(new URL("../shared/capability-family-samples.json", import.meta.url), "utf8"),
 );

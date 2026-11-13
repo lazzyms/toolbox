@@ -47,7 +47,8 @@ export type WorkspaceId =
   | "compress-files"
   | "media-tools";
 
-export type ToolInputCardinality = "single" | "multiple" | "ordered";
+/** "none" marks a creation tool: it takes no input files and accepts no extensions. */
+export type ToolInputCardinality = "single" | "multiple" | "ordered" | "none";
 
 export type NativeAvailability = "available" | "unavailable";
 

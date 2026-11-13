@@ -23,7 +23,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isInputCardinality = (
   value: unknown,
 ): value is ToolCapability["inputCardinality"] =>
-  value === "single" || value === "multiple" || value === "ordered";
+  value === "single" || value === "multiple" || value === "ordered" || value === "none";
 
 const isNativeAvailability = (value: unknown): value is NativeAvailability =>
   value === "available" || value === "unavailable";
@@ -72,6 +72,9 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Each shared capability needs a command.");
   }
+  if (!isInputCardinality(inputCardinality)) {
+    throw new Error(`${command} has an invalid input cardinality.`);
+  }
   if ((value.acceptedExtensions == null) === (value.formatFamilies == null)) {
     throw new Error(`${command} must declare either accepted extensions or format families.`);
   }
@@ -79,9 +82,12 @@ const parseCapability = (value: unknown): SharedCapability => {
     value.formatFamilies == null ? undefined : parseFormatFamilies(command, value.formatFamilies);
   const acceptedExtensions =
     formatFamilies?.flatMap((family) => family.extensions) ?? value.acceptedExtensions;
+  if (inputCardinality === "none" && Array.isArray(acceptedExtensions) && acceptedExtensions.length > 0) {
+    throw new Error(`${command} takes no input files, so it cannot declare accepted extensions.`);
+  }
   if (
     !Array.isArray(acceptedExtensions) ||
-    acceptedExtensions.length === 0 ||
+    (inputCardinality !== "none" && acceptedExtensions.length === 0) ||
     !acceptedExtensions.every(
       (extension) =>
         typeof extension === "string" &&
@@ -90,9 +96,6 @@ const parseCapability = (value: unknown): SharedCapability => {
     new Set(acceptedExtensions).size !== acceptedExtensions.length
   ) {
     throw new Error(`${command} has invalid accepted extensions.`);
-  }
-  if (!isInputCardinality(inputCardinality)) {
-    throw new Error(`${command} has an invalid input cardinality.`);
   }
   if (typeof supportsPageSelection !== "boolean" || typeof supportsPreview !== "boolean") {
     throw new Error(`${command} has invalid capability flags.`);
