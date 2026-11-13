@@ -216,7 +216,7 @@ const declaredPointerTargets = () => {
 test("tool pointer targets declared by native tools are registered, available and never retired", () => {
   const targets = declaredPointerTargets();
   assert.ok(targets.includes("heic-convert"), "the scan finds the declared pointer targets");
-  assert.ok(targets.includes("pdf-ocr"), "PDF to Text hands scans that need OCR to OCR");
+  assert.ok(targets.includes("pdf-ocr"), "Extract from PDF hands scans that need OCR to OCR");
   for (const target of targets) {
     assert.ok(registeredToolIds.has(target), `${target} is a registered tool id`);
     assert.ok(!RetiredToolIds.replacements.has(target), `${target} is not a retired tool id`);
