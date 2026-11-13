@@ -144,16 +144,22 @@ pub fn split(request: &PageSelectionRequest, input: PathBuf) -> JobOutcome {
     if let Err(error) = validate_split_request(request) {
         return JobOutcome::failure(input, ToolError::invalid_input(error));
     }
-    if let Err(error) = load_existing_document_for_mutation(&input) {
-        return failure(input, error);
-    }
+    let page_count = match load_existing_document_for_mutation(&input) {
+        Ok(document) => document.get_pages().len(),
+        Err(error) => return failure(input, error),
+    };
     let location = &request.output_location;
     let qpdf = match qpdf() { Ok(qpdf) => qpdf, Err(error) => return JobOutcome::failure(input, ToolError::unavailable(error)) };
+    let spans = match split_spans(request, page_count) {
+        Ok(spans) if spans.is_empty() => return failure(input, "The PDF has no pages to split.".to_string()),
+        Ok(spans) => spans,
+        Err(error) => return failure(input, error),
+    };
     let workspace = match SplitWorkspace::new() {
         Ok(workspace) => workspace,
         Err(error) => return failure(input, format!("Could not create a private split workspace: {error}")),
     };
-    let generated = match generate_split_outputs(request, &input, &qpdf, &workspace) {
+    let generated = match write_split_spans(&input, &qpdf, workspace.path(), spans) {
         Ok(generated) => generated,
         Err(error) => return failure(input, error),
     };
@@ -195,48 +201,38 @@ impl Drop for SplitWorkspace {
     fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
 }
 
-fn generate_split_outputs(request: &PageSelectionRequest, input: &Path, qpdf: &Path, workspace: &SplitWorkspace) -> Result<Vec<PathBuf>, String> {
-    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
+struct SplitSpan { suffix: String, first: usize, last: usize }
+
+fn split_spans(request: &PageSelectionRequest, page_count: usize) -> Result<Vec<SplitSpan>, String> {
+    let width = page_count.to_string().len();
     if request.split_mode.as_deref() == Some("chunks") {
         let Some(size) = request.chunk_size.filter(|size| *size > 0) else { return Err("Chunk size must be greater than zero.".to_string()); };
-        let output = workspace.path().join(format!("{stem}-split.pdf"));
-        let result = Command::new(qpdf).arg(input).arg(format!("--split-pages={size}")).arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
-        if !result.status.success() { return Err(stderr(result, "qpdf failed to split PDF chunks.")); }
-        return collect_split_outputs(workspace.path(), "qpdf reported success but produced no chunk files.");
+        return Ok((1..=page_count).step_by(size).map(|first| {
+            let last = (first + size - 1).min(page_count);
+            let suffix = if size == 1 { format!("-split-{first:0width$}") } else { format!("-split-{first:0width$}-{last:0width$}") };
+            SplitSpan { suffix, first, last }
+        }).collect());
     }
     if let Some(raw) = request.page_ranges.as_deref().filter(|value| !value.trim().is_empty()) {
-        let page_count = Document::load(input).map_err(|error| error.to_string())?.get_pages().len();
-        let ranges = parse_split_ranges(raw, page_count)?;
-        let mut outputs = Vec::with_capacity(ranges.len());
-        for (number, (start, end)) in ranges.into_iter().enumerate() {
-            let output = workspace.path().join(format!("{stem}-split-{number}.pdf"));
-            let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{start}-{end}")).arg("--").arg(&output).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
-            if !result.status.success() { return Err(stderr(result, "qpdf failed to split the selected ranges.")); }
-            if !output.is_file() { return Err("qpdf reported success but produced no range file.".to_string()); }
-            outputs.push(output);
-        }
-        return Ok(outputs);
+        return Ok(parse_split_ranges(raw, page_count)?.into_iter().enumerate().map(|(number, (first, last))| SplitSpan { suffix: format!("-split-{number}"), first, last }).collect());
     }
-    let pattern = workspace.path().join(format!("{stem}-split-page-%d.pdf"));
-    let result = Command::new(qpdf).arg(input).arg("--split-pages").arg(&pattern).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
-    if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
-    collect_split_outputs(workspace.path(), "qpdf reported success but produced no split files.")
+    Ok((1..=page_count).map(|page| SplitSpan { suffix: format!("-split-page-{page:0width$}"), first: page, last: page }).collect())
 }
 
-fn collect_split_outputs(workspace: &Path, empty_message: &str) -> Result<Vec<PathBuf>, String> {
-    let mut outputs = fs::read_dir(workspace).map_err(|error| format!("Could not inspect qpdf split outputs: {error}"))?.filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_file() && path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))).collect::<Vec<_>>();
-    outputs.sort();
-    if outputs.is_empty() { Err(empty_message.to_string()) } else { Ok(outputs) }
+fn write_split_spans(input: &Path, qpdf: &Path, workspace: &Path, spans: Vec<SplitSpan>) -> Result<Vec<(String, PathBuf)>, String> {
+    spans.into_iter().enumerate().map(|(index, span)| {
+        let part = workspace.join(format!("part-{index}.pdf"));
+        let result = Command::new(qpdf).arg(input).arg("--pages").arg(input).arg(format!("{}-{}", span.first, span.last)).arg("--").arg(&part).output_until_stopped().map_err(|error| format!("Could not run qpdf: {error}"))?;
+        if !result.status.success() { return Err(stderr(result, "qpdf failed to split the PDF.")); }
+        if !part.is_file() { return Err("qpdf reported success but produced no split file.".to_string()); }
+        Ok((span.suffix, part))
+    }).collect()
 }
 
-fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated: &[PathBuf]) -> Result<Vec<PathBuf>, JobOutcome> {
+fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated: &[(String, PathBuf)]) -> Result<Vec<PathBuf>, JobOutcome> {
     let mut outputs = Vec::with_capacity(generated.len());
-    for source in generated {
-        let suffix = match split_output_suffix(input, source) {
-            Ok(suffix) => suffix,
-            Err(error) => return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(error))),
-        };
-        let reservation = match OutputNaming::reserve_destination(input, location, &suffix, "pdf") {
+    for (suffix, source) in generated {
+        let reservation = match OutputNaming::reserve_destination(input, location, suffix, "pdf") {
             Ok(reservation) => reservation,
             Err(error) => return Err(JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not reserve split output: {error}")))),
         };
@@ -250,14 +246,6 @@ fn materialize_split_outputs(input: &Path, location: &OutputLocation, generated:
         outputs.push(destination);
     }
     Ok(outputs)
-}
-
-fn split_output_suffix(input: &Path, generated: &Path) -> Result<String, String> {
-    let input_stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
-    let generated_stem = generated.file_stem().and_then(|value| value.to_str()).ok_or_else(|| "qpdf produced an unnamed split file.".to_string())?;
-    let suffix = generated_stem.strip_prefix(input_stem).ok_or_else(|| "qpdf produced an unexpected split file name.".to_string())?;
-    if !suffix.starts_with("-split") { return Err("qpdf produced an unexpected split file name.".to_string()); }
-    Ok(suffix.to_string())
 }
 
 fn copy_into_reservation(source: &Path, destination: &Path) -> io::Result<()> {
@@ -1399,12 +1387,11 @@ mod tests {
         fs::create_dir_all(&generated).unwrap();
         fs::create_dir_all(&output_folder).unwrap();
         fs::write(&input, b"source").unwrap();
-        let first = generated.join("source-split-0.pdf");
-        let invalid = generated.join("unexpected.pdf");
+        let first = generated.join("part-0.pdf");
+        let missing = generated.join("part-1.pdf");
         fs::write(&first, b"first split").unwrap();
-        fs::write(&invalid, b"unexpected split").unwrap();
 
-        let outcome = materialize_split_outputs(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]).unwrap_err();
+        let outcome = materialize_split_outputs(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[("-split-0".to_string(), first), ("-split-1".to_string(), missing)]).unwrap_err();
 
         assert!(outcome.error().is_some());
         assert_eq!(outcome.output_paths().len(), 1);
@@ -1412,6 +1399,19 @@ mod tests {
         assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(), b"first split");
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn split_spans_name_parts_like_qpdf_did() {
+        let suffixes = |mode: &str, ranges: Option<&str>, chunk: Option<usize>, pages: usize| split_spans(&split_request(OutputLocation::AlongsideInput, mode, ranges, chunk), pages).unwrap().into_iter().map(|span| (span.suffix, span.first, span.last)).collect::<Vec<_>>();
+        let span = |suffix: &str, first: usize, last: usize| (suffix.to_string(), first, last);
+
+        assert_eq!(suffixes("pages", None, None, 3), vec![span("-split-page-1", 1, 1), span("-split-page-2", 2, 2), span("-split-page-3", 3, 3)]);
+        assert_eq!(suffixes("pages", None, None, 12)[..2], [span("-split-page-01", 1, 1), span("-split-page-02", 2, 2)]);
+        assert_eq!(suffixes("chunks", None, Some(2), 3), vec![span("-split-1-2", 1, 2), span("-split-3-3", 3, 3)]);
+        assert_eq!(suffixes("chunks", None, Some(5), 12), vec![span("-split-01-05", 1, 5), span("-split-06-10", 6, 10), span("-split-11-12", 11, 12)]);
+        assert_eq!(suffixes("chunks", None, Some(1), 3), vec![span("-split-1", 1, 1), span("-split-2", 2, 2), span("-split-3", 3, 3)]);
+        assert_eq!(suffixes("ranges", Some("3, 1-2, 2-"), None, 3), vec![span("-split-0", 3, 3), span("-split-1", 1, 2), span("-split-2", 2, 3)]);
     }
 
     fn split_temp_entries() -> std::collections::HashSet<PathBuf> {
