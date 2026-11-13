@@ -28,3 +28,12 @@ test("Force asks OCR to read pages again whose only text is an earlier invisible
   assert.equal(ocrRequest(["/scans/a.pdf"], "alongsideInput", null, "eng", "text").force, false);
   assert.equal(ocrRequest(["/scans/a.pdf"], "alongsideInput", null, "eng", "text", true).force, true);
 });
+
+test("OCR sends the range in page order, and no range when the field is empty", () => {
+  const range = (typed: string | null) => ocrRequest(["/scans/a.pdf"], "alongsideInput", typed, "eng", "text").pageRange;
+  assert.equal(range("9-, 5, 1-3"), "1-3, 5, 9-");
+  assert.equal(range(" 4 ,2-3,1 "), "1, 2-3, 4");
+  assert.equal(range(""), null);
+  assert.equal(range("   "), null);
+  assert.equal(range(null), null);
+});
