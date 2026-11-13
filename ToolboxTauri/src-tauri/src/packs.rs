@@ -1005,7 +1005,7 @@ mod tests {
     /// Listing must work offline: the module has no network code and reads only the filesystem.
     #[test]
     fn listing_makes_no_network_request() {
-        let source = include_str!("packs.rs");
+        let source = include_str!("packs.rs").replace("\r\n", "\n");
         let runtime = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
         for needle in ["std::net", "TcpStream", "UdpSocket", "ToSocketAddrs", "reqwest", "ureq", "hyper", "tauri_plugin_http", "Command::new"] {
             assert!(!runtime.contains(needle), "packs.rs must not use {needle}");

@@ -98,6 +98,9 @@ mod tests {
         root
     }
 
+    // Images must be absolute paths on this device, which differ between macOS and Windows.
+    const IMAGE: &str = if cfg!(windows) { r"C:\Users\sam\Pictures\floorplan.png" } else { "/Users/sam/Pictures/floorplan.png" };
+
     fn plain(text: &str) -> serde_json::Value { json!({ "text": text, "bold": false, "italic": false }) }
 
     /// Everything the editor keeps, including what saving the PDF leaves out: blank blocks, blank items and cells,
@@ -113,7 +116,7 @@ mod tests {
                 { "kind": "bulletedList", "items": [{ "runs": [plain("Oven")] }, { "runs": [] }] },
                 { "kind": "numberedList", "items": [{ "runs": [plain("Hob")] }] },
                 { "kind": "table", "headerRow": true, "rows": [["Room", "", " Done "], ["", "", ""]] },
-                { "kind": "image", "path": "/Users/sam/Pictures/floorplan.png" },
+                { "kind": "image", "path": IMAGE },
                 { "kind": "pageBreak" },
                 { "kind": "heading3", "text": "" },
             ],

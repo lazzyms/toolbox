@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn uninstalling_makes_no_network_request() {
-        let source = include_str!("uninstall.rs");
+        let source = include_str!("uninstall.rs").replace("\r\n", "\n");
         let runtime = &source[..source.find("#[cfg(test)]\nmod tests").unwrap()];
         for needle in ["std::net", "TcpStream", "reqwest", "tauri_plugin_http", "Command::new"] {
             assert!(!runtime.contains(needle), "uninstall.rs must not use {needle}");
