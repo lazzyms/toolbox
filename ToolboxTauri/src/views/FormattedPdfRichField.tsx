@@ -137,6 +137,8 @@ interface RichFieldProps {
   runs: readonly Run[];
   /** Headings keep their text only: bold and italic do not apply to them. */
   plain: boolean;
+  /** Table cells hold one line of text, and show no placeholder. */
+  singleLine?: boolean;
   disabled: boolean;
   describedBy?: string;
   className?: string;
@@ -150,7 +152,7 @@ interface RichFieldProps {
  * A block's text with bold and italic runs. The DOM is left to the browser while it matches the runs, so typing,
  * IME composition and the browser's own undo keep working; it is redrawn only when the runs change from outside.
  */
-export const RichField = ({ fieldKey, label, runs, plain, disabled, describedBy, className, onChange, onFocus, onKeyDown, onPaste }: RichFieldProps) => {
+export const RichField = ({ fieldKey, label, runs, plain, singleLine = false, disabled, describedBy, className, onChange, onFocus, onKeyDown, onPaste }: RichFieldProps) => {
     const root = useRef<HTMLDivElement>(null);
     useEffect(() => {
       const field = root.current;
@@ -169,7 +171,7 @@ export const RichField = ({ fieldKey, label, runs, plain, disabled, describedBy,
         ref={root}
         role="textbox"
         aria-label={label}
-        aria-multiline="true"
+        aria-multiline={!singleLine}
         aria-describedby={describedBy}
         aria-disabled={disabled || undefined}
         contentEditable={!disabled}
@@ -177,7 +179,7 @@ export const RichField = ({ fieldKey, label, runs, plain, disabled, describedBy,
         tabIndex={disabled ? -1 : 0}
         data-field-key={fieldKey}
         data-plain={plain}
-        data-placeholder="Type or paste text here"
+        data-placeholder={singleLine ? undefined : "Type or paste text here"}
         className={cn(
           "min-h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1.5 text-base leading-6 break-words whitespace-pre-wrap shadow-xs outline-none md:text-sm dark:bg-input/30",
           "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50",

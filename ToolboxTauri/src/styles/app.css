@@ -2667,6 +2667,13 @@ ol.formatted-pdf-items { list-style: decimal; }
 .formatted-pdf-break::before, .formatted-pdf-break::after { content: ""; flex: 1; border-top: 1px dashed var(--border); }
 .formatted-pdf-break:focus-visible { box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
 .formatted-pdf-block-actions { display: flex; gap: 2px; }
+.formatted-pdf-table { display: grid; gap: 4px; min-width: 0; overflow-x: auto; }
+.formatted-pdf-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.formatted-pdf-table th, .formatted-pdf-table td { border: 1px solid var(--border); padding: 0; text-align: left; vertical-align: top; }
+.formatted-pdf-table th { background: var(--muted); font-weight: 600; }
+.formatted-pdf-table .formatted-pdf-cell-field { min-height: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; padding: 3px 8px; font-size: 12px; }
+.formatted-pdf-table-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.formatted-pdf-table-header { display: flex; align-items: center; gap: 6px; padding-right: 4px; }
 .formatted-pdf-settings { display: grid; gap: 16px; }
 .formatted-pdf-defaults { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; }
 .formatted-pdf-defaults dd { margin: 0; }

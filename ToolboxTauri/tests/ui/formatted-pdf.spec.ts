@@ -440,3 +440,80 @@ test("Formatted PDF format keys stay out of other text fields and IME compositio
     await expect.poll(async () => ((await invocation(page, "create_formatted_pdf")) as { document: { blocks: unknown } } | undefined)?.document.blocks)
         .toEqual([{ kind: "bulletedList", items: [{ runs: [plain("Keys")] }] }]);
 });
+
+test("Formatted PDF adds and edits a table and sends its rows, leaving blank rows out, with the header-row flag", async ({ page }) => {
+    await openFormatted(page);
+    await block(page, "Block 1, Paragraph").fill("Condition of each room.");
+    await block(page, "Block 1, Paragraph").click();
+    await page.getByRole("button", { name: "Table", exact: true }).click();
+    const table = page.getByRole("listitem", { name: "Block 2, Table, 3 columns, header row" });
+    await expect(table).toBeVisible();
+    await expect(table.getByRole("columnheader")).toHaveCount(3);
+    const cell = (row: number, column: number) => block(page, `Block 2, Table, row ${row}, column ${column}`);
+    await expect(cell(1, 1)).toBeFocused();
+    await expect(page.getByLabel("Block type")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Bulleted list" })).toBeDisabled();
+
+    for (const [row, column, text] of [[1, 1, "Room"], [1, 2, "Condition"], [1, 3, "Notes"], [2, 1, "Kitchen"], [2, 2, "Good"], [2, 3, "Oven cleaned"]] as const) {
+        await cell(row, column).click();
+        await page.keyboard.type(text);
+    }
+    // Enter and Shift+Enter keep a cell to one line.
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Shift+Enter");
+    await expect(cell(2, 3)).toHaveText("Oven cleaned");
+    await expect(page.getByRole("listitem", { name: /^Block 3/ })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Add a column to block 2" }).click();
+    await expect(page.getByRole("listitem", { name: "Block 2, Table, 4 columns, header row" })).toBeVisible();
+    await expect(cell(1, 4)).toBeFocused();
+    await page.keyboard.type("Photo");
+    await page.getByRole("button", { name: "Add a row to block 2" }).click();
+    await expect(cell(4, 1)).toBeFocused();
+    await page.keyboard.type("Bathroom");
+    await cell(4, 2).click();
+    await page.keyboard.type("Fair");
+    // Pasted lines join into one line in a cell.
+    await cell(4, 3).click();
+    await page.evaluate(() => {
+        const data = new DataTransfer();
+        data.setData("text/plain", "Grout\nstained");
+        document.activeElement?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await expect(cell(4, 3)).toHaveText("Grout stained");
+
+    // Without a header row, the first row is an ordinary row.
+    await page.getByRole("checkbox", { name: "Header row" }).uncheck();
+    await expect(page.getByRole("listitem", { name: "Block 2, Table, 4 columns" })).toBeVisible();
+    await expect(table.getByRole("columnheader")).toHaveCount(0);
+    await page.getByRole("checkbox", { name: "Header row" }).check();
+    await expect(page.getByRole("listitem", { name: "Block 2, Table, 4 columns, header row" }).getByRole("columnheader")).toHaveCount(4);
+
+    // The table's controls show while the caret is in it.
+    await block(page, "Block 1, Paragraph").click();
+    await expect(page.getByRole("checkbox", { name: "Header row" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add a row to block 2" })).toHaveCount(0);
+    await cell(2, 2).click();
+    await expect(page.getByRole("checkbox", { name: "Header row" })).toBeChecked();
+
+    expect(await savedBlocks(page)).toEqual([
+        { kind: "paragraph", runs: [plain("Condition of each room.")] },
+        { kind: "table", headerRow: true, rows: [["Room", "Condition", "Notes", "Photo"], ["Kitchen", "Good", "Oven cleaned", ""], ["Bathroom", "Fair", "Grout stained", ""]] },
+    ]);
+});
+
+test("Formatted PDF sends a table without a header row, and drops blank columns", async ({ page }) => {
+    await openFormatted(page);
+    await block(page, "Block 1, Paragraph").click();
+    await page.getByRole("button", { name: "Table", exact: true }).click();
+    // A table typed into an empty paragraph takes its place.
+    await expect(page.getByRole("listitem", { name: "Block 1, Table, 3 columns, header row" })).toBeVisible();
+    await page.getByRole("checkbox", { name: "Header row" }).uncheck();
+    for (const [row, column, text] of [[1, 1, "Kitchen"], [1, 3, "Oven cleaned"], [3, 1, "Bathroom"]] as const) {
+        await block(page, `Block 1, Table, row ${row}, column ${column}`).click();
+        await page.keyboard.type(text);
+    }
+    expect(await savedBlocks(page)).toEqual([
+        { kind: "table", headerRow: false, rows: [["Kitchen", "Oven cleaned"], ["Bathroom", ""]] },
+    ]);
+});
