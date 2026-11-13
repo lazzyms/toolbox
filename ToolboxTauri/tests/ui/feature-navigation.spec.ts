@@ -2279,6 +2279,49 @@ test("Compress rows show sizes and the saving, skips keep both sizes without fil
     await expect(summary).toContainText("Counts only compressed files. Skipped and failed files kept their size and got no copy.");
 });
 
+for (const theme of ["light", "dark"] as const) {
+    test(`Compress shows and announces the signature removed warning only on the signed PDF row in the ${theme} theme`, async ({ page }) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await page.goto("/");
+        const paths = ["/local/permit-signed.pdf", "/local/report.pdf"];
+        await page.evaluate((outcomes) => { (window as TestWindow).__toolboxProcessingResults = outcomes; }, [
+            succeeded(paths[0], ["/local/permit-signed-compressed.pdf"], {
+                detail: "PDF repacked without loss",
+                originalBytes: 2_400_000,
+                outputBytes: 1_100_000,
+                // The row's wording comes from the warning code, not from the native message.
+                warnings: [{ code: "signatureRemoved", message: "" }],
+            }),
+            succeeded(paths[1], ["/local/report-compressed.pdf"], { detail: "PDF repacked without loss", originalBytes: 1_000_000, outputBytes: 500_000 }),
+        ] satisfies MockOutcome[]);
+        await openFromHome(page, "Compress");
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        await page.evaluate((paths) => { (window as TestWindow).__toolboxDialogResults = [paths]; }, paths);
+        await page.getByRole("button", { name: "Choose files to process" }).click();
+        await page.getByRole("button", { name: "Compress 2 files", exact: true }).click();
+
+        const results = page.getByRole("list", { name: "Results" });
+        const rows = results.getByRole("listitem");
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(0)).toHaveAttribute("data-tone", "warn");
+        await expect(rows.nth(1)).toHaveAttribute("data-tone", "ok");
+        await expect(rows.nth(1)).not.toContainText("signature");
+        await expect(rows.nth(0).getByRole("button", { name: "Open permit-signed-compressed.pdf" })).toBeVisible();
+        await expect(results).toMatchAriaSnapshot(`
+          - list "Results":
+            - listitem:
+              - text: "permit-signed.pdf 2.4 MB → 1.1 MB, 54% smaller Saved. The digital signature was removed, because changing the file breaks it. PDF repacked without loss Compressed with a warning"
+              - button "Open permit-signed-compressed.pdf"
+              - button /permit-signed-compressed\\.pdf/
+            - listitem:
+              - text: report.pdf 1 MB → 500 KB, 50% smaller report-compressed.pdf PDF repacked without loss Compressed
+              - button "Open report-compressed.pdf"
+              - button /report-compressed\\.pdf/
+        `);
+        await expect(resultSummaryStatus(page)).toContainText("1 compressed file has a warning.");
+    });
+}
+
 test("every output exposes native file actions and keeps action errors inline", async ({ page }) => {
     const splitOutputs = ["a-01.pdf", "a-02.pdf", "a-12.pdf"].map((name) => `/local/out/${name}`);
     const folderOutput = "/local/out/brochure-pages";
