@@ -14,6 +14,7 @@ import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ResultList } from "../components/ResultList";
+import { FormattedPdfPreview, useFormattedPreview } from "./FormattedPdfPreview";
 import { RunStateContext } from "../components/ToolScaffold";
 import { ShortcutHint } from "../components/ShortcutHint";
 import { chooseCreatedDocumentSavePath } from "../components/saveStep";
@@ -54,10 +55,11 @@ type Margins = "narrow" | "normal" | "wide";
 /** How every page looks; sent with the document as its page settings. */
 export type PageSettings = { pageSize: PageSize; orientation: Orientation; margins: Margins; header: string; footer: string; pageNumbers: boolean };
 const defaultPage: PageSettings = { pageSize: "a4", orientation: "portrait", margins: "normal", header: "", footer: "", pageNumbers: false };
-const pageSizes: Record<PageSize, { name: string; choice: string }> = {
-  a4: { name: "A4", choice: "A4, 210 × 297 mm" },
-  letter: { name: "Letter", choice: "Letter, 8.5 × 11 in" },
-  legal: { name: "Legal", choice: "Legal, 8.5 × 14 in" },
+/** Each size's name, its choice in the menu, and its portrait width and height in points. */
+const pageSizes: Record<PageSize, { name: string; choice: string; points: readonly [number, number] }> = {
+  a4: { name: "A4", choice: "A4, 210 × 297 mm", points: [595, 842] },
+  letter: { name: "Letter", choice: "Letter, 8.5 × 11 in", points: [612, 792] },
+  legal: { name: "Legal", choice: "Legal, 8.5 × 14 in", points: [612, 1008] },
 };
 const marginLabels: Record<Margins, { name: string; hint: string }> = {
   narrow: { name: "Narrow", hint: "Narrow is 13 mm on every side." },
@@ -514,6 +516,15 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     if ((event.metaKey || event.ctrlKey) && event.code === "KeyU") event.preventDefault();
   };
 
+  // The preview gets the document a save would send, without the output path.
+  const typed = { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page, font: FONT };
+  const { preview, updating, error: previewError } = useFormattedPreview(typed.blocks.length > 0 ? typed : null);
+  const [portraitWidth, portraitHeight] = pageSizes[page.pageSize].points;
+  const previewSize = page.orientation === "portrait" ? [portraitWidth, portraitHeight] as const : [portraitHeight, portraitWidth] as const;
+  const estimate = preview && !updating && preview.pageCount > 0
+    ? `${preview.pageCount === 1 ? "1 page" : `${preview.pageCount} pages`}, ${pageSizes[page.pageSize].name}${page.orientation === "landscape" ? " landscape" : ""}`
+    : null;
+
   const save = async () => {
     if (empty || saving) return;
     const name = `${title.trim() || "Untitled"}.pdf`;
@@ -523,7 +534,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
     setMissing(null);
     reportRunning?.(true);
     try {
-      const request = { document: { title: title.trim(), author: author.trim(), blocks: requestBlocks(blocks), page, font: FONT }, outputPath };
+      const request = { document: typed, outputPath };
       const outcomes = parseToolResult(await invoke("create_formatted_pdf", { request }));
       // A missing image keeps the draft open on the block to fix, as the board shows, with nothing to show in results.
       const lost = missingImage(outcomes, blocks);
@@ -752,6 +763,13 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
               </p>
             </section>
             <aside className="formatted-pdf-settings" aria-label="Document settings">
+              <FormattedPdfPreview
+                preview={preview}
+                updating={updating}
+                error={previewError}
+                pageName={`${pageSizes[page.pageSize].name} ${page.orientation}`}
+                pageSize={previewSize}
+              />
               <fieldset className="workspace-field" disabled={saving} aria-describedby="formatted-pdf-page-summary">
                 <legend className="workspace-panel-label">Page</legend>
                 <p id="formatted-pdf-page-summary" className="workspace-note">{pageSummary(page)}</p>
@@ -820,6 +838,12 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
           </div>
           <footer className="formatted-pdf-footer">
             {empty && <p id="formatted-pdf-blocker" className="workspace-note">Empty document. Add some text to save a PDF.</p>}
+            {!empty && !missingBlock && estimate && (
+              <p id="formatted-pdf-estimate" className="formatted-pdf-status">
+                <strong>{estimate}</strong>
+                <span className="workspace-note">Opens the save dialog. Nothing is replaced.</span>
+              </p>
+            )}
             {missingBlock && (
               <p id="formatted-pdf-status" className="formatted-pdf-status" role="status" aria-live="polite">
                 <strong className="text-destructive">Save failed, nothing written</strong>
@@ -828,7 +852,7 @@ export const FormattedPdfView = ({ utility }: { utility: ToolDefinition }) => {
             )}
             <Button
               variant="default"
-              aria-describedby={empty ? "formatted-pdf-blocker" : missingBlock ? "formatted-pdf-status" : undefined}
+              aria-describedby={empty ? "formatted-pdf-blocker" : missingBlock ? "formatted-pdf-status" : estimate ? "formatted-pdf-estimate" : undefined}
               disabled={saving || empty}
               onClick={() => void save()}
               className="workspace-primary-action"

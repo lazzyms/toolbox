@@ -1,15 +1,18 @@
 //! Formatted PDF: a document typed in Toolbox, sent as ordered blocks rather than markup, laid out into a new PDF.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use serde::Deserialize;
+use base64::Engine;
+use lopdf::Document;
+use serde::{Deserialize, Serialize};
 
 use crate::kit::common::limits::{self, ToolLimits};
 use crate::kit::common::{note_renamed, OutputLocation, OutputNaming};
 use crate::kit::contracts::{JobOutcome, LimitKind, ToolError};
 use crate::kit::images::source::{self, ImageFamily};
 use crate::kit::pdf::convert::{page_count, Margins, Orientation, PageSize};
-use crate::kit::pdf::font_resolver::{FontResolver, SystemFontLookup};
+use crate::kit::pdf::font_resolver::{FontReport, FontResolver, SystemFontLookup};
 use crate::kit::pdf::layout::{assemble, Align, Assembly, Block, FontBook, Flow, Geometry, Paragraph, Picture, Span, Style, Theme, PAGE_COUNT, PAGE_NUMBER};
 use crate::packs::uninstall::RunPacks;
 
@@ -216,68 +219,188 @@ pub fn create(request: &FormattedPdfRequest, packs: &RunPacks) -> JobOutcome {
 
 fn create_with<S: SystemFontLookup>(request: &FormattedPdfRequest, fonts: &FontResolver<S>, packs: &RunPacks) -> JobOutcome {
     let result = (|| {
-        let document = &request.document;
-        document.blocks.iter().try_for_each(DocumentBlock::check)?;
-        let (blocks, images) = layout_blocks(&document.blocks);
-        if blocks.is_empty() { return Err(ToolError::invalid_input("The document is empty. Add some text and try again.")); }
-        if document.font.family.trim().is_empty() { return Err(ToolError::invalid_input("Choose a font for the document.")); }
-        if !document.font.size.is_finite() || !FONT_SIZES.contains(&document.font.size) {
-            return Err(ToolError::invalid_input(format!("Text size must be between {} and {} pt.", FONT_SIZES.start(), FONT_SIZES.end())));
-        }
-        let limits = limits();
-        let page = &document.page;
-        let bytes = document.title.len() + document.author.len() + page.header.len() + page.footer.len() + document.blocks.iter().map(DocumentBlock::text_bytes).sum::<usize>();
-        if bytes as u64 > limits.max_bytes {
-            return Err(ToolError::limit_exceeded(
-                LimitKind::FileSize,
-                format!("The document is larger than the {} limit for one PDF. Split it into smaller documents and try again.", limits::bytes_label(limits.max_bytes)),
-            ));
-        }
-
-        // Each image file is read once, now, so a missing one fails the save before anything is written.
-        let pictures = images.iter().map(|path| load_picture(path)).collect::<Result<Vec<_>, _>>()?;
-
-        let size = page.size();
-        let theme = Theme::new(&document.font.family, CODE_FAMILY, document.font.size, false);
-        let margin = page.margins.points();
-        let inset = margin * BAND_INSET;
-        let header = page.header_blocks();
-        let mut book = FontBook::new(fonts, packs);
-        // The text starts below the header and ends above the footer, even where a long one reaches past the margin.
-        let geometry = {
-            let mut measure = Flow::new(&mut book, theme.clone(), &[], Geometry::uniform(size.0, size.1, margin));
-            let mut edge = |blocks: &[Block], name: &str| -> Result<f32, ToolError> {
-                if blocks.is_empty() { return Ok(margin); }
-                let reach = inset + measure.band_height(blocks)? + BAND_GAP;
-                if reach > size.1 / 4. {
-                    return Err(ToolError::invalid_input(format!("The {name} is too long to fit on the page. Shorten it and try again.")));
-                }
-                Ok(margin.max(reach))
-            };
-            let top = edge(&header, "header")?;
-            let bottom = edge(&page.footer_blocks(("9999", "9999")), "footer")?;
-            Geometry { top, bottom, ..Geometry::uniform(size.0, size.1, margin) }
-        };
-        let mut flow = Flow::new(&mut book, theme, &pictures, geometry);
-        flow.blocks(&blocks)?;
-        let footer = page.footer_blocks((&PAGE_NUMBER.to_string(), &PAGE_COUNT.to_string()));
-        flow.bands(&header, &footer, inset, inset)?;
-        let laid = flow.finish();
-        let count = laid.pages.len();
-        limits.check_made_pages(count)?;
-        let mut pdf = assemble(&book, Assembly {
-            size, pages: laid.pages, pictures: &pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors,
-            title: Some(&document.title), author: Some(&document.author),
-        })?;
-
+        // Each image file is read once, as the PDF is made, so a missing one fails the save before anything is written.
+        let made = make(&request.document, fonts, packs, |path| load_picture(path).map(|picture| (picture, None)))?;
+        let mut pdf = made.pdf;
         let output = OutputNaming::reserve_single_output(Some(&request.output_path), &request.output_path, &OutputLocation::AlongsideInput, "", "pdf")
             .map_err(|error| ToolError::invalid_input(format!("Could not save the PDF there: {error}")))?;
         pdf.save(output.path()).map_err(|error| ToolError::processing(format!("Could not write the PDF: {error}")))?;
         let path = output.publish().map_err(|error| ToolError::processing(format!("Could not save the PDF: {error}")))?;
-        let detail = format!("{}, {}.", page_count(count), page.label());
-        Ok(JobOutcome::succeeded(request.output_path.clone(), vec![path], detail).with_fonts(book.reports()))
+        let detail = format!("{}, {}.", page_count(made.count), request.document.page.label());
+        Ok(JobOutcome::succeeded(request.output_path.clone(), vec![path], detail).with_fonts(made.fonts))
     })();
     result.unwrap_or_else(|error| JobOutcome::failure(request.output_path.clone(), error))
+}
+
+/// A document laid out and assembled, not yet written anywhere.
+struct Made {
+    pdf: Document,
+    count: usize,
+    fonts: Vec<FontReport>,
+}
+
+/// Checks the document, lays it out and assembles the PDF in memory. Saving and previewing both come here, so a preview
+/// has the pages the saved PDF will have. `picture` reads an image block's file, with a caption to draw under it.
+fn make<S: SystemFontLookup>(
+    document: &FormattedDocument,
+    fonts: &FontResolver<S>,
+    packs: &RunPacks,
+    picture: impl Fn(&Path) -> Result<(Picture, Option<String>), ToolError>,
+) -> Result<Made, ToolError> {
+    document.blocks.iter().try_for_each(DocumentBlock::check)?;
+    let (mut blocks, images) = layout_blocks(&document.blocks);
+    if blocks.is_empty() { return Err(ToolError::invalid_input("The document is empty. Add some text and try again.")); }
+    if document.font.family.trim().is_empty() { return Err(ToolError::invalid_input("Choose a font for the document.")); }
+    if !document.font.size.is_finite() || !FONT_SIZES.contains(&document.font.size) {
+        return Err(ToolError::invalid_input(format!("Text size must be between {} and {} pt.", FONT_SIZES.start(), FONT_SIZES.end())));
+    }
+    let limits = limits();
+    let page = &document.page;
+    let bytes = document.title.len() + document.author.len() + page.header.len() + page.footer.len() + document.blocks.iter().map(DocumentBlock::text_bytes).sum::<usize>();
+    if bytes as u64 > limits.max_bytes {
+        return Err(ToolError::limit_exceeded(
+            LimitKind::FileSize,
+            format!("The document is larger than the {} limit for one PDF. Split it into smaller documents and try again.", limits::bytes_label(limits.max_bytes)),
+        ));
+    }
+
+    let (pictures, captions): (Vec<Picture>, Vec<Option<String>>) = images.iter().map(|path| picture(path)).collect::<Result<Vec<_>, _>>()?.into_iter().unzip();
+    if captions.iter().any(Option::is_some) {
+        blocks = blocks.into_iter().flat_map(|block| {
+            let caption = match &block { Block::Image(index) => captions[*index].as_deref().and_then(|text| band_line(text, Align::Center)), _ => None };
+            std::iter::once(block).chain(caption)
+        }).collect();
+    }
+
+    let size = page.size();
+    let theme = Theme::new(&document.font.family, CODE_FAMILY, document.font.size, false);
+    let margin = page.margins.points();
+    let inset = margin * BAND_INSET;
+    let header = page.header_blocks();
+    let mut book = FontBook::new(fonts, packs);
+    // The text starts below the header and ends above the footer, even where a long one reaches past the margin.
+    let geometry = {
+        let mut measure = Flow::new(&mut book, theme.clone(), &[], Geometry::uniform(size.0, size.1, margin));
+        let mut edge = |blocks: &[Block], name: &str| -> Result<f32, ToolError> {
+            if blocks.is_empty() { return Ok(margin); }
+            let reach = inset + measure.band_height(blocks)? + BAND_GAP;
+            if reach > size.1 / 4. {
+                return Err(ToolError::invalid_input(format!("The {name} is too long to fit on the page. Shorten it and try again.")));
+            }
+            Ok(margin.max(reach))
+        };
+        let top = edge(&header, "header")?;
+        let bottom = edge(&page.footer_blocks(("9999", "9999")), "footer")?;
+        Geometry { top, bottom, ..Geometry::uniform(size.0, size.1, margin) }
+    };
+    let mut flow = Flow::new(&mut book, theme, &pictures, geometry);
+    flow.blocks(&blocks)?;
+    let footer = page.footer_blocks((&PAGE_NUMBER.to_string(), &PAGE_COUNT.to_string()));
+    flow.bands(&header, &footer, inset, inset)?;
+    let laid = flow.finish();
+    let count = laid.pages.len();
+    limits.check_made_pages(count)?;
+    let pdf = assemble(&book, Assembly {
+        size, pages: laid.pages, pictures: &pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors,
+        title: Some(&document.title), author: Some(&document.author),
+    })?;
+    Ok(Made { pdf, count, fonts: book.reports() })
+}
+
+/// What the preview shows: the document's first pages as images, and how many pages saving it would make.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FormattedPreviewRequest {
+    pub document: FormattedDocument,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormattedPreview {
+    /// Every page the saved PDF would have; only the first `PREVIEW_MAX_PAGES` are drawn.
+    pub page_count: usize,
+    pub pages: Vec<PreviewPage>,
+    /// The file names of image blocks whose file can't be read; the preview draws a placeholder in their place.
+    pub missing_images: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewPage {
+    pub data_url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The preview runs on every pause in typing, so it draws at most this many pages, each fitted to this many pixels.
+pub const PREVIEW_MAX_PAGES: usize = 20;
+pub const PREVIEW_MAX_DIMENSION: u32 = 800;
+/// The placeholder drawn for an image that can't be read, as the design draws it: a grey hatched box, its file name below.
+const PLACEHOLDER_SIZE: (u32, u32) = (320, 160);
+const PLACEHOLDER_STRIPES: [[u8; 3]; 2] = [[0xe6, 0xe6, 0xe6], [0xf2, 0xf2, 0xf2]];
+const PLACEHOLDER_BORDER: [u8; 3] = [0xcc, 0xcc, 0xcc];
+
+/// Lays the document out exactly as saving does and draws its first pages, all in memory. Nothing is written: the
+/// PDF goes to the renderer on stdin and the page images come back on stdout. An empty document has no pages.
+pub fn preview(request: &FormattedPreviewRequest, packs: &RunPacks) -> Result<FormattedPreview, String> {
+    let fonts = FontResolver::bundled().map_err(|error| error.message)?;
+    let renderer = crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER)?;
+    preview_with(request, &fonts, packs, &renderer)
+}
+
+fn preview_with<S: SystemFontLookup>(request: &FormattedPreviewRequest, fonts: &FontResolver<S>, packs: &RunPacks, renderer: &Path) -> Result<FormattedPreview, String> {
+    let document = &request.document;
+    if layout_blocks(&document.blocks).0.is_empty() {
+        return Ok(FormattedPreview { page_count: 0, pages: Vec::new(), missing_images: Vec::new() });
+    }
+    let missing = std::cell::RefCell::new(Vec::new());
+    let made = make(document, fonts, packs, |path| {
+        match load_picture(path) {
+            Ok(picture) => Ok((picture, None)),
+            Err(_) => {
+                let name = image_name(path);
+                missing.borrow_mut().push(name.clone());
+                Ok((placeholder(), Some(name)))
+            }
+        }
+    }).map_err(|error| error.message)?;
+    let mut pdf = made.pdf;
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).map_err(|error| format!("Could not make the preview: {error}"))?;
+    let drawn = made.count.min(PREVIEW_MAX_PAGES);
+    let output = super::run_bounded_helper_with_input(
+        render_command(renderer, drawn),
+        Some(bytes),
+        std::time::Instant::now() + super::PDF_PREVIEW_TIMEOUT,
+        super::PDF_PREVIEW_MAX_BYTES as usize,
+        super::PDF_TEXT_MAX_ERROR_BYTES,
+        "The preview took too long to draw.",
+    )?;
+    if !output.status.success() { return Err("The preview could not be drawn.".into()); }
+    let images = super::split_png_stream(&output.stdout)?;
+    if images.len() != drawn { return Err("The preview could not be drawn.".into()); }
+    let pages = images.into_iter().map(|png| {
+        let (width, height) = super::check_preview_png(png)?;
+        Ok(PreviewPage { data_url: format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)), width, height })
+    }).collect::<Result<Vec<_>, String>>()?;
+    Ok(FormattedPreview { page_count: made.count, pages, missing_images: missing.into_inner() })
+}
+
+/// pdftoppm reading the PDF from stdin and, with no output root, writing each page's PNG to stdout in turn.
+fn render_command(renderer: &Path, pages: usize) -> Command {
+    let mut command = Command::new(renderer);
+    command.args(["-png", "-scale-to"]).arg(PREVIEW_MAX_DIMENSION.to_string()).args(["-f", "1", "-l"]).arg(pages.to_string()).arg("-");
+    command
+}
+
+/// The hatched box drawn where an image that can't be read would go.
+fn placeholder() -> Picture {
+    let (width, height) = PLACEHOLDER_SIZE;
+    let image = image::RgbImage::from_fn(width, height, |x, y| {
+        let edge = x < 2 || y < 2 || x >= width - 2 || y >= height - 2;
+        image::Rgb(if edge { PLACEHOLDER_BORDER } else { PLACEHOLDER_STRIPES[((x + y) / 8 % 2) as usize] })
+    });
+    Picture::from_image(image::DynamicImage::ImageRgb8(image), None).expect("the placeholder is within the picture limits")
 }
 
 /// The document's blocks for layout, in order. Blank blocks, list items and table rows are left out, and so are page breaks
@@ -1113,5 +1236,115 @@ mod tests {
             assert!(!path.exists());
         }
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn renderer() -> PathBuf {
+        crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_RENDERER).expect("the preview tests need pdftoppm")
+    }
+
+    fn preview_of(request: &FormattedPdfRequest) -> FormattedPreview {
+        preview_with(&FormattedPreviewRequest { document: request.document.clone() }, &fonts(), &no_packs(), &renderer()).unwrap()
+    }
+
+    /// Every file under `root`, with its bytes.
+    fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut found = Vec::new();
+        let mut folders = vec![root.to_path_buf()];
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { folders.push(path); } else { found.push((path.clone(), fs::read(&path).unwrap())); }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn the_preview_has_the_saved_pdfs_page_count_for_each_document() {
+        let root = sandbox("preview_pages");
+        let picture = root.join("plan.png");
+        png(&picture, 400, 300);
+        let documents = [
+            ("short", request(short_blocks(), &root.join("short.pdf"))),
+            ("long", request(long_blocks(40), &root.join("long.pdf"))),
+            ("letter, wide margins, header and numbers", with_page(long_blocks(40), &root.join("letter.pdf"), json!({ "pageSize": "letter", "orientation": "landscape", "margins": "wide", "header": "Flat 4B", "pageNumbers": true }))),
+            ("page breaks", request(json!([paragraph("One"), { "kind": "pageBreak" }, paragraph("Two"), { "kind": "pageBreak" }, list("numberedList", &["Three".into()])]), &root.join("breaks.pdf"))),
+            ("table and image", request(json!([table(true, &[&["Room", "Notes"], &["Kitchen", "Oven cleaned"]]), { "kind": "image", "path": picture }, paragraph("After the plan")]), &root.join("table.pdf"))),
+        ];
+        for (name, document) in &documents {
+            let preview = preview_of(document);
+            assert!(run(document).error().is_none(), "{name} saves");
+            let saved = Document::load(&document.output_path).unwrap().get_pages().len();
+            assert_eq!(preview.page_count, saved, "{name}: the preview and the saved PDF have the same page count");
+            assert_eq!(preview.pages.len(), saved.min(PREVIEW_MAX_PAGES), "{name}: every page is drawn, up to the cap");
+            assert!(preview.missing_images.is_empty());
+            let (width, height) = document.document.page.size();
+            for page in &preview.pages {
+                assert!(page.data_url.starts_with("data:image/png;base64,"));
+                assert_eq!(page.width.max(page.height), PREVIEW_MAX_DIMENSION, "{name}: pages are drawn at the preview size");
+                assert_eq!(page.width > page.height, width > height, "{name}: the drawn page has the page's orientation");
+            }
+        }
+        assert!(documents.iter().filter(|(_, document)| Document::load(&document.output_path).unwrap().get_pages().len() > 1).count() >= 3, "several documents run to more than one page");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_preview_draws_at_most_its_page_cap_and_counts_every_page() {
+        let root = sandbox("preview_cap");
+        let document = request(json!((0..PREVIEW_MAX_PAGES + 5).flat_map(|index| [paragraph(&format!("Page {index}")), json!({ "kind": "pageBreak" })]).collect::<Vec<_>>()), &root.join("cap.pdf"));
+        let preview = preview_of(&document);
+        assert_eq!(preview.page_count, PREVIEW_MAX_PAGES + 5);
+        assert_eq!(preview.pages.len(), PREVIEW_MAX_PAGES);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_preview_writes_no_files() {
+        let root = sandbox("preview_writes_nothing");
+        let picture = root.join("plan.png");
+        png(&picture, 40, 30);
+        let document = request(json!([paragraph("Floor plan"), { "kind": "image", "path": picture }, { "kind": "image", "path": root.join("gone.png") }]), &root.join("plan.pdf"));
+        let before = files(&root);
+        let working = std::env::current_dir().unwrap();
+        let drawn_here = || fs::read_dir(&working).unwrap().filter_map(|entry| entry.ok()).filter(|entry| entry.path().extension().is_some_and(|ext| ext == "png" || ext == "ppm")).count();
+        let pngs_here = drawn_here();
+        let preview = preview_of(&document);
+        assert_eq!(preview.page_count, 1);
+        assert_eq!(files(&root), before, "nothing beside the document's files is written or changed, not even at the save path");
+        assert_eq!(drawn_here(), pngs_here, "the renderer writes no page images to the working folder");
+        // The PDF goes to the renderer on stdin and the pages come back on stdout: no input file and no output root.
+        let command = render_command(Path::new("pdftoppm"), 3);
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["-png", "-scale-to", "800", "-f", "1", "-l", "3", "-"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_missing_image_previews_as_a_named_placeholder_and_an_empty_document_has_no_pages() {
+        let root = sandbox("preview_missing");
+        let missing = root.join("Move").join("floorplan.png");
+        let preview = preview_of(&request(json!([paragraph("Floor plan"), { "kind": "image", "path": missing }]), &root.join("plan.pdf")));
+        assert_eq!((preview.page_count, preview.pages.len()), (1, 1), "the page still draws");
+        assert_eq!(preview.missing_images, ["floorplan.png"]);
+        let empty = preview_of(&request(json!([paragraph("   "), { "kind": "pageBreak" }]), &root.join("empty.pdf")));
+        assert_eq!((empty.page_count, empty.pages.len()), (0, 0));
+        let refused = preview_with(&FormattedPreviewRequest { document: request(json!([{ "kind": "image", "path": "floorplan.png" }]), &root.join("x.pdf")).document }, &fonts(), &no_packs(), &renderer());
+        assert!(refused.unwrap_err().contains("read from this device only"), "the preview checks the document as saving does");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn split_png_stream_splits_concatenated_pngs_and_refuses_a_truncated_one() {
+        let encode = |width: u32| {
+            let mut bytes = Vec::new();
+            image::RgbImage::new(width, 2).write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+            bytes
+        };
+        let (first, second) = (encode(3), encode(5));
+        let stream = [first.clone(), second.clone()].concat();
+        assert_eq!(super::super::split_png_stream(&stream).unwrap(), [first.as_slice(), second.as_slice()]);
+        assert!(super::super::split_png_stream(&stream[..stream.len() - 4]).is_err());
+        assert!(super::super::split_png_stream(b"not a png").is_err());
     }
 }

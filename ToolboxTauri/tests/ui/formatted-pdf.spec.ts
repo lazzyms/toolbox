@@ -7,7 +7,16 @@ type FormattedWindow = Window & {
     __lastSaveFolder?: string;
     __dialogResults: Array<string | null>;
     __drop: (paths: string[], point?: { x: number; y: number }) => void;
+    /** What preview_formatted_pdf replies; while `__holdPreview` is set, each reply waits in `__heldPreviews`. */
+    __preview: unknown;
+    __holdPreview: boolean;
+    __heldPreviews: Array<(preview: unknown) => void>;
 };
+
+/** One-pixel PNGs in two colours, so each faked page is told apart by its image. */
+const PAGE_ONE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQi1rwHwADygIY2ofr+QAAAABJRU5ErkJggg==";
+const PAGE_TWO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGM4oaHxHwAE7AIY0raoogAAAABJRU5ErkJggg==";
+const fakePreview = (pages: string[], pageCount = pages.length) => ({ pageCount, pages: pages.map((dataUrl) => ({ dataUrl, width: 566, height: 800 })), missingImages: [] });
 
 test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
@@ -18,6 +27,9 @@ test.beforeEach(async ({ page }) => {
         let nextId = 1;
         win.__invocations = [];
         win.__dialogResults = [];
+        win.__preview = { pageCount: 1, pages: [{ dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQi1rwHwADygIY2ofr+QAAAABJRU5ErkJggg==", width: 566, height: 800 }], missingImages: [] };
+        win.__holdPreview = false;
+        win.__heldPreviews = [];
         win.__drop = (paths, point) => {
             for (const [id, listener] of listeners) {
                 if (listener.event === "toolbox://shell-event") callbacks.get(listener.handler)?.({ event: listener.event, id, payload: { kind: "dropped-files", paths, point } });
@@ -33,6 +45,7 @@ test.beforeEach(async ({ page }) => {
                 if (command === "get_last_save_folder") return win.__lastSaveFolder ?? "/Users/test/Documents";
                 if (command === "plugin:path|resolve_directory") return "/Users/test";
                 if (command === "create_formatted_pdf") return new Promise((resolve) => { finish = resolve; });
+                if (command === "preview_formatted_pdf") return win.__holdPreview ? new Promise((resolve) => { win.__heldPreviews.push(resolve); }) : win.__preview;
                 if (command === "plugin:dialog|open") return win.__dialogResults.shift() ?? null;
                 if (command === "plugin:event|listen") {
                     const { event, handler } = args as { event: string; handler: number };
@@ -649,4 +662,80 @@ test("Formatted PDF names a missing image, keeps the draft and points to the blo
     await expect(page.getByRole("alert")).toHaveCount(0);
     await expect(page.getByRole("status").filter({ hasText: "Save failed" })).toHaveCount(0);
     await expect(page.getByRole("group", { name: /, Image, / })).toHaveCount(0);
+});
+
+const previewRequests = (page: Page) => page.evaluate(() =>
+    (window as unknown as FormattedWindow).__invocations.filter(({ command }) => command === "preview_formatted_pdf").map(({ args }) => (args as { request: unknown }).request));
+
+test("Formatted PDF previews the pages beside the editor and sends the current document again after each edit", async ({ page }) => {
+    await openFormatted(page);
+    const preview = page.getByRole("region", { name: "Preview" });
+    const shownPage = preview.getByRole("img");
+    // Nothing typed yet: a blank page and no preview request.
+    await expect(preview.getByRole("img", { name: "Blank A4 portrait page" })).toBeVisible();
+    await expect(preview.getByText("Nothing to preview yet. The page fills in as you type.")).toBeVisible();
+    await expect(preview.getByText("1 of 1")).toBeVisible();
+    expect(await previewRequests(page)).toEqual([]);
+
+    // Typing quickly sends one request, once the typing pauses, with the document a save would send.
+    await page.evaluate((preview) => { (window as unknown as FormattedWindow).__preview = preview; }, fakePreview([PAGE_ONE, PAGE_TWO]));
+    await block(page, "Block 1, Paragraph").pressSequentially("Dear neighbour,");
+    await expect(preview.getByRole("img", { name: "Page 1 of 2, A4 portrait" })).toBeVisible();
+    expect(await previewRequests(page)).toEqual([{
+        document: { title: "", author: "", blocks: [{ kind: "paragraph", runs: [plain("Dear neighbour,")] }], page: defaultPage, font: { family: "Liberation Serif", size: 11 } },
+    }]);
+    await expect(shownPage.locator("img")).toHaveAttribute("src", PAGE_ONE);
+    await expect(page.getByText("2 pages, A4", { exact: true })).toBeVisible();
+    await expect(preview.getByRole("button", { name: "Previous page" })).toBeDisabled();
+    await preview.getByRole("button", { name: "Next page" }).click();
+    await expect(preview.getByRole("img", { name: "Page 2 of 2, A4 portrait" }).locator("img")).toHaveAttribute("src", PAGE_TWO);
+    await expect(preview.getByText("2 of 2")).toBeVisible();
+    await expect(preview.getByRole("button", { name: "Next page" })).toBeDisabled();
+
+    // An edit dims the shown page while a new request, with the current document, is drawn.
+    await page.evaluate(() => { (window as unknown as FormattedWindow).__holdPreview = true; });
+    await page.getByRole("radio", { name: "Landscape" }).click();
+    await expect.poll(async () => (await previewRequests(page)).length).toBe(2);
+    expect(((await previewRequests(page))[1] as { document: unknown }).document).toEqual({
+        title: "", author: "", blocks: [{ kind: "paragraph", runs: [plain("Dear neighbour,")] }], page: { ...defaultPage, orientation: "landscape" }, font: { family: "Liberation Serif", size: 11 },
+    });
+    await expect(preview.getByRole("status")).toHaveText("Updating…");
+    await expect(preview.getByText("Updating preview…")).toBeVisible();
+    await expect(shownPage).toHaveAttribute("aria-busy", "true");
+
+    // A second edit before the first reply: the older reply is dropped, so the pages are always the latest document's.
+    await page.getByLabel("Title", { exact: true }).fill("Move-out checklist");
+    await expect.poll(async () => (await previewRequests(page)).length).toBe(3);
+    expect(((await previewRequests(page))[2] as { document: { title: string } }).document.title).toBe("Move-out checklist");
+    await page.evaluate((latest) => (window as unknown as FormattedWindow).__heldPreviews[1](latest), fakePreview([PAGE_TWO], 1));
+    await expect(preview.getByRole("img", { name: "Page 1 of 1, A4 landscape" }).locator("img")).toHaveAttribute("src", PAGE_TWO);
+    await page.evaluate((stale) => (window as unknown as FormattedWindow).__heldPreviews[0](stale), fakePreview([PAGE_ONE, PAGE_ONE, PAGE_ONE]));
+    await page.waitForTimeout(100);
+    await expect(preview.getByRole("img", { name: "Page 1 of 1, A4 landscape" }).locator("img")).toHaveAttribute("src", PAGE_TWO);
+    await expect(preview.getByRole("status")).toHaveText("");
+    await expect(page.getByText("1 page, A4 landscape", { exact: true })).toBeVisible();
+
+    // Clearing the document goes back to the blank page without asking for a preview.
+    await block(page, "Block 1, Paragraph").fill("");
+    await expect(preview.getByRole("img", { name: "Blank A4 landscape page" })).toBeVisible();
+    await page.waitForTimeout(400);
+    expect((await previewRequests(page)).length).toBe(3);
+});
+
+test("Formatted PDF says how many pages the preview leaves out and why a preview is unavailable", async ({ page }) => {
+    await openFormatted(page);
+    const preview = page.getByRole("region", { name: "Preview" });
+    await page.evaluate((capped) => { (window as unknown as FormattedWindow).__preview = capped; }, fakePreview([PAGE_ONE, PAGE_TWO], 30));
+    await block(page, "Block 1, Paragraph").fill("A long report");
+    await expect(preview.getByRole("img", { name: "Page 1 of 30, A4 portrait" })).toBeVisible();
+    await expect(preview.getByText("The preview shows the first 2 pages. Saving makes all 30.")).toBeVisible();
+    await preview.getByRole("button", { name: "Next page" }).click();
+    await expect(preview.getByRole("button", { name: "Next page" })).toBeDisabled();
+    await expect(page.getByText("30 pages, A4", { exact: true })).toBeVisible();
+
+    await page.evaluate(() => { (window as unknown as FormattedWindow).__preview = null; });
+    await block(page, "Block 1, Paragraph").fill("A short note");
+    await expect(preview.getByRole("status")).toHaveText("Preview unavailable");
+    await expect(preview.getByText("The preview could not be drawn.")).toBeVisible();
+    await expect(saveButton(page)).toBeEnabled();
 });
