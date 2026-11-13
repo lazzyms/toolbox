@@ -947,3 +947,110 @@ test('resetting the only turn leaves nothing to export', async ({ page }) => {
   await expect(liveStatus(page)).toHaveText('Page 3 turned back to how it was in the original. It’s back to how it was opened.');
   await expect(exportButton(page)).toBeDisabled();
 });
+
+// Mirroring. A mirror flips each selected page as it is displayed, composes with its turn, and exports as a vector flip.
+const notice = (page: Page) => page.locator('.scene-organize-notice');
+async function exportedOrientations(page: Page) {
+  await exportButton(page).click();
+  await expect.poll(() => page.evaluate(() => (window as any).calls.some((call: any) => call.command === 'export_pdf_scene'))).toBe(true);
+  const scene = await page.evaluate(() => (window as any).calls.filter((call: any) => call.command === 'export_pdf_scene').at(-1).args.request.scene);
+  return scene.pages.map((item: any) => [item.sourceIndex + 1, item.rotation, item.mirrored]);
+}
+
+test('each mirror control flips the selected pages, says so, composes with a turn and exports the orientation', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await selectRun(page, 2, 3);
+  for (const name of ['Mirror left to right (H)', 'Mirror top to bottom (V)'])
+    await expect(orientation(page).getByRole('button', { name, exact: true })).toBeEnabled();
+  await expect(orientation(page).getByRole('button', { name: 'Mirror left to right (H)' })).toHaveAttribute('aria-keyshortcuts', 'H');
+  await expect(orientation(page).getByRole('button', { name: 'Mirror top to bottom (V)' })).toHaveAttribute('aria-keyshortcuts', 'V');
+  await orientation(page).getByRole('button', { name: 'Mirror left to right (H)' }).click();
+  await expect(liveStatus(page)).toHaveText('Pages 2 and 3 mirrored left to right');
+  await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, mirrored left to right, selected');
+  // A second mirror on the same axis undoes the first: there is nothing to export.
+  await orientation(page).getByRole('button', { name: 'Mirror left to right (H)' }).click();
+  await expect(liveStatus(page)).toHaveText('Pages 2 and 3 mirrored left to right. It’s back to how it was opened.');
+  await expect(exportButton(page)).toBeDisabled();
+  await orientation(page).getByRole('button', { name: 'Mirror top to bottom (V)' }).click();
+  await expect(liveStatus(page)).toHaveText('Pages 2 and 3 mirrored top to bottom');
+  await expect(option(page, 3)).toHaveAccessibleName('Position 3, original page 3, mirrored top to bottom, selected');
+  await option(page, 4).click();
+  await page.keyboard.press('Meta+R');
+  await orientationMenu(page, 'Mirror left to right');
+  await expect(liveStatus(page)).toHaveText('Page 4 mirrored left to right');
+  await expect(option(page, 4)).toHaveAccessibleName('Position 4, original page 4, rotated 90° left, mirrored left to right, selected');
+  await option(page, 5).click();
+  await orientationMenu(page, 'Mirror top to bottom');
+  await expect(liveStatus(page)).toHaveText('Page 5 mirrored top to bottom');
+  expect(await exportedOrientations(page)).toEqual([[1, 0, false], [2, 180, true], [3, 180, true], [4, 270, true], [5, 180, true]]);
+});
+
+test('H and V mirror the selected pages, each mirror is one undo step, and they do nothing without a selection', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await option(page, 1).click();
+  await page.keyboard.press('Escape');
+  await expect(count(page)).toHaveText('No pages selected');
+  for (const name of ['Mirror left to right (H)', 'Mirror top to bottom (V)'])
+    await expect(orientation(page).getByRole('button', { name, exact: true })).toBeDisabled();
+  await page.keyboard.press('h');
+  await expect(undoButton(page)).toBeDisabled();
+  await option(page, 2).click();
+  await page.keyboard.press('h');
+  await expect(liveStatus(page)).toHaveText('Page 2 mirrored left to right');
+  await page.keyboard.press('v');
+  await expect(liveStatus(page)).toHaveText('Page 2 mirrored top to bottom');
+  // Left to right, then top to bottom, is the page turned 180°.
+  await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, rotated 180°, selected');
+  await undoButton(page).click();
+  await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, mirrored left to right, selected');
+  await undoButton(page).click();
+  await expect(option(page, 2)).toHaveAccessibleName('Position 2, original page 2, selected');
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  expect(await exportedOrientations(page)).toEqual([[1, 0, false], [2, 0, true], [3, 0, false], [4, 0, false], [5, 0, false]]);
+});
+
+test('a mirrored page flips its thumbnail and focus view in CSS, names the flip and needs no new render', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(option(page, 2).locator('img')).toBeVisible();
+  await option(page, 2).click();
+  const badge = option(page, 2).locator('.scene-organize-orientation-badge');
+  const thumbnail = option(page, 2).locator('.scene-organize-thumb img');
+  await page.keyboard.press('h');
+  await expect(badge).toHaveText('⇋ Mirrored');
+  await expect(orientationFact(page)).toHaveText('Mirrored left to right');
+  // scaleX(-1) computes to matrix(-1, 0, 0, 1, 0, 0).
+  await expect(thumbnail).toHaveCSS('transform', 'matrix(-1, 0, 0, 1, 0, 0)');
+  await expect(focusPreview(page).getByRole('img', { name: 'Preview of page 2' })).toHaveCSS('transform', 'matrix(-1, 0, 0, 1, 0, 0)');
+  await page.keyboard.press('Meta+R');
+  await expect(badge).toHaveText('↻ 90° · ⇋ Mirrored');
+  await expect(orientationFact(page)).toHaveText('Rotated 90° right, mirrored left to right');
+  await page.keyboard.press('Meta+R');
+  await expect(badge).toHaveText('⇵ Mirrored');
+  await expect(orientationFact(page)).toHaveText('Mirrored top to bottom');
+  await expect(thumbnail).toHaveCSS('transform', /^matrix\(1, /);
+  await orientationMenu(page, /^Reset orientation of 1 page/);
+  await expect(badge).toHaveCount(0);
+  await expect(thumbnail).toHaveCSS('transform', 'none');
+  expect((await thumbnailRequests(page)).flat().filter((index) => index === 1)).toHaveLength(1);
+});
+
+test('the reversed-text notice counts mirrored pages before export and goes once none are mirrored', async ({ page }) => {
+  await setPlatform(page, 'MacIntel');
+  await openReport(page);
+  await expect(notice(page)).toHaveCount(0);
+  await option(page, 1).click();
+  await page.keyboard.press('h');
+  await expect(notice(page)).toHaveText('1 mirrored page will show its text reversed. That’s expected: mirroring flips how the page looks. The text still copies and searches normally.');
+  await expect(notice(page)).toHaveRole('status');
+  await selectRun(page, 2, 3);
+  await page.keyboard.press('v');
+  await expect(notice(page).locator('strong')).toHaveText('3 mirrored pages will show their text reversed.');
+  await page.keyboard.press('v');
+  await option(page, 1).click();
+  await page.keyboard.press('h');
+  await expect(notice(page)).toHaveCount(0);
+  await expect(exportButton(page)).toBeDisabled();
+});

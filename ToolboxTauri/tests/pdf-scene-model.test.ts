@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { headerFooterOverlaps, headerFooterParts, headerFooterVariant, isRangedKind, legacyWatermarkPatterns, movePagesBefore, objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, removePages, resolvePageTokens, rotatePages, sceneFromDocument, swapPage, tokenDate, watermarkMarks, type HeaderFooterOptions, type HeaderFooterText, type PageNumberFormat, type PdfScene, type SceneObject, interleaveDuplexScan, movePagesBy, movePagesTo, movePagesToGap, reversePages, resetPageRotation } from "../src/features/pdf-editor/scene";
+import { headerFooterOverlaps, headerFooterParts, headerFooterVariant, isRangedKind, legacyWatermarkPatterns, movePagesBefore, objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, removePages, resolvePageTokens, rotatePages, sceneFromDocument, swapPage, tokenDate, watermarkMarks, type HeaderFooterOptions, type HeaderFooterText, type PageNumberFormat, type PdfScene, type SceneObject, interleaveDuplexScan, movePagesBy, movePagesTo, movePagesToGap, reversePages, resetPageRotation, composeOrientation, mirrorPages } from "../src/features/pdf-editor/scene";
 import { parsePageRange } from "../src/shared/workspaceValidation";
 
 test("scene import carries source rotation and page-box baseline", () => {
@@ -15,6 +15,7 @@ test("scene import carries source rotation and page-box baseline", () => {
     width: 300,
     height: 200,
     rotation: 0,
+    mirrored: false,
     crop: null,
     sourceRotation: 90,
     sourceBox: { x: 20, y: 30, width: 200, height: 300 },
@@ -230,6 +231,58 @@ test("resetting orientation turns only the chosen pages back and keeps every oth
   ]);
   assert.equal(reset.pages[1], scene.pages[1], "an untouched page keeps its identity");
   assert.equal(resetPageRotation(reset, ["source-2", "source-0"]), reset, "nothing to reset returns the same scene");
+});
+
+const orientations = [0, 90, 180, 270].flatMap((rotation) => [false, true].map((mirrored) => ({ rotation, mirrored })));
+const edits = [{ rotate: 90 }, { rotate: -90 }, { rotate: 180 }, { mirror: "horizontal" as const }, { mirror: "vertical" as const }];
+/** Turns a screen point (y down) clockwise by quarter turns. */
+const turnPoint = ([x, y]: number[], degrees: number) => {
+  for (let turn = 0; turn < ((degrees % 360) + 360) % 360; turn += 90) [x, y] = [-y, x];
+  return [x, y];
+};
+/** Where an orientation sends the point (1, 2), as the thumbnail draws it: flipped left to right, then turned. */
+const sendPoint = ({ rotation, mirrored }: { rotation: number; mirrored?: boolean }) => turnPoint([mirrored ? -1 : 1, 2], rotation);
+
+test("orientations compose into one of the eight, matching the geometry of each edit", () => {
+  const point = (edit: (typeof edits)[number], [x, y]: number[]) => "rotate" in edit ? turnPoint([x, y], edit.rotate)
+    : edit.mirror === "horizontal" ? [-x, y] : [x, -y];
+  for (const orientation of orientations) {
+    for (const edit of edits) {
+      const next = composeOrientation(orientation, edit);
+      assert.ok([0, 90, 180, 270].includes(next.rotation), `${JSON.stringify(next)} stays a quarter turn`);
+      assert.deepEqual(sendPoint(next), point(edit, sendPoint(orientation)), `${JSON.stringify(orientation)} then ${JSON.stringify(edit)}`);
+    }
+  }
+});
+
+test("a mirror twice on the same axis is the identity, and top to bottom is left to right turned 180°", () => {
+  for (const orientation of orientations) {
+    for (const mirror of ["horizontal", "vertical"] as const) {
+      assert.deepEqual(composeOrientation(composeOrientation(orientation, { mirror }), { mirror }), orientation);
+    }
+    assert.deepEqual(composeOrientation(orientation, { mirror: "vertical" }),
+      composeOrientation(composeOrientation(orientation, { mirror: "horizontal" }), { rotate: 180 }));
+  }
+  assert.deepEqual(composeOrientation({ rotation: 90 }, { mirror: "horizontal" }), { rotation: 270, mirrored: true });
+  assert.deepEqual(composeOrientation({ rotation: 0, mirrored: true }, { rotate: 90 }), { rotation: 90, mirrored: true });
+});
+
+test("mirroring flips only the selected pages, keeps their turn and undoes with a second mirror", () => {
+  const turned = rotatePages(sixPages(), ["source-1"], 90);
+  const scene = mirrorPages(turned, ["source-1", "source-3"], "horizontal");
+  assert.deepEqual(scene.pages.map((page) => [page.rotation, page.mirrored]),
+    [[0, false], [270, true], [0, false], [0, true], [0, false], [0, false]]);
+  assert.equal(scene.pages[0], turned.pages[0], "an untouched page keeps its identity");
+  assert.deepEqual(mirrorPages(scene, ["source-1", "source-3"], "horizontal").pages, turned.pages);
+  assert.deepEqual(mirrorPages(sixPages(), ["source-2"], "vertical").pages[2], { ...sixPages().pages[2], rotation: 180, mirrored: true });
+  assert.equal(mirrorPages(scene, [], "vertical"), scene);
+  assert.equal(rotatePages(scene, ["source-3"], 90).pages[3].mirrored, true, "a turn keeps the mirror");
+});
+
+test("resetting orientation also clears a mirror", () => {
+  const scene = mirrorPages(rotatePages(sixPages(), ["source-0"], 90), ["source-0", "source-1"], "vertical");
+  const reset = resetPageRotation(scene, ["source-0", "source-1"]);
+  assert.deepEqual(reset.pages.slice(0, 2).map((page) => [page.rotation, page.mirrored]), [[0, false], [0, false]]);
 });
 
 test("swapping pages changes only the page order", () => {

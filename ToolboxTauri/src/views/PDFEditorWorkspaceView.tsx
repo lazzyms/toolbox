@@ -10,7 +10,7 @@ import { fileName } from '../components/resultRow';
 import type { ShellEvent } from '../hooks/useShellBridge';
 import type { AtomicToolId, ToolDefinition, ToolError, ToolResult } from '../contracts';
 import { useToolAvailability } from '../ToolAvailabilityContext';
-import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, RefreshCw, RotateCcw, RotateCw, TriangleAlert, Undo2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp, ChevronDown, FlipHorizontal2, FlipVertical2, RefreshCw, RotateCcw, RotateCw, TriangleAlert, Undo2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
@@ -33,7 +33,7 @@ import type { SubToolInspectorProps, UsedSignature } from '../features/pdf-edito
 import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
 import { proposedSaveName } from '../components/saveStep';
 import type { SaveDialog } from '../registry/saveSteps';
-import { headerFooterOverlaps, headerFooterParts, isRangedKind, movePagesBefore, objectsOnPage, pageNumberRect, pageNumberTemplates, pageNumberText, pagesInRange, removePages, rotatePages, sceneFromDocument, visibleBounds, interleaveDuplexScan, movePagesBy, movePagesTo, movePagesToGap, reversePages, resetPageRotation } from '../features/pdf-editor/scene';
+import { headerFooterOverlaps, headerFooterParts, isRangedKind, movePagesBefore, objectsOnPage, pageNumberRect, pageNumberTemplates, pageNumberText, pagesInRange, removePages, rotatePages, sceneFromDocument, visibleBounds, interleaveDuplexScan, movePagesBy, movePagesTo, movePagesToGap, reversePages, resetPageRotation, mirrorPages } from '../features/pdf-editor/scene';
 import type { PdfScene, SceneObject, ScenePage, ScenePreview, SceneRect, SceneShape, SceneTool, SignatureMode, TextStyle } from '../features/pdf-editor/scene';
 import { PREVIEW_CACHE_MAX_ENTRIES, PREVIEW_RENDER_SETTINGS, createPreviewCache, pdfEditorErrorMessage, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 import type { GenerationState } from './pdfPreviewHelpers';
@@ -44,7 +44,7 @@ import { PdfEditorBatchSurface } from '../features/pdf-editor/BatchSurface';
 import { PdfPropertiesSurface } from '../features/pdf-editor/PropertiesSurface';
 import { PDFConversionWorkspaceView } from './PDFConversionWorkspaceView';
 import { matchShortcut, pressShortcutTarget, primaryModifierPressed, shortcutLabel, shortcutTarget, isWindows } from '../shortcuts';
-import { clearPageSelection, clickPage, extendPageSelection, pageOptionName, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage, pagePositionsLabel, orientationBadge, orientationLabel, rotationAnnouncement } from '../features/pdf-editor/pageSelection';
+import { clearPageSelection, clickPage, extendPageSelection, pageOptionName, selectAllPages, selectPagesByParity, selectPagesByRange, selectionCountLabel, togglePage, pagePositionsLabel, orientationBadge, orientationLabel, rotationAnnouncement, mirrorAnnouncement, mirroredTextNotice } from '../features/pdf-editor/pageSelection';
 import type { PageSelection } from '../features/pdf-editor/pageSelection';
 import { createSourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 import type { SourceThumbnail, SourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
@@ -141,11 +141,15 @@ const openFailureText = (failure: OpenFailure) => {
 };
 /** A grid placeholder keeps the source page's shape from inspection, turned with the page, so the grid doesn't jump when the thumbnail arrives. */
 const thumbnailAspect = ({ width, height, rotation }: ScenePage) => rotation % 180 === 0 ? `${width} / ${height}` : `${height} / ${width}`;
-/** Source thumbnails show the original page, so the scene's rotation is drawn in CSS. A quarter turn swaps the image box to fill the frame. */
-const thumbnailImageStyle = ({ width, height, rotation }: ScenePage): React.CSSProperties | undefined => {
-  if (!rotation) return undefined;
-  if (rotation % 180 === 0) return { transform: `rotate(${rotation}deg)` };
-  return { position: 'absolute', left: '50%', top: '50%', width: `${(100 * width) / height}%`, height: `${(100 * height) / width}%`, maxWidth: 'none', maxHeight: 'none', transform: `translate(-50%, -50%) rotate(${rotation}deg)` };
+/**
+ * Source thumbnails show the original page, so the scene's orientation is drawn in CSS: the mirror flips the
+ * image left to right, then the turn rotates it. A quarter turn swaps the image box to fill the frame.
+ */
+const thumbnailImageStyle = ({ width, height, rotation, mirrored }: ScenePage): React.CSSProperties | undefined => {
+  if (!rotation && !mirrored) return undefined;
+  const orientation = [rotation ? `rotate(${rotation}deg)` : '', mirrored ? 'scaleX(-1)' : ''].filter(Boolean).join(' ');
+  if (rotation % 180 === 0) return { transform: orientation };
+  return { position: 'absolute', left: '50%', top: '50%', width: `${(100 * width) / height}%`, height: `${(100 * height) / width}%`, maxWidth: 'none', maxHeight: 'none', transform: `translate(-50%, -50%) ${orientation}` };
 };
 
 function keepToolbarTabStop(toolbar: HTMLDivElement | null) {
@@ -844,6 +848,11 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       if (pageTargets.length && canReorder) { event.preventDefault(); openMoveTo(true); }
       return;
     }
+    // H mirrors the selected pages left to right, V top to bottom.
+    if ((event.key.toLowerCase() === 'h' || event.key.toLowerCase() === 'v') && !event.shiftKey) {
+      if (pageTargets.length && canReorder) { event.preventDefault(); mirrorSelection(event.key.toLowerCase() === 'h' ? 'horizontal' : 'vertical'); }
+      return;
+    }
     if (event.key === 'Escape') {
       // With nothing selected, Escape keeps its usual meaning and leaves the workspace.
       if (pageSelection.ids.length) { event.preventDefault(); replacePageSelection(clearPageSelection()); }
@@ -888,6 +897,12 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     if (!pageTargets.length) return;
     const next = rotatePages(scene, pageTargets, degrees);
     reorder(next, rotationAnnouncement(positionsOf(pageTargets), degrees) + backToOpened(next), null);
+  };
+  // A mirror flips each selected page as it is displayed. Export keeps the page vector: only how it is drawn changes.
+  const mirrorSelection = (axis: 'horizontal' | 'vertical') => {
+    if (!pageTargets.length) return;
+    const next = mirrorPages(scene, pageTargets, axis);
+    reorder(next, mirrorAnnouncement(positionsOf(pageTargets), axis) + backToOpened(next), null);
   };
   const resetOrientation = () => {
     if (!pageTargets.length) return;
@@ -1054,6 +1069,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const selectionLocked = exporting || !page;
   const documentName = path ? fileName(path) : '';
   const pageCount = `${scene.pages.length} ${scene.pages.length === 1 ? 'page' : 'pages'}`;
+  // Mirrored pages show their text reversed. The notice says so before export, and goes once no page is mirrored.
+  const mirroredNotice = mirroredTextNotice(scene.pages.filter((item) => item.mirrored).length);
   const editRuns: PdfEditRun[] = page?.sourceIndex == null ? [] : document?.pages[page.sourceIndex]?.editRuns ?? [];
   const textEdits = scene.textEdits ?? [];
   const pageEdits = textEdits.filter((edit) => edit.pageIndex === page?.sourceIndex);
@@ -1180,6 +1197,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
               aria-keyshortcuts={isWindows() ? 'Control+Shift+R' : 'Shift+Meta+R'} disabled={!canReorder || !pageTargets.length} onClick={() => rotateSelection(-90)}><RotateCcw aria-hidden="true" /></Button>
             <Button variant="ghost" size="icon-sm" aria-label={`Rotate right (${rotateRightKey})`} title={`Rotate right (${rotateRightKey})`}
               aria-keyshortcuts={isWindows() ? 'Control+R' : 'Meta+R'} disabled={!canReorder || !pageTargets.length} onClick={() => rotateSelection(90)}><RotateCw aria-hidden="true" /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label="Mirror left to right (H)" title="Mirror left to right (H)"
+              aria-keyshortcuts="H" disabled={!canReorder || !pageTargets.length} onClick={() => mirrorSelection('horizontal')}><FlipHorizontal2 aria-hidden="true" /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label="Mirror top to bottom (V)" title="Mirror top to bottom (V)"
+              aria-keyshortcuts="V" disabled={!canReorder || !pageTargets.length} onClick={() => mirrorSelection('vertical')}><FlipVertical2 aria-hidden="true" /></Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-xs" aria-label="More orientation options" disabled={!canReorder || !pageTargets.length}><ChevronDown aria-hidden="true" /></Button>
@@ -1189,9 +1210,12 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
                 <DropdownMenuItem onSelect={() => rotateSelection(-90)}><RotateCcw aria-hidden="true" />Rotate left 90°<DropdownMenuShortcut>{rotateLeftKey}</DropdownMenuShortcut></DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => rotateSelection(180)}><RefreshCw aria-hidden="true" />Rotate 180°</DropdownMenuItem>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => mirrorSelection('horizontal')}><FlipHorizontal2 aria-hidden="true" />Mirror left to right<DropdownMenuShortcut>H</DropdownMenuShortcut></DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => mirrorSelection('vertical')}><FlipVertical2 aria-hidden="true" />Mirror top to bottom<DropdownMenuShortcut>V</DropdownMenuShortcut></DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem className="flex-col items-start gap-0.5" onSelect={resetOrientation}>
                   <span className="flex items-center gap-2"><Undo2 aria-hidden="true" />Reset orientation of {pageTargets.length} {pageTargets.length === 1 ? 'page' : 'pages'}</span>
-                  <span className="text-xs text-muted-foreground">Turns the selected pages back to how they were in the original. Other changes stay.</span>
+                  <span className="text-xs text-muted-foreground">Turns and unflips the selected pages back to how they were in the original. Other changes stay.</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1274,6 +1298,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       </div>
       <div className="scene-organize-body">
         <div className="scene-organize-grid-frame">
+        {mirroredNotice && <Card role="status" className="scene-organize-notice flex-row items-start gap-2.5 rounded-lg px-3 py-2.5 shadow-none">
+          <FlipHorizontal2 className="scene-organize-notice-icon" aria-hidden="true" />
+          <p><strong>{mirroredNotice}</strong> That’s expected: mirroring flips how the page looks. The text still copies and searches normally.</p>
+        </Card>}
         <div ref={organizeGrid} className="scene-organize-grid" role="listbox" aria-multiselectable="true" aria-label={`Pages of ${documentName}, in order`}
           aria-describedby="scene-organize-grid-help" data-size={thumbnailSize} data-dragging={pageDrag ? true : undefined} onKeyDown={gridKeyDown} onKeyUp={gridKeyUp}>
           {scene.pages.map((item, index) => {
@@ -1294,7 +1322,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
               <span className="scene-organize-thumb" data-selected={isSelected || undefined} data-placeholder={source && !thumb ? source.status : undefined} style={{ aspectRatio: thumbnailAspect(item) }}>
                 {thumb ? <img alt="" src={thumb} style={thumbnailImageStyle(item)} /> : source && <span aria-hidden="true">{position}</span>}
                 {isSelected && <span className="scene-organize-check" aria-hidden="true">✓</span>}
-                {orientationBadge(item.rotation) && <Badge variant="outline" className="scene-organize-orientation-badge" aria-hidden="true">{orientationBadge(item.rotation)}</Badge>}
+                {orientationBadge(item) && <Badge variant="outline" className="scene-organize-orientation-badge" aria-hidden="true">{orientationBadge(item)}</Badge>}
               </span>
               <span className="scene-organize-label"><strong>{position}</strong>{original !== null && original !== position && <span> · was page {original}</span>}</span>
             </Button>;
@@ -1329,7 +1357,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
           <dl className="scene-organize-facts">
             <dt>Position</dt><dd>{currentIndex + 1} of {scene.pages.length}</dd>
             <dt>Original page</dt><dd>{page.sourceIndex === null ? 'None' : page.sourceIndex + 1}</dd>
-            <dt>Orientation</dt><dd>{orientationLabel(page.rotation)}</dd>
+            <dt>Orientation</dt><dd>{orientationLabel(page)}</dd>
           </dl>
           <Button variant="outline" size="sm" disabled={!pageViewTool} onClick={() => { if (pageViewTool) { endGroup(); setTool(pageViewTool); } }}>Open in page view</Button>
         </aside>

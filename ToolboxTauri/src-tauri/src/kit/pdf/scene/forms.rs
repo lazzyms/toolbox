@@ -773,7 +773,7 @@ mod tests {
     }
 
     fn identity_scene() -> PdfScene {
-        PdfScene { pages: vec![ScenePage { source_index: Some(0), width: 612., height: 792., rotation: 0, crop: None, source_rotation: None, source_box: None, objects: vec![] }] }
+        PdfScene { pages: vec![ScenePage { mirrored: false, source_index: Some(0), width: 612., height: 792., rotation: 0, crop: None, source_rotation: None, source_box: None, objects: vec![] }] }
     }
 
     fn fill(input: &Path, scene: PdfScene, values: serde_json::Value) -> crate::kit::contracts::JobOutcome {

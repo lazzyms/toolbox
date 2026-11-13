@@ -1,6 +1,6 @@
 import { parsePageRange, selectedPageLabel } from "../../shared/workspaceValidation";
 import type { ValidationIssue } from "../../shared/workspaceValidation";
-import type { ScenePage } from "./scene";
+import type { MirrorAxis, PageOrientation, ScenePage } from "./scene";
 
 /** Selected page ids in document order, plus the page a Shift range runs from. */
 export type PageSelection = { ids: string[]; anchor: string | null };
@@ -59,28 +59,57 @@ export const selectionCountLabel = (count: number) => (count === 0 ? "No pages s
 
 const quarterTurns = (degrees: number) => ((degrees % 360) + 360) % 360;
 const turnWords: Record<number, string> = { 90: "90° right", 180: "180°", 270: "90° left" };
-const orientationWords: Record<number, string> = { 90: "rotated 90° right", 180: "rotated 180°", 270: "rotated 90° left" };
-const orientationBadges: Record<number, string> = { 90: "↻ 90°", 180: "↻ 180°", 270: "↺ 90°" };
+const rotationWords: Record<number, string> = { 90: "rotated 90° right", 180: "rotated 180°", 270: "rotated 90° left" };
+const rotationBadges: Record<number, string> = { 90: "↻ 90°", 180: "↻ 180°", 270: "↺ 90°" };
+const mirrorWords: Record<MirrorAxis, string> = { horizontal: "mirrored left to right", vertical: "mirrored top to bottom" };
+const mirrorBadges: Record<MirrorAxis, string> = { horizontal: "⇋ Mirrored", vertical: "⇵ Mirrored" };
 
-/** A page's turn for its details: "Rotated 90° right", "Rotated 180°", "Rotated 90° left" or "As in the original". */
-export const orientationLabel = (rotation: number) => {
-  const words = orientationWords[quarterTurns(rotation)];
+/**
+ * Splits an orientation into the turn and flip a person would name. A left-to-right flip turned 180°
+ * is a top-to-bottom flip, so that one reads as a single mirror; other mirrored turns keep the
+ * left-to-right flip.
+ */
+const orientationParts = ({ rotation, mirrored }: PageOrientation): { turn: number; mirror: MirrorAxis | null } => {
+  const turn = quarterTurns(rotation);
+  if (!mirrored) return { turn, mirror: null };
+  return turn === 180 ? { turn: 0, mirror: "vertical" } : { turn, mirror: "horizontal" };
+};
+
+const orientationWords = (orientation: PageOrientation) => {
+  const { turn, mirror } = orientationParts(orientation);
+  return [rotationWords[turn], mirror && mirrorWords[mirror]].filter(Boolean).join(", ");
+};
+
+/** A page's orientation for its details, such as "Rotated 90° right, mirrored left to right", or "As in the original". */
+export const orientationLabel = (orientation: PageOrientation) => {
+  const words = orientationWords(orientation);
   return words ? words[0].toUpperCase() + words.slice(1) : "As in the original";
 };
 
-/** The short mark a turned page shows on its thumbnail, or null when it is as in the original. */
-export const orientationBadge = (rotation: number) => orientationBadges[quarterTurns(rotation)] ?? null;
+/** The short mark a turned or mirrored page shows on its thumbnail, or null when it is as in the original. */
+export const orientationBadge = (orientation: PageOrientation) => {
+  const { turn, mirror } = orientationParts(orientation);
+  return [rotationBadges[turn], mirror && mirrorBadges[mirror]].filter(Boolean).join(" · ") || null;
+};
 
 /** Announces a turn of the pages, for example "Pages 4 to 6 rotated 90° left". */
 export const rotationAnnouncement = (positions: number[], degrees: number) =>
   `${pagePositionsLabel(positions)} rotated ${turnWords[quarterTurns(degrees)] ?? "0°"}`;
 
+/** Announces a mirror of the pages, for example "Pages 8 and 9 mirrored left to right". */
+export const mirrorAnnouncement = (positions: number[], axis: MirrorAxis) => `${pagePositionsLabel(positions)} ${mirrorWords[axis]}`;
+
+/** The notice shown before export while pages are mirrored, or null when none are. */
+export const mirroredTextNotice = (count: number) => count === 0 ? null
+  : count === 1 ? "1 mirrored page will show its text reversed."
+  : `${count} mirrored pages will show their text reversed.`;
+
 const previewWords = { loading: "preview loading", failed: "preview unavailable" } as const;
 
-export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIndex" | "rotation">, selected: boolean, preview?: keyof typeof previewWords) => {
+export const pageOptionName = (position: number, page: Pick<ScenePage, "sourceIndex" | "rotation" | "mirrored">, selected: boolean, preview?: keyof typeof previewWords) => {
   const parts = [`Position ${position}`];
   if (page.sourceIndex !== null) parts.push(`original page ${page.sourceIndex + 1}`);
-  const orientation = orientationWords[quarterTurns(page.rotation)];
+  const orientation = orientationWords(page);
   if (orientation) parts.push(orientation);
   if (preview) parts.push(previewWords[preview]);
   if (selected) parts.push("selected");
