@@ -39,6 +39,7 @@ const PDF: ToolLimits = ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_
 const IMAGE: ToolLimits = ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES };
 pub const MAX_IMAGE_PAGES: u32 = 1_000;
 const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(MAX_IMAGE_PAGES), ..IMAGE };
+pub const SIGNATURE_IMAGE: ToolLimits = ToolLimits { max_bytes: 20 * MB, max_expanded_bytes: 80 * MB, ..IMAGE };
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {

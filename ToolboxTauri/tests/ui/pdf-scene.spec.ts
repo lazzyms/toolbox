@@ -392,7 +392,7 @@ test('scene composes every mark kind, moves and resizes, then exports once', asy
   expect(result.pages[0].objects.map((o: any) => o.kind)).toEqual(['text', 'highlight', 'shape', 'signature', 'watermark']);
   expect(result.pages[0].objects[0].rect.x).toBeCloseTo(612 * .2 + 10, 0);
   expect(result.pages[0].objects[0].rect.width).toBeGreaterThan(612 * .35 + 8);
-  expect(result.pages[0].objects[3]).toMatchObject({ signatureMode: 'text', fontFamily: 'Satisfy' });
+  expect(result.pages[0].objects[3]).toMatchObject({ signatureMode: 'text', text: 'Your signature', color: '#1f1f1f', opacity: 1 });
   expect(await page.evaluate(() => (window as any).calls.filter((c: any) => c.command === 'export_pdf_scene').length)).toBe(1);
 });
 
@@ -632,7 +632,8 @@ test('the object list names the type, page and text of every placed object', asy
   await draw(page, 'Highlight', .6);
   await page.getByRole('toolbar', { name: 'PDF editor tools' }).getByRole('button', { name: 'Signature', exact: true }).click();
   await draw(page, 'Signature', .3);
-  const list = page.getByRole('complementary', { name: 'PDF editor inspector' }).getByRole('list').first();
+  // The signature tool adds its own "Use again" list to the inspector, so target the object list by its section.
+  const list = page.getByRole('complementary', { name: 'PDF editor inspector' }).getByRole('region', { name: /^Objects in this document/ }).getByRole('list');
   await expect(list.getByRole('button')).toHaveText([/Page 1Text/, /Page 1square/, /Page 2highlighted area/, /Page 2Your signature/]);
   for (const name of ['Text box, page 1: Text', 'Shape, page 1: square', 'Highlight, page 2: highlighted area', 'Signature, page 2: Your signature'])
     await expect(list.getByRole('button', { name, exact: true })).toBeVisible();

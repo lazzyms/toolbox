@@ -9,7 +9,7 @@ const baseline = sceneFromDocument({
   pages: [0, 1].map((index) => ({ index, width: 612, height: 792 })),
 });
 const object = (kind: SceneObject["kind"]): SceneObject => ({
-  id: `${kind}-1`, kind, rect: { x: 10, y: 10, width: 100, height: 40 }, text: "Text", fontSize: 18, color: "#000000", opacity: 1, strokes: [],
+  id: `${kind}-1`, kind, rect: { x: 10, y: 10, width: 100, height: 40 }, text: "Text", fontSize: 18, color: "#000000", opacity: 1,
 });
 const withObjects = (scene: PdfScene, pageIndex: number, ...kinds: SceneObject["kind"][]): PdfScene => ({
   pages: scene.pages.map((page, index) => index === pageIndex ? { ...page, objects: [...page.objects, ...kinds.map(object)] } : page),

@@ -24,7 +24,7 @@ import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { RedactDisclosure, RedactInspector, listMarks, redactionFills } from '../features/pdf-editor/RedactInspector';
 import type { ListedMark } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
-import type { SubToolInspectorProps } from '../features/pdf-editor/SubToolInspectors';
+import type { SubToolInspectorProps, UsedSignature } from '../features/pdf-editor/SubToolInspectors';
 import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
 import { proposedSaveName } from '../components/saveStep';
 import type { SaveDialog } from '../registry/saveSteps';
@@ -68,12 +68,15 @@ const toolGuidance: Record<EditorTool, string> = {
   'edit-text': 'Click text with a dashed outline to change it. Text that is part of a picture can\'t be edited. Use OCR first.',
   text: 'Drag to add text. Double-click text to edit it.',
   highlight: 'Drag across text or draw a highlight area.', shape: 'Drag to draw a shape.',
-  signature: 'Choose a signature, then drag its box onto the page.', watermark: 'Choose a pattern, then add a watermark.',
+  signature: 'Type your name or choose a picture of your signature, then click where it goes.', watermark: 'Choose a pattern, then add a watermark.',
   crop: 'Drag a rectangle on the page to crop it.', redact: 'Drag over anything you want removed.',
 };
 const kindLabels: Record<SceneObject['kind'], string> = {
   text: 'Text box', highlight: 'Highlight', shape: 'Shape', signature: 'Signature', watermark: 'Watermark',
 };
+// Signatures placed during this app session, offered again under "Use again". Memory only, never saved to disk.
+let usedSignatures: UsedSignature[] = [];
+const usedSignatureKey = (item: UsedSignature) => item.mode === 'image' ? `image:${item.path}` : `text:${item.text}:${item.color.toLowerCase()}`;
 const objectText = (object: SceneObject) => object.kind === 'shape' ? object.shape ?? 'square'
   : object.kind === 'highlight' ? 'highlighted area'
     : object.kind === 'signature' && object.signatureMode === 'image' ? 'signature image' : object.text;
@@ -301,7 +304,9 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
   const [signatureText, setSignatureText] = useState('Your signature');
   const [signatureTextDraft, setSignatureTextDraft] = useState('');
-  const [signatureFont, setSignatureFont] = useState('Satisfy');
+  const [signatureColor, setSignatureColor] = useState('#1f1f1f');
+  const [signatureError, setSignatureError] = useState<string | null>(null);
+  const [reusable, setReusable] = useState(usedSignatures);
   const [watermarkText, setWatermarkText] = useState('DRAFT');
   const [watermarkFontSize, setWatermarkFontSize] = useState(40);
   const [watermarkPattern, setWatermarkPattern] = useState<WatermarkPattern>('across-page');
@@ -560,29 +565,44 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     id: crypto.randomUUID(), kind, rect,
     text: kind === 'watermark' ? watermarkText : kind === 'signature' ? signatureText : text,
     fontSize: kind === 'watermark' ? watermarkFontSize : kind === 'signature' ? Math.max(18, fontSize) : fontSize,
-    color: kind === 'highlight' ? highlightColor : color,
-    opacity: kind === 'highlight' ? highlightOpacity : opacity,
-    strokes: [],
+    color: kind === 'highlight' ? highlightColor : kind === 'signature' ? signatureColor : color,
+    opacity: kind === 'highlight' ? highlightOpacity : kind === 'signature' ? 1 : opacity,
     shape: kind === 'shape' ? shape : undefined,
     highlightMode: kind === 'highlight' ? 'area' : undefined,
     signatureMode: kind === 'signature' ? signatureMode : undefined,
     signaturePath: kind === 'signature' && signatureMode === 'image' ? signaturePath : undefined,
     signaturePreview: kind === 'signature' && signatureMode === 'image' ? signaturePreview : undefined,
-    fontFamily: kind === 'signature' ? signatureFont : undefined,
     ...(kind === 'text' ? textStyle : {}),
     watermarkPattern: kind === 'watermark' ? watermarkPattern : undefined,
   });
   const chooseSignatureImage = async () => {
     if (!availability.allows('pdf-sign')) return;
     try {
-      const picked = await open({ multiple: false, filters: [{ name: 'Signature image', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'] }] });
+      const picked = await open({ multiple: false, filters: [{ name: 'Signature picture', extensions: ['png', 'jpg', 'jpeg'] }] });
       if (typeof picked !== 'string') return;
+      try { await invoke('inspect_signature_image', { request: { path: picked } }); }
+      catch (reason) { setSignatureError(String(reason)); return; }
+      setSignatureError(null);
       let previewSource: string | null = null;
       try { previewSource = convertFileSrc(picked); } catch { /* Keep the original path for native export, but fail closed for the preview. */ }
       setSignatureMode('image'); setSignaturePath(picked); setSignaturePreview(previewSource);
       if (selected?.kind === 'signature') updateObject({ signatureMode: 'image', signaturePath: picked, signaturePreview: previewSource }, 'signature-image');
     } catch (reason) { setError(String(reason)); }
   };
+  useEffect(() => {
+    const placed = scene.pages.flatMap((item) => item.objects).filter((object) => object.kind === 'signature' && object.signatureMode
+      && (object.signatureMode === 'image' ? object.signaturePath : object.text.trim()))
+      .map((object): UsedSignature => ({ mode: object.signatureMode!, text: object.text, path: object.signaturePath ?? null, preview: object.signaturePreview ?? null, color: object.color }));
+    const fresh = placed.filter((item, index) => !usedSignatures.some((used) => usedSignatureKey(used) === usedSignatureKey(item))
+      && placed.findIndex((other) => usedSignatureKey(other) === usedSignatureKey(item)) === index);
+    if (fresh.length) { usedSignatures = [...fresh, ...usedSignatures]; setReusable(usedSignatures); }
+  }, [scene]);
+  const reuseSignature = (item: UsedSignature) => {
+    setSignatureMode(item.mode); setSignatureColor(item.color); setSignatureError(null);
+    if (item.mode === 'text') setSignatureText(item.text); else { setSignaturePath(item.path); setSignaturePreview(item.preview); }
+    endGroup(); setTool('signature'); setSelectedId(null);
+  };
+  const clearUsedSignatures = () => { usedSignatures = []; setReusable(usedSignatures); };
   const addFixedWatermark = () => {
     if (!page || !availability.allows('pdf-watermark')) return;
     const b = visibleBounds(page);
@@ -689,8 +709,11 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const chooseTool = (next: EditorTool) => { if (!availability.allows(toolFlagBySceneTool[next])) return; endGroup(); setTool(next); setSelectedId(null); setSelectedRun(null); };
   const selectedKind = selected?.kind ?? tool;
   const selectedEnabled = Boolean(selected && availability.allows(toolFlagByObjectKind[selected.kind]));
+  // A new signature needs a name or a checked picture before it can be placed.
+  const signatureReady = signatureMode === 'image' ? Boolean(signaturePath) : Boolean(signatureText.trim());
   const canEditCanvas = tool !== null && availability.allows(toolFlagBySceneTool[tool])
-    && (!selected || availability.allows(toolFlagByObjectKind[selected.kind]));
+    && (!selected || availability.allows(toolFlagByObjectKind[selected.kind]))
+    && (selected || tool !== 'signature' || signatureReady);
   const activeColor = selected?.color ?? (tool === 'highlight' ? highlightColor : color);
   const activeOpacity = selected?.opacity ?? (tool === 'highlight' ? highlightOpacity : opacity);
 
@@ -698,7 +721,8 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     page, pageNumber: currentIndex + 1, selected, hasTextRuns: Boolean(document?.pages[page.sourceIndex ?? -1]?.textRuns?.length), updateObject, commitPage, endGroup,
     fontSize, setFontSize, textStyle, setTextStyle, shape, setShape,
     signatureMode, setSignatureMode, signaturePath, signaturePreview, signatureText, setSignatureText,
-    signatureTextDraft, setSignatureTextDraft, signatureFont, setSignatureFont, chooseSignatureImage,
+    signatureTextDraft, setSignatureTextDraft, signatureColor, setSignatureColor, signatureError, chooseSignatureImage,
+    usedSignatures: reusable, reuseSignature, clearUsedSignatures,
     watermarkText, setWatermarkText, watermarkFontSize, setWatermarkFontSize, watermarkPattern, setWatermarkPattern, addFixedWatermark,
     selectedRun: editRuns.find((run) => run.index === selectedRun), textEdits,
     pageNumberOf: (sourceIndex) => scene.pages.findIndex((item) => item.sourceIndex === sourceIndex) + 1, showEdit, revertEdit, chooseTool,
@@ -861,7 +885,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
               {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill}
                 onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks} />}
               {Fields && inspector && <Fields {...inspector} />}
-              {(selected || (tool !== null && !['select', 'edit-text', 'crop', 'redact'].includes(tool))) && <>
+              {selectedKind !== 'signature' && (selected || (tool !== null && !['select', 'edit-text', 'crop', 'redact'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
                   <input id="scene-object-color" type="color" aria-label="Object color" value={activeColor} onChange={(event) => {
                     if (selected) updateObject({ color: event.target.value }, 'color'); else if (tool === 'highlight') setHighlightColor(event.target.value); else setColor(event.target.value);

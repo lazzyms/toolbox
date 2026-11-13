@@ -1589,6 +1589,7 @@ body {
 .scene-toolbar-divider { align-self: stretch; width: 1px; background: var(--border); margin: 2px 3px; }
 .scene-inline-hint, .scene-property-note { color: var(--muted-foreground); font-size: 10px; }
 .scene-signature-mini-preview { width: 58px; height: 28px; object-fit: contain; border: 1px solid var(--border); border-radius: 4px; background: var(--pdf-document-page); }
+.scene-signature-preview { height: 64px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--pdf-document-page); }
 .scene-render-status { margin-left: auto; font-size: 10px; white-space: nowrap; }
 .scene-document { display: grid; grid-template-columns: 96px minmax(0, 1fr) 260px; height: calc(100dvh - 248px); min-height: 240px; }
 .scene-thumbnails { display: flex; flex-direction: column; gap: 8px; overflow: auto; }
