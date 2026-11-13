@@ -645,7 +645,8 @@ fn main() {
             packs::list_packs,
             packs::install::inspect_pack_file,
             packs::install::install_pack_file,
-            packs::download::install_pack
+            packs::download::install_pack,
+            packs::uninstall::uninstall_pack
         ])
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             shell::focus(app);

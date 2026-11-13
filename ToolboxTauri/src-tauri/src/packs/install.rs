@@ -43,8 +43,9 @@ const BUILT_IN_CONFIG: &str = include_str!("../../tauri.conf.json");
 #[cfg(debug_assertions)]
 const PUBLIC_KEY_OVERRIDE_ENV: &str = "TOOLBOX_PACK_PUBLIC_KEY";
 
-/// One install at a time, so two installs never share the staging folder.
-static INSTALL_LOCK: Mutex<()> = Mutex::new(());
+/// One install or uninstall at a time, so two installs never share the staging folder and an
+/// uninstall never removes a pack while it is being moved into place.
+pub(super) static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackLimits {
@@ -130,6 +131,8 @@ pub enum PackInstallErrorKind {
     ServerBlocked,
     /// The download started and then stopped or stalled before it finished.
     Interrupted,
+    /// Uninstall only: a run is using the pack. Nothing was removed.
+    InUse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -692,7 +695,7 @@ pub(super) mod tests {
         }
 
         /// A catalog offering exactly this pack, with the payload's real checksum.
-        fn catalog(&self) -> Catalog {
+        pub(in crate::packs) fn catalog(&self) -> Catalog {
             self.catalog_with_checksum(digest_hex(&self.payload()))
         }
 
@@ -986,7 +989,7 @@ pub(super) mod tests {
         assert_eq!(serde_json::to_value(PackInstallError::new(PackInstallErrorKind::BadSignature, "")).unwrap()["kind"], "badSignature");
         let error = PackInstallError::new(PackInstallErrorKind::NotEnoughSpace { needed_bytes: 310, free_bytes: 120 }, "");
         assert_eq!(serde_json::to_value(&error).unwrap()["details"], serde_json::json!({ "neededBytes": 310, "freeBytes": 120 }));
-        for (kind, name) in [(PackInstallErrorKind::Offline, "offline"), (PackInstallErrorKind::ServerBlocked, "serverBlocked"), (PackInstallErrorKind::Interrupted, "interrupted"), (PackInstallErrorKind::Cancelled, "cancelled")] {
+        for (kind, name) in [(PackInstallErrorKind::Offline, "offline"), (PackInstallErrorKind::ServerBlocked, "serverBlocked"), (PackInstallErrorKind::Interrupted, "interrupted"), (PackInstallErrorKind::Cancelled, "cancelled"), (PackInstallErrorKind::InUse, "inUse")] {
             assert_eq!(serde_json::to_value(PackInstallError::new(kind, "")).unwrap()["kind"], name);
         }
     }

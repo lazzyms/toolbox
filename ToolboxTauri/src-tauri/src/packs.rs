@@ -1,7 +1,8 @@
 //! Optional packs: the built-in catalog and what is installed in the app-data folder.
 //!
 //! Listing is read-only and local. It reads the catalog built into the app and the files under
-//! `<app data>/packs`, and never touches the network. Only [`download`] does.
+//! `<app data>/packs`, and never touches the network. Only [`download`] does. [`uninstall`] removes
+//! a pack unless a run is using it.
 //!
 //! Installed layout, one folder per pack, in the per-user local app-data folder (non-roaming on
 //! Windows):
@@ -12,6 +13,7 @@
 
 pub mod download;
 pub mod install;
+pub mod uninstall;
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -280,7 +282,6 @@ fn disk_usage(path: &Path) -> u64 {
 
 /// The folder discovery reads as the installed pack root for `id`: the recorded version's folder.
 /// `None` when nothing is recorded. Discovery verifies every file it uses against the manifest.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn installed_pack_root(app_data: &Path, id: &str) -> Option<PathBuf> {
     let folder = app_data.join(PACKS_DIR).join(id);
     let record: InstalledRecord = serde_json::from_str(&std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()?).ok()?;
