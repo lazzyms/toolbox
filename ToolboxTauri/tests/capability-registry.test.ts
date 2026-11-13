@@ -346,6 +346,8 @@ test("workspace entries group editor tools into one entry and list labelled grou
     "details:pdf-privacy", "details:pdf-properties",
     "more:pdf-rotate", "more:pdf-repair", "more:pdf-compare", "more:pdf-extract-pages", "more:pdf-bates",
   ]);
+  for (const id of ["pdf-merge", "pdf-split"]) assert.equal(workspaceForTool(id)?.id, "pdf-editor", `${id} opens in the PDF Editor`);
+  assert.deepEqual(entryIds("pdf-convert"), ["pdf-to-images", "pdf-extract", "pdf-to-epub", "images-to-pdf", "pdf-ocr", "formatted-pdf", "convert-to-pdf"]);
   assert.deepEqual(entryIds("image-editor"), ["resize+crop+rotate+image-tone+image-watermark+image-metadata", "heic-convert"]);
   assert.deepEqual(entryIds("image-editor", { groupEditor: false }), ["resize", "crop", "rotate", "image-tone", "image-watermark", "image-metadata", "heic-convert"]);
 

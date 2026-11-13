@@ -34,6 +34,9 @@ if (membersOf("media-tools").includes("pdf-ocr")) failures.push("pdf-ocr must no
 for (const id of ["pdf-merge", "pdf-split", "pdf-crop", "pdf-page-numbers", "pdf-rotate", "pdf-repair", "pdf-compare", "pdf-redact", "pdf-privacy", "pdf-properties", "pdf-bates"]) {
   if (!membersOf("pdf-editor").includes(id)) failures.push(`${id} must belong to the PDF Editor`);
 }
+for (const id of ["pdf-merge", "pdf-split"]) {
+  if (membersOf("pdf-convert").includes(id)) failures.push(`${id} belongs to the PDF Editor, not PDF Conversion`);
+}
 if (!membersOf("image-editor").includes("image-metadata")) failures.push("image-metadata must belong to the Image Editor");
 
 const mainPage = read("src/views/MainPage.tsx");
