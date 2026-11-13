@@ -346,6 +346,14 @@ export interface BatchTotal {
     note: string;
 }
 
+/** While a batch runs, how much the finished copies saved, as in "14.3 MB saved so far", or null when no finished file reports sizes. */
+export const savedSoFar = (finished: JobOutcome[]): string | null => {
+    const measured = finished.filter((result) => result.state === "succeeded" && result.originalBytes !== undefined && result.outputBytes !== undefined);
+    if (measured.length === 0) return null;
+    const saved = measured.reduce((sum, result) => sum + (result.originalBytes ?? 0) - (result.outputBytes ?? 0), 0);
+    return `${formatBytes(saved)} saved so far`;
+};
+
 /** Sums only files that got a smaller copy. Skipped and failed files kept their size and got no copy. */
 export const batchTotal = (results: JobOutcome[], resultVerb: string): BatchTotal | null => {
     const measured = results.filter((result) => result.state === "succeeded" && result.originalBytes !== undefined && result.outputBytes !== undefined);

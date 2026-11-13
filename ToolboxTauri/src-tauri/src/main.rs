@@ -8,7 +8,7 @@ mod quick_action;
 mod settings;
 mod shell;
 
-use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_notices, reveal_output_path};
+use crate::file_actions::{open_output_path, open_sponsor_page, open_third_party_notices, reveal_output_path, reveal_output_paths};
 use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::ImageProcessor;
 use crate::kit::images::tools;
@@ -544,6 +544,7 @@ fn main() {
             shell::set_document_title,
             open_output_path,
             reveal_output_path,
+            reveal_output_paths,
             open_third_party_notices,
             open_sponsor_page,
             intake::inspect_intake_paths,
@@ -6431,6 +6432,186 @@ mod command_tests {
                 }
             }
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Compresses `offender` beside a good PDF into a custom folder and checks both originals.
+    fn compress_pair(root: &PathBuf, offender: &PathBuf) -> Vec<JobOutcome> {
+        let good = root.join("good.pdf");
+        make_compressible_pdf(&good);
+        let originals = [std::fs::read(offender).unwrap(), std::fs::read(&good).unwrap()];
+        let outcomes = compress(&[offender.clone(), good.clone()], CompressLevel::Medium, location(root, "out"));
+        assert_eq!([std::fs::read(offender).unwrap(), std::fs::read(&good).unwrap()], originals, "originals are untouched");
+        outcomes
+    }
+
+    #[test]
+    fn compress_files_fails_a_pdf_over_the_recorded_size_alone() {
+        let root = sandbox("compress-limit-size");
+        let offender = root.join("oversized.pdf");
+        std::fs::write(&offender, b"%PDF-1.7\n").unwrap();
+        std::fs::OpenOptions::new().write(true).open(&offender).unwrap().set_len(1_000_000_001).unwrap();
+        let good = root.join("good.pdf");
+        make_compressible_pdf(&good);
+        let originals = [Original::of(&offender), Original::of(&good)];
+        let outcomes = compress(&[offender.clone(), good.clone()], CompressLevel::Medium, location(&root, "out"));
+        for original in &originals { original.assert_untouched(); }
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::FileSize, "1 GB");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_a_pdf_over_the_page_limit_alone_and_points_to_split_pdf() {
+        let root = sandbox("compress-limit-pages");
+        let offender = root.join("long.pdf");
+        make_pdf(&offender, 5_001);
+        let outcomes = compress_pair(&root, &offender);
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::PageCount, "5,000");
+        let error = outcomes[0].error().unwrap();
+        assert_eq!(error.message, "Over the size limit: 5,001 pages, and the limit is 5,000. Split it, then compress the parts.");
+        assert_eq!(error.pointer, Some(crate::kit::contracts::OutcomePointer::Tool { tool_id: "pdf-split".into() }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_a_pdf_stream_expanding_past_the_recorded_size_alone() {
+        let root = sandbox("compress-limit-pdf-expansion");
+        let offender = root.join("bomb.pdf");
+        std::fs::write(&offender, crate::kit::common::limits::fixtures::pdf_with_stream(&crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001))).unwrap();
+        let outcomes = compress_pair(&root, &offender);
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::Decompression, "500 MB");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_an_image_decoding_past_the_recorded_size_alone() {
+        let root = sandbox("compress-limit-image-expansion");
+        let offender = root.join("huge.png");
+        std::fs::write(&offender, crate::kit::common::limits::fixtures::png_header(11_200, 11_200)).unwrap();
+        let outcomes = compress_pair(&root, &offender);
+        assert_only_offender_limited(&outcomes, &offender, LimitKind::Decompression, "500 MB");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_a_file_past_its_time_limit_alone_and_others_finish() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let root = sandbox("compress-limit-time");
+        let slow = root.join("slow.pdf");
+        let good = root.join("good.jpg");
+        make_compressible_pdf(&slow);
+        write_jpeg(&good, &photo_rgb(64, 48, 51), 100, None, false);
+        let originals = [std::fs::read(&slow).unwrap(), std::fs::read(&good).unwrap()];
+        let request = Arc::new(CompressFilesRequest { paths: vec![slow.clone(), good.clone()], level: CompressLevel::Medium, strip_exif: false, output_location: location(&root, "out") });
+        let released = Arc::new(AtomicBool::new(false));
+        let recorded = crate::kit::common::limits::recorded("compress_files").unwrap();
+        assert_eq!(recorded.max_duration, std::time::Duration::from_secs(5 * 60), "Compress records five minutes per file");
+        let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(3), ..recorded };
+        let job_released = Arc::clone(&released);
+        let job_slow = slow.clone();
+        let outcomes = BatchRunner::run_with_limits(&RunEvents::silent(), "compress_files", request.paths.clone(), &request.output_location, Some(limits), &request, move |request, path| {
+            while path == job_slow && !job_released.load(Ordering::SeqCst) { std::thread::sleep(std::time::Duration::from_millis(10)); }
+            compress_file(request, path)
+        });
+        released.store(true, Ordering::SeqCst);
+        assert_eq!([std::fs::read(&slow).unwrap(), std::fs::read(&good).unwrap()], originals);
+        assert_only_offender_limited(&outcomes, &slow, LimitKind::Time, "3 seconds");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_fails_a_truncated_pdf_and_damaged_images_alone_with_no_partial_output() {
+        let root = sandbox("compress-truncated");
+        let good = root.join("good.pdf");
+        make_compressible_pdf(&good);
+        let whole = std::fs::read(&good).unwrap();
+        let truncated_pdf = root.join("truncated.pdf");
+        std::fs::write(&truncated_pdf, &whole[..whole.len() / 3]).unwrap();
+        let png = write_compress_png(&root.join("whole.png"), &photo_rgba(96, 64, 3), false);
+        let truncated_png = root.join("truncated.png");
+        std::fs::write(&truncated_png, &png[..png.len() / 2]).unwrap();
+        let webp = write_webp(&root.join("whole.webp"), &photo_rgba(96, 64, 4).to_rgba8(), false, 95, false);
+        let truncated_webp = root.join("truncated.webp");
+        std::fs::write(&truncated_webp, &webp[..webp.len() / 2]).unwrap();
+        std::fs::remove_file(root.join("whole.png")).unwrap();
+        std::fs::remove_file(root.join("whole.webp")).unwrap();
+        let inputs = vec![truncated_pdf.clone(), good.clone(), truncated_png.clone(), truncated_webp.clone()];
+        let before = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let outcomes = compress(&inputs, CompressLevel::Medium, location(&root, "out"));
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs, "one outcome per file, in input order");
+        for index in [0, 2, 3] {
+            let error = outcomes[index].error().unwrap_or_else(|| panic!("{} must fail", inputs[index].display()));
+            assert!(!error.message.is_empty());
+            assert!(outcomes[index].output_paths().is_empty());
+        }
+        assert_eq!(outcomes[2].error().unwrap().message, crate::kit::images::compress::png::DAMAGED);
+        assert_eq!(outcomes[3].error().unwrap().message, crate::kit::images::compress::webp::DAMAGED);
+        assert!(outcomes[1].error().is_none(), "the good PDF still compresses: {:?}", outcomes[1].error());
+        let written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        assert_eq!(written, ["good-compressed.pdf"], "no partial or staged output for the failed files");
+        assert_eq!(inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>(), before, "originals are byte-identical");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_repeats_pdf_jpeg_png_and_webp_byte_for_byte_at_every_level() {
+        let root = sandbox("compress-determinism-all");
+        let inputs = vec![root.join("survey.pdf"), root.join("photo.jpg"), root.join("poster.png"), root.join("banner.webp")];
+        make_photo_pdf(&inputs[0]);
+        write_jpeg(&inputs[1], &photo_rgb(320, 240, 31), 100, Some(exif_block(1)), true);
+        write_compress_png(&inputs[2], &photo_rgba(200, 150, 32), true);
+        write_webp(&inputs[3], &photo_rgba(200, 150, 33).to_rgba8(), false, 95, true);
+        let before = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            for strip_exif in [false, true] {
+                let runs = ["first", "second"].map(|run| compress_jpegs(&inputs, level, strip_exif, location(&root, &format!("{level:?}-{strip_exif}-{run}"))));
+                for (first, second) in runs[0].iter().zip(&runs[1]) {
+                    assert_eq!(first.input_path, second.input_path);
+                    assert!(first.error().is_none() && second.error().is_none(), "{level:?} {}: {:?}", first.input_path.display(), first.error());
+                    match (first.output_paths(), second.output_paths()) {
+                        ([a], [b]) => assert!(std::fs::read(a).unwrap() == std::fs::read(b).unwrap(), "{level:?} strip={strip_exif} {} differs between runs", first.input_path.display()),
+                        ([], []) => assert_eq!((first.original_bytes, first.output_bytes), (second.original_bytes, second.output_bytes), "a skip repeats with the same sizes"),
+                        other => panic!("{level:?} {} wrote different outputs: {other:?}", first.input_path.display()),
+                    }
+                }
+            }
+        }
+        assert_eq!(inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>(), before, "originals are byte-identical");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_writes_every_output_to_a_per_run_folder_and_nothing_beside_the_originals() {
+        let root = sandbox("compress-custom-folder");
+        let originals = root.join("originals");
+        std::fs::create_dir_all(&originals).unwrap();
+        let inputs = vec![originals.join("report.pdf"), originals.join("photo.jpg"), originals.join("poster.png"), originals.join("banner.webp")];
+        make_compressible_pdf(&inputs[0]);
+        write_jpeg(&inputs[1], &photo_rgb(320, 240, 41), 100, None, false);
+        write_compress_png(&inputs[2], &photo_rgba(200, 150, 42), true);
+        write_webp(&inputs[3], &photo_rgba(200, 150, 43).to_rgba8(), false, 95, true);
+        let before = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let OutputLocation::CustomFolder(folder) = location(&root, "this run") else { unreachable!() };
+
+        let outcomes = compress_jpegs(&inputs, CompressLevel::High, false, OutputLocation::CustomFolder(folder.clone()));
+
+        for outcome in &outcomes {
+            assert!(outcome.error().is_none(), "{}: {:?}", outcome.input_path.display(), outcome.error());
+            for output in outcome.output_paths() { assert_eq!(output.parent(), Some(folder.as_path()), "{} is outside the run folder", output.display()); }
+        }
+        let mut written = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        let mut expected = outcomes.iter().flat_map(|outcome| outcome.output_paths().iter().map(|output| output.file_name().unwrap().to_string_lossy().into_owned())).collect::<Vec<_>>();
+        expected.sort();
+        assert!(!expected.is_empty());
+        assert_eq!(written, expected, "the run folder holds exactly the reported outputs");
+        let mut beside = std::fs::read_dir(&originals).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        beside.sort();
+        assert_eq!(beside, ["banner.webp", "photo.jpg", "poster.png", "report.pdf"], "nothing was written beside the originals");
+        assert_eq!(inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>(), before, "originals are byte-identical");
         let _ = std::fs::remove_dir_all(root);
     }
 
