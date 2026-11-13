@@ -197,16 +197,27 @@ async fn run_export_pdf_scene(events: RunEvents, request: scene::ExportRequest, 
     BatchRunner::run(&events, "export_pdf_scene", run.request.paths.clone(), &run.request.output_location, &run, scene::export)
 }
 
+/// Rejects the whole run when a ranged page scope can't apply to any file, before any file is read.
+fn check_ranged_scope(command: &str, paths: &[std::path::PathBuf], scope: &editor::RangedPageScope) -> Result<(), Vec<JobOutcome>> {
+    match scope {
+        editor::RangedPageScope::All => Ok(()),
+        editor::RangedPageScope::Selected { pages } => validate_page_selection(command, paths, Some(pages.as_slice())),
+        editor::RangedPageScope::Range { ranges } => require_page_ranges(paths, ranges).map(drop),
+    }
+}
+
 #[tauri::command]
 async fn crop_pdf(events: RunEvents, request: editor::CropPdfRequest) -> Vec<JobOutcome> {
-    let checked = match &request.scope {
-        editor::RangedPageScope::All => Ok(()),
-        editor::RangedPageScope::Selected { pages } => validate_page_selection("crop_pdf", &request.paths, Some(pages.as_slice())),
-        editor::RangedPageScope::Range { ranges } => require_page_ranges(&request.paths, ranges).map(drop),
-    };
-    if let Err(outcomes) = checked { return outcomes; }
+    if let Err(outcomes) = check_ranged_scope("crop_pdf", &request.paths, &request.scope) { return outcomes; }
     let request = Arc::new(request);
     BatchRunner::run(&events, "crop_pdf", request.paths.clone(), &request.output_location, &request, editor::crop)
+}
+
+#[tauri::command]
+async fn resize_pdf(events: RunEvents, request: editor::ResizePdfRequest) -> Vec<JobOutcome> {
+    if let Err(outcomes) = check_ranged_scope("resize_pdf", &request.paths, &request.scope) { return outcomes; }
+    let request = Arc::new(request);
+    BatchRunner::run(&events, "resize_pdf", request.paths.clone(), &request.output_location, &request, editor::resize)
 }
 
 #[tauri::command]
@@ -570,6 +581,7 @@ fn main() {
             classify_pdf_blank_pages,
             export_pdf_scene,
             crop_pdf,
+            resize_pdf,
             bates_number_pdfs,
             compress_files,
             rotate_pdf,
@@ -662,7 +674,7 @@ mod command_tests {
     use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer, WarningKind};
     use crate::kit::images::tools::{CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, RemoveMetadataStep, ResizeStep, RotateStep, TiffMode, TiffRequest, ToneStep};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
-    use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, PageScope, PdfRect, RangedPageScope, RedactPdfRequest};
+    use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, PageScope, PdfRect, RangedPageScope, RedactPdfRequest, ResizeOrientation, ResizePdfRequest, ResizePlacement, TargetSize};
     use crate::kit::compress::CompressLevel;
     use crate::kit::pdf::remaining::{ImagesToPdfRequest, MergePdfRequest, PageSelectionRequest, PdfToImagesRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode, SplitMode, SplitPdfRequest};
     use crate::kit::vision::{OcrRequest, VisionRequest};
@@ -1999,6 +2011,84 @@ mod command_tests {
     }
 
     #[test]
+    fn resize_command_applies_the_view_payload_to_a_mixed_batch_with_skipped_signed_and_failed_files_isolated() {
+        use crate::kit::contracts::{OutcomeWarning, SkipCode, WarningKind};
+        let root = sandbox("resize-scoped-batch");
+        let (lease, nda, already, broken) = (root.join("lease.pdf"), root.join("vendor-nda.pdf"), root.join("already-a4.pdf"), root.join("broken.pdf"));
+        make_pdf(&lease, 5); make_pdf(&nda, 4); make_pdf(&already, 3);
+        let mut document = lopdf::Document::load(&nda).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&nda).unwrap();
+        let mut document = lopdf::Document::load(&already).unwrap();
+        for page in document.get_pages().into_values() {
+            document.get_dictionary_mut(page).unwrap().set("MediaBox", vec![lopdf::Object::Integer(0), 0.into(), lopdf::Object::Real(595.2756), lopdf::Object::Real(841.8898)]);
+        }
+        document.save(&already).unwrap();
+        std::fs::write(&broken, b"%PDF-1.7 not really").unwrap();
+        let inputs = vec![lease.clone(), nda.clone(), already.clone(), broken.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+        let before = [&lease, &nda].map(|path| page_boxes_and_contents(path));
+
+        // The exact request the Crop and Resize view sends in Resize mode.
+        let request = serde_json::from_value::<ResizePdfRequest>(serde_json::json!({
+            "paths": inputs.clone(),
+            "size": { "preset": "a4" },
+            "orientation": "match",
+            "placement": "fit",
+            "scope": { "range": { "ranges": "3-" } },
+            "outputLocation": location(&root, "out"),
+        })).expect("Crop and Resize view payload for resize_pdf");
+        let outcomes = tauri::async_runtime::block_on(resize_pdf(RunEvents::silent(), request));
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), inputs);
+
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        for ((outcome, before), (pages, detail, warnings)) in outcomes.iter().zip(&before).zip([(5, "Pages 3\u{2013}5 changed to A4.", vec![]), (4, "Pages 3\u{2013}4 changed to A4.", removed)]) {
+            assert!(outcome.error().is_none(), "{}", outcome.error().cloned().unwrap_or_default());
+            assert_eq!(outcome.detail, detail);
+            assert_eq!(outcome.warnings, warnings);
+            let after = page_boxes_and_contents(&outcome.output_paths()[0]);
+            assert_eq!(after.len(), pages);
+            for (number, (page_after, page_before)) in after.iter().zip(before).enumerate() {
+                if number < 2 {
+                    assert_eq!(page_after, page_before, "page {} is outside 3- and must be unchanged", number + 1);
+                } else {
+                    let a4 = [0.0, 0.0, 595.2756, 841.8898];
+                    assert!(page_after.1.iter().zip(a4).all(|(actual, expected)| (actual - expected).abs() < 1e-3), "page {}: {:?}", number + 1, page_after.1);
+                    assert_eq!(page_after.0.as_deref(), Some(&page_after.1[..]), "page {} crop box is the new paper", number + 1);
+                }
+            }
+        }
+        assert!(!crate::kit::pdf::has_signed_signature_field(&lopdf::Document::load(&outcomes[1].output_paths()[0]).unwrap()));
+
+        match &outcomes[2].state {
+            OutcomeState::Skipped { reason } => {
+                assert_eq!(reason.code, SkipCode::NoEffectiveChange);
+                assert_eq!(reason.message, "Page 3 is already A4. Nothing was saved.");
+            }
+            state => panic!("expected already-a4.pdf to be skipped, got {state:?}"),
+        }
+        assert!(outcomes[2].output_paths().is_empty());
+        assert!(outcomes[3].error().is_some() && outcomes[3].output_paths().is_empty());
+
+        let mut written = std::fs::read_dir(root.join("out")).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        written.sort();
+        assert_eq!(written, vec!["lease-resized.pdf", "vendor-nda-resized.pdf"]);
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+
+        // A malformed range is rejected for every file before anything is read or written.
+        let outcomes = tauri::async_runtime::block_on(resize_pdf(RunEvents::silent(), ResizePdfRequest {
+            paths: vec![lease.clone(), nda.clone()], size: TargetSize::Preset("letter".into()), orientation: ResizeOrientation::Match,
+            placement: ResizePlacement::Fit, scope: RangedPageScope::Range { ranges: "4-2".into() }, output_location: location(&root, "bad-range"),
+        }));
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_some_and(|error| error.message.contains("\"4-2\" runs backwards"))), "{outcomes:?}");
+        assert!(!root.join("bad-range").exists() || std::fs::read_dir(root.join("bad-range")).unwrap().count() == 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn crop_command_rejects_malformed_ranges_for_every_file_before_writing() {
         let root = sandbox("crop-malformed-range");
         let (first, second) = (root.join("first.pdf"), root.join("second.pdf"));
@@ -3035,6 +3125,7 @@ mod command_tests {
         outputs.extend(named(&mut naming, "bates_number_pdfs", pdf.clone(), assert_success("bates", bates_number_pdfs(RunEvents::silent(), bates::BatesRequest { paths: vec![pdf.clone()], run: None, format: bates::BatesFormat { prefix: "HL".into(), suffix: String::new(), start: 1, digits: 6, position: bates::BatesPosition::BottomRight, font_family: None, font_size: 10. }, output_location: location(&root, "bates") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_merge_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
         outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], spec: CropSpec::Margins { top: 36.0, right: 18.0, bottom: 36.0, left: 18.0 }, scope: RangedPageScope::All, output_location: location(&root, "crop pdf") }))));
+        outputs.extend(named(&mut naming, "resize_pdf", pdf.clone(), assert_success("resize pdf", resize_pdf(RunEvents::silent(), ResizePdfRequest { paths: vec![pdf.clone()], size: TargetSize::Preset("a4".into()), orientation: ResizeOrientation::Match, placement: ResizePlacement::Fit, scope: RangedPageScope::All, output_location: location(&root, "resize pdf") }))));
         outputs.extend(named(&mut naming, "protect_files", pdf_two.clone(), assert_success("lock", protect_files(RunEvents::silent(), PasswordRequest { paths: vec![pdf_two.clone()], password: crate::kit::TEST_OVERRIDE_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "protect") }))));
         outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf"), output_path: None }))));
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, picks: Vec::new(), output_location: location(&root, "pdf to images") }))));

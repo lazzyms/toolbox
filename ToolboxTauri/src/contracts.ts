@@ -92,6 +92,7 @@ export type ToolCommand =
   | "convert_images"
   | "inspect_pdf"
   | "crop_pdf"
+  | "resize_pdf"
   | "export_pdf_scene"
   | "bates_number_pdfs"
   | "compress_files"

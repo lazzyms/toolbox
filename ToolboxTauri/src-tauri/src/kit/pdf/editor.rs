@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::contracts::{SkipReason, ToolError};
+use crate::kit::contracts::{SkipCode, SkipReason, ToolError};
 use super::metadata::{effective_crop_bounds, page_rotation};
 use super::page_ranges::PageRanges;
 use super::{mutation_preflight, note_signature_removed, remove_signatures, PdfMutationIntent, PdfMutationPreflight, SignedPdf};
@@ -81,6 +81,69 @@ impl CropSpec {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ResizePdfRequest {
+    pub paths: Vec<PathBuf>,
+    pub size: TargetSize,
+    pub orientation: ResizeOrientation,
+    pub placement: ResizePlacement,
+    pub scope: RangedPageScope,
+    pub output_location: OutputLocation,
+}
+
+/// The paper every page in scope is set to: a preset from the shared paper-size table, by id.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TargetSize {
+    Preset(String),
+}
+
+/// How the paper is turned: `Match` gives each page the paper in its own displayed orientation.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResizeOrientation {
+    Match,
+}
+
+/// Where the visible page lands on the paper: `Fit` scales it uniformly by the smaller ratio and centres it.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResizePlacement {
+    Fit,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PaperSizes {
+    /// Pages within this many points of the paper on both sides already count as that paper.
+    pub tolerance_points: f32,
+    pub sizes: Vec<PaperSize>,
+}
+
+/// A portrait paper size in points.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct PaperSize {
+    pub id: String,
+    pub name: String,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// The paper sizes the Crop and Resize view offers, shared with the UI so both use the same points.
+pub(crate) fn paper_sizes() -> &'static PaperSizes {
+    static SIZES: std::sync::OnceLock<PaperSizes> = std::sync::OnceLock::new();
+    SIZES.get_or_init(|| serde_json::from_str(include_str!("../../../../shared/paper-sizes.json")).expect("the shared paper-size table is valid JSON"))
+}
+
+impl TargetSize {
+    fn paper(&self) -> Result<&'static PaperSize, ToolError> {
+        let TargetSize::Preset(id) = self;
+        paper_sizes().sizes.iter().find(|paper| paper.id == *id)
+            .ok_or_else(|| ToolError::invalid_input(format!("\"{id}\" isn't a paper size this tool offers.")))
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RedactPdfRequest {
     pub paths: Vec<PathBuf>,
     pub rectangle: PdfRect,
@@ -107,13 +170,9 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
     // Only the crop box changes, so page objects, annotations, links, forms and structure stay valid.
     transform_or_skip_pdf_checked(input, &request.output_location, "-cropped", PdfMutationIntent::ValidateOnly, SignedPdf::RemoveSignature, |document, pages, _preflight| {
         request.spec.validate()?;
-        let (selected, notes) = match &request.scope {
-            RangedPageScope::All => ((0..pages.len()).collect(), Vec::new()),
-            RangedPageScope::Selected { pages: selected } => (selected_indices(selected, pages.len()).map_err(ToolError::invalid_input)?, Vec::new()),
-            RangedPageScope::Range { ranges } => match PageRanges::parse(ranges).map_err(ToolError::invalid_input)?.clamp_or_skip(pages.len()) {
-                Ok(clamped) => (clamped.page_indices(), clamped.notes),
-                Err(reason) => return Ok(Edited::Skipped(reason)),
-            },
+        let (selected, notes) = match ranged_pages(&request.scope, pages.len())? {
+            Ok(selection) => selection,
+            Err(reason) => return Ok(Edited::Skipped(reason)),
         };
         for page_index in selected {
             let page_id = pages[page_index];
@@ -129,11 +188,7 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 /// margins, or by the parts of the displayed page outside a fractional rectangle.
 fn displayed_crop_box(document: &Document, page_id: ObjectId, page_index: usize, spec: &CropSpec) -> Result<[f32; 4], ToolError> {
     let [x0, y0, x1, y1] = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
-    let user_unit = match document.get_dictionary(page_id).ok().and_then(|page| page.get(b"UserUnit").ok()) {
-        Some(value) => super::resolve(document, value).and_then(super::metadata::number).map_err(ToolError::processing)?,
-        None => 1.0,
-    };
-    if !user_unit.is_finite() || user_unit <= 0.0 { return Err(ToolError::processing("PDF page has an invalid UserUnit.")); }
+    let user_unit = page_user_unit(document, page_id)?;
     let rotation = page_rotation(document, page_id);
     let [top, right, bottom, left] = match *spec {
         CropSpec::Margins { top, right, bottom, left } => [top, right, bottom, left].map(|inset| inset / user_unit),
@@ -158,6 +213,184 @@ fn displayed_crop_box(document: &Document, page_id: ObjectId, page_index: usize,
         return Err(ToolError::invalid_input(format!("Page {} has no area left after {cause}.", page_index + 1)));
     }
     Ok(crop_box)
+}
+
+/// The 0-based pages a ranged scope selects in a file of `page_count` pages, with notes on clamped ranges,
+/// or the reason to skip a file that has none of the typed pages.
+fn ranged_pages(scope: &RangedPageScope, page_count: usize) -> Result<Result<(Vec<usize>, Vec<String>), SkipReason>, ToolError> {
+    Ok(match scope {
+        RangedPageScope::All => Ok(((0..page_count).collect(), Vec::new())),
+        RangedPageScope::Selected { pages } => Ok((selected_indices(pages, page_count).map_err(ToolError::invalid_input)?, Vec::new())),
+        RangedPageScope::Range { ranges } => PageRanges::parse(ranges).map_err(ToolError::invalid_input)?.clamp_or_skip(page_count).map(|clamped| (clamped.page_indices(), clamped.notes)),
+    })
+}
+
+/// The page's /UserUnit: how many points one user-space unit spans.
+fn page_user_unit(document: &Document, page_id: ObjectId) -> Result<f32, ToolError> {
+    let user_unit = match document.get_dictionary(page_id).ok().and_then(|page| page.get(b"UserUnit").ok()) {
+        Some(value) => super::resolve(document, value).and_then(super::metadata::number).map_err(ToolError::processing)?,
+        None => 1.0,
+    };
+    if !user_unit.is_finite() || user_unit <= 0.0 { return Err(ToolError::processing("PDF page has an invalid UserUnit.")); }
+    Ok(user_unit)
+}
+
+pub fn resize(request: &ResizePdfRequest, input: PathBuf) -> JobOutcome {
+    transform_or_skip_pdf_checked(input, &request.output_location, "-resized", PdfMutationIntent::ValidateOnly, SignedPdf::RemoveSignature, |document, pages, _preflight| {
+        let paper = request.size.paper()?;
+        let (selected, notes) = match ranged_pages(&request.scope, pages.len())? {
+            Ok(selection) => selection,
+            Err(reason) => return Ok(Edited::Skipped(reason)),
+        };
+        let mut placements = Vec::new();
+        let mut unchanged = Vec::new();
+        for &page_index in &selected {
+            match resize_placement(document, pages[page_index], page_index, paper, request.orientation, request.placement)? {
+                Some(placement) => placements.push((page_index, placement)),
+                None => unchanged.push(page_index),
+            }
+        }
+        if placements.is_empty() {
+            let message = if selected.len() == pages.len() {
+                format!("Every page is already {}. Nothing was saved.", paper.name)
+            } else {
+                format!("{} {} already {}. Nothing was saved.", describe_pages(&unchanged), if unchanged.len() == 1 { "is" } else { "are" }, paper.name)
+            };
+            return Ok(Edited::Skipped(SkipReason::new(SkipCode::NoEffectiveChange, message)));
+        }
+        // Annotations shared between pages are moved once, by the first page that lists them.
+        let mut moved_annotations = std::collections::HashSet::new();
+        let changed: Vec<usize> = placements.iter().map(|(page_index, _)| *page_index).collect();
+        for (page_index, placement) in placements {
+            place_page_content(document, pages[page_index], &placement, &mut moved_annotations)?;
+        }
+        let mut detail = vec![format!("{} changed to {}.", describe_pages(&changed), paper.name)];
+        if !unchanged.is_empty() {
+            detail.push(format!("{} {} already {}.", describe_pages(&unchanged), if unchanged.len() == 1 { "was" } else { "were" }, paper.name));
+        }
+        detail.extend(notes);
+        Ok(Edited::Saved(detail.join(" ")))
+    })
+}
+
+/// Where one page's visible area lands on the new paper, in the page's user space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PagePlacement {
+    /// The page's visible area before resizing: [x0, y0, x1, y1].
+    visible: [f32; 4],
+    /// The new page size in user space: width and height before /Rotate is applied.
+    target: (f32, f32),
+    /// Uniform scale and the translation that centres the scaled visible area on the new page.
+    scale: f32,
+    offset: (f32, f32),
+}
+
+/// The new page for one page, or None when the page is already that paper as displayed.
+fn resize_placement(document: &Document, page_id: ObjectId, page_index: usize, paper: &PaperSize, orientation: ResizeOrientation, placement: ResizePlacement) -> Result<Option<PagePlacement>, ToolError> {
+    let visible @ [x0, y0, x1, y1] = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
+    let user_unit = page_user_unit(document, page_id)?;
+    let rotation = page_rotation(document, page_id);
+    if rotation % 90 != 0 { return Err(ToolError::processing(format!("Page {} has an unsupported rotation of {rotation} degrees.", page_index + 1))); }
+    let quarter_turn = rotation % 180 == 90;
+    let (width, height) = (x1 - x0, y1 - y0);
+    if width <= 0.0 || height <= 0.0 { return Err(ToolError::processing(format!("Page {} has no visible area.", page_index + 1))); }
+    // The page as displayed, in points.
+    let (shown_width, shown_height) = if quarter_turn { (height * user_unit, width * user_unit) } else { (width * user_unit, height * user_unit) };
+    let (paper_width, paper_height) = match orientation {
+        // A landscape page gets landscape paper; a portrait or square page keeps the paper's portrait.
+        ResizeOrientation::Match if (shown_width > shown_height) != (paper.width > paper.height) => (paper.height, paper.width),
+        ResizeOrientation::Match => (paper.width, paper.height),
+    };
+    let tolerance = paper_sizes().tolerance_points;
+    if (shown_width - paper_width).abs() <= tolerance && (shown_height - paper_height).abs() <= tolerance { return Ok(None); }
+    // The new page in user space: /Rotate stays, so a quarter-turned page stores the paper's sides swapped.
+    let (target_width, target_height) = if quarter_turn { (paper_height / user_unit, paper_width / user_unit) } else { (paper_width / user_unit, paper_height / user_unit) };
+    let ResizePlacement::Fit = placement;
+    let scale = (target_width / width).min(target_height / height);
+    let offset = ((target_width - scale * width) / 2.0 - scale * x0, (target_height - scale * height) / 2.0 - scale * y0);
+    Ok(Some(PagePlacement { visible, target: (target_width, target_height), scale, offset }))
+}
+
+/// Sets every page box to the new paper, draws the old visible area scaled and centred on it, and moves the
+/// page's annotations by the same mapping so links, comments and form fields stay on their content.
+fn place_page_content(document: &mut Document, page_id: ObjectId, placement: &PagePlacement, moved_annotations: &mut std::collections::HashSet<ObjectId>) -> Result<(), ToolError> {
+    let processing = |error: String| ToolError::processing(error);
+    let [x0, y0, x1, y1] = placement.visible;
+    let PagePlacement { scale, offset: (e, f), target: (target_width, target_height), .. } = *placement;
+    // New streams wrap the existing content, which may be shared with other pages, so it is never rewritten.
+    // The clip keeps content that was cropped away hidden.
+    let prefix = format!("q\n{scale} 0 0 {scale} {e} {f} cm\n{x0} {y0} {} {} re W n\n", x1 - x0, y1 - y0);
+    let prefix_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, prefix.into_bytes())));
+    let suffix_id = document.add_object(Object::Stream(lopdf::Stream::new(dictionary! {}, b"\nQ\n".to_vec())));
+    let prior = document.get_dictionary(page_id).map_err(|error| processing(error.to_string()))?.get(b"Contents").ok().cloned();
+    let existing = match prior {
+        Some(Object::Array(contents)) => contents,
+        Some(Object::Reference(existing)) => vec![Object::Reference(existing)],
+        Some(existing) => vec![Object::Reference(document.add_object(existing))],
+        None => Vec::new(),
+    };
+    let contents: Vec<Object> = std::iter::once(Object::Reference(prefix_id)).chain(existing).chain([Object::Reference(suffix_id)]).collect();
+    let paper_box = || Object::Array(vec![Object::Integer(0), Object::Integer(0), Object::Real(target_width), Object::Real(target_height)]);
+    let page = document.get_dictionary_mut(page_id).map_err(|error| processing(error.to_string()))?;
+    page.set("Contents", contents);
+    for key in ["MediaBox", "CropBox", "BleedBox", "TrimBox", "ArtBox"] { page.set(key, paper_box()); }
+    let annotations = match page.get(b"Annots").ok().cloned() {
+        Some(Object::Reference(array_id)) => document.get_object(array_id).and_then(Object::as_array).map(|array| array.clone()).unwrap_or_default(),
+        Some(Object::Array(array)) => array,
+        _ => Vec::new(),
+    };
+    let map = |x: f32, y: f32| (scale * x + e, scale * y + f);
+    // The shared PDF preflight only lets indirect annotations through.
+    for annotation_id in annotations.iter().filter_map(|annotation| annotation.as_reference().ok()) {
+        if !moved_annotations.insert(annotation_id) { continue; }
+        if let Ok(dictionary) = document.get_dictionary_mut(annotation_id) { move_annotation(dictionary, map); }
+    }
+    Ok(())
+}
+
+/// Maps the annotation's rectangle and point lists. An array with a value that isn't a number is left as is.
+fn move_annotation(annotation: &mut lopdf::Dictionary, map: impl Fn(f32, f32) -> (f32, f32)) {
+    let map_points = |values: &[Object]| -> Option<Vec<Object>> {
+        if values.len() % 2 != 0 { return None; }
+        let numbers = values.iter().map(|value| super::metadata::number(value).ok()).collect::<Option<Vec<f32>>>()?;
+        Some(numbers.chunks(2).flat_map(|pair| { let (x, y) = map(pair[0], pair[1]); [Object::Real(x), Object::Real(y)] }).collect())
+    };
+    if let Ok(Object::Array(rect)) = annotation.get_mut(b"Rect") {
+        if let Some(mapped) = map_points(rect) {
+            // Keep the rectangle normalised: lower-left then upper-right.
+            if let [Object::Real(ax), Object::Real(ay), Object::Real(bx), Object::Real(by)] = mapped.as_slice() {
+                *rect = vec![Object::Real(ax.min(*bx)), Object::Real(ay.min(*by)), Object::Real(ax.max(*bx)), Object::Real(ay.max(*by))];
+            }
+        }
+    }
+    for key in [&b"QuadPoints"[..], b"L", b"Vertices", b"CL"] {
+        if let Ok(Object::Array(points)) = annotation.get_mut(key) {
+            if let Some(mapped) = map_points(points) { *points = mapped; }
+        }
+    }
+    if let Ok(Object::Array(strokes)) = annotation.get_mut(b"InkList") {
+        let mapped: Option<Vec<Object>> = strokes.iter().map(|stroke| stroke.as_array().ok().and_then(|points| map_points(points)).map(Object::Array)).collect();
+        if let Some(mapped) = mapped { *strokes = mapped; }
+    }
+}
+
+/// Names pages by 0-based index in runs, such as "Page 4" or "Pages 3–14 and 20".
+fn describe_pages(indices: &[usize]) -> String {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for &index in indices {
+        let page = index + 1;
+        match runs.last_mut() {
+            Some((_, end)) if *end + 1 == page => *end = page,
+            _ => runs.push((page, page)),
+        }
+    }
+    let parts: Vec<String> = runs.iter().map(|&(start, end)| if start == end { start.to_string() } else { format!("{start}\u{2013}{end}") }).collect();
+    let listed = match parts.as_slice() {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!("{} {listed}", if indices.len() == 1 { "Page" } else { "Pages" })
 }
 
 /// Permanently removes everything under the rectangle: each target page is flattened to an image with
@@ -494,6 +727,299 @@ mod session_tests {
         crop(&CropPdfRequest {
             paths: vec![source.to_path_buf()], spec, scope: RangedPageScope::All, output_location: location(output_dir),
         }, source.to_path_buf())
+    }
+
+    fn resize_to(source: &Path, output_dir: &Path, preset: &str, scope: RangedPageScope) -> JobOutcome {
+        resize(&ResizePdfRequest {
+            paths: vec![source.to_path_buf()], size: TargetSize::Preset(preset.into()), orientation: ResizeOrientation::Match,
+            placement: ResizePlacement::Fit, scope, output_location: location(output_dir),
+        }, source.to_path_buf())
+    }
+
+    fn stream_text(document: &Document, object: &Object) -> String {
+        let stream = document.get_object(object.as_reference().unwrap()).unwrap().as_stream().unwrap();
+        String::from_utf8(stream.decompressed_content().unwrap_or_else(|_| stream.content.clone())).unwrap()
+    }
+
+    /// The scale and translation of the resize wrapper, and the clip rectangle, read from the page's first content stream.
+    fn resize_wrapper(document: &Document, page: ObjectId) -> ([f32; 3], [f32; 4]) {
+        let contents = document.get_dictionary(page).unwrap().get(b"Contents").unwrap().as_array().unwrap();
+        let prefix = stream_text(document, &contents[0]);
+        assert_eq!(stream_text(document, contents.last().unwrap()).trim(), "Q");
+        let numbers = prefix.split_whitespace().filter_map(|token| token.parse::<f32>().ok()).collect::<Vec<_>>();
+        assert!(prefix.starts_with("q\n") && prefix.contains(" cm\n") && prefix.trim_end().ends_with("re W n"), "{prefix}");
+        assert_eq!((numbers[1], numbers[2], numbers[0]), (0.0, 0.0, numbers[3]), "uniform scale: {prefix}");
+        ([numbers[0], numbers[4], numbers[5]], [numbers[6], numbers[7], numbers[8], numbers[9]])
+    }
+
+    fn only_page(document: &Document) -> ObjectId { document.get_pages().values().copied().next().unwrap() }
+
+    fn assert_near(actual: f32, expected: f32, label: &str) {
+        assert!((actual - expected).abs() < 1e-3, "{label}: {actual} != {expected}");
+    }
+
+    #[test]
+    fn resize_sets_each_preset_exactly_on_every_box_and_fits_the_page_centred() {
+        let output_dir = temp_path("resize-presets-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        // Neither shape matches any preset, so every preset changes both.
+        for (shape, media) in [("portrait", [0.0, 0.0, 500.0, 700.0]), ("landscape", [10.0, 20.0, 710.0, 520.0])] {
+            let source = temp_path(&format!("resize-preset-{shape}.pdf"));
+            make_boxed_pdf(&source, media, None, None);
+            let original = std::fs::read(&source).unwrap();
+            for paper in &paper_sizes().sizes {
+                let outcome = resize_to(&source, &output_dir, &paper.id, RangedPageScope::All);
+                assert!(outcome.error().is_none(), "{shape} {}: {:?}", paper.id, outcome.error());
+                assert_eq!(outcome.detail, format!("Page 1 changed to {}.", paper.name));
+                let output = &outcome.output_paths()[0];
+                assert!(output.file_name().unwrap().to_string_lossy().contains("-resized"));
+                let after = Document::load(output).unwrap();
+                let page = only_page(&after);
+                let (width, height) = if shape == "landscape" { (paper.height, paper.width) } else { (paper.width, paper.height) };
+                for key in [&b"MediaBox"[..], b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"] {
+                    let actual = page_box(&after, page, key);
+                    for (value, expected) in actual.iter().zip([0.0, 0.0, width, height]) {
+                        assert_near(*value, expected, &format!("{shape} {} {}", paper.id, String::from_utf8_lossy(key)));
+                    }
+                }
+                let ([scale, e, f], clip) = resize_wrapper(&after, page);
+                let (source_width, source_height) = (media[2] - media[0], media[3] - media[1]);
+                assert_near(scale, (width / source_width).min(height / source_height), "fit uses the smaller ratio");
+                // The scaled page sits centred: equal gaps on each side.
+                let (left, bottom) = (scale * media[0] + e, scale * media[1] + f);
+                let (right, top) = (scale * media[2] + e, scale * media[3] + f);
+                assert_near(left, width - right, &format!("{shape} {} centred horizontally", paper.id));
+                assert_near(bottom, height - top, &format!("{shape} {} centred vertically", paper.id));
+                assert!(left.abs() < 1e-3 || bottom.abs() < 1e-3, "one side touches the paper: nothing is cut off");
+                assert_eq!(clip, [media[0], media[1], source_width, source_height]);
+                assert!(after.extract_text(&[1]).unwrap().contains("source"), "text stays extractable");
+            }
+            assert_eq!(std::fs::read(&source).unwrap(), original, "the original is never modified");
+            let _ = std::fs::remove_file(source);
+        }
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_matches_each_page_as_displayed_including_rotated_pages() {
+        let output_dir = temp_path("resize-rotated-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let a4 = &paper_sizes().sizes.iter().find(|paper| paper.id == "a4").unwrap();
+        // A portrait page turned a quarter is displayed landscape, so it gets landscape A4: in user space the
+        // MediaBox keeps the page's own portrait sides and /Rotate stays.
+        for (rotate, media, user_space) in [
+            (90, [0.0, 0.0, 500.0, 700.0], (a4.width, a4.height)),
+            (270, [0.0, 0.0, 500.0, 700.0], (a4.width, a4.height)),
+            (180, [0.0, 0.0, 500.0, 700.0], (a4.width, a4.height)),
+            (90, [0.0, 0.0, 700.0, 500.0], (a4.height, a4.width)),
+        ] {
+            let source = temp_path(&format!("resize-rotated-{rotate}-{}.pdf", media[2]));
+            make_boxed_pdf(&source, media, None, Some(rotate));
+            let outcome = resize_to(&source, &output_dir, "a4", RangedPageScope::All);
+            assert!(outcome.error().is_none(), "{rotate}: {:?}", outcome.error());
+            let after = Document::load(&outcome.output_paths()[0]).unwrap();
+            let page = only_page(&after);
+            assert_box_near(page_box(&after, page, b"MediaBox"), [0.0, 0.0, user_space.0, user_space.1], &format!("rotate {rotate} {media:?}"));
+            assert_eq!(after.get_dictionary(page).unwrap().get(b"Rotate").unwrap().as_i64().unwrap(), rotate);
+            let ([scale, _, _], _) = resize_wrapper(&after, page);
+            assert_near(scale, (user_space.0 / (media[2] - media[0])).min(user_space.1 / (media[3] - media[1])), "rotated fit");
+            let _ = std::fs::remove_file(source);
+        }
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_fits_only_the_visible_crop_box_and_clips_what_was_cropped_away() {
+        let source = temp_path("resize-cropped.pdf");
+        let output_dir = temp_path("resize-cropped-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_boxed_pdf(&source, [0.0, 0.0, 612.0, 792.0], Some([100.0, 100.0, 400.0, 500.0]), None);
+        let outcome = resize_to(&source, &output_dir, "a4", RangedPageScope::All);
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let after = Document::load(&outcome.output_paths()[0]).unwrap();
+        let page = only_page(&after);
+        let ([scale, e, f], clip) = resize_wrapper(&after, page);
+        let a4 = (595.2756_f32, 841.8898_f32);
+        let expected = (a4.0 / 300.0).min(a4.1 / 400.0);
+        assert_near(scale, expected, "scale of the 300 x 400 visible area");
+        assert_near(e, (a4.0 - expected * 300.0) / 2.0 - expected * 100.0, "x offset");
+        assert_near(f, (a4.1 - expected * 400.0) / 2.0 - expected * 100.0, "y offset");
+        assert_eq!(clip, [100.0, 100.0, 300.0, 400.0]);
+        assert_box_near(page_box(&after, page, b"CropBox"), [0.0, 0.0, a4.0, a4.1], "crop box is the new paper");
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_moves_links_comments_and_form_fields_with_the_content_and_keeps_shared_content_intact() {
+        let source = temp_path("resize-annotated.pdf");
+        let output_dir = temp_path("resize-annotated-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_navigation_and_form_pdf(&source);
+        let mut document = Document::load(&source).unwrap();
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        let highlight = document.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Highlight", "Rect" => vec![100.into(), 600.into(), 200.into(), 620.into()],
+            "QuadPoints" => vec![100.into(), 620.into(), 200.into(), 620.into(), 100.into(), 600.into(), 200.into(), 600.into()],
+        });
+        // Listed on both pages: it must move once, not twice.
+        let shared_comment = document.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![300.into(), 300.into(), 320.into(), 320.into()],
+        });
+        let ink = document.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Ink", "Rect" => vec![10.into(), 10.into(), 60.into(), 60.into()],
+            "InkList" => vec![Object::Array(vec![10.into(), 10.into(), 60.into(), 60.into()])],
+        });
+        let first = document.get_dictionary(pages[0]).unwrap().get(b"Annots").unwrap().as_array().unwrap().clone();
+        document.get_dictionary_mut(pages[0]).unwrap().set("Annots", first.into_iter().chain([Object::Reference(highlight), Object::Reference(shared_comment), Object::Reference(ink)]).collect::<Vec<_>>());
+        let second = document.get_dictionary(pages[1]).unwrap().get(b"Annots").unwrap().as_array().unwrap().clone();
+        let second_annots = document.add_object(second.into_iter().chain([Object::Reference(shared_comment)]).collect::<Vec<_>>());
+        document.get_dictionary_mut(pages[1]).unwrap().set("Annots", Object::Reference(second_annots));
+        document.save(&source).unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let before = Document::load(&source).unwrap();
+
+        let outcome = resize_to(&source, &output_dir, "a4", RangedPageScope::All);
+
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert_eq!(outcome.detail, "Pages 1\u{2013}2 changed to A4.");
+        let after = Document::load(&outcome.output_paths()[0]).unwrap();
+        let after_pages = after.get_pages().values().copied().collect::<Vec<_>>();
+        let ([scale, e, f], _) = resize_wrapper(&after, after_pages[0]);
+        assert_eq!(resize_wrapper(&after, after_pages[1]).0, [scale, e, f], "both Letter pages use one mapping");
+        let numbers = |document: &Document, dictionary: &lopdf::Dictionary, key: &[u8]| dictionary.get(key).unwrap().as_array().unwrap().iter()
+            .map(|value| super::super::metadata::number(super::super::resolve(document, value).unwrap()).unwrap()).collect::<Vec<_>>();
+        let mapped = |values: Vec<f32>| values.chunks(2).flat_map(|pair| [scale * pair[0] + e, scale * pair[1] + f]).collect::<Vec<_>>();
+        let assert_moved = |label: &str, before_values: Vec<f32>, after_values: Vec<f32>| {
+            for (actual, expected) in after_values.iter().zip(mapped(before_values)) { assert_near(*actual, expected, label); }
+        };
+        for (label, id) in [("widget", 0usize), ("highlight", 1), ("comment", 2)] {
+            let id = after.get_dictionary(after_pages[0]).unwrap().get(b"Annots").unwrap().as_array().unwrap()[id].as_reference().unwrap();
+            assert_moved(label, numbers(&before, before.get_dictionary(id).unwrap(), b"Rect"), numbers(&after, after.get_dictionary(id).unwrap(), b"Rect"));
+        }
+        assert_moved("quad points", numbers(&before, before.get_dictionary(highlight).unwrap(), b"QuadPoints"), numbers(&after, after.get_dictionary(highlight).unwrap(), b"QuadPoints"));
+        let ink = after.get_dictionary(ink).unwrap();
+        assert_moved("ink rect", vec![10.0, 10.0, 60.0, 60.0], numbers(&after, ink, b"Rect"));
+        let stroke = ink.get(b"InkList").unwrap().as_array().unwrap()[0].as_array().unwrap().iter().map(|value| super::super::metadata::number(value).unwrap()).collect();
+        assert_moved("ink stroke", vec![10.0, 10.0, 60.0, 60.0], stroke);
+        let link = after.get_object(second_annots).unwrap().as_array().unwrap()[0].as_reference().unwrap();
+        assert_moved("link", numbers(&before, before.get_dictionary(link).unwrap(), b"Rect"), numbers(&after, after.get_dictionary(link).unwrap(), b"Rect"));
+        // Link destinations, the outline, named destinations and the form stay wired to the same objects.
+        assert_eq!(after.get_dictionary(link).unwrap().get(b"Dest").unwrap(), before.get_dictionary(link).unwrap().get(b"Dest").unwrap());
+        let catalog = |document: &Document| document.get_dictionary(document.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap().clone();
+        for key in [b"AcroForm".as_slice(), b"Names", b"Outlines"] {
+            assert_eq!(catalog(&after).get(key).unwrap(), catalog(&before).get(key).unwrap());
+        }
+        // The shared source content stream is wrapped, not rewritten.
+        let contents = after.get_dictionary(after_pages[0]).unwrap().get(b"Contents").unwrap().as_array().unwrap().clone();
+        assert_eq!(stream_text(&after, &contents[1]), "BT /F0 12 Tf 36 720 Td (source) Tj ET");
+        for page in [1, 2] { assert!(after.extract_text(&[page]).unwrap().contains("source"), "page {page} text"); }
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    fn make_sized_pages_pdf(path: &Path, sizes: &[(f32, f32)]) {
+        make_pdf_with_pages(path, sizes.len());
+        let mut document = Document::load(path).unwrap();
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        for (page, (width, height)) in pages.into_iter().zip(sizes) {
+            document.get_dictionary_mut(page).unwrap().set("MediaBox", vec![0.into(), 0.into(), Object::Real(*width), Object::Real(*height)]);
+        }
+        document.save(path).unwrap();
+    }
+
+    #[test]
+    fn resize_leaves_pages_already_at_the_target_unchanged_and_skips_files_with_nothing_to_change() {
+        use crate::kit::contracts::OutcomeState;
+        let output_dir = temp_path("resize-unchanged-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let (a4, letter, a4_landscape) = ((595.2756, 841.8898), (612.0, 792.0), (841.8898, 595.2756));
+
+        let mixed = temp_path("resize-mixed.pdf");
+        make_sized_pages_pdf(&mixed, &[a4, letter, a4_landscape, letter]);
+        let before = Document::load(&mixed).unwrap();
+        let outcome = resize_to(&mixed, &output_dir, "a4", RangedPageScope::All);
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert_eq!(outcome.detail, "Pages 2 and 4 changed to A4. Pages 1 and 3 were already A4.");
+        let after = Document::load(&outcome.output_paths()[0]).unwrap();
+        let (before_pages, after_pages) = (before.get_pages().values().copied().collect::<Vec<_>>(), after.get_pages().values().copied().collect::<Vec<_>>());
+        for index in [0, 2] {
+            assert_eq!(after.get_dictionary(after_pages[index]).unwrap(), before.get_dictionary(before_pages[index]).unwrap(), "page {} is unchanged", index + 1);
+        }
+        assert_box_near(page_box(&after, after_pages[1], b"MediaBox"), [0.0, 0.0, a4.0, a4.1], "page 2");
+
+        // Within the 1.5 pt tolerance a page already counts as A4.
+        let all_a4 = temp_path("resize-all-a4.pdf");
+        make_sized_pages_pdf(&all_a4, &[(595.0, 842.5), a4_landscape]);
+        let outcome = resize_to(&all_a4, &output_dir, "a4", RangedPageScope::All);
+        match &outcome.state {
+            OutcomeState::Skipped { reason } => {
+                assert_eq!(reason.code, SkipCode::NoEffectiveChange);
+                assert_eq!(reason.message, "Every page is already A4. Nothing was saved.");
+            }
+            state => panic!("expected an all-A4 file to be skipped, got {state:?}"),
+        }
+        assert!(outcome.output_paths().is_empty());
+
+        // Only the pages in the typed range count, and the range is clamped to this file.
+        let scoped = temp_path("resize-scoped-a4.pdf");
+        make_sized_pages_pdf(&scoped, &[letter, a4, a4]);
+        let outcome = resize_to(&scoped, &output_dir, "a4", RangedPageScope::Range { ranges: "2-9".into() });
+        match &outcome.state {
+            OutcomeState::Skipped { reason } => {
+                assert_eq!(reason.code, SkipCode::NoEffectiveChange);
+                assert_eq!(reason.message, "Pages 2\u{2013}3 are already A4. Nothing was saved.");
+            }
+            state => panic!("expected the scoped A4 pages to be skipped, got {state:?}"),
+        }
+        let outcome = resize_to(&scoped, &output_dir, "a4", RangedPageScope::Range { ranges: "1, 3-9".into() });
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        assert!(outcome.detail.starts_with("Page 1 changed to A4. Page 3 was already A4."), "{}", outcome.detail);
+        assert!(outcome.detail.contains("9"), "the clamping note names the typed range: {}", outcome.detail);
+        let after = Document::load(&outcome.output_paths()[0]).unwrap();
+        let pages = after.get_pages().values().copied().collect::<Vec<_>>();
+        assert_box_near(page_box(&after, pages[0], b"MediaBox"), [0.0, 0.0, a4.0, a4.1], "page 1 in range");
+        assert!(after.get_dictionary(pages[1]).unwrap().get(b"Contents").unwrap().as_reference().is_ok(), "page 2 is outside the range and untouched");
+
+        let outcome = resize_to(&scoped, &output_dir, "a4", RangedPageScope::Range { ranges: "7-".into() });
+        assert!(matches!(&outcome.state, OutcomeState::Skipped { reason } if reason.code == SkipCode::RangeEmptyAfterClamping), "{:?}", outcome.state);
+
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 2, "only the two changed files were written");
+        for path in [mixed, all_a4, scoped] { let _ = std::fs::remove_file(path); }
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_rejects_an_unknown_preset_and_never_overwrites_earlier_outputs() {
+        let source = temp_path("resize-collision.pdf");
+        let output_dir = temp_path("resize-collision-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        make_pdf_with_pages(&source, 1);
+        let outcome = resize_to(&source, &output_dir, "b5", RangedPageScope::All);
+        assert!(outcome.error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)), "{:?}", outcome.error());
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0);
+        let stem = source.file_stem().unwrap().to_string_lossy().to_string();
+        let names = (0..3).map(|_| {
+            let outcome = resize_to(&source, &output_dir, "a4", RangedPageScope::All);
+            assert!(outcome.error().is_none(), "{:?}", outcome.error());
+            outcome.output_paths()[0].file_name().unwrap().to_string_lossy().to_string()
+        }).collect::<Vec<_>>();
+        assert_eq!(names, vec![format!("{stem}-resized.pdf"), format!("{stem}-resized-1.pdf"), format!("{stem}-resized-2.pdf")]);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_paper_table_is_the_shared_one_the_ui_reads() {
+        let table = paper_sizes();
+        assert_eq!(table.tolerance_points, 1.5);
+        let ids = table.sizes.iter().map(|paper| (paper.id.as_str(), paper.name.as_str())).collect::<Vec<_>>();
+        assert_eq!(ids, vec![("a3", "A3"), ("a4", "A4"), ("a5", "A5"), ("letter", "Letter"), ("legal", "Legal"), ("tabloid", "Tabloid")]);
+        for paper in &table.sizes { assert!(paper.width > 0.0 && paper.width < paper.height, "{} is portrait", paper.id); }
+        let a4 = &table.sizes[1];
+        assert_near(a4.width, 210.0 * MM, "A4 width");
+        assert_near(a4.height, 297.0 * MM, "A4 height");
     }
 
     #[test]

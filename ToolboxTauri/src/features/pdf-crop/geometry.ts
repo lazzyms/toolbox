@@ -3,6 +3,8 @@
  * sees it (after rotation, top-left origin), so it lands in the same relative spot on every page size;
  * lengths are only for showing and typing, measured against the page in the preview.
  */
+import paperSizes from "../../../shared/paper-sizes.json" with { type: "json" };
+
 export type Unit = "mm" | "in" | "pt";
 export type Rect = { left: number; top: number; width: number; height: number };
 export type Margins = { top: number; right: number; bottom: number; left: number };
@@ -101,18 +103,17 @@ export const keptRect = (page: PageSize, crop: { rect: Rect } | { margins: Margi
   return { left: left / page.width, top: top / page.height, width: (page.width - left - right) / page.width, height: (page.height - top - bottom) / page.height };
 };
 
-const papers: ReadonlyArray<{ name: string; width: number; height: number }> = [
-  { name: "A3", width: 841.89, height: 1190.55 },
-  { name: "A4", width: 595.28, height: 841.89 },
-  { name: "A5", width: 419.53, height: 595.28 },
-  { name: "Letter", width: 612, height: 792 },
-  { name: "Legal", width: 612, height: 1008 },
-  { name: "Tabloid", width: 792, height: 1224 },
-];
+export type Paper = { id: string; name: string; width: number; height: number };
+
+/** The portrait paper sizes Resize offers, in points, shared with the native resize so both agree exactly. */
+export const papers: ReadonlyArray<Paper> = paperSizes.sizes;
+
+/** A page within this many points of a paper on both sides already is that paper. */
+const PAPER_TOLERANCE = paperSizes.tolerancePoints;
 
 /** "A4", "Letter, landscape", or null for a size without a common name. */
 export const paperName = (page: PageSize): string | null => {
-  const near = (a: number, b: number) => Math.abs(a - b) < 1.5;
+  const near = (a: number, b: number) => Math.abs(a - b) <= PAPER_TOLERANCE;
   for (const paper of papers) {
     if (near(page.width, paper.width) && near(page.height, paper.height)) return paper.name;
     if (near(page.width, paper.height) && near(page.height, paper.width)) return `${paper.name}, landscape`;
