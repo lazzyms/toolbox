@@ -60,6 +60,14 @@ pub(crate) const PDF_THUMBNAIL_MAX_DIMENSION: u32 = 320;
 pub(crate) const PDF_THUMBNAIL_MAX_BATCH: usize = 12;
 pub(crate) const PDF_THUMBNAIL_FILE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const PDF_THUMBNAIL_PAGE_TIMEOUT: Duration = Duration::from_secs(3);
+// "Select blank pages" in Organize. A source page is blank only when it has no extractable text and, on a render
+// scaled to fit PDF_BLANK_RENDER_DIMENSION, fewer than PDF_BLANK_MAX_INK_BASIS_POINTS / 10,000 of its pixels are ink:
+// luma below PDF_BLANK_INK_LUMA_THRESHOLD. Light paper tone and specks of scanner noise stay under both thresholds.
+// Each helper run (text, then render) gets the thumbnail deadline for one page.
+pub(crate) const PDF_BLANK_MAX_BATCH: usize = 12;
+pub(crate) const PDF_BLANK_RENDER_DIMENSION: u32 = 320;
+pub(crate) const PDF_BLANK_INK_LUMA_THRESHOLD: u8 = 192;
+pub(crate) const PDF_BLANK_MAX_INK_BASIS_POINTS: u64 = 20;
 pub(crate) const PDF_HELPER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PDF_TEXT_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const PDF_TEXT_MAX_ERROR_BYTES: usize = 1024 * 1024;
