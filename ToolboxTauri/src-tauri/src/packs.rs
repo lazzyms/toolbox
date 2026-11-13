@@ -829,6 +829,13 @@ mod tests {
         download_budget_bytes: u64,
         pack: PlannedPack,
         families: Vec<ScriptFamily>,
+        fonts: Vec<PlannedFont>,
+    }
+
+    #[derive(Deserialize)]
+    struct PlannedFont {
+        path: String,
+        scripts: Vec<String>,
     }
 
     #[derive(Deserialize)]
@@ -905,6 +912,22 @@ mod tests {
         }
         check_script_packs(&parse_catalog(BUILT_IN_CATALOG).unwrap(), &plan).unwrap();
         check_script_packs(&fixture(), &plan).unwrap();
+    }
+
+    #[test]
+    fn the_fonts_the_release_pins_make_a_script_pack_the_app_accepts() {
+        let plan = script_plan();
+        let fonts: serde_json::Map<String, serde_json::Value> = plan.fonts.iter()
+            .flat_map(|font| font.scripts.iter().map(|script| (script.clone(), serde_json::Value::from(font.path.as_str()))))
+            .collect();
+        assert_eq!(fonts.len(), plan.fonts.iter().map(|font| font.scripts.len()).sum::<usize>(), "a script has two fonts");
+        let catalog = catalog_of(vec![script_pack(&plan.pack.id, &plan.pack.name, fonts.into(), plan.download_budget_bytes)]);
+        check_script_packs(&catalog, &plan).unwrap();
+        for family in &plan.families {
+            for script in &family.scripts {
+                assert!(catalog.packs[0].script_fonts.contains_key(script), "{script} has no font");
+            }
+        }
     }
 
     #[test]

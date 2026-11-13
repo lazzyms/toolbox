@@ -7,7 +7,7 @@ import test from "node:test";
 import { packMatrixFailures, requiredPacks } from "../scripts/check-tool-matrix.mjs";
 import {
   buildRelease, codeSigned, inspectPackRelease, inspectUninstallers, minisignKey, packBudgets, packSources,
-  SUPPORTED_TARGETS, tauriNsisTemplate, unzip, verifyMinisign, zip,
+  SUPPORTED_TARGETS, tauriNsisTemplate, trueTypeOutlines, unzip, verifyMinisign, zip,
 } from "../scripts/pack-release.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -229,15 +229,67 @@ for (const { name, cause, build } of failing) {
 }
 
 test("every release pack comes from a pinned source the plan names", () => {
-  const plan = JSON.parse(readFileSync(join(projectRoot, "shared/ocr-language-packs.json"), "utf8"));
+  const ocr = JSON.parse(readFileSync(join(projectRoot, "shared/ocr-language-packs.json"), "utf8"));
+  const script = JSON.parse(readFileSync(join(projectRoot, "shared/script-packs.json"), "utf8"));
   const sources = packSources(APP_VERSION);
-  assert.deepEqual(sources.map(({ pack }) => pack.id), plan.languages.filter(({ bundled }) => !bundled).map(({ packId }) => packId));
+  assert.deepEqual(sources.map(({ pack }) => pack.id), [...ocr.languages.filter(({ bundled }) => !bundled).map(({ packId }) => packId), script.pack.id]);
   for (const { pack, target, files } of sources) {
     assert.equal(target, "all");
     assert.deepEqual(pack.appVersions, { from: APP_VERSION });
-    assert.ok(pack.license && pack.version && files.length === 1);
-    assert.ok(files[0].download.url.includes(plan.models.commit) && files[0].download.gitBlobSha1 && files[0].download.bytes);
+    assert.ok(pack.license && pack.version && files.length);
+    for (const { download } of files) assert.ok(/^https:\/\/github\.com\/[^/]+\/[^/]+\/raw\/[0-9a-f]{40}\//.test(download.url) && download.gitBlobSha1 && download.bytes, download.url);
   }
+  const ocrFiles = sources.filter(({ pack }) => pack.ocrLanguage).map(({ files }) => files);
+  assert.ok(ocrFiles.every((files) => files.length === 1 && files[0].download.url.includes(ocr.models.commit)));
+});
+
+test("the script pack names a font for every planned script and ships each font's license", () => {
+  const plan = JSON.parse(readFileSync(join(projectRoot, "shared/script-packs.json"), "utf8"));
+  const { pack, files } = packSources(APP_VERSION).find(({ pack }) => pack.id === plan.pack.id);
+  assert.equal(pack.name, plan.pack.name);
+  assert.deepEqual(pack.toolIds, ["pdf-edit", "convert-to-pdf", "formatted-pdf"]);
+  const planned = plan.fonts.flatMap(({ path, scripts }) => scripts.map((name) => [name, path]));
+  assert.deepEqual(Object.entries(pack.scriptFonts).sort(), planned.sort());
+  for (const name of [...plan.baseScripts, ...plan.families.flatMap(({ scripts }) => scripts)]) {
+    assert.equal(name in pack.scriptFonts, !plan.baseScripts.includes(name), name);
+  }
+  assert.deepEqual(files.filter(({ font }) => font).map(({ path }) => path), plan.fonts.map(({ path }) => path));
+  assert.deepEqual(files.filter(({ font }) => !font).map(({ path }) => path), plan.licenses.map(({ path }) => path));
+  assert.ok(plan.fonts.reduce((sum, { bytes }) => sum + bytes, 0) < plan.downloadBudgetBytes);
+});
+
+/** An sfnt header and table directory with `tags`, which is all `trueTypeOutlines` reads. */
+function sfnt(version, tags) {
+  const bytes = Buffer.alloc(12 + tags.length * 16);
+  bytes.writeUInt32BE(version, 0);
+  bytes.writeUInt16BE(tags.length, 4);
+  tags.forEach((tag, index) => bytes.write(tag, 12 + index * 16, "latin1"));
+  return bytes;
+}
+
+const TRUETYPE_TABLES = ["cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp"];
+
+test("only static TrueType-outline fonts count as script pack fonts", () => {
+  assert.equal(trueTypeOutlines(sfnt(0x00010000, TRUETYPE_TABLES)), true);
+  assert.equal(trueTypeOutlines(sfnt(0x4f54544f, ["CFF ", "cmap", "head", "hhea", "hmtx", "maxp"])), false);
+  assert.equal(trueTypeOutlines(sfnt(0x00010000, [...TRUETYPE_TABLES, "fvar", "gvar"])), false);
+  assert.equal(trueTypeOutlines(sfnt(0x00010000, TRUETYPE_TABLES.filter((tag) => tag !== "glyf"))), false);
+  assert.equal(trueTypeOutlines(Buffer.from("wOFF")), false);
+});
+
+test("a release refuses a script pack font that isn't static TrueType", async () => {
+  const fontSource = (data) => ({
+    pack: {
+      id: "unicode-scripts", name: "Unicode scripts", description: "d", toolIds: ["pdf-edit", "convert-to-pdf", "formatted-pdf"],
+      scriptFonts: { Arabic: "fonts/Arabic.ttf" }, license: "OFL-1.1", version: "1.0", minPackFormat: 1, appVersions: { from: "1.0.0" },
+    },
+    target: "all",
+    files: [{ path: "fonts/Arabic.ttf", font: true, license: "OFL-1.1", download: { url: "https://example.test/Arabic.ttf" } }],
+    fetched: data,
+  });
+  const build = (source) => buildRelease({ outDir: folder(), version: APP_VERSION, sources: [source], sign: key.sign, fetchFile: async () => source.fetched });
+  await assert.rejects(build(fontSource(sfnt(0x00010000, [...TRUETYPE_TABLES, "fvar"]))), /fonts\/Arabic\.ttf is not a static TrueType-outline font/);
+  await build(fontSource(sfnt(0x00010000, TRUETYPE_TABLES)));
 });
 
 // --- tool matrix -----------------------------------------------------------------------------
@@ -271,10 +323,9 @@ test("the tool matrix fails a catalog that misses a pack, a target or a tool", (
   assert.deepEqual(matrixCauses((catalog) => { catalog.packs[0].toolIds.push("retired-tool"); }), ["unknown-tool"]);
 });
 
-test("the tool matrix needs the script pack, which no release builds yet", () => {
-  const sources = packSources(APP_VERSION).map(({ pack }) => ({ ...pack, payloads: [{ target: "all" }] }));
-  const failures = packMatrixFailures({ formatVersion: 1, packs: sources }, { registryIds });
-  assert.deepEqual(failures.map(({ cause, pack }) => [cause, pack]), [["missing-pack", "unicode-scripts"]]);
+test("the tool matrix passes the packs a release builds", () => {
+  const packs = packSources(APP_VERSION).map(({ pack }) => ({ ...pack, payloads: [{ target: "all" }] }));
+  assert.deepEqual(packMatrixFailures({ formatVersion: 1, packs }, { registryIds: [...registryIds, "convert-to-pdf", "formatted-pdf"] }), []);
 });
 
 // --- uninstallers ----------------------------------------------------------------------------
