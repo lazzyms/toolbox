@@ -224,50 +224,12 @@ async fn crop_pdf(events: RunEvents, request: editor::CropPdfRequest) -> Vec<Job
 }
 
 #[tauri::command]
-async fn sign_pdf(events: RunEvents, request: editor::SignPdfRequest) -> Vec<JobOutcome> {
-    let explicit_pages = match &request.scope {
-        editor::PageScope::All => None,
-        editor::PageScope::Selected { pages } => Some(pages.as_slice()),
-    };
-    if let Err(outcomes) = validate_page_selection("sign_pdf", &request.paths, explicit_pages) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "sign_pdf", request.paths.clone(), &request.output_location, &request, editor::sign)
-}
-
-#[tauri::command]
-async fn edit_pdf(events: RunEvents, request: editor::EditPdfRequest) -> Vec<JobOutcome> {
-    if let Err(outcomes) = validate_page_selection("edit_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "edit_pdf", request.paths.clone(), &request.output_location, &request, editor::edit)
-}
-
-#[tauri::command]
-async fn edit_pdf_session(events: RunEvents, request: editor::PdfEditSessionRequest) -> Vec<JobOutcome> {
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "edit_pdf_session", request.paths.clone(), &request.output_location, &request, editor::apply_session)
-}
-
-#[tauri::command]
 async fn bates_number_pdfs(events: RunEvents, request: bates::BatesRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("bates_number_pdfs", &request.paths) { return outcomes; }
     let (plan, run) = match bates::plan(&request) { Ok(planned) => planned, Err(outcomes) => return outcomes };
     let plan = Arc::new(plan);
     let outcomes = BatchRunner::run(&events, "bates_number_pdfs", run, &request.output_location, &plan, bates::number);
     bates::report(&plan, outcomes)
-}
-
-#[tauri::command]
-async fn add_page_numbers(events: RunEvents, request: remaining::PageOverlayRequest) -> Vec<JobOutcome> {
-    if let Err(outcomes) = validate_page_selection("add_page_numbers", &request.paths, request.pages.as_deref()) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "add_page_numbers", request.paths.clone(), &request.output_location, &request, remaining::add_page_numbers)
-}
-
-#[tauri::command]
-async fn watermark_pdf(events: RunEvents, request: remaining::PdfWatermarkRequest) -> Vec<JobOutcome> {
-    if let Err(outcomes) = validate_page_selection("watermark_pdf", &request.paths, request.pages.as_deref()) { return outcomes; }
-    let request = Arc::new(request);
-    BatchRunner::run(&events, "watermark_pdf", request.paths.clone(), &request.output_location, &request, remaining::watermark)
 }
 
 #[tauri::command]
@@ -652,12 +614,7 @@ fn main() {
             classify_pdf_blank_pages,
             export_pdf_scene,
             crop_pdf,
-            edit_pdf,
-            edit_pdf_session,
-            sign_pdf,
-            add_page_numbers,
             bates_number_pdfs,
-            watermark_pdf,
             compress_files,
             rotate_pdf,
             repair_pdf,
@@ -751,13 +708,13 @@ mod command_tests {
 
     use super::*;
     use crate::kit::common::OutputLocation;
-    use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
+    use crate::kit::common::watermark::{WatermarkOptions, WatermarkPosition};
     use crate::kit::contracts::{ErrorKind, LimitKind};
     use crate::kit::images::tools::{CropRequest, CropStep, ImageEditStackRequest, ImageEditSteps, GifCreateRequest, GifExtractRequest, ImageEdit, ImageEditExportRequest, ImageEditPlan, ImageEditPreviewRequest, IconSetRequest, MetadataRequest, ResizeRequest, ResizeStep, RotateRequest, RotateStep, TiffMode, TiffRequest, ToneRequest, ToneStep, WatermarkRequest};
     use crate::kit::office::{test_minimal_ooxml_package, OfficeProcessor};
-    use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, EditPdfRequest, PageScope, PdfEditMode, PdfEditOperation, PdfEditSessionPlan, PdfEditSessionRequest, PdfOverlay, PdfOverlayPosition, PdfRect, RangedPageScope, RedactPdfRequest, RotatePage, SignPdfRequest};
+    use crate::kit::pdf::editor::{CropPdfRequest, CropSpec, PageScope, PdfRect, RangedPageScope, RedactPdfRequest};
     use crate::kit::compress::CompressLevel;
-    use crate::kit::pdf::remaining::{ImagesToPdfRequest, MergePdfRequest, PageOverlayRequest, PageSelectionRequest, PdfToImagesRequest, PdfWatermarkRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode, SplitMode, SplitPdfRequest};
+    use crate::kit::pdf::remaining::{ImagesToPdfRequest, MergePdfRequest, PageSelectionRequest, PdfToImagesRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode, SplitMode, SplitPdfRequest};
     use crate::kit::vision::{OcrRequest, VisionRequest};
 
     fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }
@@ -2077,29 +2034,6 @@ mod command_tests {
     }
 
     #[test]
-    fn sign_command_rejects_empty_selected_scope_at_the_boundary() {
-        let root = sandbox("sign-empty-selection");
-        let input = root.join("source.pdf");
-        make_pdf(&input, 1);
-        let outcomes = tauri::async_runtime::block_on(sign_pdf(RunEvents::silent(), SignPdfRequest {
-            paths: vec![input.clone()],
-            page: 0,
-            text: "signed".to_string(),
-            signature_path: None,
-            rectangle: PdfRect { x: 1.0, y: 1.0, width: 100.0, height: 100.0 },
-            scope: PageScope::Selected { pages: vec![] },
-            output_location: location(&root, "sign-empty"),
-        }));
-
-        assert_eq!(outcomes.len(), 1);
-        assert_eq!(outcomes[0].input_path, input);
-        assert!(outcomes[0].output_paths().is_empty());
-        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput)));
-        assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one page")));
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn ocr_command_rejects_bad_languages_modes_and_ranges_before_any_helper_runs() {
         let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-boundary");
@@ -2941,25 +2875,9 @@ mod command_tests {
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "blank-page classification must not change the source PDF");
         outputs.extend(named(&mut naming, "export_pdf_scene", pdf.clone(), assert_success("PDF scene", run_export_pdf_scene(RunEvents::silent(), scene::ExportRequest { paths: vec![pdf.clone()], scene: visual_scene, output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() }, no_packs()))));
         outputs.extend(named(&mut naming, "remove_password", protected.clone(), assert_success("unlock", remove_password(RunEvents::silent(), PasswordRequest { paths: vec![protected], password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "unlock") }))));
-        outputs.extend(named(&mut naming, "add_page_numbers", pdf.clone(), assert_success("page numbers", add_page_numbers(RunEvents::silent(), PageOverlayRequest { paths: vec![pdf.clone()], position: Some("bottom-right".into()), pages: None, start_number: Some(1), font_size: Some(12), output_location: location(&root, "page numbers") }))));
         outputs.extend(named(&mut naming, "bates_number_pdfs", pdf.clone(), assert_success("bates", bates_number_pdfs(RunEvents::silent(), bates::BatesRequest { paths: vec![pdf.clone()], run: None, format: bates::BatesFormat { prefix: "HL".into(), suffix: String::new(), start: 1, digits: 6, position: bates::BatesPosition::BottomRight, font_family: None, font_size: 10. }, output_location: location(&root, "bates") }))));
         outputs.extend(named(&mut naming, "merge_pdfs", pdf.clone(), assert_merge_success("merge", &[pdf.clone(), pdf_two.clone()], run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: location(&root, "merge"), output_path: None }))));
-        outputs.extend(named(&mut naming, "watermark_pdf", pdf.clone(), assert_success("watermark pdf", watermark_pdf(RunEvents::silent(), PdfWatermarkRequest { paths: vec![pdf.clone()], options: WatermarkOptions { text: Some("TEST".into()), logo_path: None, size: None, opacity: 70, color: None, position: Some(WatermarkPosition::Placement(WatermarkPlacement::Center)), rotation: 0.0 }, pages: None, output_location: location(&root, "watermark pdf") }))));
         outputs.extend(named(&mut naming, "crop_pdf", pdf.clone(), assert_success("crop pdf", crop_pdf(RunEvents::silent(), CropPdfRequest { paths: vec![pdf.clone()], spec: CropSpec::Margins { top: 36.0, right: 18.0, bottom: 36.0, left: 18.0 }, scope: RangedPageScope::All, output_location: location(&root, "crop pdf") }))));
-        outputs.extend(named(&mut naming, "edit_pdf", pdf.clone(), assert_success("edit pdf", edit_pdf(RunEvents::silent(), EditPdfRequest { paths: vec![pdf.clone()], mode: "highlight".into(), text: "TEST NOTE".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 }, output_location: location(&root, "edit pdf") }))));
-        outputs.extend(named(&mut naming, "edit_pdf_session", pdf.clone(), assert_success("composed pdf editor", edit_pdf_session(RunEvents::silent(), PdfEditSessionRequest {
-            paths: vec![pdf.clone()],
-            plan: PdfEditSessionPlan {
-                page_order: vec![1, 0],
-                delete_pages: vec![],
-                rotate_pages: vec![RotatePage { page: 0, degrees: 90 }],
-                operations: vec![
-                    PdfEditOperation::Overlay { overlay: PdfOverlay::Edit { mode: PdfEditMode::Highlight, text: "COMPOSED".into(), pages: None, rectangle: PdfRect { x: 40.0, y: 650.0, width: 220.0, height: 60.0 } } },
-                    PdfEditOperation::Overlay { overlay: PdfOverlay::Watermark { text: "WATERMARK".into(), opacity: 65, position: Some(PdfOverlayPosition::Center), logo_path: None, pages: None } },
-                ],
-            },
-            output_location: location(&root, "composed pdf editor"),
-        }))));
         outputs.extend(named(&mut naming, "protect_files", pdf_two.clone(), assert_success("lock", protect_files(RunEvents::silent(), PasswordRequest { paths: vec![pdf_two.clone()], password: crate::kit::TEST_OVERRIDE_PASSWORD.into(), password_overrides: Default::default(), output_location: location(&root, "protect") }))));
         outputs.extend(named(&mut naming, "images_to_pdf", image.clone(), assert_aggregate_success("images to pdf", &[image.clone(), image_two.clone()], run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: location(&root, "images to pdf"), output_path: None }))));
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), assert_success("pdf to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: None, picks: Vec::new(), output_location: location(&root, "pdf to images") }))));
@@ -3027,7 +2945,6 @@ mod command_tests {
         outputs.extend(named(&mut naming, "convert_to_pdf", table.clone(), converted_table));
         outputs.extend(named(&mut naming, "split_pdf", pdf.clone(), assert_success("split", split_pdf(RunEvents::silent(), SplitPdfRequest { paths: vec![pdf.clone()], mode: SplitMode::EveryN { pages: 1 }.into(), output_location: location(&root, "split") }))));
         outputs.extend(named(&mut naming, "extract_from_pdf", image_pdf.clone(), assert_success("extract images from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![image_pdf.clone()], ExtractMode::Images, None, location(&root, "extract images"))))));
-        outputs.extend(named(&mut naming, "sign_pdf", pdf.clone(), assert_success("sign", sign_pdf(RunEvents::silent(), SignPdfRequest { paths: vec![pdf.clone()], page: 0, text: "Signed".into(), signature_path: None, rectangle: PdfRect { x: 40.0, y: 40.0, width: 180.0, height: 60.0 }, scope: PageScope::All, output_location: location(&root, "sign") }))));
         outputs.extend(named(&mut naming, "ocr_pdf", pdf.clone(), assert_ocr_adapter("ocr", run_ocr_pdf(RunEvents::silent(), OcrRequest { paths: vec![pdf.clone()], page_range: None, mode: "text".into(), force: false, languages: vec!["eng".into()], output_location: location(&root, "ocr"), language_overrides: Default::default() }, no_packs()))));
         outputs.extend(named(&mut naming, "extract_pdf_pages", pdf.clone(), assert_success("extract pages", extract_pdf_pages(RunEvents::silent(), PageSelectionRequest { paths: vec![pdf.clone()], pages: vec![], page_ranges: Some("1".into()), output_location: location(&root, "extract pages") }))));
         outputs.extend(named(&mut naming, "compress_files", compressible_pdf.clone(), assert_success("compress files", compress_files(RunEvents::silent(), serde_json::from_value::<CompressFilesRequest>(serde_json::json!({ "paths": [compressible_pdf.clone()], "level": "medium", "stripExif": false, "outputLocation": location(&root, "compress files") })).expect("Compress Files view payload for compress_files")))));
@@ -4085,31 +4002,6 @@ mod command_tests {
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn tools_that_do_not_opt_in_still_reject_signed_pdfs_before_output() {
-        let root = sandbox("signed-not-opted-in");
-        let signed = root.join("vendor-nda.pdf");
-        make_pdf(&signed, 1);
-        let mut document = lopdf::Document::load(&signed).unwrap();
-        crate::kit::pdf::tests::sign(&mut document);
-        document.save(&signed).unwrap();
-        let original = std::fs::read(&signed).unwrap();
-        let rectangle = PdfRect { x: 10.0, y: 10.0, width: 100.0, height: 100.0 };
-        let paths = vec![signed.clone()];
-        let runs = [
-            ("sign", tauri::async_runtime::block_on(sign_pdf(RunEvents::silent(), SignPdfRequest { paths: paths.clone(), page: 0, text: "Signed".into(), signature_path: None, rectangle: rectangle.clone(), scope: PageScope::All, output_location: location(&root, "sign") }))),
-            ("edit", tauri::async_runtime::block_on(edit_pdf(RunEvents::silent(), EditPdfRequest { paths: paths.clone(), mode: "highlight".into(), text: String::new(), pages: None, rectangle, output_location: location(&root, "edit") }))),
-        ];
-        for (name, outcomes) in runs {
-            assert_eq!(outcomes.len(), 1, "{name}");
-            assert_eq!(outcomes[0].error().map(|error| error.message.as_str()), Some("Digitally signed PDFs cannot be edited because this mutation would invalidate the signature; remove the signature or use an unsigned copy"), "{name}");
-            assert!(outcomes[0].output_paths().is_empty() && outcomes[0].warnings.is_empty(), "{name}");
-            assert_eq!(std::fs::read_dir(root.join(name)).unwrap().count(), 0, "{name}");
-        }
-        assert_eq!(std::fs::read(&signed).unwrap(), original);
         let _ = std::fs::remove_dir_all(root);
     }
 
