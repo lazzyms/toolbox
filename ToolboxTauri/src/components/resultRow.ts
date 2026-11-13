@@ -103,8 +103,14 @@ export const warningText = (warning: OutcomeWarning): string => {
             return `${imagePlace(warning.details)} — Would be ${grouped(warning.details.width)} × ${grouped(warning.details.height)} px when decoded, over the size limit. Not saved.`;
         case "jpegColourKept":
             return jpegColourText(warning.details);
+        case "pagesWithoutText":
+            return warning.details.pages.length === 1
+                ? `${pageList(warning.details.pages)} has no selectable text. OCR can read it.`
+                : `${pageList(warning.details.pages)} have no selectable text. OCR can read them.`;
     }
 };
+
+const ocrPointer: OutcomePointer = { kind: "tool", toolId: "pdf-ocr" };
 
 const imagePlace = ({ page, image }: { page: number; image: number }) => `Page ${page}, image ${image}`;
 
@@ -134,7 +140,8 @@ const jpegColourText = ({ colour, pages, images }: { colour: JpegColour; pages: 
         : `${place} — ${images} inverted JPEGs, copied as they are. Some viewers show them in negative.`;
 };
 
-const isNote = (warning: OutcomeWarning) => warning.code === "approximateLayout";
+/** Notes tell what was approximated or what another tool can still do for a file; they don't say anything went wrong. */
+const isNote = (warning: OutcomeWarning) => warning.code === "approximateLayout" || warning.code === "pagesWithoutText";
 
 export const warningDetail = (warning: OutcomeWarning): RowDetail => ({ text: warningText(warning), tone: warning.code === "omittedContent" ? "warn" : null });
 
@@ -181,6 +188,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
             const warned = warnings.length > 0;
             const noted = warned && outcome.warnings.every(isNote);
             const flagged = noted ? (warnings.length === 1 ? "a note" : "notes") : warnings.length === 1 ? "a warning" : "warnings";
+            const pointsAtOcr = outcome.warnings.some((warning) => warning.code === "pagesWithoutText");
             const byOutput = namedByOutput && first !== null;
             const renamed = outcome.warnings.filter((warning): warning is RenamedWarning => warning.code === "renamedToAvoidReplacing");
             const fonts = (outcome.fonts ?? []).map((font) => ({ requested: font.requestedFamily, used: font.fontUsed, source: fontSources[font.source] }));
@@ -207,7 +215,7 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
                 detailLines: nonEmpty(warned ? [sizes, ...warnings, outcome.detail] : [sizes, first && !byOutput && !outputNoun ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
-                pointer: null,
+                pointer: pointsAtOcr ? pointerView(ocrPointer) : null,
                 canRetry: false,
                 canRetryWithPassword: false,
                 fonts,
