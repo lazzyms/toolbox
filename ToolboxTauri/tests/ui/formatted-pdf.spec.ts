@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openToolBySearch } from "./open-tool";
 
 type FormattedWindow = Window & {
@@ -246,23 +246,25 @@ test("Formatted PDF sends the exact structured document and shows the numbered n
     await expect(saveButton(page)).toBeDisabled();
 });
 
-test("Formatted PDF sends the exact page settings chosen with each page and header control", async ({ page }) => {
-    const settings = page.getByRole("complementary", { name: "Document settings" });
-    const cases: Array<[(page: Page) => Promise<void>, Record<string, unknown>]> = [
-        [async () => undefined, {}],
-        [() => settings.getByLabel("Size", { exact: true }).selectOption("letter"), { pageSize: "letter" }],
-        [() => settings.getByLabel("Size", { exact: true }).selectOption("legal"), { pageSize: "legal" }],
-        [() => settings.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click(), { orientation: "landscape" }],
-        [() => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Narrow" }).click(), { margins: "narrow" }],
-        [() => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Wide" }).click(), { margins: "wide" }],
-        [() => settings.getByLabel("Header text").fill("Flat 4B handover"), { header: "Flat 4B handover" }],
-        [() => settings.getByLabel("Footer text").fill("Confidential"), { footer: "Confidential" }],
-        [() => settings.getByLabel("Page numbers at the bottom").check(), { pageNumbers: true }],
-    ];
-    for (const [change, expected] of cases) {
-        expect(await pageSentAfter(page, change)).toEqual({ ...defaultPage, ...expected });
-    }
-});
+// One test per control: each one reloads the app, which is too slow to share one test's time on Windows on Arm.
+const pageSettingCases: Array<[string, (settings: Locator) => Promise<unknown>, Record<string, unknown>]> = [
+    ["no change", async () => undefined, {}],
+    ["Letter size", (settings) => settings.getByLabel("Size", { exact: true }).selectOption("letter"), { pageSize: "letter" }],
+    ["Legal size", (settings) => settings.getByLabel("Size", { exact: true }).selectOption("legal"), { pageSize: "legal" }],
+    ["landscape", (settings) => settings.getByRole("radiogroup", { name: "Orientation" }).getByRole("radio", { name: "Landscape" }).click(), { orientation: "landscape" }],
+    ["narrow margins", (settings) => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Narrow" }).click(), { margins: "narrow" }],
+    ["wide margins", (settings) => settings.getByRole("radiogroup", { name: "Margins" }).getByRole("radio", { name: "Wide" }).click(), { margins: "wide" }],
+    ["header text", (settings) => settings.getByLabel("Header text").fill("Flat 4B handover"), { header: "Flat 4B handover" }],
+    ["footer text", (settings) => settings.getByLabel("Footer text").fill("Confidential"), { footer: "Confidential" }],
+    ["page numbers", (settings) => settings.getByLabel("Page numbers at the bottom").check(), { pageNumbers: true }],
+];
+
+for (const [name, change, expected] of pageSettingCases) {
+    test(`Formatted PDF sends the exact page settings chosen with ${name}`, async ({ page }) => {
+        const settings = page.getByRole("complementary", { name: "Document settings" });
+        expect(await pageSentAfter(page, async () => { await change(settings); })).toEqual({ ...defaultPage, ...expected });
+    });
+}
 
 test("Formatted PDF summarises the page settings, explains each margin and resets them for a new document", async ({ page }) => {
     await openFormatted(page);
