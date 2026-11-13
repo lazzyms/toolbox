@@ -90,25 +90,32 @@ pub struct ResizePdfRequest {
     pub output_location: OutputLocation,
 }
 
-/// The paper every page in scope is set to: a preset from the shared paper-size table, by id.
+/// The paper every page in scope is set to: a preset from the shared paper-size table, by id, or a custom
+/// width and height in points, within the table's custom bounds.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TargetSize {
     Preset(String),
+    Custom { width: f32, height: f32 },
 }
 
-/// How the paper is turned: `Match` gives each page the paper in its own displayed orientation.
+/// How the paper is turned: `Match` gives each page the paper in its own displayed orientation;
+/// `Portrait` and `Landscape` turn every page in scope that way.
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ResizeOrientation {
     Match,
+    Portrait,
+    Landscape,
 }
 
-/// Where the visible page lands on the paper: `Fit` scales it uniformly by the smaller ratio and centres it.
+/// Where the visible page lands on the paper: `Fit` scales it uniformly by the smaller ratio and centres it;
+/// `ActualSize` keeps it at scale 1, centred, so whatever lies past the new page is cut off.
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ResizePlacement {
     Fit,
+    ActualSize,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -116,11 +123,19 @@ pub enum ResizePlacement {
 pub(crate) struct PaperSizes {
     /// Pages within this many points of the paper on both sides already count as that paper.
     pub tolerance_points: f32,
+    /// The smallest and largest side a custom size may have, in points.
+    pub custom_bounds_points: CustomBounds,
     pub sizes: Vec<PaperSize>,
 }
 
-/// A portrait paper size in points.
 #[derive(Debug, serde::Deserialize)]
+pub(crate) struct CustomBounds {
+    pub min: f32,
+    pub max: f32,
+}
+
+/// A paper size in points, portrait for the presets.
+#[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct PaperSize {
     pub id: String,
     pub name: String,
@@ -134,11 +149,38 @@ pub(crate) fn paper_sizes() -> &'static PaperSizes {
     SIZES.get_or_init(|| serde_json::from_str(include_str!("../../../../shared/paper-sizes.json")).expect("the shared paper-size table is valid JSON"))
 }
 
+/// A length in points as the view's sentences show it: millimetres to a tenth, then points, with thousands separators.
+fn describe_bound(points: f32) -> String {
+    let group = |value: f32, decimals: usize| {
+        let text = format!("{value:.decimals$}");
+        let text = if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text };
+        let (whole, fraction) = text.split_once('.').map_or((text.as_str(), None), |(whole, fraction)| (whole, Some(fraction)));
+        let digits: Vec<char> = whole.chars().collect();
+        let mut grouped = String::new();
+        for (index, digit) in digits.iter().enumerate() {
+            if index > 0 && (digits.len() - index) % 3 == 0 { grouped.push(','); }
+            grouped.push(*digit);
+        }
+        fraction.map_or(grouped.clone(), |fraction| format!("{grouped}.{fraction}"))
+    };
+    format!("{} mm ({} pt)", group(points * 25.4 / 72.0, 1), group(points, 1))
+}
+
 impl TargetSize {
-    fn paper(&self) -> Result<&'static PaperSize, ToolError> {
-        let TargetSize::Preset(id) = self;
-        paper_sizes().sizes.iter().find(|paper| paper.id == *id)
-            .ok_or_else(|| ToolError::invalid_input(format!("\"{id}\" isn't a paper size this tool offers.")))
+    fn paper(&self) -> Result<PaperSize, ToolError> {
+        match self {
+            TargetSize::Preset(id) => paper_sizes().sizes.iter().find(|paper| paper.id == *id).cloned()
+                .ok_or_else(|| ToolError::invalid_input(format!("\"{id}\" isn't a paper size this tool offers."))),
+            &TargetSize::Custom { width, height } => {
+                let CustomBounds { min, max } = paper_sizes().custom_bounds_points;
+                for (side, length) in [("Width", width), ("Height", height)] {
+                    if length.is_nan() || length < min { return Err(ToolError::invalid_input(format!("{side} must be at least {}.", describe_bound(min)))); }
+                    if length > max { return Err(ToolError::invalid_input(format!("{side} can be at most {}.", describe_bound(max)))); }
+                }
+                let millimetres = |points: f32| { let text = format!("{:.1}", points * 25.4 / 72.0); text.strip_suffix(".0").map(str::to_string).unwrap_or(text) };
+                Ok(PaperSize { id: "custom".into(), name: format!("{} \u{d7} {} mm", millimetres(width), millimetres(height)), width, height })
+            }
+        }
     }
 }
 
@@ -237,7 +279,7 @@ fn page_user_unit(document: &Document, page_id: ObjectId) -> Result<f32, ToolErr
 
 pub fn resize(request: &ResizePdfRequest, input: PathBuf) -> JobOutcome {
     transform_or_skip_pdf_checked(input, &request.output_location, "-resized", PdfMutationIntent::ValidateOnly, SignedPdf::RemoveSignature, |document, pages, _preflight| {
-        let paper = request.size.paper()?;
+        let paper = &request.size.paper()?;
         let (selected, notes) = match ranged_pages(&request.scope, pages.len())? {
             Ok(selection) => selection,
             Err(reason) => return Ok(Edited::Skipped(reason)),
@@ -300,13 +342,19 @@ fn resize_placement(document: &Document, page_id: ObjectId, page_index: usize, p
         // A landscape page gets landscape paper; a portrait or square page keeps the paper's portrait.
         ResizeOrientation::Match if (shown_width > shown_height) != (paper.width > paper.height) => (paper.height, paper.width),
         ResizeOrientation::Match => (paper.width, paper.height),
+        ResizeOrientation::Portrait => (paper.width.min(paper.height), paper.width.max(paper.height)),
+        ResizeOrientation::Landscape => (paper.width.max(paper.height), paper.width.min(paper.height)),
     };
     let tolerance = paper_sizes().tolerance_points;
     if (shown_width - paper_width).abs() <= tolerance && (shown_height - paper_height).abs() <= tolerance { return Ok(None); }
     // The new page in user space: /Rotate stays, so a quarter-turned page stores the paper's sides swapped.
     let (target_width, target_height) = if quarter_turn { (paper_height / user_unit, paper_width / user_unit) } else { (paper_width / user_unit, paper_height / user_unit) };
-    let ResizePlacement::Fit = placement;
-    let scale = (target_width / width).min(target_height / height);
+    let scale = match placement {
+        ResizePlacement::Fit => (target_width / width).min(target_height / height),
+        // Scale 1 in user space is actual size, because the page keeps its UserUnit. The new page boxes cut off
+        // whatever lies past them.
+        ResizePlacement::ActualSize => 1.0,
+    };
     let offset = ((target_width - scale * width) / 2.0 - scale * x0, (target_height - scale * height) / 2.0 - scale * y0);
     Ok(Some(PagePlacement { visible, target: (target_width, target_height), scale, offset }))
 }
@@ -730,10 +778,14 @@ mod session_tests {
     }
 
     fn resize_to(source: &Path, output_dir: &Path, preset: &str, scope: RangedPageScope) -> JobOutcome {
-        resize(&ResizePdfRequest {
-            paths: vec![source.to_path_buf()], size: TargetSize::Preset(preset.into()), orientation: ResizeOrientation::Match,
-            placement: ResizePlacement::Fit, scope, output_location: location(output_dir),
-        }, source.to_path_buf())
+        resize_with(source, output_dir, TargetSize::Preset(preset.into()), ResizeOrientation::Match, ResizePlacement::Fit)(scope)
+    }
+
+    fn resize_with(source: &Path, output_dir: &Path, size: TargetSize, orientation: ResizeOrientation, placement: ResizePlacement) -> impl Fn(RangedPageScope) -> JobOutcome {
+        let (source, output_dir) = (source.to_path_buf(), output_dir.to_path_buf());
+        move |scope| resize(&ResizePdfRequest {
+            paths: vec![source.clone()], size: size.clone(), orientation, placement, scope, output_location: location(&output_dir),
+        }, source.clone())
     }
 
     fn stream_text(document: &Document, object: &Object) -> String {
@@ -987,6 +1039,178 @@ mod session_tests {
 
         assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 2, "only the two changed files were written");
         for path in [mixed, all_a4, scoped] { let _ = std::fs::remove_file(path); }
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    fn custom(width_mm: f32, height_mm: f32) -> TargetSize { TargetSize::Custom { width: width_mm * MM, height: height_mm * MM } }
+
+    /// The page as displayed, in points: its MediaBox with /Rotate applied.
+    fn displayed_size(document: &Document, page: ObjectId) -> (f32, f32) {
+        let [x0, y0, x1, y1] = page_box(document, page, b"MediaBox");
+        let rotate = document.get_dictionary(page).unwrap().get(b"Rotate").ok().and_then(|value| value.as_i64().ok()).unwrap_or(0);
+        if rotate % 180 == 90 { (y1 - y0, x1 - x0) } else { (x1 - x0, y1 - y0) }
+    }
+
+    #[test]
+    fn resize_sets_a_custom_size_exactly_on_every_box_and_names_it_in_millimetres() {
+        let output_dir = temp_path("resize-custom-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let source = temp_path("resize-custom.pdf");
+        make_boxed_pdf(&source, [0.0, 0.0, 500.0, 700.0], None, None);
+        let original = std::fs::read(&source).unwrap();
+        // 200 x 250 mm and 8 x 10 in, each sent in points.
+        for (size, (width, height), name) in [
+            (custom(200.0, 250.0), (200.0 * MM, 250.0 * MM), "200 \u{d7} 250 mm"),
+            (TargetSize::Custom { width: 8.0 * 72.0, height: 10.0 * 72.0 }, (576.0, 720.0), "203.2 \u{d7} 254 mm"),
+        ] {
+            let outcome = resize_with(&source, &output_dir, size, ResizeOrientation::Match, ResizePlacement::Fit)(RangedPageScope::All);
+            assert!(outcome.error().is_none(), "{name}: {:?}", outcome.error());
+            assert_eq!(outcome.detail, format!("Page 1 changed to {name}."));
+            let after = Document::load(&outcome.output_paths()[0]).unwrap();
+            let page = only_page(&after);
+            for key in [&b"MediaBox"[..], b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"] {
+                assert_box_near(page_box(&after, page, key), [0.0, 0.0, width, height], &format!("{name} {}", String::from_utf8_lossy(key)));
+            }
+            let ([scale, _, _], _) = resize_wrapper(&after, page);
+            assert_near(scale, (width / 500.0).min(height / 700.0), "fit");
+        }
+        // A page already at the custom size, within the tolerance, is left alone.
+        let already = temp_path("resize-custom-already.pdf");
+        make_boxed_pdf(&already, [0.0, 0.0, 200.0 * MM + 1.0, 250.0 * MM - 1.0], None, None);
+        let outcome = resize_with(&already, &output_dir, custom(200.0, 250.0), ResizeOrientation::Match, ResizePlacement::Fit)(RangedPageScope::All);
+        assert!(matches!(&outcome.state, crate::kit::contracts::OutcomeState::Skipped { reason } if reason.message == "Every page is already 200 \u{d7} 250 mm. Nothing was saved."), "{:?}", outcome.state);
+        assert_eq!(std::fs::read(&source).unwrap(), original, "the original is never modified");
+        for path in [source, already] { let _ = std::fs::remove_file(path); }
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_custom_sizes_must_be_within_72_and_14400_points_or_fail_with_invalid_input() {
+        let bounds = &paper_sizes().custom_bounds_points;
+        assert_eq!((bounds.min, bounds.max), (72.0, 14_400.0), "the bounds the UI reads from the shared table");
+        let output_dir = temp_path("resize-bounds-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let source = temp_path("resize-bounds.pdf");
+        make_pdf_with_pages(&source, 1);
+        for (width, height, message) in [
+            (71.9, 500.0, "Width must be at least 25.4 mm (72 pt)."),
+            (500.0, 71.9, "Height must be at least 25.4 mm (72 pt)."),
+            (0.0, 500.0, "Width must be at least 25.4 mm (72 pt)."),
+            (-200.0, 500.0, "Width must be at least 25.4 mm (72 pt)."),
+            (14_400.5, 500.0, "Width can be at most 5,080 mm (14,400 pt)."),
+            (500.0, 14_400.5, "Height can be at most 5,080 mm (14,400 pt)."),
+            (f32::NAN, 500.0, "Width must be at least 25.4 mm (72 pt)."),
+        ] {
+            let outcome = resize_with(&source, &output_dir, TargetSize::Custom { width, height }, ResizeOrientation::Match, ResizePlacement::Fit)(RangedPageScope::All);
+            let error = outcome.error().unwrap_or_else(|| panic!("{width} x {height} should fail"));
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "{width} x {height}: {error:?}");
+            assert_eq!(error.message, message);
+        }
+        assert_eq!(std::fs::read_dir(&output_dir).unwrap().count(), 0, "nothing is written for a size out of bounds");
+        // The bounds themselves are allowed.
+        let outcome = resize_with(&source, &output_dir, TargetSize::Custom { width: 72.0, height: 14_400.0 }, ResizeOrientation::Match, ResizePlacement::Fit)(RangedPageScope::All);
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        let after = Document::load(&outcome.output_paths()[0]).unwrap();
+        assert_box_near(page_box(&after, only_page(&after), b"MediaBox"), [0.0, 0.0, 72.0, 14_400.0], "smallest and largest side");
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_portrait_and_landscape_turn_every_page_and_match_keeps_each_page_as_displayed() {
+        let output_dir = temp_path("resize-orientation-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let source = temp_path("resize-orientation.pdf");
+        // Portrait, landscape, portrait turned a quarter (shown landscape) and landscape turned a quarter (shown portrait).
+        make_sized_pages_pdf(&source, &[(500.0, 700.0), (700.0, 500.0), (500.0, 700.0), (700.0, 500.0)]);
+        let mut document = Document::load(&source).unwrap();
+        let pages = document.get_pages().values().copied().collect::<Vec<_>>();
+        for page in [pages[2], pages[3]] { document.get_dictionary_mut(page).unwrap().set("Rotate", 90); }
+        document.save(&source).unwrap();
+        let a4 = (595.2756_f32, 841.8898_f32);
+        let (portrait, landscape) = (a4, (a4.1, a4.0));
+        // A landscape custom size is turned the same way: Portrait gives its short side as the width.
+        let (wide, tall) = ((300.0 * MM, 200.0 * MM), (200.0 * MM, 300.0 * MM));
+        for (size, orientation, expected) in [
+            (TargetSize::Preset("a4".into()), ResizeOrientation::Portrait, [portrait; 4]),
+            (TargetSize::Preset("a4".into()), ResizeOrientation::Landscape, [landscape; 4]),
+            (TargetSize::Preset("a4".into()), ResizeOrientation::Match, [portrait, landscape, landscape, portrait]),
+            (custom(300.0, 200.0), ResizeOrientation::Portrait, [tall; 4]),
+            (custom(300.0, 200.0), ResizeOrientation::Landscape, [wide; 4]),
+            (custom(300.0, 200.0), ResizeOrientation::Match, [tall, wide, wide, tall]),
+        ] {
+            let label = format!("{size:?} {orientation:?}");
+            let outcome = resize_with(&source, &output_dir, size, orientation, ResizePlacement::Fit)(RangedPageScope::All);
+            assert!(outcome.error().is_none(), "{label}: {:?}", outcome.error());
+            let after = Document::load(&outcome.output_paths()[0]).unwrap();
+            for (index, (page, expected)) in after.get_pages().values().copied().zip(expected).enumerate() {
+                let (width, height) = displayed_size(&after, page);
+                assert_near(width, expected.0, &format!("{label} page {} width", index + 1));
+                assert_near(height, expected.1, &format!("{label} page {} height", index + 1));
+                let rotate = after.get_dictionary(page).unwrap().get(b"Rotate").ok().and_then(|value| value.as_i64().ok()).unwrap_or(0);
+                assert_eq!(rotate, if index >= 2 { 90 } else { 0 }, "/Rotate stays");
+            }
+        }
+        // Forcing an orientation also changes a page that is already the paper the other way round.
+        let turned = temp_path("resize-orientation-turned.pdf");
+        make_sized_pages_pdf(&turned, &[landscape]);
+        let outcome = resize_with(&turned, &output_dir, TargetSize::Preset("a4".into()), ResizeOrientation::Portrait, ResizePlacement::Fit)(RangedPageScope::All);
+        assert_eq!(outcome.detail, "Page 1 changed to A4.");
+        let outcome = resize_with(&turned, &output_dir, TargetSize::Preset("a4".into()), ResizeOrientation::Landscape, ResizePlacement::Fit)(RangedPageScope::All);
+        assert!(matches!(&outcome.state, crate::kit::contracts::OutcomeState::Skipped { .. }), "{:?}", outcome.state);
+        for path in [source, turned] { let _ = std::fs::remove_file(path); }
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn resize_actual_size_keeps_scale_one_centred_clips_to_the_new_page_and_moves_annotations_the_same_way() {
+        let output_dir = temp_path("resize-actual-output");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        let a4 = (595.2756_f32, 841.8898_f32);
+        // A page larger than A4 with an offset origin, a smaller one, and a quarter-turned one.
+        for (label, media, rotate, user_space) in [
+            ("larger", [50.0, 60.0, 1050.0, 1260.0], None, a4),
+            ("smaller", [0.0, 0.0, 300.0, 400.0], None, a4),
+            ("turned", [0.0, 0.0, 1000.0, 700.0], Some(90), (a4.1, a4.0)),
+        ] {
+            let source = temp_path(&format!("resize-actual-{label}.pdf"));
+            make_boxed_pdf(&source, media, None, rotate);
+            let mut document = Document::load(&source).unwrap();
+            let page = only_page(&document);
+            let comment = document.add_object(dictionary! {
+                "Type" => "Annot", "Subtype" => "Square",
+                "Rect" => vec![Object::Real(media[0] + 10.0), Object::Real(media[1] + 20.0), Object::Real(media[0] + 110.0), Object::Real(media[1] + 70.0)],
+                "Vertices" => vec![Object::Real(media[0] + 10.0), Object::Real(media[1] + 20.0)],
+            });
+            document.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(comment)]);
+            document.save(&source).unwrap();
+            let original = std::fs::read(&source).unwrap();
+
+            let outcome = resize_with(&source, &output_dir, TargetSize::Preset("a4".into()), ResizeOrientation::Portrait, ResizePlacement::ActualSize)(RangedPageScope::All);
+
+            assert!(outcome.error().is_none(), "{label}: {:?}", outcome.error());
+            let after = Document::load(&outcome.output_paths()[0]).unwrap();
+            let page = only_page(&after);
+            let (width, height) = displayed_size(&after, page);
+            assert_near(width, a4.0, &format!("{label} shown portrait width"));
+            assert_near(height, a4.1, &format!("{label} shown portrait height"));
+            for key in [&b"MediaBox"[..], b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"] {
+                assert_box_near(page_box(&after, page, key), [0.0, 0.0, user_space.0, user_space.1], &format!("{label}: the new page clips the content"));
+            }
+            let ([scale, e, f], clip) = resize_wrapper(&after, page);
+            assert_eq!(scale, 1.0, "{label}: actual size");
+            // Centred: the old page's centre lands on the new page's centre.
+            assert_near((media[0] + media[2]) / 2.0 + e, user_space.0 / 2.0, &format!("{label} centred horizontally"));
+            assert_near((media[1] + media[3]) / 2.0 + f, user_space.1 / 2.0, &format!("{label} centred vertically"));
+            assert_eq!(clip, [media[0], media[1], media[2] - media[0], media[3] - media[1]], "{label}: the old visible area stays the inner clip");
+            let annotation = after.get_dictionary(comment).unwrap();
+            let numbers = |key: &[u8]| annotation.get(key).unwrap().as_array().unwrap().iter().map(|value| super::super::metadata::number(value).unwrap()).collect::<Vec<_>>();
+            let expected_rect = [media[0] + 10.0 + e, media[1] + 20.0 + f, media[0] + 110.0 + e, media[1] + 70.0 + f];
+            for (actual, expected) in numbers(b"Rect").iter().zip(expected_rect) { assert_near(*actual, expected, &format!("{label} annotation rect")); }
+            for (actual, expected) in numbers(b"Vertices").iter().zip(&expected_rect[..2]) { assert_near(*actual, *expected, &format!("{label} annotation vertices")); }
+            assert_eq!(std::fs::read(&source).unwrap(), original, "the original is never modified");
+            let _ = std::fs::remove_file(source);
+        }
         let _ = std::fs::remove_dir_all(output_dir);
     }
 

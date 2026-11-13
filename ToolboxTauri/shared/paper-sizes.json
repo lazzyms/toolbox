@@ -1,5 +1,6 @@
 {
   "tolerancePoints": 1.5,
+  "customBoundsPoints": { "min": 72, "max": 14400 },
   "sizes": [
     { "id": "a3", "name": "A3", "width": 841.8898, "height": 1190.5512 },
     { "id": "a4", "name": "A4", "width": 595.2756, "height": 841.8898 },

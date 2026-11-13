@@ -2089,6 +2089,41 @@ mod command_tests {
     }
 
     #[test]
+    fn resize_command_applies_a_custom_size_payload_and_rejects_one_out_of_bounds_for_every_file() {
+        use crate::kit::contracts::ErrorKind;
+        let root = sandbox("resize-custom-batch");
+        let (lease, broken) = (root.join("lease.pdf"), root.join("broken.pdf"));
+        make_pdf(&lease, 2);
+        std::fs::write(&broken, b"%PDF-1.7 not really").unwrap();
+        let original = std::fs::read(&lease).unwrap();
+        let payload = |width: f64, height: f64, out: &str| serde_json::from_value::<ResizePdfRequest>(serde_json::json!({
+            "paths": [lease.clone(), broken.clone()],
+            "size": { "custom": { "width": width, "height": height } },
+            "orientation": "landscape",
+            "placement": "actualSize",
+            "scope": "all",
+            "outputLocation": location(&root, out),
+        })).expect("Crop and Resize view payload for a custom resize");
+
+        // 200 x 250 mm in points, turned landscape, at actual size.
+        let outcomes = tauri::async_runtime::block_on(resize_pdf(RunEvents::silent(), payload(566.9291, 708.6614, "out")));
+        assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
+        assert_eq!(outcomes[0].detail, "Pages 1\u{2013}2 changed to 200 \u{d7} 250 mm.");
+        for (_, media, _) in page_boxes_and_contents(&outcomes[0].output_paths()[0]) {
+            assert!(media.iter().zip([0.0, 0.0, 708.6614, 566.9291]).all(|(actual, expected)| (actual - expected).abs() < 1e-3), "{media:?}");
+        }
+        assert!(outcomes[1].error().is_some() && outcomes[1].output_paths().is_empty(), "the broken file fails on its own");
+
+        // Out of bounds fails every file with InvalidInput and writes nothing.
+        let outcomes = tauri::async_runtime::block_on(resize_pdf(RunEvents::silent(), payload(71.0, 708.6614, "too-small")));
+        assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message == "Width must be at least 25.4 mm (72 pt)."), "{:?}", outcomes[0]);
+        assert!(outcomes.iter().all(|outcome| outcome.error().is_some() && outcome.output_paths().is_empty()));
+        assert!(!root.join("too-small").exists() || std::fs::read_dir(root.join("too-small")).unwrap().count() == 0);
+        assert_eq!(std::fs::read(&lease).unwrap(), original);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn crop_command_rejects_malformed_ranges_for_every_file_before_writing() {
         let root = sandbox("crop-malformed-range");
         let (first, second) = (root.join("first.pdf"), root.join("second.pdf"));
