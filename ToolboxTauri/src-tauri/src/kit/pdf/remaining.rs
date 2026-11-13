@@ -2386,12 +2386,12 @@ pub(crate) mod tests {
         FAX_ROWS.iter().flat_map(|row| row.bytes().map(|pixel| if pixel == b'#' { 0 } else { 255 })).collect()
     }
 
-    /// Writes CCITT codes given as strings of 0 and 1.
+    /// Writes CCITT codes given as strings of 0 and 1. TIFF Pages builds its Group 3 fixtures with it too.
     #[derive(Default)]
-    struct FaxBits { bytes: Vec<u8>, used: usize }
+    pub(crate) struct FaxBits { pub(crate) bytes: Vec<u8>, used: usize }
 
     impl FaxBits {
-        fn put(&mut self, code: &str) {
+        pub(crate) fn put(&mut self, code: &str) {
             for bit in code.bytes() {
                 if self.used % 8 == 0 { self.bytes.push(0); }
                 if bit == b'1' { *self.bytes.last_mut().unwrap() |= 0x80 >> (self.used % 8); }
@@ -2400,12 +2400,12 @@ pub(crate) mod tests {
         }
 
         /// An EOL whose last bit ends a byte, after zero fill bits.
-        fn aligned_eol(&mut self) {
+        pub(crate) fn aligned_eol(&mut self) {
             while (self.used + 12) % 8 != 0 { self.put("0"); }
             self.put("000000000001");
         }
 
-        /// Terminating run codes, enough for the 10-pixel fixture.
+        /// Terminating run codes, enough for rows up to 10 pixels wide.
         fn run(&mut self, black: bool, length: usize) {
             const WHITE: [&str; 11] = ["00110101","000111","0111","1000","1011","1100","1110","1111","10011","10100","00111"];
             const BLACK: [&str; 11] = ["0000110111","010","11","10","011","0011","0010","00011","000101","000100","0000100"];
@@ -2413,7 +2413,7 @@ pub(crate) mod tests {
         }
 
         /// One row coded one-dimensionally: alternating runs that start white.
-        fn row_1d(&mut self, row: &str) {
+        pub(crate) fn row_1d(&mut self, row: &str) {
             let (mut black, mut length) = (false, 0);
             for pixel in row.bytes().map(|pixel| pixel == b'#') {
                 if pixel != black { self.run(black, length); black = pixel; length = 0; }
@@ -2423,7 +2423,7 @@ pub(crate) mod tests {
         }
 
         /// One row coded two-dimensionally: V0 for every change when it repeats the row above, horizontal mode otherwise.
-        fn row_2d(&mut self, row: &str, above: &str) {
+        pub(crate) fn row_2d(&mut self, row: &str, above: &str) {
             let changes = fax_changes(row);
             if row == above { for _ in 0..=changes.len() { self.put("1"); } return; }
             let (mut a0, mut index) = (0, 0);

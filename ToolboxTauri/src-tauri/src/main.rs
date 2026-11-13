@@ -1125,8 +1125,12 @@ mod command_tests {
 
     type RawTiffPage = (u32, u32, Vec<(u16, Vec<u32>)>, Vec<u8>);
 
+    /// A little-endian TIFF with one IFD per page. Each page's data is one strip, unless the page lists its own
+    /// StripByteCounts (279) and RowsPerStrip (278), which split the data into consecutive strips.
     fn raw_tiff(pages: &[RawTiffPage]) -> Vec<u8> {
         const SHORT_TAGS: [u16; 7] = [258, 259, 262, 266, 277, 284, 530];
+        // JPEGTables is an UNDEFINED byte string.
+        const BYTE_TAGS: [u16; 1] = [347];
         let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
         let mut link = 4;
         for (width, height, tags, strip) in pages {
@@ -1134,7 +1138,11 @@ mod command_tests {
             out.extend_from_slice(strip);
             if out.len() % 2 == 1 { out.push(0); }
             let mut entries = tags.clone();
-            entries.extend([(256, vec![*width]), (257, vec![*height]), (273, vec![strip_offset]), (278, vec![*height]), (279, vec![strip.len() as u32])]);
+            entries.extend([(256, vec![*width]), (257, vec![*height])]);
+            match tags.iter().find(|(tag, _)| *tag == 279) {
+                Some((_, counts)) => entries.push((273, counts.iter().scan(strip_offset, |at, count| { let offset = *at; *at += count; Some(offset) }).collect())),
+                None => entries.extend([(273, vec![strip_offset]), (278, vec![*height]), (279, vec![strip.len() as u32])]),
+            }
             entries.sort_by_key(|(tag, _)| *tag);
             let ifd = out.len();
             out[link..link + 4].copy_from_slice(&(ifd as u32).to_le_bytes());
@@ -1142,10 +1150,10 @@ mod command_tests {
             let mut tail = Vec::new();
             out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
             for (tag, values) in &entries {
-                let short = SHORT_TAGS.contains(tag);
-                let mut bytes = values.iter().flat_map(|value| if short { (*value as u16).to_le_bytes().to_vec() } else { value.to_le_bytes().to_vec() }).collect::<Vec<_>>();
+                let (short, byte) = (SHORT_TAGS.contains(tag), BYTE_TAGS.contains(tag));
+                let mut bytes = values.iter().flat_map(|value| if byte { vec![*value as u8] } else if short { (*value as u16).to_le_bytes().to_vec() } else { value.to_le_bytes().to_vec() }).collect::<Vec<_>>();
                 out.extend_from_slice(&tag.to_le_bytes());
-                out.extend_from_slice(&(if short { 3u16 } else { 4 }).to_le_bytes());
+                out.extend_from_slice(&(if byte { 7u16 } else if short { 3 } else { 4 }).to_le_bytes());
                 out.extend_from_slice(&(values.len() as u32).to_le_bytes());
                 if bytes.len() <= 4 {
                     bytes.resize(4, 0);
@@ -10059,6 +10067,166 @@ mod command_tests {
         }
         assert_eq!(std::fs::read_dir(root.join("combine")).unwrap().count(), 0, "a failed combine publishes nothing");
         for (path, original) in paths.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original); }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The fax fixture rows: 10 × 6, `#` is black. Rows 1 and 2 match, so two-dimensional coding can refer to the row above.
+    const FAX_PAGE: [&str; 6] = ["##....####", "##....####", "..#####...", "#........#", "..........", "##########"];
+
+    /// A CCITT TIFF page of `FAX_PAGE`: bilevel, one sample, with the given Compression, Photometric and FillOrder,
+    /// any extra tags, and the coded strips laid out back to back.
+    fn fax_tiff_page(compression: u32, photometric: u32, fill_order: u32, extra: Vec<(u16, Vec<u32>)>, strips: &[Vec<u8>]) -> RawTiffPage {
+        let reversed = |strip: &Vec<u8>| strip.iter().map(|byte| if fill_order == 2 { byte.reverse_bits() } else { *byte }).collect::<Vec<_>>();
+        let mut tags = vec![(258, vec![1]), (259, vec![compression]), (262, vec![photometric]), (266, vec![fill_order]), (277, vec![1])];
+        tags.extend(extra);
+        if strips.len() > 1 {
+            tags.push((278, vec![(FAX_PAGE.len() / strips.len()) as u32]));
+            tags.push((279, strips.iter().map(|strip| strip.len() as u32).collect()));
+        }
+        (10, FAX_PAGE.len() as u32, tags, strips.iter().flat_map(reversed).collect())
+    }
+
+    /// Group 3 rows of `FAX_PAGE`, each after an EOL, then RTC: one-dimensional, or alternating one- and
+    /// two-dimensional rows with their tag bits. `aligned` ends every EOL on a byte boundary, as T4Options bit 2 allows.
+    fn group_three(rows: std::ops::Range<usize>, two_dimensional: bool, aligned: bool) -> Vec<u8> {
+        let mut bits = crate::kit::pdf::remaining::tests::FaxBits::default();
+        for index in rows.clone() {
+            if aligned { bits.aligned_eol() } else { bits.put("000000000001") }
+            match (two_dimensional, index > rows.start && index % 2 == 1) {
+                (false, _) => bits.row_1d(FAX_PAGE[index]),
+                (true, false) => { bits.put("1"); bits.row_1d(FAX_PAGE[index]) }
+                (true, true) => { bits.put("0"); bits.row_2d(FAX_PAGE[index], FAX_PAGE[index - 1]) }
+            }
+        }
+        for _ in 0..6 { bits.put(if two_dimensional { "0000000000011" } else { "000000000001" }); }
+        bits.bytes
+    }
+
+    /// Group 4 rows of `FAX_PAGE`, ended by EOFB.
+    fn group_four(rows: std::ops::Range<usize>) -> Vec<u8> {
+        let mut encoder = fax::encoder::Encoder::new(fax::VecWriter::new());
+        for row in &FAX_PAGE[rows] {
+            encoder.encode_line(row.bytes().map(|pixel| if pixel == b'#' { fax::Color::Black } else { fax::Color::White }), 10).unwrap();
+        }
+        encoder.finish().unwrap().finish()
+    }
+
+    /// Splits a JPEG into the tables-only stream a JPEGTables tag holds and the abbreviated stream that follows it in
+    /// a strip, as libtiff writes JPEG-in-TIFF.
+    fn abbreviated_jpeg(jpeg: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let (mut tables, mut image, mut at) = (vec![0xFF, 0xD8], vec![0xFF, 0xD8], 2);
+        loop {
+            let marker = jpeg[at + 1];
+            if marker == 0xDA { image.extend_from_slice(&jpeg[at..]); break; }
+            let end = at + 2 + usize::from(u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]));
+            if matches!(marker, 0xDB | 0xC4) { &mut tables } else { &mut image }.extend_from_slice(&jpeg[at..end]);
+            at = end;
+        }
+        tables.extend_from_slice(&[0xFF, 0xD9]);
+        (tables, image)
+    }
+
+    fn sha256(bytes: &[u8]) -> String {
+        <sha2::Sha256 as sha2::Digest>::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    #[test]
+    fn tiff_pages_decode_ccitt_group_three_and_four_and_jpeg_pages_in_process_for_previews_split_and_combine() {
+        use crate::kit::images::tools::{TiffPageRef, TiffPreviewRequest};
+        let root = sandbox("tiff-fax-jpeg");
+        let ink = FAX_PAGE.iter().flat_map(|row| row.bytes().map(|pixel| if pixel == b'#' { 0u8 } else { 255 })).collect::<Vec<_>>();
+        let inverted = ink.iter().map(|pixel| 255 - pixel).collect::<Vec<_>>();
+        let fax = |name: &str, pages: &[RawTiffPage]| { let path = root.join(name); std::fs::write(&path, raw_tiff(pages)).unwrap(); path };
+        let g3 = fax("fax-g3.tif", &[
+            fax_tiff_page(3, 0, 1, vec![(292, vec![0])], &[group_three(0..6, false, false)]),
+            // BlackIsZero, reversed bit order and two strips, each starting with its own EOL.
+            fax_tiff_page(3, 1, 2, vec![(292, vec![4])], &[group_three(0..3, false, true), group_three(3..6, false, true)]),
+        ]);
+        let g3_2d = fax("fax-g3-2d.tiff", &[
+            fax_tiff_page(3, 0, 1, vec![(292, vec![1])], &[group_three(0..6, true, false)]),
+            fax_tiff_page(3, 0, 2, vec![(292, vec![5])], &[group_three(0..2, true, true), group_three(2..4, true, true), group_three(4..6, true, true)]),
+        ]);
+        let g4 = fax("fax-g4.tif", &[
+            fax_tiff_page(4, 0, 1, vec![], &[group_four(0..6)]),
+            fax_tiff_page(4, 1, 2, vec![(293, vec![0])], &[group_four(0..3), group_four(3..6)]),
+        ]);
+
+        // A colour page in a complete JPEG stream with 4:2:0 chroma, and a greyscale page whose tables sit in JPEGTables.
+        let colour = image::RgbImage::from_fn(16, 8, |x, y| image::Rgb([(x * 15) as u8, (y * 30) as u8, (160 + x * 5) as u8]));
+        let grey = image::GrayImage::from_fn(9, 7, |x, y| image::Luma([(x * 25 + y * 9) as u8]));
+        let (mut colour_jpeg, mut grey_jpeg) = (Vec::new(), Vec::new());
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut colour_jpeg, 90).encode_image(&colour).unwrap();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut grey_jpeg, 90).encode_image(&grey).unwrap();
+        let (tables, abbreviated) = abbreviated_jpeg(&grey_jpeg);
+        let scan = fax("scan-jpeg.tif", &[
+            (16, 8, vec![(258, vec![8, 8, 8]), (259, vec![7]), (262, vec![6]), (277, vec![3]), (530, vec![2, 2])], colour_jpeg.clone()),
+            (9, 7, vec![(258, vec![8]), (259, vec![7]), (262, vec![1]), (277, vec![1]), (347, tables.iter().map(|byte| u32::from(*byte)).collect())], abbreviated),
+        ]);
+        let paths = vec![g3.clone(), g3_2d.clone(), g4.clone(), scan.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let fax_pages = |second: &Vec<u8>| vec![(tiff::ColorType::Gray(8), (10, 6), ink.clone()), (tiff::ColorType::Gray(8), (10, 6), second.clone())];
+        let expected_fax = [fax_pages(&inverted), fax_pages(&ink), fax_pages(&inverted)];
+        for (path, expected) in paths.iter().zip(&expected_fax) {
+            let split = assert_success(&path.display().to_string(), std::future::ready(run_split_tiff_pages(&RunEvents::silent(), TiffRequest {
+                mode: TiffMode::Split, paths: vec![path.clone()], pages: None, output_location: location(&root, "split"), output_path: None, compression: Default::default(),
+            })));
+            assert_eq!(split.iter().flat_map(tiff_pages).collect::<Vec<_>>(), *expected, "{}: every fax page splits pixel for pixel", path.display());
+        }
+
+        let split = assert_success("jpeg split", std::future::ready(run_split_tiff_pages(&RunEvents::silent(), TiffRequest {
+            mode: TiffMode::Split, paths: vec![scan.clone()], pages: None, output_location: location(&root, "split"), output_path: None, compression: Default::default(),
+        })));
+        let jpeg_pages = split.iter().flat_map(tiff_pages).collect::<Vec<_>>();
+        assert_eq!(jpeg_pages.iter().map(|(color, size, _)| (*color, *size)).collect::<Vec<_>>(), vec![(tiff::ColorType::RGB(8), (16, 8)), (tiff::ColorType::Gray(8), (9, 7))]);
+        let worst = |decoded: &[u8], jpeg: &[u8]| decoded.iter().zip(image::load_from_memory(jpeg).unwrap().as_bytes()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst(&jpeg_pages[0].2, &colour_jpeg) <= 3, "the colour JPEG page matches the decoded JPEG");
+        assert_eq!(worst(&jpeg_pages[1].2, &grey_jpeg), 0, "the greyscale page decodes with its JPEGTables");
+        // The JPEG decoder picks SIMD code at run time; pinning its exact output keeps every platform's pages identical.
+        assert_eq!(
+            [sha256(&colour_jpeg), sha256(&grey_jpeg), sha256(&jpeg_pages[0].2), sha256(&jpeg_pages[1].2)],
+            ["ef66f3a31d3af7c5b3279e516743cb63b61082ee96dab75c3b407866462e89e0", "beb58c933dcc32b335b8ba6498b2669f3908ea4ee5f902faeaf4f6286a3e9243", "48ba0616c96c58b7863eec55d92cb71feb8c27843e04a5fe0d63d2420441114a", "8b7fffd577f7d6d01d3fbdd15b69f92cb4e2b3c8f25dc18f786b43a0aa3b8ef8"].map(String::from),
+            "the code-generated JPEGs and their decoded pixels are the same on every platform",
+        );
+
+        let order = vec![
+            TiffPageRef { path: scan.clone(), page: 1 }, TiffPageRef { path: g4.clone(), page: 1 }, TiffPageRef { path: g3_2d.clone(), page: 0 },
+            TiffPageRef { path: g3.clone(), page: 1 }, TiffPageRef { path: scan.clone(), page: 0 },
+        ];
+        let combined = assert_aggregate_success("combine", &paths, run_combine_tiff_pages(&TiffRequest {
+            mode: TiffMode::Combine, paths: paths.clone(), pages: Some(order), output_location: location(&root, "combine"), output_path: None, compression: Default::default(),
+        }));
+        assert_eq!(tiff_pages(&combined[0]), vec![
+            jpeg_pages[1].clone(), expected_fax[2][1].clone(), expected_fax[1][0].clone(), expected_fax[0][1].clone(), jpeg_pages[0].clone(),
+        ], "Combine takes fax and JPEG pages across files in the chosen order");
+
+        for (path, sizes) in paths.iter().zip([vec![(10, 6); 2], vec![(10, 6); 2], vec![(10, 6); 2], vec![(16, 8), (9, 7)]]) {
+            let previews = inspect_tiff_pages(TiffPreviewRequest { path: path.clone() }).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            assert_eq!(previews.iter().map(|preview| (preview.width, preview.height)).collect::<Vec<_>>(), sizes, "{}: every page previews", path.display());
+        }
+        for (path, original) in paths.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original, "{} stays untouched", path.display()); }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tiff_pages_name_a_short_fax_page_and_keep_modified_huffman_unsupported() {
+        use crate::kit::images::tools::TiffPreviewRequest;
+        let root = sandbox("tiff-fax-unsupported");
+        let fax = |name: &str, page: RawTiffPage| { let path = root.join(name); std::fs::write(&path, raw_tiff(&[page])).unwrap(); path };
+        let mut short = group_three(0..6, false, false);
+        short.truncate(4);
+        let cases = [
+            (fax("short-g3.tif", fax_tiff_page(3, 0, 1, vec![], &[short])), "TIFF page 1 of 1 can't be read. The Group 3 fax data ends before the page does."),
+            (fax("short-g4.tif", fax_tiff_page(4, 0, 1, vec![], &[group_four(0..3)])), "TIFF page 1 of 1 can't be read. The Group 4 fax data ends before the page does."),
+            (fax("huffman.tif", fax_tiff_page(2, 0, 1, vec![], &[vec![0; 8]])), "TIFF page 1 of 1 can't be read. CCITT modified Huffman compression isn't supported in TIFF pages."),
+        ];
+        for (path, reason) in &cases {
+            let original = std::fs::read(path).unwrap();
+            assert_eq!(inspect_tiff_pages(TiffPreviewRequest { path: path.clone() }).err().as_deref(), Some(*reason));
+            let split = run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: vec![path.clone()], pages: None, output_location: location(&root, "split"), output_path: None, compression: Default::default() });
+            assert_eq!(split[0].error().map(|error| error.message.clone()), Some(format!("Could not process {}: {reason}", path.display())));
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
