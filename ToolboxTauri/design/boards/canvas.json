@@ -178,38 +178,6 @@
 "title": "Details: privacy report and properties",
 "expand": "fill"
 },
-"PdfPrivacy.dc.html": {
-"x": 10040,
-"y": 6120,
-"w": 1280,
-"h": 800,
-"title": "Privacy Check: read-only report, one file or many",
-"expand": "fill"
-},
-"PdfProperties.dc.html": {
-"x": 11400,
-"y": 6120,
-"w": 1280,
-"h": 800,
-"title": "Edit Properties: keep, set or clear, mixed values",
-"expand": "fill"
-},
-"PdfRestrictions.dc.html": {
-"x": 12760,
-"y": 6120,
-"w": 1280,
-"h": 800,
-"title": "Remove Restrictions: permissions password, per-file override",
-"expand": "fill"
-},
-"PdfDetailsNarrow.dc.html": {
-"x": 14120,
-"y": 6120,
-"w": 900,
-"h": 800,
-"title": "Narrow window: Details tools with options as a drawer",
-"expand": "fill"
-},
 "Split.dc.html": {
 "x": 2720,
 "y": 6120,
@@ -402,6 +370,54 @@
 "title": "Results: every lock and unlock outcome",
 "expand": "fill"
 },
+"ExtractFromPdf.dc.html": {
+"x": 5440,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Extract from PDF: modes, range, options, running",
+"expand": "fill"
+},
+"ExtractFromPdfResults.dc.html": {
+"x": 6800,
+"y": 9600,
+"w": 1280,
+"h": 800,
+"title": "Extract from PDF results: text, folders, skipped, failed",
+"expand": "fill"
+},
+"PdfPrivacy.dc.html": {
+"x": 10040,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Privacy Check: read-only report, one file or many",
+"expand": "fill"
+},
+"PdfProperties.dc.html": {
+"x": 11400,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Edit Properties: keep, set or clear, mixed values",
+"expand": "fill"
+},
+"PdfRestrictions.dc.html": {
+"x": 12760,
+"y": 6120,
+"w": 1280,
+"h": 800,
+"title": "Remove Restrictions: permissions password, per-file override",
+"expand": "fill"
+},
+"PdfDetailsNarrow.dc.html": {
+"x": 14120,
+"y": 6120,
+"w": 900,
+"h": 800,
+"title": "Narrow window: Details tools with options as a drawer",
+"expand": "fill"
+},
 "ConvertToPdf.dc.html": {
 "x": 14000,
 "y": 7280,
@@ -481,10 +497,6 @@
 "PdfNarrow.dc.html",
 "PdfCrop.dc.html",
 "PdfDetails.dc.html",
-"PdfPrivacy.dc.html",
-"PdfProperties.dc.html",
-"PdfRestrictions.dc.html",
-"PdfDetailsNarrow.dc.html",
 "Split.dc.html",
 "Merge.dc.html",
 "Bates.dc.html",
@@ -492,6 +504,8 @@
 "OCR.dc.html",
 "ImagesToPdf.dc.html",
 "FormattedPdf.dc.html",
+"ExtractFromPdf.dc.html",
+"ExtractFromPdfResults.dc.html",
 "ImageEdit.dc.html",
 "ImageConvert.dc.html",
 "Compress.dc.html",
@@ -509,6 +523,10 @@
 "SecOptions.dc.html",
 "SecRunning.dc.html",
 "SecResults.dc.html",
+"PdfPrivacy.dc.html",
+"PdfProperties.dc.html",
+"PdfRestrictions.dc.html",
+"PdfDetailsNarrow.dc.html",
 "ConvertToPdf.dc.html",
 "ConvertToPdfResults.dc.html",
 "CropResize.dc.html",
@@ -731,6 +749,77 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"exrow": {
+"x": 5440,
+"y": 9340,
+"text": "PDF Conversion: Extract from PDF",
+"kind": "title1",
+"maxW": 2640
+},
+"ex1": {
+"x": 8160,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Extract 1. Mode choice, range and per-mode options\n\nBoard: Extract from PDF, states Files added, Text options, Images options.\n\nText / Images / Both is a three-way segmented radio group at the top of the options panel, because it decides everything below it. Both is the default. One hint line under it says what each PDF will produce.\n\nPages comes next and is the same for every mode: All pages or Range, using the shared range field and hints from PDF to Images.\n\nBelow that, one boxed section per part: Text for Text and Both, Images for Images and Both. A section for a part that isn't chosen is hidden, not greyed, and its values are kept if the user switches back."
+},
+"ex2": {
+"x": 8560,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Extract 2. Page range and clamping\n\nBoard: Extract from PDF, states Page range and Range error.\n\nOne range applies to the whole batch. The hint under Pages says it once: pages past a PDF's last page are left out, and a PDF with no pages left is skipped.\n\nThe Pages column becomes 'Pages used' and shows '9 of 12' per row, so the clamp is visible before running. A PDF the range shortens gets an amber 'Range shortened' state with the pages that remain.\n\nA PDF the range would empty is not blocked: it runs and ends Skipped with 'No pages in range 3-5, 8-. This PDF has 2 pages.' (results board, Text state).\n\nAn invalid range shows the error under the field and disables the run button, with the estimate saying why."
+},
+"ex3": {
+"x": 8960,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Extract 3. Folder-per-PDF results\n\nBoard: Extract from PDF results, states Both and Images.\n\nThere is one row per PDF. Under its name, an outputs list shows one line per output: the text file with Open and Show in Finder, and the images folder with Show in Finder only. In Both mode the text file and the folder share one row.\n\nThe folder line carries the counts. Extracted is always shown. Duplicates, small left out and couldn't be saved appear only when they are not zero, joined by middle dots. A renamed folder ('-images-1') says which name already existed.\n\nNo thumbnails. A folder can hold hundreds of images, decoding previews would slow the list, and Show in Finder already gives the system's own preview. This keeps the row the same height as every other ResultList row."
+},
+"ex4": {
+"x": 9360,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Extract 4. Skipped next to succeeded and failed, and the OCR hand-off\n\nBoard: Extract from PDF results, states Both, Text and Needs attention.\n\nSkipped uses the grey dash icon and grey state text. Failed uses the red x. Succeeded uses the check. Skipped rows have no outputs, and the reason says nothing was saved. Both Skipped and Failed count under 'Needs attention', but the segment bar draws Skipped in grey, not red.\n\nIn Both mode a PDF that has only one part succeeds with a note: 'Text only' or 'Images only', with the missing part named in the detail.\n\nOpen in OCR is the shared pointer button (Q3). It opens OCR with that PDF already in its list, selects OCR in the rail, and keeps the Extract list as it was. It never starts OCR by itself."
+},
+"ex5": {
+"x": 9760,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "purple",
+"text": "Extract 5. Per-image reports, colour warnings and OCR hints\n\nBoard: Extract from PDF results, states Both and Warnings and notes.\n\nThe row shows one summary sentence ('3 images weren't saved. 4 pages have no selectable text.') and the state '3 warnings'. A ghost 'Show details (4)' button expands a list beneath the outputs. Each line has its page and image number and a short reason: JBIG2 unsupported, damaged data, over the decoded-size limit, CMYK or inverted JPEG copied as it is, or pages with no selectable text.\n\nWarnings use the amber triangle. OCR hints use the grey info circle. Details start collapsed, so a long report never pushes other PDFs off screen. The Warnings and notes chip filters to these rows and opens their details.\n\nOne undecodable image never fails the file. A file fails only when no image could be decoded (Images state, fax-bundle.pdf)."
+},
+"ex6": {
+"x": 10160,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Extract 6. Where the layout and minimum-size options go, and their defaults\n\nBoard: Extract from PDF, states Text options, Images options and Small images skipped.\n\n'Preserve layout' sits in the Text section as a checkbox, off by default. Off means reading order. The hint says when to turn it on: columns and tables.\n\n'Skip small images' sits in the Images section as a checkbox, off by default, so every image is saved, as today. Turning it on shows a number field, 'Smaller than 64 px wide or tall'. The 64 px starting value is a design proposal.\n\nThe Images section also says what to expect: JPEG and JPEG 2000 are copied as they are, and everything else is saved as lossless PNG."
+},
+"ex7": {
+"x": 10560,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Extract 7. Destination and the per-run change\n\nBoard: Extract from PDF, states Files added and Changed save location.\n\nThe Save to block is the shared one. It shows the app-wide output location ('Next to each original') and a 'Change for this run' link. After a change it shows the folder, a 'This run only' badge, Change and Reset to default, and a sentence saying the setting itself is unchanged.\n\nThe example box under it previews the names for the chosen mode: report-text.txt, and the report-images folder with page-3-image-2.png. It also says that existing names get -1, -2 and so on.\n\nThe results panel repeats where outputs were saved and what the run used."
+},
+"ex8": {
+"x": 10960,
+"y": 9600,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Extract 8. Errors, keyboard and screen readers\n\nBoard: Extract from PDF results, states Both, Text, Images and Helper unavailable.\n\nPassword-protected PDFs fail with a Remove Password pointer. Damaged files fail with no pointer. A file over a limit fails with the limit named and a Split PDF pointer when splitting helps (the limit values are placeholders until implementation). A helper timeout fails only that file and offers Retry. A partial publish keeps the saved images as an output and fails the row.\n\nIf the text helper is missing, one alert above the list says to reinstall Toolbox, and each row reads 'Unavailable'.\n\nThe mode, Pages and per-part choices are radio groups and checkboxes in tab order. The run shortcut, Cancel with Esc and the status lines are the shared ones. Each result row's accessible name is one sentence. Its output buttons name the file, such as 'Open report-text.txt'."
 },
 "pdrail": {
 "x": 15060,

@@ -658,195 +658,6 @@
     "screen": "PdfDetails--tab-properties.jpg"
   },
   {
-    "board": "PdfPrivacy.dc.html",
-    "title": "Privacy Check: read-only report, one file or many",
-    "state": "default",
-    "query": "",
-    "screen": "PdfPrivacy--default.jpg"
-  },
-  {
-    "board": "PdfPrivacy.dc.html",
-    "title": "Privacy Check: read-only report, one file or many",
-    "state": "state-empty",
-    "query": "state=Empty",
-    "screen": "PdfPrivacy--state-empty.jpg"
-  },
-  {
-    "board": "PdfPrivacy.dc.html",
-    "title": "Privacy Check: read-only report, one file or many",
-    "state": "state-checking",
-    "query": "state=Checking",
-    "screen": "PdfPrivacy--state-checking.jpg"
-  },
-  {
-    "board": "PdfPrivacy.dc.html",
-    "title": "Privacy Check: read-only report, one file or many",
-    "state": "state-report-one-file",
-    "query": "state=Report%2C%20one%20file",
-    "screen": "PdfPrivacy--state-report-one-file.jpg"
-  },
-  {
-    "board": "PdfPrivacy.dc.html",
-    "title": "Privacy Check: read-only report, one file or many",
-    "state": "state-report-batch",
-    "query": "state=Report%2C%20batch",
-    "screen": "PdfPrivacy--state-report-batch.jpg"
-  },
-  {
-    "board": "PdfPrivacy.dc.html",
-    "title": "Privacy Check: read-only report, one file or many",
-    "state": "state-wrong-password-retry",
-    "query": "state=Wrong%20password%20retry",
-    "screen": "PdfPrivacy--state-wrong-password-retry.jpg"
-  },
-  {
-    "board": "PdfPrivacy.dc.html",
-    "title": "Privacy Check: read-only report, one file or many",
-    "state": "state-reports-saved",
-    "query": "state=Reports%20saved",
-    "screen": "PdfPrivacy--state-reports-saved.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "default",
-    "query": "",
-    "screen": "PdfProperties--default.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "state-empty",
-    "query": "state=Empty",
-    "screen": "PdfProperties--state-empty.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "state-one-file",
-    "query": "state=One%20file",
-    "screen": "PdfProperties--state-one-file.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "state-invalid-date",
-    "query": "state=Invalid%20date",
-    "screen": "PdfProperties--state-invalid-date.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "state-all-keep",
-    "query": "state=All%20keep",
-    "screen": "PdfProperties--state-all-keep.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "state-saving",
-    "query": "state=Saving",
-    "screen": "PdfProperties--state-saving.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "state-results",
-    "query": "state=Results",
-    "screen": "PdfProperties--state-results.jpg"
-  },
-  {
-    "board": "PdfProperties.dc.html",
-    "title": "Edit Properties: keep, set or clear, mixed values",
-    "state": "state-wrong-password-retry",
-    "query": "state=Wrong%20password%20retry",
-    "screen": "PdfProperties--state-wrong-password-retry.jpg"
-  },
-  {
-    "board": "PdfRestrictions.dc.html",
-    "title": "Remove Restrictions: permissions password, per-file override",
-    "state": "default",
-    "query": "",
-    "screen": "PdfRestrictions--default.jpg"
-  },
-  {
-    "board": "PdfRestrictions.dc.html",
-    "title": "Remove Restrictions: permissions password, per-file override",
-    "state": "state-empty",
-    "query": "state=Empty",
-    "screen": "PdfRestrictions--state-empty.jpg"
-  },
-  {
-    "board": "PdfRestrictions.dc.html",
-    "title": "Remove Restrictions: permissions password, per-file override",
-    "state": "state-password-shown",
-    "query": "state=Password%20shown",
-    "screen": "PdfRestrictions--state-password-shown.jpg"
-  },
-  {
-    "board": "PdfRestrictions.dc.html",
-    "title": "Remove Restrictions: permissions password, per-file override",
-    "state": "state-per-file-override",
-    "query": "state=Per-file%20override",
-    "screen": "PdfRestrictions--state-per-file-override.jpg"
-  },
-  {
-    "board": "PdfRestrictions.dc.html",
-    "title": "Remove Restrictions: permissions password, per-file override",
-    "state": "state-removing",
-    "query": "state=Removing",
-    "screen": "PdfRestrictions--state-removing.jpg"
-  },
-  {
-    "board": "PdfRestrictions.dc.html",
-    "title": "Remove Restrictions: permissions password, per-file override",
-    "state": "state-results",
-    "query": "state=Results",
-    "screen": "PdfRestrictions--state-results.jpg"
-  },
-  {
-    "board": "PdfRestrictions.dc.html",
-    "title": "Remove Restrictions: permissions password, per-file override",
-    "state": "state-wrong-password-retry",
-    "query": "state=Wrong%20password%20retry",
-    "screen": "PdfRestrictions--state-wrong-password-retry.jpg"
-  },
-  {
-    "board": "PdfDetailsNarrow.dc.html",
-    "title": "Narrow window: Details tools with options as a drawer",
-    "state": "default",
-    "query": "",
-    "screen": "PdfDetailsNarrow--default.jpg"
-  },
-  {
-    "board": "PdfDetailsNarrow.dc.html",
-    "title": "Narrow window: Details tools with options as a drawer",
-    "state": "tool-edit-properties",
-    "query": "tool=Edit%20Properties",
-    "screen": "PdfDetailsNarrow--tool-edit-properties.jpg"
-  },
-  {
-    "board": "PdfDetailsNarrow.dc.html",
-    "title": "Narrow window: Details tools with options as a drawer",
-    "state": "tool-remove-restrictions",
-    "query": "tool=Remove%20Restrictions",
-    "screen": "PdfDetailsNarrow--tool-remove-restrictions.jpg"
-  },
-  {
-    "board": "PdfDetailsNarrow.dc.html",
-    "title": "Narrow window: Details tools with options as a drawer",
-    "state": "state-options-open",
-    "query": "state=Options%20open",
-    "screen": "PdfDetailsNarrow--state-options-open.jpg"
-  },
-  {
-    "board": "PdfDetailsNarrow.dc.html",
-    "title": "Narrow window: Details tools with options as a drawer",
-    "state": "state-results",
-    "query": "state=Results",
-    "screen": "PdfDetailsNarrow--state-results.jpg"
-  },
-  {
     "board": "Split.dc.html",
     "title": "Split: ranges or every N, fit preview, grouped results",
     "state": "default",
@@ -1902,6 +1713,300 @@
     "state": "retryOpen-true",
     "query": "retryOpen=true",
     "screen": "SecResults--retryOpen-true.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "default",
+    "query": "",
+    "screen": "ExtractFromPdf--default.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "ExtractFromPdf--state-empty.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-text-options",
+    "query": "state=Text%20options",
+    "screen": "ExtractFromPdf--state-text-options.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-images-options",
+    "query": "state=Images%20options",
+    "screen": "ExtractFromPdf--state-images-options.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-small-images-skipped",
+    "query": "state=Small%20images%20skipped",
+    "screen": "ExtractFromPdf--state-small-images-skipped.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-page-range",
+    "query": "state=Page%20range",
+    "screen": "ExtractFromPdf--state-page-range.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-range-error",
+    "query": "state=Range%20error",
+    "screen": "ExtractFromPdf--state-range-error.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-changed-save-location",
+    "query": "state=Changed%20save%20location",
+    "screen": "ExtractFromPdf--state-changed-save-location.jpg"
+  },
+  {
+    "board": "ExtractFromPdf.dc.html",
+    "title": "Extract from PDF: modes, range, options, running",
+    "state": "state-extracting",
+    "query": "state=Extracting",
+    "screen": "ExtractFromPdf--state-extracting.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "default",
+    "query": "",
+    "screen": "ExtractFromPdfResults--default.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-text",
+    "query": "state=Text",
+    "screen": "ExtractFromPdfResults--state-text.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-images",
+    "query": "state=Images",
+    "screen": "ExtractFromPdfResults--state-images.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-needs-attention",
+    "query": "state=Needs%20attention",
+    "screen": "ExtractFromPdfResults--state-needs-attention.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-warnings-and-notes",
+    "query": "state=Warnings%20and%20notes",
+    "screen": "ExtractFromPdfResults--state-warnings-and-notes.jpg"
+  },
+  {
+    "board": "ExtractFromPdfResults.dc.html",
+    "title": "Extract from PDF results: text, folders, skipped, failed",
+    "state": "state-helper-unavailable",
+    "query": "state=Helper%20unavailable",
+    "screen": "ExtractFromPdfResults--state-helper-unavailable.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "default",
+    "query": "",
+    "screen": "PdfPrivacy--default.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "PdfPrivacy--state-empty.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-checking",
+    "query": "state=Checking",
+    "screen": "PdfPrivacy--state-checking.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-report-one-file",
+    "query": "state=Report%2C%20one%20file",
+    "screen": "PdfPrivacy--state-report-one-file.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-report-batch",
+    "query": "state=Report%2C%20batch",
+    "screen": "PdfPrivacy--state-report-batch.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-wrong-password-retry",
+    "query": "state=Wrong%20password%20retry",
+    "screen": "PdfPrivacy--state-wrong-password-retry.jpg"
+  },
+  {
+    "board": "PdfPrivacy.dc.html",
+    "title": "Privacy Check: read-only report, one file or many",
+    "state": "state-reports-saved",
+    "query": "state=Reports%20saved",
+    "screen": "PdfPrivacy--state-reports-saved.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "default",
+    "query": "",
+    "screen": "PdfProperties--default.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "PdfProperties--state-empty.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-one-file",
+    "query": "state=One%20file",
+    "screen": "PdfProperties--state-one-file.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-invalid-date",
+    "query": "state=Invalid%20date",
+    "screen": "PdfProperties--state-invalid-date.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-all-keep",
+    "query": "state=All%20keep",
+    "screen": "PdfProperties--state-all-keep.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-saving",
+    "query": "state=Saving",
+    "screen": "PdfProperties--state-saving.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "PdfProperties--state-results.jpg"
+  },
+  {
+    "board": "PdfProperties.dc.html",
+    "title": "Edit Properties: keep, set or clear, mixed values",
+    "state": "state-wrong-password-retry",
+    "query": "state=Wrong%20password%20retry",
+    "screen": "PdfProperties--state-wrong-password-retry.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "default",
+    "query": "",
+    "screen": "PdfRestrictions--default.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "PdfRestrictions--state-empty.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-password-shown",
+    "query": "state=Password%20shown",
+    "screen": "PdfRestrictions--state-password-shown.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-per-file-override",
+    "query": "state=Per-file%20override",
+    "screen": "PdfRestrictions--state-per-file-override.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-removing",
+    "query": "state=Removing",
+    "screen": "PdfRestrictions--state-removing.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "PdfRestrictions--state-results.jpg"
+  },
+  {
+    "board": "PdfRestrictions.dc.html",
+    "title": "Remove Restrictions: permissions password, per-file override",
+    "state": "state-wrong-password-retry",
+    "query": "state=Wrong%20password%20retry",
+    "screen": "PdfRestrictions--state-wrong-password-retry.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "default",
+    "query": "",
+    "screen": "PdfDetailsNarrow--default.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "tool-edit-properties",
+    "query": "tool=Edit%20Properties",
+    "screen": "PdfDetailsNarrow--tool-edit-properties.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "tool-remove-restrictions",
+    "query": "tool=Remove%20Restrictions",
+    "screen": "PdfDetailsNarrow--tool-remove-restrictions.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "state-options-open",
+    "query": "state=Options%20open",
+    "screen": "PdfDetailsNarrow--state-options-open.jpg"
+  },
+  {
+    "board": "PdfDetailsNarrow.dc.html",
+    "title": "Narrow window: Details tools with options as a drawer",
+    "state": "state-results",
+    "query": "state=Results",
+    "screen": "PdfDetailsNarrow--state-results.jpg"
   },
   {
     "board": "ConvertToPdf.dc.html",
