@@ -146,7 +146,7 @@ fn bounds(doc: &Document, v: &Object) -> Result<[f32;4], String> {
     if b.iter().any(|n| !n.is_finite()) || b[2]<=b[0] || b[3]<=b[1] { return Err("Invalid page box".into()); }
     Ok(b)
 }
-struct Geometry { bbox: [f32;4], matrix: [f32;6], width: f32, height: f32 }
+struct Geometry { bbox: [f32;4], matrix: [f32;6], width: f32, height: f32, rotation: i64 }
 fn geometry(doc: &Document, id: ObjectId) -> Result<Geometry,String> {
     let media = bounds(doc,&inherited(doc,id,b"MediaBox")?.ok_or("Missing MediaBox")?)?;
     let mut b = match inherited(doc,id,b"CropBox")? { Some(v)=>bounds(doc,&v)?, None=>media };
@@ -156,7 +156,8 @@ fn geometry(doc: &Document, id: ObjectId) -> Result<Geometry,String> {
     let rotate = inherited(doc,id,b"Rotate")?.map(|v| v.as_i64().map_err(err)).transpose()?.unwrap_or(0);
     if rotate%90!=0 { return Err("Source rotation must be a multiple of 90".into()); }
     // Source PDF bottom-left coordinates to visible, top-left scene coordinates.
-    let (matrix,width,height)=match rotate.rem_euclid(360) {
+    let rotation=rotate.rem_euclid(360);
+    let (matrix,width,height)=match rotation {
         0=>([1.,0.,0.,-1.,-b[0],b[3]],w,h),
         90=>([0.,1.,1.,0.,-b[1],-b[0]],h,w),
         180=>([-1.,0.,0.,1.,b[2],-b[1]],w,h),
@@ -165,7 +166,7 @@ fn geometry(doc: &Document, id: ObjectId) -> Result<Geometry,String> {
     if let Some(unit)=doc.get_dictionary(id).map_err(err)?.get(b"UserUnit").ok() {
         if super::metadata::number(resolve(doc,unit)?)? != 1. { return Err("PDF UserUnit other than 1 is not supported".into()); }
     }
-    Ok(Geometry{bbox:b,matrix,width,height})
+    Ok(Geometry{bbox:b,matrix,width,height,rotation})
 }
 fn dimensions(w:f32,h:f32)->Result<(),String> {
     if !w.is_finite() || !h.is_finite() || w<=0. || h<=0. || w>14400. || h>14400. { Err("Page dimensions must be within 0–14400 points".into()) } else { Ok(()) }
@@ -912,15 +913,15 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
                 let baseline = [baseline_box.x, baseline_box.y, baseline_box.x + baseline_box.width, baseline_box.y + baseline_box.height];
                 if !same_box(geometry.bbox, baseline) { return Err("Scene source page-box baseline does not match the source PDF".into()); }
             }
-            // A mirror alone is remapped: annotations, widgets and destinations follow the flip. A crop or
-            // resize still cannot move them safely, so it is refused as before.
-            let crops_page = page_box_changed(page, &geometry);
-            navigation_geometry_edit |= crops_page;
-            if has_annotations && crops_page {
-                return Err("This PDF page has annotations or form widgets and the requested crop would change their coordinates; scene export was rejected before output".into());
+            // A crop only sets the crop box and a mirror is remapped, so annotations, widgets and destinations
+            // follow either. A resize has no such transform, so it is still refused.
+            let resizes_page = page_resized(page, &geometry);
+            navigation_geometry_edit |= resizes_page;
+            if has_annotations && resizes_page {
+                return Err("This PDF page has annotations or form widgets and the requested resize would change their coordinates; scene export was rejected before output".into());
             }
-            if (page.crop.is_some() || crops_page) && has_widget {
-                return Err("Cropping a PDF with form widgets is unsupported; remove the crop or edit the source PDF first".into());
+            if resizes_page && has_widget {
+                return Err("Resizing a PDF with form widgets is unsupported; remove the page operation or edit the source PDF first".into());
             }
             if page.mirrored && has_annotations && page_annotation_ids(document, page_id)?.iter().any(|id| annotation_owners.get(id).copied().unwrap_or(0) > 1) {
                 return Err("This PDF page shares annotations or form widgets with another page, so mirroring it would move them on both; scene export was rejected before output".into());
@@ -928,7 +929,7 @@ fn scene_preflight(document: &Document, scene: &PdfScene, source_pages: &[Object
         }
     }
     if has_navigation && navigation_geometry_edit {
-        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after a crop; scene export was rejected before output".into());
+        return Err("This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after a resize; scene export was rejected before output".into());
     }
     Ok(ScenePreflight { pages_root, source_pages: source_pages.to_vec() })
 }
@@ -940,14 +941,16 @@ fn same_rect(left: &Rect, right: &Rect) -> bool { same_box([left.x, left.y, left
 /// Rotation is not a geometry change: it is added to the page's own /Rotate entry, which turns
 /// annotations, form widgets and destinations with the page and leaves their coordinates alone.
 fn page_geometry_changed(page: &ScenePage, geometry: &Geometry) -> bool {
-    page.mirrored || page_box_changed(page, geometry)
+    scene_crop(page).is_some() || page_rebuilt(page, geometry)
 }
-/// Whether the scene crops or resizes the page. Unlike a mirror, this has no transform that keeps
+/// Whether the page's content must be redrawn into a new page space: only a mirror or a size change does.
+fn page_rebuilt(page: &ScenePage, geometry: &Geometry) -> bool {
+    page.mirrored || page_resized(page, geometry)
+}
+/// Whether the scene resizes the page. Unlike a mirror, this has no transform that keeps
 /// annotations, widgets and destinations on the content they point at.
-fn page_box_changed(page: &ScenePage, geometry: &Geometry) -> bool {
-    let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
-    page.crop.as_ref().is_some_and(|crop| !same_rect(crop, &full_page))
-        || (page.width - geometry.width).abs() > 0.1
+fn page_resized(page: &ScenePage, geometry: &Geometry) -> bool {
+    (page.width - geometry.width).abs() > 0.1
         || (page.height - geometry.height).abs() > 0.1
 }
 
@@ -974,11 +977,11 @@ fn concat(outer: [f32; 6], inner: [f32; 6]) -> [f32; 6] {
 fn apply(m: [f32; 6], (x, y): (f32, f32)) -> (f32, f32) { (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]) }
 /// The matrix from a mirrored source page's user space to the user space of the page it is redrawn on.
 /// It is the same chain the redrawn content takes in `compose`: the source turn and box offset undone,
-/// the flip around the visible area, then back to PDF's bottom-up axis.
+/// the flip around the visible area, then back to PDF's bottom-up axis on a page the scene page's size.
 fn mirrored_page_matrix(geometry: &Geometry, page: &ScenePage) -> [f32; 6] {
     let crop = page.crop.clone().unwrap_or(Rect { x: 0., y: 0., width: page.width, height: page.height });
     let flip = [-1., 0., 0., 1., 2. * crop.x + crop.width, 0.];
-    let outer = [1., 0., 0., -1., -crop.x, crop.y + crop.height];
+    let outer = [1., 0., 0., -1., 0., page.height];
     concat(outer, concat(flip, geometry.matrix))
 }
 /// The matrix only ever swaps or negates axes, so a coordinate maps from exactly one source axis.
@@ -1169,6 +1172,28 @@ fn rotate_kept_page(document: &mut Document, page_id: ObjectId, page: &ScenePage
     if page.rotation.rem_euclid(360) == 0 { return Ok(()); }
     let rotation = effective_rotation(document, page_id, page)?;
     document.get_dictionary_mut(page_id).map_err(err)?.set("Rotate", rotation);
+    Ok(())
+}
+/// The page's crop, unless it keeps the whole page.
+fn scene_crop(page: &ScenePage) -> Option<&Rect> {
+    let full_page = Rect { x: 0., y: 0., width: page.width, height: page.height };
+    page.crop.as_ref().filter(|crop| !same_rect(crop, &full_page))
+}
+/// The crop box for a scene crop, by the batch Crop rule: the crop is a rectangle of the displayed page, so
+/// `bounds` and `rotation` are the visible user-space area and /Rotate the crop was drawn against.
+fn scene_crop_box(page: &ScenePage, bounds: [f32; 4], rotation: i64, page_index: usize) -> Result<Option<[f32; 4]>, String> {
+    let Some(crop) = scene_crop(page) else { return Ok(None); };
+    let spec = super::editor::CropSpec::Rectangle {
+        left: crop.x / page.width, top: crop.y / page.height,
+        width: crop.width / page.width, height: crop.height / page.height,
+    };
+    spec.validate().map_err(|error| error.message)?;
+    super::editor::crop_box_within(bounds, rotation, 1., page_index, &spec).map(Some).map_err(|error| error.message)
+}
+fn set_crop_box(doc: &mut Document, id: ObjectId, crop_box: Option<[f32; 4]>) -> Result<(), String> {
+    if let Some(crop_box) = crop_box {
+        doc.get_dictionary_mut(id).map_err(err)?.set("CropBox", crop_box.iter().copied().map(Object::Real).collect::<Vec<_>>());
+    }
     Ok(())
 }
 fn inverse_matrix([a, b, c, d, e, f]: [f32; 6]) -> [f32; 6] {
@@ -1649,9 +1674,16 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
             let id = *sources.get(index).ok_or("Source page index outside document")?;
             geometry(&doc, id)
         }).transpose()?;
-        let preserve_source_page = source_geometry.as_ref().is_some_and(|geometry| !page_geometry_changed(page, geometry));
+        let preserve_source_page = source_geometry.as_ref().is_some_and(|geometry| !page_rebuilt(page, geometry));
+        // Preserved pages crop against their own visible area and /Rotate; rebuilt and new pages are drawn
+        // upright in a page space the size of the scene page, before any scene rotation.
+        let crop_box = match source_geometry.as_ref().filter(|_| preserve_source_page) {
+            Some(g) => scene_crop_box(page, g.bbox, g.rotation, kids.len())?,
+            None => scene_crop_box(page, [0., 0., page.width, page.height], 0, kids.len())?,
+        };
         if preserve_source_page && placed.is_empty() {
             let id = sources[page.source_index.unwrap()];
+            set_crop_box(doc, id, crop_box)?;
             rotate_kept_page(doc, id, page)?;
             kids.push(Object::Reference(id));
             continue;
@@ -1691,7 +1723,7 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
             let g = source_geometry.as_ref().unwrap();
             format!("q\n{}0 0 {} {} re W n\n", cm(inverse_matrix(g.matrix)), page.width, page.height)
         } else {
-            format!("q\n1 0 0 -1 {} {} cm\n0 0 {} {} re W n\n",-crop.x,crop.y+crop.height,page.width,page.height)
+            format!("q\n1 0 0 -1 0 {} cm\n0 0 {} {} re W n\n",page.height,page.width,page.height)
         };
         let mut original=String::new();
         if let (Some(index), Some(g)) = (source_index, source_geometry.as_ref()) {
@@ -1814,17 +1846,19 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
                 rotate_kept_page(doc, id, page)?;
             } else {
                 let stream=doc.add_object(Stream::new(dictionary!{},format!("{header}{behind}{original}{front}Q\n").into_bytes()));
-                super::set_page_box_family(doc, id, [0., 0., crop.width, crop.height], false)?;
+                super::set_page_box_family(doc, id, [0., 0., page.width, page.height], false)?;
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
                 page_dict.set("Rotate",page.rotation.rem_euclid(360));
                 page_dict.set("Resources",resources);
                 page_dict.set("Contents",stream);
             }
+            set_crop_box(doc, id, crop_box)?;
             kids.push(Object::Reference(id));
         } else {
             let (xobjects, font_resources, states) = resources_set;
             let stream=doc.add_object(Stream::new(dictionary!{},format!("{header}{behind}{original}{front}Q\n").into_bytes()));
-            let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,crop.width,crop.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>font_resources,"ExtGState"=>states},"Contents"=>stream});
+            let id=doc.add_object(dictionary!{"Type"=>"Page","Parent"=>preflight.pages_root,"MediaBox"=>array(&[0.,0.,page.width,page.height]),"Rotate"=>page.rotation.rem_euclid(360),"Resources"=>dictionary!{"XObject"=>xobjects,"Font"=>font_resources,"ExtGState"=>states},"Contents"=>stream});
+            set_crop_box(doc, id, crop_box)?;
             kids.push(Object::Reference(id));
         }
     }
@@ -2071,7 +2105,7 @@ fn render_png(path:&Path,index:usize,renderer:&Path,temp:&TempDir,max_dimension:
     let prefix=temp.0.join(format!("render-{index}"));
     let output=super::run_bounded_helper({
         let mut command = Command::new(renderer);
-        command.args(["-png","-singlefile","-scale-to"]).arg(max_dimension.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
+        command.args(["-png","-singlefile","-cropbox","-scale-to"]).arg(max_dimension.to_string()).arg("-f").arg((index+1).to_string()).arg("-l").arg((index+1).to_string()).arg(path).arg(&prefix);
         command
     }, deadline, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
     if !output.status.success() { return Err("pdftoppm could not render this PDF".into()); }
@@ -2673,7 +2707,9 @@ mod tests {
         let composed=compose(&input,&scene()).unwrap();
         let pages:Vec<_>=composed.get_pages().values().copied().collect();
         assert_eq!(pages.len(),3);
-        assert_eq!(bounds(&composed,composed.get_dictionary(pages[0]).unwrap().get(b"MediaBox").unwrap()).unwrap(),[0.,0.,500.,600.]);
+        // A rotated page is redrawn upright at its scene size; its crop only sets the crop box.
+        assert_eq!(bounds(&composed,composed.get_dictionary(pages[0]).unwrap().get(b"MediaBox").unwrap()).unwrap(),[0.,0.,612.,792.]);
+        assert!(same_box(bounds(&composed,composed.get_dictionary(pages[0]).unwrap().get(b"CropBox").unwrap()).unwrap(),[10.,172.,510.,772.]));
         assert_eq!(composed.get_dictionary(pages[1]).unwrap().get(b"Rotate").unwrap().as_i64().unwrap(),90);
         let bytes=composed.get_page_content(pages[0]); let content=String::from_utf8_lossy(&bytes);
         assert!(content.contains("/S4 gs")); assert!(content.contains("re W n")); assert!(content.contains("/SceneTextNotoSansRegular 50 Tf"), "a tenth of the cropped shorter side: {content}");
@@ -3038,6 +3074,19 @@ mod tests {
     }
 
     #[test]
+    fn cropped_page_preview_shows_only_the_visible_area() {
+        let _guard = crate::kit::lock_process_env();
+        if let Err(e)=renderer() { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some(){panic!("{e}")}; eprintln!("Renderer unavailable: {e}"); return; }
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
+        // A tall 200x600 crop of the 612x792 page keeps its full media box but previews at the crop's shape.
+        let page=|crop:Option<Rect>| PdfScene { pages:vec![ScenePage { source_index:Some(1), width:612., height:792., rotation:0, mirrored: false, crop, source_rotation:None, source_box:None, objects:vec![] }] };
+        let cropped=preview(&PreviewRequest{path:input.clone(),scene:page(Some(Rect{x:100.,y:50.,width:200.,height:600.})),page_index:0,sections:Default::default()}).unwrap();
+        let full=preview(&PreviewRequest{path:input,scene:page(None),page_index:0,sections:Default::default()}).unwrap();
+        assert!((cropped.width as f32/cropped.height as f32 - 200./600.).abs() < 0.02, "{}x{}", cropped.width, cropped.height);
+        assert!((full.width as f32/full.height as f32 - 612./792.).abs() < 0.02, "{}x{}", full.width, full.height);
+    }
+
+    #[test]
     fn renders_shape_variants_and_rotated_watermarks() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("source.pdf"); fixture(&input);
         let variants=[Shape::Square,Shape::Round,Shape::Triangle,Shape::Line,Shape::DottedLine,Shape::ArrowLeft,Shape::ArrowRight,Shape::ArrowUp,Shape::ArrowDown];
@@ -3092,7 +3141,7 @@ mod tests {
         let composed = compose(&input, &model).unwrap();
         let page_id = composed.get_pages().values().next().copied().unwrap();
         let content = String::from_utf8_lossy(&composed.get_page_content(page_id)).into_owned();
-        assert!(content.contains("/Sig0 Do") && !content.contains(" Tj"), "typed signature must be an image, not text: {content}");
+        assert!(content.contains("/Sig0 Do") && !content.replace("(Original content) Tj", "").contains(" Tj"), "typed signature must be an image, not text: {content}");
         let xobjects = composed.get_dictionary(page_id).unwrap().get(b"Resources").unwrap().as_dict().unwrap().get(b"XObject").unwrap().as_dict().unwrap();
         let signature = composed.get_object(xobjects.get(b"Sig0").unwrap().as_reference().unwrap()).unwrap().as_stream().unwrap();
         assert_eq!(signature.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Image");
@@ -3177,7 +3226,7 @@ mod tests {
         signature_object.signature_mode = Some(SignatureMode::Image);
         signature_object.signature_path = Some(signature);
         let model = PdfScene { pages: vec![ScenePage {
-            source_index: Some(0), width: 612., height: 792., rotation: 0, mirrored: false,
+            source_index: Some(0), width: 612., height: 792., rotation: 0, mirrored: true,
             crop: Some(Rect { x: 0., y: 0., width: 500., height: 700. }),
             source_rotation: None, source_box: None,
             objects: vec![object(Kind::Watermark), signature_object, SceneObject { signature_mode: Some(SignatureMode::Text), ..object(Kind::Signature) }],
@@ -3746,7 +3795,7 @@ mod tests {
     }
 
     #[test]
-    fn scene_still_rejects_cropping_a_mirrored_page_with_annotations_or_destinations_before_output() {
+    fn scene_mirrors_a_cropped_page_with_annotations_and_sets_only_its_crop_box() {
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("annotated.pdf");
         mirror_navigation_fixture(&input, false);
@@ -3754,9 +3803,16 @@ mod tests {
         page.crop = Some(Rect { x: 0., y: 0., width: 100., height: 100. });
         let scene = PdfScene { pages: vec![page, oriented_page(1, (200., 300.), 0, false)] };
         let result = export(&ExportRequest { output_path: None, sections: Default::default(), paths: vec![input.clone()], scene, output_location: OutputLocation::AlongsideInput }, input.clone());
-        assert!(result.error().is_some_and(|error| error.message.contains("annotations or form widgets") && error.message.contains("crop")), "{:?}", result.error());
-        assert!(result.output_paths().is_empty());
-        assert!(!input.with_file_name("annotated-edited-1.pdf").exists());
+        assert!(result.error().is_none(), "{:?}", result.error());
+        let output = Document::load(&result.output_paths()[0]).unwrap();
+        let page = output.get_pages().values().next().copied().unwrap();
+        let dict = output.get_dictionary(page).unwrap();
+        // The page keeps its full size; the crop is the top-left 100 x 100 of the displayed page.
+        assert_eq!(bounds(&output, dict.get(b"MediaBox").unwrap()).unwrap(), [0., 0., 200., 300.]);
+        assert!(same_box(bounds(&output, dict.get(b"CropBox").unwrap()).unwrap(), [0., 200., 100., 300.]));
+        // The link flips around the visible area, x → 100 - x, so it stays on the content it covered.
+        let link = dict.get(b"Annots").unwrap().as_array().unwrap()[0].as_reference().unwrap();
+        assert!(same_box(bounds(&output, output.get_dictionary(link).unwrap().get(b"Rect").unwrap()).unwrap(), [10., 40., 70., 80.]));
     }
 
     #[test]
@@ -3769,16 +3825,66 @@ mod tests {
         assert!(!input.with_file_name("nested-edited.pdf").exists());
     }
     #[test]
-    fn scene_rejects_annotation_crop_before_output() {
+    fn scene_rejects_annotation_resize_before_output() {
         let temp=TempDir::new().unwrap(); let input=temp.0.join("annotated.pdf"); fixture(&input);
         let mut source=Document::load(&input).unwrap(); let page=source.get_pages().values().next().copied().unwrap();
         let annotation=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Text", "Rect"=>array(&[20.,20.,80.,50.])});
         source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(annotation)]); source.save(&input).unwrap();
-        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:300., height:200., rotation:0, mirrored: false, crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}), source_rotation:None, source_box:None, objects:vec![] }] };
+        let scene=PdfScene { pages:vec![ScenePage { source_index:Some(0), width:310., height:200., rotation:0, mirrored: false, crop:None, source_rotation:None, source_box:None, objects:vec![] }] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default()},input.clone());
         assert!(result.error().is_some_and(|error| error.message.contains("annotation")));
         assert!(result.output_paths().is_empty());
         assert!(!input.with_file_name("annotated-edited.pdf").exists());
+    }
+    #[test]
+    fn scene_crop_keeps_annotations_navigation_and_overlay_placement_on_the_cropped_page() {
+        // Page 1 is rotated 90 degrees with a crop box inside an offset media box, and carries a link and a widget.
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("cropped.pdf"); fixture(&input);
+        let mut source=Document::load(&input).unwrap();
+        let page=source.get_pages().values().next().copied().unwrap();
+        let link=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Link", "Rect"=>array(&[40.,60.,90.,80.])});
+        let widget=source.add_object(dictionary! {"Type"=>"Annot", "Subtype"=>"Widget", "FT"=>"Tx", "Rect"=>array(&[100.,60.,180.,80.])});
+        source.get_dictionary_mut(page).unwrap().set("Annots",vec![Object::Reference(link),Object::Reference(widget)]);
+        let outlines=source.add_object(dictionary! {"Type"=>"Outlines", "Count"=>0});
+        let catalog_id=source.trailer.get(b"Root").unwrap().as_reference().unwrap();
+        source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
+        source.get_dictionary_mut(catalog_id).unwrap().set("AcroForm", dictionary! {"Fields"=>vec![Object::Reference(widget)]});
+        source.save(&input).unwrap();
+        let original=fs::read(&input).unwrap();
+        let mut shape=object(Kind::Shape); shape.shape=Some(Shape::Square);
+        let objects=vec![object(Kind::Text), shape, object(Kind::Watermark)];
+        let page_with=|crop:Option<Rect>| ScenePage { source_index:Some(0), width:300., height:200., rotation:0, mirrored: false, crop, source_rotation:None, source_box:None, objects:objects.clone() };
+        let second=ScenePage { source_index:Some(1), width:612., height:792., rotation:0, mirrored: false, crop:None, source_rotation:None, source_box:None, objects:vec![] };
+        let crop=Rect{x:20.,y:30.,width:200.,height:120.};
+
+        let uncropped=compose(&input,&PdfScene{pages:vec![page_with(None),second.clone()]}).unwrap();
+        let cropped=compose(&input,&PdfScene{pages:vec![page_with(Some(crop.clone())),second.clone()]}).unwrap();
+
+        let id=cropped.get_pages().values().next().copied().unwrap();
+        assert_eq!(id, page, "the cropped page keeps its object");
+        let dict=cropped.get_dictionary(id).unwrap();
+        // Displayed top-left (20,30)–(220,150) on a 90-degree page over crop box [20,30,220,330].
+        let crop_box=bounds(&cropped,dict.get(b"CropBox").unwrap()).unwrap();
+        assert!(same_box(crop_box,[50.,50.,170.,250.]), "{crop_box:?}");
+        assert_eq!(bounds(&cropped,dict.get(b"MediaBox").unwrap()).unwrap(),[10.,20.,250.,360.]);
+        assert_eq!(dict.get(b"Rotate").unwrap().as_i64().unwrap(),90);
+        assert_eq!(dict.get(b"Annots").unwrap().as_array().unwrap(),&vec![Object::Reference(link),Object::Reference(widget)]);
+        assert!(cropped.get_dictionary(catalog_id).unwrap().has(b"Outlines"));
+        // The overlays are drawn through the page's own displayed-space matrix, exactly as on the uncropped
+        // page, after the untouched original content; the watermark tiles only the visible area.
+        let drawn=|document:&Document| String::from_utf8_lossy(&document.get_page_content(document.get_pages().values().next().copied().unwrap())).into_owned();
+        let (with_crop, without_crop)=(drawn(&cropped), drawn(&uncropped));
+        assert!(with_crop.starts_with("q 1 0 0 rg 40 60 50 70 re f Q BT /OriginalFont 18 Tf 40 260 Td (Original content) Tj ET"), "{with_crop}");
+        assert!(with_crop.contains("q\n0 1 1 0 20 30 cm\n0 0 300 200 re W n\n"), "{with_crop}");
+        // Segments: original content and page matrix, then the text, the shape and the watermark.
+        let segments=|content:&str| content.split("q /S").map(str::to_string).collect::<Vec<_>>();
+        let (cropped_segments, uncropped_segments)=(segments(&with_crop), segments(&without_crop));
+        assert_eq!(cropped_segments.len(), 4, "{with_crop}");
+        assert!(cropped_segments[1].contains("30 40 120 40 re W n") && cropped_segments[1].contains("BT /SceneTextNotoSansRegular 18 Tf\n1 0 0 -1 30 57.784 Tm <00030004000200010003> Tj"), "{with_crop}");
+        assert_eq!(cropped_segments[..3], uncropped_segments[..3], "text and shape land where they were placed");
+        // The watermark centres on the visible area: (20,30)–(220,150) rather than the whole 300x200 page.
+        assert!(with_crop.contains("q 1 0 0 1 120 90 cm") && without_crop.contains("q 1 0 0 1 150 100 cm"), "watermark sits on the visible area: {with_crop}");
+        assert_eq!(fs::read(&input).unwrap(),original);
     }
     #[test]
     fn scene_rejects_digitally_signed_pdf_before_output() {
@@ -3881,7 +3987,7 @@ mod tests {
         source.get_dictionary_mut(catalog_id).unwrap().set("Outlines", outlines);
         source.save(&input).unwrap();
         let scene=PdfScene { pages:vec![
-            ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0, mirrored: false,crop:Some(Rect{x:0.,y:0.,width:100.,height:100.}),source_rotation:None,source_box:None,objects:vec![]},
+            ScenePage {source_index:Some(0),width:310.,height:200.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
             ScenePage {source_index:Some(1),width:612.,height:792.,rotation:0, mirrored: false,crop:None,source_rotation:None,source_box:None,objects:vec![]},
         ] };
         let result=export(&ExportRequest {paths:vec![input.clone()],scene,output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default()},input.clone());
@@ -4502,7 +4608,7 @@ mod tests {
         let mut model = scene();
         model.pages[0].objects = vec![SceneObject { layer: Layer::Behind, ..watermark_object(text_watermark("DRAFT"), None) }];
         let content = page_contents(&compose(&cropped, &model).unwrap())[0].clone();
-        assert!(content.find(" Tj").unwrap() < content.find("/Original Do").unwrap(), "{content}");
+        assert!(content.find(" Tj").unwrap() < content.find("(Original content)").unwrap(), "{content}");
     }
 
     #[test]
@@ -5103,9 +5209,9 @@ mod tests {
         many_page_fixture(&input, 5);
         let png = temp.0.join("page.png");
         image::RgbImage::from_pixel(232, 300, image::Rgb([200, 200, 255])).save(&png).unwrap();
-        // pdftoppm -png -singlefile -scale-to N -f P -l P input prefix: page 2 fails, page 4 "succeeds" without writing an image.
+        // pdftoppm -png -singlefile -cropbox -scale-to N -f P -l P input prefix: page 2 fails, page 4 "succeeds" without writing an image.
         let fake = temp.0.join("pdftoppm");
-        fs::write(&fake, format!("#!/bin/sh\ncase \"$6\" in 2) echo broken >&2; exit 1;; 4) exit 0;; esac\nexec cp '{}' \"${{10}}.png\"\n", png.display())).unwrap();
+        fs::write(&fake, format!("#!/bin/sh\ncase \"$7\" in 2) echo broken >&2; exit 1;; 4) exit 0;; esac\nexec cp '{}' \"${{11}}.png\"\n", png.display())).unwrap();
         fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
         let before = fs::read(&input).unwrap();
         let results = with_renderer_override(&fake, || source_thumbnails(&SourceThumbnailsRequest { path: input.clone(), page_indices: vec![0, 1, 2, 3] })).unwrap();
@@ -5241,9 +5347,9 @@ mod tests {
         // pdftotext -enc UTF-8 -f P -l P input -: page 2 fails, page 5 has text, the rest are empty.
         let extractor = temp.0.join("pdftotext");
         fs::write(&extractor, "#!/bin/sh\ncase \"$4\" in 2) echo broken >&2; exit 1;; 5) echo 'Page five';; esac\nexit 0\n").unwrap();
-        // pdftoppm -png -singlefile -scale-to N -f P -l P input prefix: page 3 fails, page 4 writes nothing.
+        // pdftoppm -png -singlefile -cropbox -scale-to N -f P -l P input prefix: page 3 fails, page 4 writes nothing.
         let renderer = temp.0.join("pdftoppm");
-        fs::write(&renderer, format!("#!/bin/sh\ncase \"$6\" in 3) echo broken >&2; exit 1;; 4) exit 0;; esac\nexec cp '{}' \"${{10}}.png\"\n", white.display())).unwrap();
+        fs::write(&renderer, format!("#!/bin/sh\ncase \"$7\" in 3) echo broken >&2; exit 1;; 4) exit 0;; esac\nexec cp '{}' \"${{11}}.png\"\n", white.display())).unwrap();
         for helper in [&extractor, &renderer] { fs::set_permissions(helper, fs::Permissions::from_mode(0o755)).unwrap(); }
         let before = fs::read(&input).unwrap();
         // The fake helpers are passed in, not set in the environment, so tests running beside this one keep the real ones.

@@ -58,7 +58,7 @@ pub enum CropSpec {
 const FRACTION_TOLERANCE: f32 = 1e-4;
 
 impl CropSpec {
-    fn validate(&self) -> Result<(), ToolError> {
+    pub(crate) fn validate(&self) -> Result<(), ToolError> {
         match *self {
             CropSpec::Rectangle { left, top, width, height } => {
                 let finite = [left, top, width, height].iter().all(|value| value.is_finite());
@@ -229,9 +229,14 @@ pub fn crop(request: &CropPdfRequest, input: PathBuf) -> JobOutcome {
 /// Insets the page's visible area from its displayed top, right, bottom and left edges: by fixed lengths for
 /// margins, or by the parts of the displayed page outside a fractional rectangle.
 fn displayed_crop_box(document: &Document, page_id: ObjectId, page_index: usize, spec: &CropSpec) -> Result<[f32; 4], ToolError> {
-    let [x0, y0, x1, y1] = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
-    let user_unit = page_user_unit(document, page_id)?;
-    let rotation = page_rotation(document, page_id);
+    let bounds = effective_crop_bounds(document, page_id).map_err(ToolError::processing)?;
+    crop_box_within(bounds, page_rotation(document, page_id), page_user_unit(document, page_id)?, page_index, spec)
+}
+
+/// The crop box for a page whose visible area is `bounds` in user space, shown turned clockwise by `rotation`
+/// degrees at `user_unit` points per unit. This is the one crop rule shared by the batch tool and the editor.
+pub(crate) fn crop_box_within(bounds: [f32; 4], rotation: i64, user_unit: f32, page_index: usize, spec: &CropSpec) -> Result<[f32; 4], ToolError> {
+    let [x0, y0, x1, y1] = bounds;
     let [top, right, bottom, left] = match *spec {
         CropSpec::Margins { top, right, bottom, left } => [top, right, bottom, left].map(|inset| inset / user_unit),
         CropSpec::Rectangle { left, top, width, height } => {
@@ -1386,6 +1391,74 @@ mod session_tests {
             assert_eq!(std::fs::read(&source).unwrap(), original, "{name}: original must stay");
             let _ = std::fs::remove_file(source);
             let _ = std::fs::remove_dir_all(output_dir);
+        }
+    }
+
+    #[test]
+    fn editor_scene_crop_sets_the_same_crop_box_as_batch_crop_and_keeps_the_other_boxes() {
+        use super::super::scene::{inspect, ExportRequest, PdfScene, Rect, ScenePage, SceneRun};
+        use crate::kit::contracts::JobOutcome;
+        use crate::packs::uninstall::RunPacks;
+        // A catalog that lists no pack, so the scene export needs no installed fonts.
+        let export = |request: &ExportRequest, input: PathBuf| -> JobOutcome {
+            let packs = RunPacks::new(Ok(std::env::temp_dir().join("toolbox-editor-tests-no-packs")), "0.0.0", Ok(crate::packs::parse_catalog(r#"{"formatVersion":1,"packs":[]}"#).unwrap()));
+            super::super::scene::export(&SceneRun { request: request.clone(), packs }, input)
+        };
+        let letter = [0.0, 0.0, 612.0, 792.0];
+        let (left, top, width, height) = (0.1, 0.2, 0.5, 0.6);
+        for (name, media, existing, rotate) in [
+            ("rotate-0", letter, None, None),
+            ("rotate-90", letter, None, Some(90)),
+            ("rotate-180", letter, None, Some(180)),
+            ("rotate-270", letter, None, Some(270)),
+            ("existing-crop", [-50.0, -50.0, 700.0, 900.0], Some([100.0, 100.0, 500.0, 700.0]), None),
+            ("existing-crop-rotate-90", [-50.0, -50.0, 700.0, 900.0], Some([100.0, 100.0, 500.0, 700.0]), Some(90)),
+        ] {
+            let folder = temp_path(&format!("scene-crop-{name}"));
+            let _ = std::fs::remove_dir_all(&folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            let source = folder.join("source.pdf");
+            make_boxed_pdf(&source, media, existing, rotate);
+            let original = std::fs::read(&source).unwrap();
+            let before = Document::load(&source).unwrap();
+            let before_page = before.get_pages().values().next().copied().unwrap();
+
+            let batch_dir = folder.join("batch");
+            std::fs::create_dir_all(&batch_dir).unwrap();
+            let batch = crop_margins(&source, &batch_dir, rectangle(left, top, width, height));
+            assert!(batch.error().is_none(), "{name}: {:?}", batch.error());
+            let batch_document = Document::load(batch.output_paths().first().unwrap()).unwrap();
+            let batch_page = batch_document.get_pages().values().next().copied().unwrap();
+
+            // The editor sends the same rectangle in points of the displayed page it inspected.
+            let displayed = &inspect(&source).unwrap().pages[0];
+            let (page_width, page_height) = (displayed.width, displayed.height);
+            let scene = || PdfScene { pages: vec![ScenePage {
+                source_index: Some(0), width: page_width, height: page_height, rotation: 0, mirrored: false,
+                crop: Some(Rect { x: left * page_width, y: top * page_height, width: width * page_width, height: height * page_height }),
+                source_rotation: None, source_box: None, objects: vec![],
+            }] };
+            let request = || ExportRequest { paths: vec![source.clone()], scene: scene(), output_location: OutputLocation::AlongsideInput, output_path: None, sections: Default::default() };
+            let exported = export(&request(), source.clone());
+            assert!(exported.error().is_none(), "{name}: {:?}", exported.error());
+            assert_eq!(exported.output_paths(), [folder.join("source-edited.pdf")], "{name}: scene crop exports are named -edited");
+            let scene_document = Document::load(&exported.output_paths()[0]).unwrap();
+            let scene_page = scene_document.get_pages().values().next().copied().unwrap();
+
+            assert_box_near(page_box(&scene_document, scene_page, b"CropBox"), page_box(&batch_document, batch_page, b"CropBox"), name);
+            for key in [b"MediaBox".as_slice(), b"BleedBox", b"TrimBox", b"ArtBox"] {
+                assert_eq!(page_box(&scene_document, scene_page, key), page_box(&before, before_page, key), "{name}: {}", String::from_utf8_lossy(key));
+            }
+            assert_eq!(scene_document.get_dictionary(scene_page).unwrap().get(b"Rotate").ok(), before.get_dictionary(before_page).unwrap().get(b"Rotate").ok(), "{name}: rotation must stay");
+            assert_eq!(scene_document.get_page_content(scene_page), before.get_page_content(before_page), "{name}: content must stay");
+
+            // A second export takes the next number and leaves the first export and the original alone.
+            let first_export = std::fs::read(folder.join("source-edited.pdf")).unwrap();
+            let again = export(&request(), source.clone());
+            assert_eq!(again.output_paths(), [folder.join("source-edited-1.pdf")], "{name}: collision numbering");
+            assert_eq!(std::fs::read(folder.join("source-edited.pdf")).unwrap(), first_export, "{name}: first export must stay");
+            assert_eq!(std::fs::read(&source).unwrap(), original, "{name}: original must stay");
+            let _ = std::fs::remove_dir_all(folder);
         }
     }
 
