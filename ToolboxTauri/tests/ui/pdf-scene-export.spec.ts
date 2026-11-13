@@ -8,6 +8,8 @@ type ExportWindow = Window & {
   holdExport: boolean;
   exportOutcome: unknown;
   signed: boolean;
+  fileNext: string;
+  inspectFailure: string | null;
   __emit: (payload: unknown) => void;
   __finish: () => void;
 };
@@ -28,6 +30,8 @@ test.beforeEach(async ({ page }) => {
     w.holdExport = false;
     w.exportOutcome = success;
     w.signed = false;
+    w.fileNext = '/local/docs/scene-fixture.pdf';
+    w.inspectFailure = null;
     Object.defineProperty(window.navigator, 'platform', { configurable: true, value: 'MacIntel' });
     const dispatch = (name: string, payload: unknown) => {
       for (const [id, listener] of listeners) if (listener.event === name) callbacks.get(listener.handler)?.({ event: name, id, payload });
@@ -52,8 +56,9 @@ test.beforeEach(async ({ page }) => {
         if (command === 'plugin:path|resolve_directory') return '/Users/test';
         if (command === 'plugin:dialog|open') {
           if (args?.options?.directory) return w.dialogNext;
-          return '/local/docs/scene-fixture.pdf';
+          return w.fileNext;
         }
+        if (command === 'inspect_pdf_scene' && w.inspectFailure) throw { kind: 'invalidInput', message: w.inspectFailure, pointer: { kind: 'tool', toolId: 'lock-unlock' } };
         if (command === 'inspect_pdf_scene') return { path: '/local/docs/scene-fixture.pdf', signed: w.signed, pages: [0, 1, 2].map(index => ({ index, width: 612, height: 792, preview: null })) };
         if (command === 'inspect_pdf_scene_page') return { index: args.request.pageIndex, width: 612, height: 792, preview: svg, textRuns: [] };
         if (command === 'preview_pdf_scene_pages') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
@@ -222,4 +227,90 @@ test('an unsigned PDF shows no signature notice and no removed-signature warning
   await expect(row).toContainText('3 pages kept, 0 removed, 0 rotated, 0 mirrored.');
   await expect(row).not.toContainText('digital signature');
   await expect(row).not.toHaveAttribute('data-tone', 'warn');
+});
+
+// The native refusal for a password-protected source (kit/pdf/scene.rs LOCKED_PDF_MESSAGE): the typed invalid-input error the invoke rejects with.
+const locked = 'This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy here.';
+
+async function openLockedPdf(page: Page) {
+  await page.addInitScript((locked) => {
+    const w = window as unknown as ExportWindow;
+    w.fileNext = '/local/docs/tax-return-2025.pdf';
+    w.inspectFailure = locked;
+  }, locked);
+  await page.goto('/');
+  await openToolBySearch(page, 'Edit PDF');
+  await page.getByRole('button', { name: 'Choose files to process' }).click();
+  const alert = page.getByRole('alert').filter({ hasText: 'is password-protected' });
+  await expect(alert.getByRole('heading', { level: 2, name: 'tax-return-2025.pdf is password-protected' })).toBeVisible();
+  await expect(alert).toContainText('Remove its password with File Security first, then open the unlocked copy here.');
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toHaveCount(0);
+  await expect(page.getByText('could not be opened')).toHaveCount(0);
+  await expect(exportButton(page)).toBeDisabled();
+}
+
+test('a password-protected PDF opens to the locked state, and Open File Security opens Lock & Unlock', async ({ page }, testInfo) => {
+  await openLockedPdf(page);
+  await page.screenshot({ path: testInfo.outputPath('locked-pdf.png') });
+  await page.getByRole('button', { name: 'Open File Security', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Lock & Unlock', exact: true })).toBeVisible();
+  expect(await calls(page, 'export_pdf_scene')).toHaveLength(0);
+});
+
+test('Open another PDF replaces the password-protected file and opens the new one', async ({ page }) => {
+  await openLockedPdf(page);
+  await expect(page.getByRole('button', { name: /^Open another PDF/ })).toContainText('⌘O');
+  await page.evaluate(() => {
+    const w = window as unknown as ExportWindow;
+    w.fileNext = '/local/docs/scene-fixture.pdf';
+    w.inspectFailure = null;
+  });
+  await page.getByRole('button', { name: /^Open another PDF/ }).click();
+  await expect(page.getByRole('group', { name: 'PDF page canvas' })).toBeVisible();
+  await expect(page.getByText('is password-protected')).toHaveCount(0);
+  const opened = (await calls(page, 'inspect_pdf_scene')).map((call) => call.args.request.path);
+  expect([...new Set(opened)]).toEqual(['/local/docs/tax-return-2025.pdf', '/local/docs/scene-fixture.pdf']);
+  await expect(page.getByText('tax-return-2025.pdf', { exact: true })).toHaveCount(0);
+});
+
+test('a password-protected export result reads plainly and points to Lock & Unlock', async ({ page }) => {
+  await openDirtyEditor(page);
+  await page.evaluate((locked) => {
+    (window as unknown as ExportWindow).exportOutcome = [{ inputPath: '/local/docs/scene-fixture.pdf', outputPaths: [], state: 'failed', detail: '', reason: null, warnings: [],
+      failure: { kind: 'invalidInput', message: locked, pointer: { kind: 'tool', toolId: 'lock-unlock' } } }];
+  }, locked);
+  await exportButton(page).click();
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem').first();
+  await expect(row).toContainText(locked);
+  await expect(row).not.toContainText('could not be exported safely');
+  await expect(row).toContainText("Failed, the input can't be used");
+  await expect(row.getByRole('link', { name: /scene-fixture-edited/ })).toHaveCount(0);
+  await row.getByRole('button', { name: 'Open Lock & Unlock', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Lock & Unlock', exact: true })).toBeVisible();
+});
+
+test('native structure refusals still read as plain language on the result row', async ({ page }) => {
+  const cases = [
+    ['This PDF contains bookmarks or destinations whose coordinates cannot be transformed safely after crop or rotation; scene export was rejected before output',
+      'This PDF contains bookmarks or destinations that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.'],
+    ['This PDF page has annotations or form widgets and the requested crop or rotation would change their coordinates; scene export was rejected before output',
+      'This PDF has annotations or form fields that cannot be preserved after this page edit. Undo the crop or rotation, or use a copy without them.'],
+    ['This PDF contains navigation or form structures that could target a removed page; scene export was rejected before output',
+      'This page edit could break bookmarks or form fields. Undo it, or use a copy without those structures.'],
+    ['This tagged PDF contains structure mappings that cannot be remapped by scene edits; scene export was rejected before output',
+      'This tagged PDF uses accessibility structure that cannot be preserved after this edit. Undo the page edit or use a copy without tagged structure.'],
+    ['PDF uses a nested or unsupported page tree; scene export was rejected before output',
+      'This PDF uses a page structure that Toolbox cannot edit safely. Use a copy with a standard page tree.'],
+  ];
+  await openDirtyEditor(page);
+  const row = page.getByRole('list', { name: 'Results' }).getByRole('listitem').first();
+  for (const [native, plain] of cases) {
+    await page.evaluate((message) => {
+      (window as unknown as ExportWindow).exportOutcome = [{ inputPath: '/local/docs/scene-fixture.pdf', outputPaths: [], state: 'failed', detail: '', reason: null, warnings: [],
+        failure: { kind: 'processing', message, pointer: null } }];
+    }, native);
+    await exportButton(page).click();
+    await expect(row).toContainText(plain);
+    await expect(row).not.toContainText('rejected before output');
+  }
 });

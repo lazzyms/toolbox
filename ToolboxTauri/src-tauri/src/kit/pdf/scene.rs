@@ -4,7 +4,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use quick_xml::{events::Event, escape::unescape, Reader as XmlReader, XmlVersion};
 use serde::{Deserialize, Serialize};
-use crate::kit::{common::{batch_runner::report_progress, note_renamed, JobOutcome, OutputLocation, OutputNaming}, contracts::ToolError};
+use crate::kit::{common::{batch_runner::report_progress, note_renamed, JobOutcome, OutputLocation, OutputNaming}, contracts::{OutcomePointer, ToolError}};
 use super::metadata::{PdfDocumentMetadata, PdfPageMetadata, PdfTextRun};
 use super::{inherited, resolve, PdfMutationIntent};
 
@@ -116,9 +116,14 @@ fn valid_rect(r:&Rect)->Result<(),String> {
     dimensions(r.width,r.height)?;
     if !r.x.is_finite() || !r.y.is_finite() || r.x.abs()>14400. || r.y.abs()>14400. { return Err("Invalid rectangle origin".into()); } Ok(())
 }
+/// Why a password-protected PDF cannot be opened or exported, with the next step. The editor never asks for passwords;
+/// File Security removes them into a new copy.
+pub const LOCKED_PDF_MESSAGE:&str="This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy here.";
+/// The typed refusal for a password-protected PDF: invalid input that points to File Security.
+fn locked_pdf()->ToolError { ToolError::invalid_input(LOCKED_PDF_MESSAGE).with_pointer(OutcomePointer::Tool{tool_id:"lock-unlock".into()}) }
 fn load(path:&Path)->Result<Document,String> {
     let d=Document::load(path).map_err(err)?;
-    if d.is_encrypted() { return Err("Unlock the PDF before editing".into()); } Ok(d)
+    if d.is_encrypted() { return Err(LOCKED_PDF_MESSAGE.into()); } Ok(d)
 }
 fn cm(m:[f32;6])->String { format!("{} {} {} {} {} {} cm\n",m[0],m[1],m[2],m[3],m[4],m[5]) }
 fn array(v:&[f32])->Object { Object::Array(v.iter().copied().map(Object::Real).collect()) }
@@ -913,13 +918,12 @@ pub fn preview_pages(request:&PreviewPagesRequest)->Result<Vec<IndexedScenePrevi
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
 }
-pub const LOCKED_PDF_MESSAGE:&str="This PDF is password-protected. Remove its password with File Security first, then open the unlocked copy.";
 pub const UNREADABLE_PDF_MESSAGE:&str="Toolbox can't read this file. It may be damaged, or it isn't a PDF that Toolbox supports. Nothing was changed.";
 
 /// Reads page geometry for the scene editors. Password-protected and unreadable files come back as typed
 /// invalid-input errors so the UI can explain them (and point locked files to File Security).
 pub fn inspect(path:&Path)->Result<PdfDocumentMetadata,ToolError> {
-    let locked=|| ToolError::invalid_input(LOCKED_PDF_MESSAGE).with_pointer(crate::kit::contracts::OutcomePointer::Tool{tool_id:"lock-unlock".into()});
+    let locked=locked_pdf;
     fn unreadable(_:impl std::fmt::Display)->ToolError { ToolError::invalid_input(UNREADABLE_PDF_MESSAGE) }
     let doc=match Document::load(path) {
         Ok(doc)=>doc,
@@ -968,7 +972,7 @@ pub fn export(request:&ExportRequest,input:PathBuf)->JobOutcome {
     let chosen=request.output_path.as_deref();
     let result=(|| {
         if chosen.is_some() && request.paths.len()!=1 { return Err(ToolError::invalid_input("Export As saves one document at a time")); }
-        let (mut doc, contributors, source_pages, signed)=run_stages_counted(&input,&request.scene,&request.sections).map_err(ToolError::processing)?;
+        let (mut doc, contributors, source_pages, signed)=run_stages_counted(&input,&request.scene,&request.sections).map_err(|e| if e==LOCKED_PDF_MESSAGE { locked_pdf() } else { ToolError::processing(e) })?;
         let suffix=export_suffix(&contributors).ok_or_else(|| ToolError::invalid_input(NOTHING_TO_EXPORT))?;
         let mut bytes=Vec::new();
         doc.save_to(&mut bytes).map_err(|e| ToolError::processing(err(e)))?;
@@ -2086,6 +2090,26 @@ mod tests {
         assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), Some(PdfScene{pages:vec![]})).starts_with("Scene must contain"));
         assert!(first_failure(serde_json::json!({ "flatten": true, "redactions": [] }), None).starts_with("Flattening"));
         assert!(first_failure(serde_json::json!({ "redactions": [] }), None).starts_with("Redaction"));
+    }
+
+    #[test]
+    fn password_protected_pdf_is_refused_with_a_file_security_pointer_and_no_output() {
+        use crate::kit::contracts::ErrorKind;
+        let temp=TempDir::new().unwrap(); let input=temp.0.join("locked.pdf"); fixture(&input);
+        crate::kit::pdf::tests::encrypt_pdf(&input);
+        let original=fs::read(&input).unwrap();
+
+        let refusal=inspect(&input).err().expect("a locked PDF must not inspect");
+        assert_eq!((refusal.kind,refusal.message.as_str(),refusal.pointer),(ErrorKind::InvalidInput,LOCKED_PDF_MESSAGE,Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() })));
+        let scene=PdfScene { pages:vec![ScenePage {source_index:Some(0),width:300.,height:200.,rotation:0,crop:None,source_rotation:None,source_box:None,objects:vec![object(Kind::Shape)]}] };
+        let outcome=export(&ExportRequest {paths:vec![input.clone()],scene,output_location:OutputLocation::AlongsideInput, output_path: None, sections: Default::default()},input.clone());
+        let error=outcome.error().expect("a locked PDF must fail");
+        assert_eq!(error.kind,ErrorKind::InvalidInput);
+        assert_eq!(error.message,LOCKED_PDF_MESSAGE);
+        assert_eq!(error.pointer,Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(fs::read_dir(&temp.0).unwrap().count(),1, "nothing may be written next to the locked original");
+        assert_eq!(fs::read(&input).unwrap(),original);
     }
 
     fn identity_scene() -> PdfScene {

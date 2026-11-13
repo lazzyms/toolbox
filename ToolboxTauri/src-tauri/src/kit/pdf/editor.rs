@@ -1058,27 +1058,6 @@ mod session_tests {
         document.save(path).expect("duplicate page-tree fixture should save");
     }
 
-    fn encrypt_pdf(path: &Path) {
-        let mut document = Document::load(path).expect("fixture should load");
-        document.trailer.set(
-            "ID",
-            Object::Array(vec![
-                Object::String(b"toolbox-test-id-1".to_vec(), lopdf::StringFormat::Literal),
-                Object::String(b"toolbox-test-id-2".to_vec(), lopdf::StringFormat::Literal),
-            ]),
-        );
-        let encryption_state = lopdf::EncryptionState::try_from(lopdf::EncryptionVersion::V2 {
-            document: &document,
-            owner_password: "owner",
-            user_password: "user",
-            key_length: 128,
-            permissions: lopdf::Permissions::all(),
-        })
-        .expect("encryption fixture should create an encryption state");
-        document.encrypt(&encryption_state).expect("fixture should encrypt");
-        document.save(path).expect("encrypted fixture should save");
-    }
-
     fn add_page_annotation(path: &Path, page_index: usize, annotation: Object) {
         let mut document = Document::load(path).expect("fixture should load");
         let page = document.get_pages().values().copied().collect::<Vec<_>>()[page_index];
@@ -1258,7 +1237,7 @@ mod session_tests {
         let output_dir = temp_path("encrypted-editor-entry-output");
         std::fs::create_dir_all(&output_dir).expect("output directory should be created");
         make_pdf_with_pages(&source, 1);
-        encrypt_pdf(&source);
+        crate::kit::pdf::tests::encrypt_pdf(&source);
         assert!(Document::load(&source).unwrap().is_encrypted());
         let original = std::fs::read(&source).unwrap();
 

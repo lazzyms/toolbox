@@ -604,13 +604,15 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     </Card>}
     {!page ? <Card className="scene-empty"><CardHeader className="my-auto items-center gap-3 text-center">
       {openFailure ? <>
-        <CardTitle role="heading" aria-level={2}>{openFailure.kind === 'locked' ? `${openFailure.name} is password-protected` : `Toolbox can’t read ${openFailure.name}`}</CardTitle>
-        <CardDescription>{openFailure.kind === 'locked'
-          ? 'Remove its password with File Security first, then open the unlocked copy here.'
-          : 'The file may be damaged, or it isn’t a PDF that Toolbox supports. Nothing was changed. If another app can open it, save a new copy from there and try that.'}</CardDescription>
+        <div role="alert" className="grid gap-1.5">
+          <CardTitle role="heading" aria-level={2}>{openFailure.kind === 'locked' ? `${openFailure.name} is password-protected` : `Toolbox can’t read ${openFailure.name}`}</CardTitle>
+          <CardDescription>{openFailure.kind === 'locked'
+            ? 'Remove its password with File Security first, then open the unlocked copy here.'
+            : 'The file may be damaged, or it isn’t a PDF that Toolbox supports. Nothing was changed. If another app can open it, save a new copy from there and try that.'}</CardDescription>
+        </div>
         <div className="flex justify-center gap-2">
           {openFailure.kind === 'locked' && onNavigate && path && availability.allows('lock-unlock') && <Button onClick={() => onNavigate({ utilityId: 'lock-unlock', initialPaths: [path] })}>Open File Security</Button>}
-          <Button variant="outline" onClick={() => void onBrowse()}>Open another PDF</Button>
+          <Button variant="outline" onClick={() => void onBrowse()}>Open another PDF<ShortcutHint id="open" /></Button>
         </div>
         <p role="status" className="scene-property-note">Couldn’t open {openFailure.name}. {openFailure.kind === 'locked' ? 'It’s password-protected.' : 'It may be damaged.'}</p>
       </> : loading ? <CardTitle role="heading" aria-level={2}>Opening PDF…</CardTitle> : tool === 'organize' ? <>
