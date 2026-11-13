@@ -77,7 +77,20 @@ export interface ScenePage {
   // Marks are drawn only on the canvas; export sends them as the request's redactions section.
   redactions?: SceneRedaction[];
 }
-export interface SceneRedaction { id: string; rect: SceneRect; color: string }
+/** `label` names what a text mark covers, such as “Asha Patel”. It is shown in the marks list only and never exported. */
+export interface SceneRedaction { id: string; rect: SceneRect; color: string; label?: string }
+
+/** Joins word boxes that share a line into one box per line, keeping reading order. */
+export const textLines = (runs: { text: string; x: number; y: number; width: number; height: number }[]) =>
+  runs.reduce<{ rect: SceneRect; text: string }[]>((lines, run) => {
+    const last = lines[lines.length - 1];
+    if (last && Math.abs(last.rect.y - run.y) < Math.min(last.rect.height, run.height) / 2 && run.x >= last.rect.x) {
+      const top = Math.min(last.rect.y, run.y), bottom = Math.max(last.rect.y + last.rect.height, run.y + run.height);
+      last.rect = { x: last.rect.x, y: top, width: Math.max(last.rect.x + last.rect.width, run.x + run.width) - last.rect.x, height: bottom - top };
+      last.text += ` ${run.text}`;
+    } else lines.push({ rect: { x: run.x, y: run.y, width: run.width, height: run.height }, text: run.text });
+    return lines;
+  }, []);
 export interface PdfScene { pages: ScenePage[]; textEdits?: PdfTextEdit[] }
 export interface ScenePreview { dataUrl: string; width: number; height: number }
 export interface SceneCanvasProps {
@@ -103,6 +116,8 @@ export interface SceneCanvasProps {
   onFormLeave?: (field: PdfFormField) => void;
   redactionFill?: string;
   redactionPreview?: boolean;
+  /** Text search matches on this page, drawn while the results are under review. */
+  searchMatches?: SceneRect[];
   editRuns: PdfEditRun[];
   textEdits: PdfTextEdit[];
   selectedRun: number | null;

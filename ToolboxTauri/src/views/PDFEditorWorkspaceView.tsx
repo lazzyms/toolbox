@@ -28,8 +28,8 @@ import { colorTokens, readColorToken } from '../features/pdf-editor/colorTokens'
 import { SceneCanvas } from '../features/pdf-editor/SceneCanvas';
 import { ScriptPackPrompt, useScriptPacks } from '../features/pdf-editor/ScriptPackPrompt';
 import { scriptPackNeed } from '../features/pdf-editor/scriptPacks';
-import { RedactDisclosure, RedactInspector, listMarks, redactionFills } from '../features/pdf-editor/RedactInspector';
-import type { ListedMark } from '../features/pdf-editor/RedactInspector';
+import { RedactDisclosure, RedactInspector, listMarks, redactionFills, searchStatus } from '../features/pdf-editor/RedactInspector';
+import type { ListedMark, TextMatch, TextSearch } from '../features/pdf-editor/RedactInspector';
 import { subToolInspectors } from '../features/pdf-editor/SubToolInspectors';
 import type { SubToolInspectorProps, UsedSignature } from '../features/pdf-editor/SubToolInspectors';
 import { combinedSuffix, exportSuffix, planSceneExport, sceneContributors, sceneSections } from '../features/pdf-editor/subtools';
@@ -58,6 +58,13 @@ import type { BlankPageClassification, BlankPageFinder } from '../features/pdf-e
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
 type IndexedScenePreview = { pageIndex: number; preview: ScenePreview };
+type NativeTextMatch = { pageIndex: number; rects: SceneRect[]; before: string; text: string; after: string };
+
+const clipped = (rect: SceneRect, bounds: SceneRect): SceneRect | null => {
+  const x = Math.max(rect.x, bounds.x), y = Math.max(rect.y, bounds.y);
+  const width = Math.min(rect.x + rect.width, bounds.x + bounds.width) - x, height = Math.min(rect.y + rect.height, bounds.y + bounds.height) - y;
+  return width > 0 && height > 0 ? { x, y, width, height } : null;
+};
 /** A page drag in Organize: the pages it carries, the gap it would drop into, the pointer, and any auto-scroll. */
 type PageDrag = { ids: string[]; gap: number | null; x: number; y: number; scrolling: { direction: -1 | 1; pages: number[] } | null };
 const scrollBand = 44;
@@ -437,6 +444,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   const [reviewing, setReviewing] = useState(false);
   const [previewRedactions, setPreviewRedactions] = useState(true);
   const [disclosure, setDisclosure] = useState(false);
+  const [search, setSearch] = useState<TextSearch | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Form entries and the flatten choice live outside the scene history: Reset clears them, Undo does not.
   const [form, setForm] = useState<PdfFormInspection | null>(null);
@@ -688,6 +696,27 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     setRedactionFill(color);
     if (marks.some((mark) => mark.color !== color)) commit({ pages: scene.pages.map((item) => item.redactions?.length
       ? { ...item, redactions: item.redactions.map((mark) => ({ ...mark, color })) } : item) });
+  };
+  // Matches belong to the page layout they were found in, so reordering, removing or cropping pages clears them.
+  const searchLayout = JSON.stringify(scene.pages.map((item) => [item.id, item.sourceIndex, item.crop]));
+  useEffect(() => setSearch(null), [searchLayout]);
+  const findText = async (query: string, matchCase: boolean) => {
+    if (!path) return;
+    const found = await invoke<NativeTextMatch[]>('find_pdf_scene_text', { request: { path, query, matchCase } });
+    const matches: TextMatch[] = scene.pages.flatMap((item, index) => found.filter((match) => match.pageIndex === item.sourceIndex).flatMap((match) => {
+      const rects = match.rects.map((rect) => clipped(rect, visibleBounds(item))).filter((rect): rect is SceneRect => rect !== null);
+      return rects.length ? [{ pageId: item.id, page: index + 1, rects, before: match.before, text: match.text, after: match.after }] : [];
+    }));
+    setSearch({ query, matchCase, matches, selected: matches.map(() => true), marked: null, lastMarked: 0 });
+  };
+  const markMatches = (matches: TextMatch[]) => {
+    if (!availability.allows('pdf-redact') || !matches.length) return [];
+    const added = matches.map((match) => ({ match, marks: match.rects.map((rect) => ({ id: crypto.randomUUID(), rect, color: redactionFill, label: `“${match.text}”` })) }));
+    commit({ pages: scene.pages.map((item) => {
+      const marks = added.filter(({ match }) => match.pageId === item.id).flatMap(({ marks }) => marks);
+      return marks.length ? { ...item, redactions: [...(item.redactions ?? []), ...marks] } : item;
+    }) });
+    return added.map(({ marks }) => marks.map((mark) => mark.id));
   };
   const review = (on: boolean) => {
     setReviewing(on);
@@ -1553,6 +1582,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
             renderedPreview={exactPreview} tool={tool ?? 'select'} selectedId={selectedId} zoom={zoom} onSelect={(id) => { endGroup(); setSelectedId(id); }}
             onCommit={(next) => { if (canEditCanvas) commitPage(next); }} makeObject={makeObject} onEditText={setEditedText}
             redactionFill={redactionFill} redactionPreview={tool === 'redact' && reviewing && previewRedactions}
+            searchMatches={search && !search.marked && !reviewing ? search.matches.filter((match, index) => match.pageId === page.id && search.selected[index]).flatMap((match) => match.rects) : []}
             formFields={form?.unsupported ? [] : form?.fields} formValue={formValue}
             onFormValue={(field, value) => { if (availability.allows('pdf-edit') && !field.readOnly) setFormEntries((entries) => ({ ...entries, [field.name]: value })); }}
             formFlag={formFlag} onFormFocus={(field) => setFormFocus(field.name)} onFormLeave={leaveFormField}
@@ -1567,8 +1597,9 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
             </CardHeader>
             <CardContent className="scene-inspector-content flex flex-col gap-3 px-4">
               {scriptNeed && <ScriptPackPrompt need={scriptNeed} job={scriptPacks.job} installError={scriptPacks.installError} onInstall={(packId) => void scriptPacks.install(packId)} />}
-              {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill}
-                onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks} />}
+              {tool === 'redact' && !selected && <RedactInspector marks={marks} selectedId={selectedId} reviewing={reviewing} preview={previewRedactions} fill={redactionFill} search={search}
+                onSelect={selectMark} onRemove={removeMarks} onReview={review} onPreview={setPreviewRedactions} onFill={recolorMarks}
+                onFind={findText} onSearch={setSearch} onMark={markMatches} />}
               {Fields && inspector && <Fields {...inspector} />}
               {selectedKind !== 'watermark' && selectedKind !== 'signature' && selectedKind !== 'headerFooter' && (selected || (tool !== null && !['select', 'edit-text', 'crop', 'redact', 'form', 'pageNumbers', 'headerFooter'].includes(tool))) && <>
                 <div className="scene-inspector-field"><Label htmlFor="scene-object-color">Object color</Label>
@@ -1608,7 +1639,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
                 </ol> : <p className="scene-property-note">No changes to export yet.</p>}
               </section>
               {tool === 'select' && !selected && <p className="scene-property-note">Select an object on the page to move it or adjust its properties.</p>}
-              <p className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : exactPreview ? 'Export preview · on device' : 'Local document'}</p>
+              <p className="scene-render-status" role="status">{rendering ? 'Rendering on device…' : tool === 'redact' && !reviewing && searchStatus(search) ? searchStatus(search) : exactPreview ? 'Export preview · on device' : 'Local document'}</p>
             </CardContent>
           </Card>
         </aside>

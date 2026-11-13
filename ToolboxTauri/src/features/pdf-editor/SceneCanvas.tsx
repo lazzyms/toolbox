@@ -7,8 +7,8 @@ import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
 import { Textarea } from '../../components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '../../components/ui/toggle-group';
 import type { PdfFormField, PdfFormWidget } from './contracts';
-import { headerFooterBands, isRangedKind, notEditableReasons, overflowMessage, textOverflowWords, visibleBounds, watermarkBounds, watermarkMarks } from './scene';
-import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneShape } from './scene';
+import { headerFooterBands, isRangedKind, notEditableReasons, overflowMessage, textLines, textOverflowWords, visibleBounds, watermarkBounds, watermarkMarks } from './scene';
+import type { SceneCanvasProps, SceneObject, ScenePage, ScenePoint, SceneRect, SceneRedaction, SceneShape } from './scene';
 import './scene-canvas.css';
 
 export function sceneTransform(page: ScenePage) {
@@ -136,7 +136,7 @@ function Artwork({ page, object }: { page: ScenePage; object: SceneObject }) {
 }
 
 export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPreview, tool, selectedId, zoom, onSelect, onCommit, makeObject, formFields = [], formValue, onFormValue, formFlag, onFormFocus, onFormLeave,
-  redactionFill = '#000000', redactionPreview = false, editRuns, textEdits, selectedRun, onSelectRun, onEditRun, rangedObjects = [], onRangedChange, onEditText }: SceneCanvasProps) {
+  redactionFill = '#000000', redactionPreview = false, editRuns, textEdits, selectedRun, onSelectRun, onEditRun, rangedObjects = [], onRangedChange, onEditText, searchMatches = [] }: SceneCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   const surface = useRef<SVGSVGElement>(null);
   const coordinates = useRef<SVGGElement>(null);
@@ -324,6 +324,14 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (!selection || selection.isCollapsed || !selection.toString().trim() || !selection.rangeCount) return [];
     return Array.from(selection.getRangeAt(0).getClientRects()).map(rect => rectangle(pointFromClient(rect.left, rect.top), pointFromClient(rect.right, rect.bottom))).filter(rect => rect.width > 2 && rect.height > 2);
   }
+  /** Whole words under the selection, one mark per line, so a redaction never leaves part of a word behind. */
+  function selectedRunMarks(): SceneRedaction[] {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) return [];
+    const runs = Array.from(coordinates.current?.querySelectorAll<SVGTextElement>('[data-text-run]') ?? [])
+      .filter((element) => selection.containsNode(element, true)).map((element) => textRuns[Number(element.dataset.textRun)]).filter(Boolean);
+    return textLines(runs).map(({ rect, text }) => ({ id: crypto.randomUUID(), rect, color: redactionFill, label: `“${text}”` }));
+  }
   function down(event: PointerEvent<SVGSVGElement>) {
     if (event.button === 1 || (event.button === 0 && spacePressed.current)) {
       event.preventDefault();
@@ -343,11 +351,11 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
       if (index == null) { onSelectRun(null); setEditingRun(null); } else { event.preventDefault(); openRun(Number(index)); }
       return;
     }
-    const textTarget = tool === 'highlight' && target.closest('[data-text-run]');
+    const textTarget = (tool === 'highlight' || tool === 'redact') && target.closest('[data-text-run]');
     const start = point(event);
     if (textTarget) {
       // Leave the browser's selection gesture intact. The selection is turned
-      // into one or more scene highlights when the pointer is released.
+      // into scene highlights or redaction marks when the pointer is released.
       gesture.current = { pointerId: event.pointerId, start, base: page, next: page, mode: 'text-selection', points: [start], changed: false };
       surface.current?.setPointerCapture(event.pointerId);
       return;
@@ -429,7 +437,9 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
     if (g.mode === 'pan') return;
     if (g.mode === 'text-selection') {
       if (!cancel) {
-        const rects = selectedTextRects();
+        const marks = tool === 'redact' ? selectedRunMarks() : [];
+        if (marks.length) { onCommit({ ...g.base, redactions: [...(g.base.redactions ?? []), ...marks] }); onSelect(null); }
+        const rects = tool === 'redact' ? [] : selectedTextRects();
         if (rects.length) onCommit({ ...g.base, objects: [...g.base.objects, ...rects.map(rect => ({ ...makeObject('highlight', rect), rect, highlightMode: 'text-selection' as const }))] });
       }
       window.getSelection()?.removeAllRanges();
@@ -493,8 +503,8 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
             transform={page.mirrored ? `matrix(-1 0 0 1 ${2 * visibleBounds(page).x + visibleBounds(page).width} 0)` : undefined} />}
           {drawn.map(object => <Artwork key={object.id} page={page} object={object} />)}
         </g>}
-        {tool === 'highlight' && textRuns.length > 0 && <g className="scene-text-layer" aria-label="Selectable PDF text">
-          {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run="true" x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
+        {(tool === 'highlight' || tool === 'redact') && textRuns.length > 0 && <g className="scene-text-layer" aria-label="Selectable PDF text">
+          {textRuns.map((run, index) => <text key={`${index}-${run.x}-${run.y}`} className="scene-text-run" data-text-run={index} x={run.x} y={run.y + run.height} fontSize={Math.max(6, run.height)} fontFamily="Helvetica, Arial, sans-serif" fill="currentColor" opacity="0.001">{run.text}</text>)}
         </g>}
         {drawn.map(object => <g key={object.id}>
           {hitRects(object).map(({ rect, label }, index) => <rect key={index} {...rect} data-object={object.id} tabIndex={0} role="button" aria-label={label ?? (object.kind === 'watermark' ? `Watermark ${object.watermark?.logoPath ? 'picture' : object.watermark?.text ?? ''}. Arrow keys move it, Shift+arrow moves it further.` : object.kind === 'pageNumbers' ? `Page number ${object.text}` : `${object.kind} object ${shown.objects.indexOf(object) + 1}`)} aria-pressed={selectedId === object.id} className={`scene-object-hit scene-object-${object.kind}`} onFocus={() => onSelect(object.id)} onKeyDown={e => key(e, object)} onDoubleClick={e => beginTextEdit(e, object)} />)}
@@ -506,9 +516,10 @@ export function SceneCanvas({ page, sourcePreview, textRuns = [], renderedPrevie
             {!ranged(object) && (['nw', 'ne', 'sw', 'se'] as const).map(corner => <rect key={corner} data-object={object.id} data-corner={corner} x={(corner.includes('w') ? object.rect.x : object.rect.x + object.rect.width) - 5 / scale} y={(corner.includes('n') ? object.rect.y : object.rect.y + object.rect.height) - 5 / scale} width={10 / scale} height={10 / scale} tabIndex={0} role="button" aria-label={`Resize ${object.kind} ${corner}`} className="scene-resize-handle" strokeWidth={1 / scale} onKeyDown={e => key(e, object, corner)} />)}
           </g>}
         </g>)}
+        {tool === 'redact' && searchMatches.map((rect, index) => <rect key={`match-${index}`} {...rect} className="scene-search-match" aria-hidden="true" />)}
         {shown.redactions?.map((mark, index) => <rect key={mark.id} {...mark.rect} data-redaction={mark.id} data-preview={redactionPreview}
           className="scene-redaction" style={redactionPreview ? { fill: mark.color } : undefined}
-          tabIndex={tool === 'redact' ? 0 : -1} role="button" aria-label={`Redaction mark ${index + 1}`} aria-pressed={selectedId === mark.id}
+          tabIndex={tool === 'redact' ? 0 : -1} role="button" aria-label={`Redaction mark ${index + 1}${mark.label ? `, ${mark.label}` : ''}`} aria-pressed={selectedId === mark.id}
           onFocus={() => { if (tool === 'redact') onSelect(mark.id); }} onKeyDown={e => markKey(e, mark.id)} />)}
         {tool === 'edit-text' && <g className="scene-edit-layer" aria-label="PDF text you can edit">
           {editRuns.map((run) => {
