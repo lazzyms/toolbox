@@ -848,7 +848,7 @@ mod command_tests {
             (merge.clone(), "statement-1.pdf", 2, tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
             (combined.clone(), "scans-1.pdf", 1, tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
             (gif.clone(), "loop-1.gif", 1, tauri::async_runtime::block_on(run_create_gif(&GifCreateRequest { paths: vec![image.clone(), image_two.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: OutputLocation::AlongsideInput, output_path: Some(gif.clone()) }))),
-            (tiff_out.clone(), "pages-1.tiff", 1, tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()) }))),
+            (tiff_out.clone(), "pages-1.tiff", 1, tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: OutputLocation::AlongsideInput, output_path: Some(tiff_out.clone()), compression: Default::default() }))),
         ];
         for (existing, expected_name, entries, outcomes) in runs {
             let chosen_name = existing.file_name().unwrap().to_string_lossy().into_owned();
@@ -1842,10 +1842,10 @@ mod command_tests {
             paths: vec![image.clone(), missing_gif_frame.clone()], frame_delay_ms: 100, loop_forever: true, frame_delay_overrides: Vec::new(), output_location: location(&root, "gif-missing"), output_path: None,
         }));
         assert_aggregate_success("TIFF valid inputs", &[tiff.clone(), tiff_two.clone()], run_combine_tiff_pages(&TiffRequest {
-            mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"), output_path: None,
+            mode: TiffMode::Combine, paths: vec![tiff.clone(), tiff_two.clone()], pages: None, output_location: location(&root, "tiff-valid"), output_path: None, compression: Default::default(),
         }));
         assert_aggregate_failure("TIFF missing later input", &[tiff.clone(), missing_tiff.clone()], &missing_tiff, run_combine_tiff_pages(&TiffRequest {
-            mode: TiffMode::Combine, paths: vec![tiff.clone(), missing_tiff.clone()], pages: None, output_location: location(&root, "tiff-missing"), output_path: None,
+            mode: TiffMode::Combine, paths: vec![tiff.clone(), missing_tiff.clone()], pages: None, output_location: location(&root, "tiff-missing"), output_path: None, compression: Default::default(),
         }));
 
         let _ = std::fs::remove_dir_all(root);
@@ -1869,7 +1869,7 @@ mod command_tests {
         let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
         let folder = folder.clone();
 
-        let outcomes = run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: paths.clone(), pages: None, output_location: out, output_path: None });
+        let outcomes = run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: paths.clone(), pages: None, output_location: out, output_path: None, compression: Default::default() });
 
         assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), paths, "each file settles in its own row, in order");
         let names = |outcome: &JobOutcome| outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
@@ -1894,7 +1894,7 @@ mod command_tests {
     fn tiff_combine_with_one_file_still_combines() {
         let root = sandbox("tiff-combine-one");
         let two = root.join("scan.tiff"); write_gray_tiff(&two, &[&[1, 2], &[3, 4]]);
-        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![two.clone()], pages: None, output_location: location(&root, "combine"), output_path: None }));
+        let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![two.clone()], pages: None, output_location: location(&root, "combine"), output_path: None, compression: Default::default() }));
         assert_eq!(outcomes.len(), 1);
         let outputs = outcomes[0].output_paths();
         assert_eq!(outputs.len(), 1, "one file in Combine mode makes one TIFF: {:?}", outcomes[0]);
@@ -1920,7 +1920,7 @@ mod command_tests {
         ];
 
         let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest {
-            mode: TiffMode::Combine, paths: paths.clone(), pages: Some(pages), output_location: OutputLocation::AlongsideInput, output_path: Some(chosen.clone()),
+            mode: TiffMode::Combine, paths: paths.clone(), pages: Some(pages), output_location: OutputLocation::AlongsideInput, output_path: Some(chosen.clone()), compression: Default::default(),
         }));
 
         assert_eq!(outcomes.len(), 1, "one combined TIFF is one outcome: {outcomes:?}");
@@ -1947,7 +1947,7 @@ mod command_tests {
         let out = location(&root, "out");
         let OutputLocation::CustomFolder(folder) = &out else { unreachable!() };
         let folder = folder.clone();
-        let request = |pages: Vec<TiffPageRef>| TiffRequest { mode: TiffMode::Combine, paths: paths.clone(), pages: Some(pages), output_location: out.clone(), output_path: None };
+        let request = |pages: Vec<TiffPageRef>| TiffRequest { mode: TiffMode::Combine, paths: paths.clone(), pages: Some(pages), output_location: out.clone(), output_path: None, compression: Default::default() };
         let with_bad_page = vec![TiffPageRef { path: cover.clone(), page: 0 }, TiffPageRef { path: scan.clone(), page: 1 }, TiffPageRef { path: scan.clone(), page: 2 }];
 
         let outcomes = tauri::async_runtime::block_on(run_combine_tiff_pages(&request(with_bad_page.clone())));
@@ -3323,7 +3323,9 @@ mod command_tests {
         let plain = root.join("plain.png");
         image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(64, 48, |x, y| image::Rgb([x as u16 * 1000, y as u16 * 1300, 40000]))).save(&deep).unwrap();
         write_png(&plain, 64, 40);
-        let paths = vec![deep.clone(), plain.clone()];
+        let deep_tiff = root.join("deep-scan.tiff");
+        write_tiff(&deep_tiff, &[image::DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(64, 48, |x, y| image::Rgb([x as u16 * 1000, y as u16 * 1300, 40000])))]);
+        let paths = vec![deep.clone(), plain.clone(), deep_tiff.clone()];
         let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
 
         let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(paths.clone(), location(&root, "pdf")), no_packs()));
@@ -3339,6 +3341,7 @@ mod command_tests {
         assert_eq!(outcomes[0].warnings[0].message, "Saved as 8-bit colour, because the image is 16-bit.");
         assert_eq!(outcomes[0].detail, "1 page recognized. English.");
         assert!(outcomes[1].warnings.is_empty(), "an 8-bit image needs no note");
+        assert_eq!(outcomes[2].warnings.iter().map(|warning| (warning.kind.clone(), warning.message.as_str())).collect::<Vec<_>>(), [(WarningKind::PrecisionReduced, "Saved as 8-bit colour, because the image is 16-bit.")], "a 16-bit TIFF page gets the same note");
         assert_eq!(deep_image.get(b"BitsPerComponent").unwrap().as_i64().unwrap(), 8);
         assert_eq!(samples.len(), 64 * 48 * 3);
         let OutcomeState::Skipped { reason } = &ranged[0].state else { panic!("a range past its one page skips the image: {:?}", ranged[0]) };
@@ -5180,7 +5183,7 @@ mod command_tests {
             .collect::<Vec<_>>();
         assert!(lossy_differing_pixels.is_empty(), "lossy image export pixels must match the verified edit preview; first differences: {lossy_differing_pixels:?}");
         outputs.extend(named(&mut naming, "export_image_edit_plan", lossy_image.clone(), lossy_image_outputs));
-        outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None }))));
+        outputs.extend(named(&mut naming, "process_tiff_pages", tiff.clone(), assert_aggregate_success("tiff", &[tiff.clone()], run_combine_tiff_pages(&TiffRequest { mode: TiffMode::Combine, paths: vec![tiff.clone()], pages: None, output_location: location(&root, "tiff"), output_path: None, compression: Default::default() }))));
         outputs.extend(named(&mut naming, "blur_faces", image.clone(), assert_vision_adapter("face blur", blur_faces(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], output_location: location(&root, "face blur") }))));
         outputs.extend(named(&mut naming, "remove_image_background", image.clone(), assert_vision_adapter("background removal", remove_image_background(RunEvents::silent(), VisionRequest { paths: vec![image.clone()], output_location: location(&root, "background removal") }))));
         let docx = root.join("document.docx");
@@ -9858,23 +9861,23 @@ mod command_tests {
             (color, (image.width(), image.height()), image.as_bytes().to_vec())
         };
 
-        let split = assert_success("split", std::future::ready(run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: vec![multi.clone()], pages: None, output_location: location(&root, "split"), output_path: None })));
+        let split = assert_success("split", std::future::ready(run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: vec![multi.clone()], pages: None, output_location: location(&root, "split"), output_path: None, compression: Default::default() })));
         assert_eq!(split.iter().map(tiff_pages).collect::<Vec<_>>(), vec![vec![page(&gray)], vec![page(&rgb)], vec![page(&rgba)]]);
 
         let combined = assert_aggregate_success("combine", &[multi.clone(), other.clone()], run_combine_tiff_pages(&TiffRequest {
-            mode: TiffMode::Combine, paths: vec![multi.clone(), other.clone()], pages: None, output_location: location(&root, "combine"), output_path: None,
+            mode: TiffMode::Combine, paths: vec![multi.clone(), other.clone()], pages: None, output_location: location(&root, "combine"), output_path: None, compression: Default::default(),
         }));
         assert_eq!(tiff_pages(&combined[0]), vec![page(&gray), page(&rgb), page(&rgba), page(&single)]);
 
         let selected = assert_aggregate_success("select", &[multi.clone(), other.clone()], run_combine_tiff_pages(&TiffRequest {
             mode: TiffMode::Combine, paths: vec![multi.clone(), other.clone()],
             pages: Some(vec![TiffPageRef { path: other.clone(), page: 0 }, TiffPageRef { path: multi.clone(), page: 2 }, TiffPageRef { path: multi.clone(), page: 0 }]),
-            output_location: location(&root, "select"), output_path: None,
+            output_location: location(&root, "select"), output_path: None, compression: Default::default(),
         }));
         assert_eq!(tiff_pages(&selected[0]), vec![page(&single), page(&rgba), page(&gray)]);
 
         let outside = tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest {
-            mode: TiffMode::Combine, paths: vec![multi.clone()], pages: Some(vec![TiffPageRef { path: multi.clone(), page: 3 }]), output_location: location(&root, "outside"), output_path: None,
+            mode: TiffMode::Combine, paths: vec![multi.clone()], pages: Some(vec![TiffPageRef { path: multi.clone(), page: 3 }]), output_location: location(&root, "outside"), output_path: None, compression: Default::default(),
         }));
         assert_eq!(outside[0].error().map(|error| error.message.clone()), Some(format!("Could not process {}: TIFF page 4 isn't in this file, which has 3 pages.", multi.display())));
 
@@ -9885,18 +9888,177 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn tiff_tools_reject_sixteen_bit_pages_with_the_same_message() {
-        use crate::kit::images::tools::TiffPreviewRequest;
-        let root = sandbox("tiff-deep-pages");
-        let deep = root.join("deep.tiff");
-        write_tiff(&deep, &[image::DynamicImage::ImageRgb16(image::ImageBuffer::from_raw(2, 1, vec![1, 2, 3, 4, 5, 6]).unwrap())]);
-        let unsupported = "TIFF page 1 of 1 can't be read. Unsupported TIFF color type or bit depth: RGB(16)";
+    /// The source pixel formats TIFF Pages accepts.
+    #[derive(Clone, Copy, Debug)]
+    enum TiffVariant { Gray1, Gray8, Gray16, Rgb8, Rgb16, Rgba8, Rgba16 }
 
-        let split = run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: vec![deep.clone()], pages: None, output_location: location(&root, "split"), output_path: None });
-        assert_eq!(split[0].error().map(|error| error.message.clone()), Some(format!("Could not process {}: {unsupported}", deep.display())));
-        assert!(split[0].output_paths().is_empty());
-        assert_eq!(inspect_tiff_pages(TiffPreviewRequest { path: deep.clone() }).err().as_deref(), Some(unsupported));
+    impl TiffVariant {
+        const ALL: [TiffVariant; 7] = [TiffVariant::Gray1, TiffVariant::Gray8, TiffVariant::Gray16, TiffVariant::Rgb8, TiffVariant::Rgb16, TiffVariant::Rgba8, TiffVariant::Rgba16];
+    }
+
+    /// Lets the tiff encoder write 1-bit bilevel rows, which it has no colour type for.
+    struct Bilevel;
+    impl tiff::encoder::colortype::ColorType for Bilevel {
+        type Inner = u8;
+        const TIFF_VALUE: tiff::tags::PhotometricInterpretation = tiff::tags::PhotometricInterpretation::BlackIsZero;
+        const BITS_PER_SAMPLE: &'static [u16] = &[1];
+        const SAMPLE_FORMAT: &'static [tiff::tags::SampleFormat] = &[tiff::tags::SampleFormat::Uint];
+        fn horizontal_predict(_: &[u8], _: &mut Vec<u8>) { unreachable!("fixtures are written without a predictor") }
+    }
+
+    /// Writes a 3×2 TIFF page per entry in `pages`, in one pixel format and source compression,
+    /// and returns each page as the expected output: its colour type and samples.
+    fn write_tiff_variant(path: &PathBuf, variant: TiffVariant, compression: tiff::encoder::Compression, pages: usize) -> Vec<(tiff::ColorType, Vec<u16>)> {
+        use tiff::encoder::colortype::{Gray16, Gray8, RGB16, RGB8, RGBA16, RGBA8};
+        let mut encoder = tiff::encoder::TiffEncoder::new(std::fs::File::create(path).unwrap()).unwrap().with_compression(compression);
+        let (width, height) = (3u32, 2u32);
+        let samples = |channels: usize, page: usize, max: u32| (0..6 * channels).map(|index| ((index as u32 * 7919 + page as u32 * 3571 + 13) % max) as u16).collect::<Vec<u16>>();
+        (0..pages).map(|page| match variant {
+            TiffVariant::Gray1 => {
+                // One packed byte per row; the high bit is the first pixel.
+                let rows = [0b1010_0000u8, if page % 2 == 0 { 0b0110_0000 } else { 0b1100_0000 }];
+                let mut image = encoder.new_image::<Bilevel>(1, height).unwrap();
+                image.encoder().write_tag(tiff::tags::Tag::ImageWidth, width).unwrap();
+                image.write_data(&rows).unwrap();
+                let pixels = rows.iter().flat_map(|row| (0..width).map(move |x| if row & (0x80 >> x) != 0 { 255 } else { 0 })).collect();
+                (tiff::ColorType::Gray(8), pixels)
+            }
+            TiffVariant::Gray8 => { let data = samples(1, page, 256); encoder.write_image::<Gray8>(width, height, &data.iter().map(|&v| v as u8).collect::<Vec<_>>()).unwrap(); (tiff::ColorType::Gray(8), data) }
+            TiffVariant::Rgb8 => { let data = samples(3, page, 256); encoder.write_image::<RGB8>(width, height, &data.iter().map(|&v| v as u8).collect::<Vec<_>>()).unwrap(); (tiff::ColorType::RGB(8), data) }
+            TiffVariant::Rgba8 => { let data = samples(4, page, 256); encoder.write_image::<RGBA8>(width, height, &data.iter().map(|&v| v as u8).collect::<Vec<_>>()).unwrap(); (tiff::ColorType::RGBA(8), data) }
+            TiffVariant::Gray16 => { let data = samples(1, page, 65536); encoder.write_image::<Gray16>(width, height, &data).unwrap(); (tiff::ColorType::Gray(16), data) }
+            TiffVariant::Rgb16 => { let data = samples(3, page, 65536); encoder.write_image::<RGB16>(width, height, &data).unwrap(); (tiff::ColorType::RGB(16), data) }
+            TiffVariant::Rgba16 => { let data = samples(4, page, 65536); encoder.write_image::<RGBA16>(width, height, &data).unwrap(); (tiff::ColorType::RGBA(16), data) }
+        }).collect()
+    }
+
+    /// Every page of a written TIFF: its colour type, samples, and Compression tag.
+    fn tiff_variant_pages(path: &PathBuf) -> Vec<(tiff::ColorType, Vec<u16>, u16)> {
+        let mut decoder = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut pages = Vec::new();
+        loop {
+            let compression = decoder.find_tag_unsigned::<u16>(tiff::tags::Tag::Compression).unwrap().unwrap();
+            let samples = match decoder.read_image().unwrap() {
+                tiff::decoder::DecodingResult::U8(data) => data.into_iter().map(u16::from).collect(),
+                tiff::decoder::DecodingResult::U16(data) => data,
+                _ => panic!("expected 8- or 16-bit samples in {}", path.display()),
+            };
+            pages.push((decoder.colortype().unwrap(), samples, compression));
+            if !decoder.more_images() { return pages; }
+            decoder.next_image().unwrap();
+        }
+    }
+
+    #[test]
+    fn tiff_pages_read_every_pixel_format_and_source_compression_and_write_lzw_by_default() {
+        use crate::kit::images::tools::TiffPreviewRequest;
+        use tiff::encoder::{Compression, DeflateLevel};
+        let root = sandbox("tiff-variants");
+        let compressions = [("none", Compression::Uncompressed, 1u32), ("lzw", Compression::Lzw, 5), ("deflate", Compression::Deflate(DeflateLevel::Balanced), 8), ("packbits", Compression::Packbits, 32773)];
+        for variant in TiffVariant::ALL {
+            for (name, compression, tag) in compressions {
+                let case = format!("{variant:?}-{name}");
+                let source = root.join(format!("{case}.tiff"));
+                let expected = write_tiff_variant(&source, variant, compression, 2);
+                assert_eq!(tiff_tag(&source, tiff::tags::Tag::Compression), Some(tag), "{case}: the fixture uses its source compression");
+                let original = std::fs::read(&source).unwrap();
+                let lzw = |pages: &[(tiff::ColorType, Vec<u16>)]| pages.iter().map(|(color, samples)| (*color, samples.clone(), 5u16)).collect::<Vec<_>>();
+
+                let split = assert_success(&case, std::future::ready(run_split_tiff_pages(&RunEvents::silent(), TiffRequest {
+                    mode: TiffMode::Split, paths: vec![source.clone()], pages: None, output_location: location(&root, &format!("{case}-split")), output_path: None, compression: Default::default(),
+                })));
+                assert_eq!(split.iter().map(tiff_variant_pages).collect::<Vec<_>>(), expected.chunks(1).map(lzw).collect::<Vec<_>>(), "{case}: Split keeps 16-bit pages at 16 bits, writes others at 8, and uses LZW");
+
+                let combined = assert_aggregate_success(&case, &[source.clone()], run_combine_tiff_pages(&TiffRequest {
+                    mode: TiffMode::Combine, paths: vec![source.clone()], pages: None, output_location: location(&root, &format!("{case}-combine")), output_path: None, compression: Default::default(),
+                }));
+                assert_eq!(tiff_variant_pages(&combined[0]), lzw(&expected), "{case}: Combine keeps each page's depth and uses LZW");
+
+                let previews = inspect_tiff_pages(TiffPreviewRequest { path: source.clone() }).unwrap_or_else(|error| panic!("{case}: {error}"));
+                assert_eq!(previews.iter().map(|preview| (preview.width, preview.height)).collect::<Vec<_>>(), vec![(3, 2), (3, 2)], "{case}: every page previews");
+                assert_eq!(std::fs::read(&source).unwrap(), original, "{case}: the original stays untouched");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tiff_pages_write_the_requested_compression_and_keep_each_page_depth_across_files() {
+        use crate::kit::contracts::TiffCompression;
+        use crate::kit::images::tools::TiffPageRef;
+        let root = sandbox("tiff-output-compression");
+        let bilevel = root.join("fax.tiff");
+        let deep = root.join("deep.tiff");
+        let alpha = root.join("alpha.tiff");
+        let pages = [
+            write_tiff_variant(&bilevel, TiffVariant::Gray1, tiff::encoder::Compression::Packbits, 2),
+            write_tiff_variant(&deep, TiffVariant::Rgb16, tiff::encoder::Compression::Deflate(Default::default()), 2),
+            write_tiff_variant(&alpha, TiffVariant::Rgba8, tiff::encoder::Compression::Uncompressed, 2),
+        ];
+        let paths = vec![bilevel.clone(), deep.clone(), alpha.clone()];
+        for (compression, tag) in [(TiffCompression::Lzw, 5u16), (TiffCompression::None, 1), (TiffCompression::Deflate, 8)] {
+            let case = format!("{compression:?}");
+            let with = |pages: &[(tiff::ColorType, Vec<u16>)]| pages.iter().map(|(color, samples)| (*color, samples.clone(), tag)).collect::<Vec<_>>();
+
+            let split = run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: paths.clone(), pages: None, output_location: location(&root, &format!("{case}-split")), output_path: None, compression });
+            for (outcome, expected) in split.iter().zip(&pages) {
+                assert!(outcome.error().is_none(), "{case}: {:?}", outcome.error());
+                assert_eq!(outcome.output_paths().iter().map(tiff_variant_pages).collect::<Vec<_>>(), expected.chunks(1).map(with).collect::<Vec<_>>(), "{case}: Split writes the requested compression");
+            }
+
+            let order = vec![TiffPageRef { path: deep.clone(), page: 1 }, TiffPageRef { path: bilevel.clone(), page: 0 }, TiffPageRef { path: alpha.clone(), page: 1 }, TiffPageRef { path: deep.clone(), page: 0 }];
+            let combined = assert_aggregate_success(&case, &paths, run_combine_tiff_pages(&TiffRequest {
+                mode: TiffMode::Combine, paths: paths.clone(), pages: Some(order), output_location: location(&root, &format!("{case}-combine")), output_path: None, compression,
+            }));
+            let expected = [pages[1][1].clone(), pages[0][0].clone(), pages[2][1].clone(), pages[1][0].clone()];
+            assert_eq!(tiff_variant_pages(&combined[0]), with(&expected), "{case}: Combine writes every page with the requested compression at its own depth");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tiff_pages_fail_an_unsupported_variant_on_its_own_file_and_name_it() {
+        use crate::kit::images::tools::TiffPreviewRequest;
+        let root = sandbox("tiff-unsupported-variants");
+        let good = root.join("scan.tiff");
+        write_tiff_variant(&good, TiffVariant::Rgb16, tiff::encoder::Compression::Lzw, 2);
+        let cmyk = root.join("print.tiff");
+        let cmyk_page = (2, 1, vec![(258, vec![8, 8, 8, 8]), (259, vec![1]), (262, vec![5]), (277, vec![4])], vec![0; 8]);
+        std::fs::write(&cmyk, raw_tiff(&[cmyk_page.clone(), cmyk_page])).unwrap();
+        let float = root.join("hdr.tiff");
+        let mut encoder = tiff::encoder::TiffEncoder::new(std::fs::File::create(&float).unwrap()).unwrap();
+        for _ in 0..2 { encoder.write_image::<tiff::encoder::colortype::RGB32Float>(1, 1, &[0.5, 0.25, 1.0]).unwrap(); }
+        drop(encoder);
+        let old_jpeg = root.join("maps-1998.tif");
+        std::fs::write(&old_jpeg, raw_tiff(&[gray_tiff_page(2, 1, 6, vec![1, 2]), gray_tiff_page(2, 1, 6, vec![3, 4])])).unwrap();
+        let other = root.join("letter.tiff");
+        write_tiff_variant(&other, TiffVariant::Gray1, tiff::encoder::Compression::Uncompressed, 3);
+        let paths = vec![good.clone(), cmyk.clone(), float.clone(), old_jpeg.clone(), other.clone()];
+        let originals = paths.iter().map(|path| std::fs::read(path).unwrap()).collect::<Vec<_>>();
+        let reasons = [
+            (&cmyk, "TIFF page 1 of 2 can't be read. 8-bit CMYK TIFF pages aren't supported."),
+            (&float, "TIFF page 1 of 2 can't be read. 32-bit floating-point RGB TIFF pages aren't supported."),
+            (&old_jpeg, "TIFF page 1 of 2 can't be read. Old-style JPEG compression isn't supported in TIFF pages."),
+        ];
+
+        let split = run_split_tiff_pages(&RunEvents::silent(), TiffRequest { mode: TiffMode::Split, paths: paths.clone(), pages: None, output_location: location(&root, "split"), output_path: None, compression: Default::default() });
+        assert_eq!(split.len(), paths.len());
+        assert_eq!(split[0].output_paths().len(), 2, "the file before the unsupported ones still splits: {:?}", split[0]);
+        assert_eq!(split[4].output_paths().len(), 3, "the file after the unsupported ones still splits: {:?}", split[4]);
+        for ((path, reason), outcome) in reasons.iter().zip(&split[1..4]) {
+            assert_eq!(outcome.error().map(|error| error.message.clone()), Some(format!("Could not process {}: {reason}", path.display())));
+            assert!(outcome.output_paths().is_empty());
+            assert_eq!(inspect_tiff_pages(TiffPreviewRequest { path: (*path).clone() }).err().as_deref(), Some(*reason), "the preview names the same variant");
+        }
+
+        let message = |path: &PathBuf| tauri::async_runtime::block_on(run_combine_tiff_pages(&TiffRequest {
+            mode: TiffMode::Combine, paths: vec![good.clone(), path.clone()], pages: None, output_location: location(&root, "combine"), output_path: None, compression: Default::default(),
+        })).iter().find(|outcome| &outcome.input_path == path).and_then(|outcome| outcome.error()).map(|error| error.message.clone());
+        for (path, reason) in reasons {
+            assert_eq!(message(path), Some(format!("Could not process {}: {reason}", path.display())), "Combine names the file and its variant");
+        }
+        assert_eq!(std::fs::read_dir(root.join("combine")).unwrap().count(), 0, "a failed combine publishes nothing");
+        for (path, original) in paths.iter().zip(originals) { assert_eq!(std::fs::read(path).unwrap(), original); }
         let _ = std::fs::remove_dir_all(&root);
     }
 

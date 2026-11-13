@@ -406,7 +406,9 @@ impl ImagePages {
             Self::Tiff(tiff) => {
                 let (image, orientation) = tiff.read(index)?;
                 let has_alpha = image.color().has_alpha();
-                Ok(ImagePage { image, orientation, has_alpha, jpeg: None, reduced_from: None })
+                let bits = images::source::channel_bits(image.color());
+                let reduced_from = (bits > 8).then_some((bits, ImageFamily::Tiff));
+                Ok(ImagePage { image, orientation, has_alpha, jpeg: None, reduced_from })
             }
         }
     }

@@ -4,7 +4,7 @@ use image::{DynamicImage, ImageEncoder, ImageFormat, Rgba};
 use image::AnimationDecoder;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io::{BufReader, Seek};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
@@ -661,6 +661,9 @@ pub struct TiffRequest {
     pub output_location: OutputLocation,
     #[serde(default)]
     pub output_path: Option<PathBuf>,
+    /// How every written page is compressed. The source compression isn't kept.
+    #[serde(default)]
+    pub compression: crate::kit::contracts::TiffCompression,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1564,7 +1567,7 @@ pub fn tiff_split(request: &TiffRequest, input: PathBuf) -> JobOutcome {
             Ok(output) => output,
             Err(error) => return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not reserve TIFF page output: {error}"))),
         };
-        if let Err(error) = write_tiff_page(output.path(), page) {
+        if let Err(error) = write_tiff_file(output.path(), std::slice::from_ref(page), request.compression) {
             return JobOutcome::failure_with_outputs(input.clone(), outputs, ToolError::processing(format!("Could not write TIFF page: {error}")));
         }
         outputs.push(match output.publish() {
@@ -1604,7 +1607,7 @@ pub fn tiff_combine(request: &TiffRequest) -> JobOutcome {
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve combined TIFF output: {error}")),
     };
-    if let Err(error) = write_tiff_pages(output.path(), &pages) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
+    if let Err(error) = write_tiff_file(output.path(), &pages, request.compression) { return failure(input, format!("Could not combine TIFF pages: {error}")); }
     match output.publish() {
         Ok(path) => JobOutcome::succeeded(input, vec![path], "TIFF pages combined"),
         Err(error) => failure(input, format!("Could not publish combined TIFF: {error}")),
@@ -1636,27 +1639,11 @@ fn read_tiff_page_refs(paths: &[PathBuf], page_refs: &[TiffPageRef]) -> Result<V
     Ok(pages)
 }
 
-fn write_tiff_pages(path: &std::path::Path, pages: &[DynamicImage]) -> Result<(), String> {
-    let file = File::create(path).map_err(|error| error.to_string())?;
-    let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
-    for page in pages { write_encoded_page(&mut encoder, page)?; }
-    Ok(())
-}
-
-fn write_tiff_page(path: &std::path::Path, page: &DynamicImage) -> Result<(), String> {
-    let file = File::create(path).map_err(|error| error.to_string())?;
-    let mut encoder = tiff::encoder::TiffEncoder::new(file).map_err(|error| error.to_string())?;
-    write_encoded_page(&mut encoder, page)
-}
-
-fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::TiffEncoder<W>, page: &DynamicImage) -> Result<(), String> {
-    match page {
-        DynamicImage::ImageLuma8(page) => encoder.write_image::<tiff::encoder::colortype::Gray8>(page.width(), page.height(), page.as_raw()),
-        DynamicImage::ImageRgb8(page) => encoder.write_image::<tiff::encoder::colortype::RGB8>(page.width(), page.height(), page.as_raw()),
-        DynamicImage::ImageRgba8(page) => encoder.write_image::<tiff::encoder::colortype::RGBA8>(page.width(), page.height(), page.as_raw()),
-        page => return Err(format!("Unsupported TIFF page color type: {:?}", page.color())),
-    }
-    .map_err(|error| error.to_string())
+/// Writes pages at 8 bits per channel, or 16 for 16-bit pages, with the chosen compression.
+fn write_tiff_file(path: &Path, pages: &[DynamicImage], compression: crate::kit::contracts::TiffCompression) -> Result<(), String> {
+    let mut writer = std::io::BufWriter::new(File::create(path).map_err(|error| error.to_string())?);
+    crate::kit::images::write_tiff_pages(&mut writer, pages, compression)?;
+    std::io::Write::flush(&mut writer).map_err(|error| error.to_string())
 }
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 
@@ -1694,7 +1681,11 @@ mod tests {
     }
 
     fn request(mode: TiffMode, paths: Vec<PathBuf>) -> TiffRequest {
-        TiffRequest { mode, paths, pages: None, output_location: OutputLocation::AlongsideInput, output_path: None }
+        TiffRequest { mode, paths, pages: None, output_location: OutputLocation::AlongsideInput, output_path: None, compression: Default::default() }
+    }
+
+    fn write_tiff_page(path: &Path, page: &DynamicImage) -> Result<(), String> {
+        write_tiff_file(path, std::slice::from_ref(page), Default::default())
     }
 
     fn file_name(path: &Path) -> String { path.file_name().unwrap().to_string_lossy().into_owned() }
@@ -1808,16 +1799,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_tiff_bit_depths() {
+    fn rejects_unsupported_tiff_sample_formats_by_name() {
         let input = path("unsupported.tiff");
         let file = File::create(&input).unwrap();
         let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
-        encoder.write_image::<tiff::encoder::colortype::Gray16>(1, 1, &[1]).unwrap();
+        for _ in 0..2 { encoder.write_image::<tiff::encoder::colortype::Gray32Float>(1, 1, &[0.5]).unwrap(); }
+        drop(encoder);
+        let named = "TIFF page 1 of 2 can't be read. 32-bit floating-point greyscale TIFF pages aren't supported.";
         let split = tiff_split(&request(TiffMode::Split, vec![input.clone()]), input.clone());
-        assert!(split.error().is_some());
+        assert!(split.error().unwrap().message.ends_with(named), "{:?}", split.error());
         let combined = tiff_combine(&request(TiffMode::Combine, vec![input.clone()]));
-        assert!(combined.error().is_some());
+        assert!(combined.error().unwrap().message.ends_with(named), "{:?}", combined.error());
         let _ = std::fs::remove_file(input);
+    }
+
+    #[test]
+    fn keeps_sixteen_bit_pages_at_sixteen_bits() {
+        let input = path("deep.tiff");
+        let file = File::create(&input).unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(file).unwrap();
+        encoder.write_image::<tiff::encoder::colortype::Gray16>(2, 1, &[1, 65535]).unwrap();
+        encoder.write_image::<tiff::encoder::colortype::Gray8>(2, 1, &[3, 4]).unwrap();
+        drop(encoder);
+        let combined = tiff_combine(&request(TiffMode::Combine, vec![input.clone()]));
+        let output = combined.output_paths().first().unwrap().clone();
+        let pages = read_pages(&output).unwrap();
+        assert_eq!(pages[0], DynamicImage::ImageLuma16(image::ImageBuffer::from_raw(2, 1, vec![1, 65535]).unwrap()));
+        assert_eq!(pages[1], gray(2, 1, vec![3, 4]));
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
     }
 
     #[test]
@@ -1838,7 +1848,7 @@ mod tests {
                 TiffPageRef { path: one_page.clone(), page: 0 },
                 TiffPageRef { path: two_page.clone(), page: 0 },
             ]),
-            output_location: OutputLocation::AlongsideInput, output_path: None,
+            output_location: OutputLocation::AlongsideInput, output_path: None, compression: Default::default(),
         });
 
         assert!(outcome.error().is_none(), "selected TIFF pages failed: {:?}", outcome.error());

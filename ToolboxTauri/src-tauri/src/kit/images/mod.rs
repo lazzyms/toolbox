@@ -216,13 +216,20 @@ pub(crate) fn encode_with_profile(img: &image::DynamicImage, format: OutputForma
     }
 }
 
-// TIFF keeps 8 or 16 bits per channel and alpha as unassociated extra
-// samples; grey with alpha is written as RGBA, which every reader accepts.
 fn encode_tiff(img: &DynamicImage, compression: TiffCompression) -> Result<Vec<u8>, String> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    write_tiff_pages(&mut buf, std::slice::from_ref(img), compression)?;
+    Ok(buf.into_inner())
+}
+
+/// Writes each page as one TIFF directory with the chosen compression.
+/// TIFF keeps 8 or 16 bits per channel and alpha as unassociated extra
+/// samples; grey with alpha is written as RGBA, which every reader accepts.
+pub(crate) fn write_tiff_pages<W: std::io::Write + std::io::Seek>(writer: W, pages: &[DynamicImage], compression: TiffCompression) -> Result<(), String> {
     use tiff::encoder::{colortype, Compression, DeflateLevel, TiffEncoder};
     use tiff::tags::{ExtraSamples, Tag};
 
-    fn write<C: colortype::ColorType>(encoder: &mut TiffEncoder<&mut std::io::Cursor<Vec<u8>>>, width: u32, height: u32, data: &[C::Inner], alpha: bool) -> tiff::TiffResult<()>
+    fn write<C: colortype::ColorType, W: std::io::Write + std::io::Seek>(encoder: &mut TiffEncoder<W>, width: u32, height: u32, data: &[C::Inner], alpha: bool) -> tiff::TiffResult<()>
     where [C::Inner]: tiff::encoder::TiffValue {
         let mut image = encoder.new_image::<C>(width, height)?;
         if alpha { image.encoder().write_tag(Tag::ExtraSamples, ExtraSamples::UnassociatedAlpha.to_u16())?; }
@@ -234,21 +241,21 @@ fn encode_tiff(img: &DynamicImage, compression: TiffCompression) -> Result<Vec<u
         TiffCompression::None => Compression::Uncompressed,
         TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Balanced),
     };
-    let mut buf = std::io::Cursor::new(Vec::new());
-    let mut encoder = TiffEncoder::new(&mut buf).map_err(|e| e.to_string())?.with_compression(compression);
-    let (width, height) = (img.width(), img.height());
-    match img {
-        DynamicImage::ImageLuma8(gray) => write::<colortype::Gray8>(&mut encoder, width, height, gray.as_raw(), false),
-        DynamicImage::ImageLuma16(gray) => write::<colortype::Gray16>(&mut encoder, width, height, gray.as_raw(), false),
-        DynamicImage::ImageRgb8(rgb) => write::<colortype::RGB8>(&mut encoder, width, height, rgb.as_raw(), false),
-        DynamicImage::ImageRgb16(rgb) => write::<colortype::RGB16>(&mut encoder, width, height, rgb.as_raw(), false),
-        DynamicImage::ImageLumaA16(_) | DynamicImage::ImageRgba16(_) => write::<colortype::RGBA16>(&mut encoder, width, height, img.to_rgba16().as_raw(), true),
-        other if other.color().has_alpha() => write::<colortype::RGBA8>(&mut encoder, width, height, other.to_rgba8().as_raw(), true),
-        other => write::<colortype::RGB8>(&mut encoder, width, height, other.to_rgb8().as_raw(), false),
+    let mut encoder = TiffEncoder::new(writer).map_err(|e| e.to_string())?.with_compression(compression);
+    for img in pages {
+        let (width, height) = (img.width(), img.height());
+        match img {
+            DynamicImage::ImageLuma8(gray) => write::<colortype::Gray8, _>(&mut encoder, width, height, gray.as_raw(), false),
+            DynamicImage::ImageLuma16(gray) => write::<colortype::Gray16, _>(&mut encoder, width, height, gray.as_raw(), false),
+            DynamicImage::ImageRgb8(rgb) => write::<colortype::RGB8, _>(&mut encoder, width, height, rgb.as_raw(), false),
+            DynamicImage::ImageRgb16(rgb) => write::<colortype::RGB16, _>(&mut encoder, width, height, rgb.as_raw(), false),
+            DynamicImage::ImageLumaA16(_) | DynamicImage::ImageRgba16(_) => write::<colortype::RGBA16, _>(&mut encoder, width, height, img.to_rgba16().as_raw(), true),
+            other if other.color().has_alpha() => write::<colortype::RGBA8, _>(&mut encoder, width, height, other.to_rgba8().as_raw(), true),
+            other => write::<colortype::RGB8, _>(&mut encoder, width, height, other.to_rgb8().as_raw(), false),
+        }
+        .map_err(|e| format!("TIFF encode failed: {e}"))?;
     }
-    .map_err(|e| format!("TIFF encode failed: {e}"))?;
-    drop(encoder);
-    Ok(buf.into_inner())
+    Ok(())
 }
 
 // Convert targets are written at 8 bits per channel, except TIFF from a

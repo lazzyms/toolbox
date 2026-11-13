@@ -1,7 +1,16 @@
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { TiffCompression } from "../../contracts";
 import { exampleOutputName } from "../../components/RunDestination";
 import { TiffPageInspector, canCombineTiffPages, initialTiffPagesState, tiffPagesInOrder, type TiffMode, type TiffPagesState } from "./TiffPageInspector";
 import type { MediaPanelProps, MediaTool } from "./types";
+
+const compressions: { value: TiffCompression; name: string }[] = [
+  { value: "lzw", name: "LZW, lossless (default)" },
+  { value: "deflate", name: "Deflate, lossless" },
+  { value: "none", name: "None, largest files" },
+];
 
 const TiffPagesPanel = ({ utility, options, setOptions, files, fileKeys, removeFile, browse, loading }: MediaPanelProps<TiffPagesState>) => (
   <>
@@ -35,6 +44,24 @@ const TiffPagesPanel = ({ utility, options, setOptions, files, fileKeys, removeF
         setState={setOptions}
       />
     )}
+    <div className="workspace-field">
+      <Label htmlFor="tiff-pages-compression">Compression</Label>
+      <NativeSelect
+        id="tiff-pages-compression"
+        aria-describedby="tiff-pages-compression-hint"
+        value={options.compression}
+        disabled={loading}
+        onChange={(event) => {
+          const compression = event.target.value as TiffCompression;
+          setOptions((current) => ({ ...current, compression }));
+        }}
+      >
+        {compressions.map(({ value, name }) => <option key={value} value={value}>{name}</option>)}
+      </NativeSelect>
+      <p id="tiff-pages-compression-hint" className="workspace-panel-copy">
+        The source compression isn't kept. Pages are saved at 8 bits per channel; 16-bit pages stay 16-bit.
+      </p>
+    </div>
   </>
 );
 
@@ -60,13 +87,14 @@ export const tiffPagesTool: MediaTool<TiffPagesState> = {
   buildRequest: (options, { paths, keys, outputLocation, outputPath }) => ({
     command: "process_tiff_pages",
     request: options.mode === "split"
-      ? { mode: options.mode, paths, outputLocation }
+      ? { mode: options.mode, paths, outputLocation, compression: options.compression }
       : {
           mode: options.mode,
           paths,
           pages: tiffPagesInOrder(options, paths, keys).map(({ path, page }) => ({ path, page })),
           outputLocation,
           outputPath,
+          compression: options.compression,
         },
   }),
 };
