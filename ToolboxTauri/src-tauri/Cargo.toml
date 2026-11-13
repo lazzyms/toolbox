@@ -56,7 +56,7 @@ hayro-jbig2 = { version = "0.4.0", default-features = false, features = ["std"] 
 encoding_rs = "0.8"
 rayon = "1"
 heif-rs = "26.7"
-webpx = "0.4"
+webpx = { version = "0.4", features = ["icc"] }
 sha2 = "0.11"
 minisign-verify = "0.2.5"
 tiff = "0.11"

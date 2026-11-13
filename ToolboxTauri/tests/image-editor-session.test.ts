@@ -17,6 +17,8 @@ import {
   imageEditStackExtension,
   imageEditStackRequestSteps,
   imageEditStackSuffix,
+  imageEditStepChipLabels,
+  imageEditStepLabels,
   imageResizeStepProblem,
   presentImageEditSteps,
   pushEdit,
@@ -160,6 +162,21 @@ test("Watermark is one step that runs last and is named -watermarked on its own"
   const options = { text: "DRAFT", color: "#FFFFFF", size: 0.3, opacity: 70, rotation: 0, position: { anchorX: 1, anchorY: 1 } };
   assert.deepEqual(imageEditStackRequestSteps({ watermark }), { watermark: options });
   assert.deepEqual(imageEditStackPreviewPlan(stack).edits.at(-1), { kind: "watermark", ...options });
+});
+
+test("Remove Metadata is one step that runs after Watermark, is named -stripped on its own and changes no preview pixels", () => {
+  const watermark = { ...defaultImageWatermarkStep(), text: "DRAFT" };
+  assert.equal(imageEditStackSuffix({ metadata: {} }), "-stripped");
+  assert.equal(imageEditStackSuffix({ metadata: {}, resize: defaultImageResizeStep() }), "-edited");
+  const stack = { metadata: {}, watermark, crop: defaultImageCropStep() };
+  assert.deepEqual(presentImageEditSteps(stack), ["crop", "watermark", "metadata"]);
+  assert.deepEqual(Object.keys(imageEditStackRequestSteps(stack)), ["crop", "watermark", "metadata"], "metadata added first is still sent last");
+  assert.deepEqual(imageEditStackRequestSteps({ metadata: {} }), { metadata: {} });
+  assert.deepEqual(imageEditStackPreviewPlan({ metadata: {} }).edits, []);
+  assert.deepEqual(imageEditStackPreviewPlan(stack).edits.map(({ kind }) => kind), ["crop", "watermark"]);
+  assert.equal(imageEditStepLabels.metadata, "Remove Image Metadata");
+  assert.equal(imageEditStepChipLabels.metadata, "Remove Metadata");
+  assert.equal(imageEditStepChipLabels.watermark, imageEditStepLabels.watermark);
 });
 
 test("watermark options send only what the chosen mark uses", () => {

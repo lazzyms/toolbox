@@ -741,8 +741,8 @@ const ViewFor = ({ utility, initialPaths, fileActivation, onActivationAccepted, 
   if (utility.id === "pdf-bates") return <BatesView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-editor") return <PDFEditorWorkspaceView utility={utility} initialPaths={initialPaths} onNavigate={onNavigate} onLeaveGuard={onLeaveGuard} onSelectTool={onSelectTool} onWorkspaceSourceAction={onWorkspaceSourceAction} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   if (workspace.id === "pdf-convert") return <PDFConversionWorkspaceView utility={utility} initialPaths={initialPaths} onFilesChange={onFilesChange} onSelectTool={onSelectTool} />;
-  // Image Metadata and Convert Image Format run per file on their own screen, without an edit plan.
-  const runsWithoutEditPlan = utility.id === "image-metadata" || utility.id === "heic-convert";
+  // Convert Image Format runs per file on its own screen, without an edit plan.
+  const runsWithoutEditPlan = utility.id === "heic-convert";
   if (workspace.id === "image-editor" && !runsWithoutEditPlan) return <ImageEditorWorkspaceView utility={utility} initialPaths={initialPaths} onSelectTool={onSelectTool} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} onWorkspaceSourceAction={onWorkspaceSourceAction} />;
   if (runsWithoutEditPlan) return <MediaWorkspaceView utility={utility} initialPaths={initialPaths} fileActivation={fileActivation} onActivationAccepted={onActivationAccepted} onFilesChange={onFilesChange} />;
   const View = workspaceViews[workspace.id];

@@ -136,8 +136,15 @@ pub(crate) fn flatten_onto_white(img: &image::DynamicImage) -> image::RgbImage {
 /// Baseline JPEG at `quality`. A greyscale image stays one channel; anything else is written as RGB
 /// with alpha dropped.
 pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+    encode_jpeg_with_profile(img, quality, None)
+}
+
+fn encode_jpeg_with_profile(img: &image::DynamicImage, quality: u8, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
-    let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+    let mut encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+    if let Some(icc) = icc {
+        encoder.set_icc_profile(icc.to_vec()).map_err(|error| format!("Could not keep the colour profile: {error}"))?;
+    }
     match img {
         image::DynamicImage::ImageLuma8(grey) => encoder.write_image(grey.as_raw(), grey.width(), grey.height(), image::ExtendedColorType::L8),
         _ => {
@@ -153,14 +160,31 @@ pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
 pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
+    encode_with_profile(img, format, quality, None)
+}
+
+/// The colour profile embedded in a JPEG, PNG or WebP file, if it has one. HEIC is not read
+/// here, because its encoder cannot write a profile back.
+pub(crate) fn icc_profile(path: &std::path::Path) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_decoder().ok()?;
+    decoder.icc_profile().ok().flatten()
+}
+
+/// Encodes like `encode`, embedding the given colour profile in JPEG, PNG and WebP. HEIC is saved
+/// without it, because libheif's encoder here has no way to write one.
+pub(crate) fn encode_with_profile(img: &image::DynamicImage, format: OutputFormat, quality: u8, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
+    let profile_error = |error: image::error::UnsupportedError| format!("Could not keep the colour profile: {error}");
     match format {
         OutputFormat::Jpeg => {
             let rgb = if img.color().has_alpha() { flatten_onto_white(img) } else { img.to_rgb8() };
-            encode_jpeg(&image::DynamicImage::ImageRgb8(rgb), quality)
+            encode_jpeg_with_profile(&image::DynamicImage::ImageRgb8(rgb), quality, icc)
         }
         OutputFormat::Png => {
             let mut buf = Vec::new();
-            PngEncoder::new(&mut buf)
+            let mut encoder = PngEncoder::new(&mut buf);
+            if let Some(icc) = icc { encoder.set_icc_profile(icc.to_vec()).map_err(profile_error)?; }
+            encoder
                 .write_image(
                     img.as_bytes(),
                     img.width(),
@@ -174,10 +198,14 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
             // image's WebPEncoder is lossless-only; lossy quality needs
             // Google's libwebp through webpx (quality 0-100)
             let rgba = img.to_rgba8();
-            webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+            let bytes = webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
                 .quality(quality.min(100) as f32)
                 .encode(webpx::Unstoppable)
-                .map_err(|e| format!("WebP encode failed: {}", e))
+                .map_err(|e| format!("WebP encode failed: {}", e))?;
+            match icc {
+                Some(icc) => webpx::embed_icc(&bytes, icc).map_err(|e| format!("Could not keep the colour profile: {}", e)),
+                None => Ok(bytes),
+            }
         }
         OutputFormat::Heic => {
             // libheif's bundled x265 is 8-bit only, so a high-bit-depth source
@@ -549,6 +577,7 @@ pub mod compress;
 pub mod gif_extract;
 pub(crate) mod gif_frames;
 pub mod metadata;
+pub(crate) mod strip;
 pub mod tools;
 #[cfg(test)]
 pub(crate) mod fixtures;

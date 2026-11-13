@@ -71,17 +71,23 @@ export interface ImageEditStack {
   rotate?: ImageRotateStep;
   tone?: ImageToneStep;
   watermark?: ImageWatermarkStep;
+  metadata?: ImageMetadataStep;
 }
+
+/** Removing metadata has no options: it always keeps the orientation and colour profile. */
+export type ImageMetadataStep = Record<string, never>;
 
 /** The stack as native reads it: the watermark goes as the shared watermark options. */
 export type ImageEditStackRequest = Omit<ImageEditStack, "watermark"> & { watermark?: WatermarkOptions };
 
 /** The fixed run order. */
-export const imageEditStackSteps = ["crop", "resize", "rotate", "tone", "watermark"] as const;
+export const imageEditStackSteps = ["crop", "resize", "rotate", "tone", "watermark", "metadata"] as const;
 export type ImageEditStackStep = (typeof imageEditStackSteps)[number];
 
-export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize", rotate: "Rotate and Flip", tone: "Colour and Tone", watermark: "Watermark" };
-const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized", rotate: "-rotated", tone: "-tone", watermark: "-watermarked" };
+export const imageEditStepLabels: Record<ImageEditStackStep, string> = { crop: "Crop", resize: "Resize", rotate: "Rotate and Flip", tone: "Colour and Tone", watermark: "Watermark", metadata: "Remove Image Metadata" };
+/** The shorter names the step chips show. Everything else, including the chips' labels for screen readers, uses the full name. */
+export const imageEditStepChipLabels: Record<ImageEditStackStep, string> = { ...imageEditStepLabels, metadata: "Remove Metadata" };
+const imageEditStepSuffixes: Record<ImageEditStackStep, string> = { crop: "-cropped", resize: "-resized", rotate: "-rotated", tone: "-tone", watermark: "-watermarked", metadata: "-stripped" };
 
 export const presentImageEditSteps = (stack: ImageEditStack) => imageEditStackSteps.filter((step) => stack[step] !== undefined);
 
@@ -128,9 +134,9 @@ export const imageEditStackSuffix = (stack: ImageEditStack) => {
 export const imageEditStackRequestSteps = (stack: ImageEditStack): ImageEditStackRequest =>
   Object.fromEntries(presentImageEditSteps(stack).map((step) => [step, step === "watermark" ? imageWatermarkOptions(stack.watermark!) : stack[step]]));
 
-/** The same steps as a preview plan, in run order. */
+/** The same steps as a preview plan, in run order. Removing metadata changes no pixels, so it has no preview. */
 export const imageEditStackPreviewPlan = (stack: ImageEditStack): ImageEditPlan => ({
-  edits: presentImageEditSteps(stack).map((step): ImageEditOperation => step === "crop"
+  edits: presentImageEditSteps(stack).filter((step) => step !== "metadata").map((step): ImageEditOperation => step === "crop"
     ? { kind: "crop", ...stack.crop! }
     : step === "resize"
       ? { kind: "resize", ...stack.resize! }

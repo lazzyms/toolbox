@@ -8,6 +8,7 @@ import {
   defaultImageToneStep,
   imageEditStackPreviewPlan,
   imageEditStackSteps,
+  imageEditStepChipLabels,
   imageEditStepLabels,
   imageFlips,
   imageResizeStepProblem,
@@ -478,14 +479,14 @@ export const ImageEditStackPanel = ({
                   aria-label={`Step ${steps.indexOf(step) + 1} of ${steps.length}, ${imageEditStepLabels[step]}${step === focus ? ", showing its options" : ""}`}
                   onClick={() => onFocus(step)}
                 >
-                  <span aria-hidden="true">{steps.indexOf(step) + 1}</span>{imageEditStepLabels[step]}
+                  <span aria-hidden="true">{steps.indexOf(step) + 1}</span>{imageEditStepChipLabels[step]}
                 </Button>
                 <Button type="button" size="icon-sm" variant="ghost" aria-label={`Remove ${imageEditStepLabels[step]} step`} onClick={() => onRemove(step)}><X aria-hidden="true" /></Button>
               </span>
             ) : (
               <span key={step} role="listitem" className="image-edit-stack-step">
                 {separator}
-                <Button type="button" size="sm" variant="outline" className="border-dashed" aria-label={`Add ${imageEditStepLabels[step]} step`} onClick={() => onAdd(step)}>+ {imageEditStepLabels[step]}</Button>
+                <Button type="button" size="sm" variant="outline" className="border-dashed" aria-label={`Add ${imageEditStepLabels[step]} step`} onClick={() => onAdd(step)}>+ {imageEditStepChipLabels[step]}</Button>
               </span>
             );
           })}
@@ -964,6 +965,27 @@ export const ImageEditStackPanel = ({
                   </div>
                   <p className="workspace-panel-copy">{watermark.placement === "tile" ? "Repeats across the whole image." : "Or drag it in the preview. It lands in the same place on every size."}</p>
                 </fieldset>
+              </>
+            ) : focus === "metadata" && stack.metadata ? (
+              <>
+                <div className="workspace-field">
+                  <p id="image-metadata-removes" className="workspace-panel-label">Removes</p>
+                  <ul aria-labelledby="image-metadata-removes" className="workspace-panel-copy grid gap-0.5 pl-5 text-foreground list-disc">
+                    <li>Camera details (EXIF), including GPS location</li>
+                    <li>XMP</li>
+                    <li>IPTC</li>
+                    <li>Comments</li>
+                  </ul>
+                </div>
+                <div className="workspace-field">
+                  <p id="image-metadata-keeps" className="workspace-panel-label">Keeps</p>
+                  <ul aria-labelledby="image-metadata-keeps" className="workspace-panel-copy grid gap-0.5 pl-5 text-foreground list-disc">
+                    <li>Orientation, so photos stay upright</li>
+                    <li>Colour profile, so colours look the same</li>
+                  </ul>
+                </div>
+                <p className="workspace-panel-copy flex gap-2" role="note"><Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />JPEG and PNG are cleaned without re-encoding. HEIC, WebP and TIFF are re-encoded at quality 90.</p>
+                <p className="workspace-panel-copy flex gap-2" role="note"><Info aria-hidden="true" className="mt-0.5 size-4 shrink-0" />Each copy is checked after saving. If anything removed is still there, that file fails and no copy is kept.</p>
               </>
             ) : (
               <Card className="py-0" role="note">

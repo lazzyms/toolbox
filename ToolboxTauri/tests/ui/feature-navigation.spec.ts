@@ -662,8 +662,8 @@ test("settings use shared theme and privacy controls in both palettes", async ({
 
 test("workspace command rails follow the responsive toolbar keyboard contract", async ({ page }, testInfo) => {
     await page.goto("/");
-    await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
-    const rail = page.getByRole("toolbar", { name: "Image Editor tools" });
+    await page.getByRole("button", { name: "Open PDF Conversion", exact: true }).click();
+    const rail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
     const commands = rail.getByRole("button");
     const commandCount = await commands.count();
     expect(commandCount).toBeGreaterThan(2);
@@ -930,7 +930,6 @@ const runShortcutCases = [
     { tool: "Lock & Unlock", file: pdfFixturePath, command: "remove_password", ready: (page: Page) => fillPasswords(page, "test-password") },
     { tool: "Compress", file: pdfFixturePath, command: "compress_files", ready: async () => undefined },
     { tool: "Compress Images", file: fixturePath, command: "compress_images", ready: async () => undefined },
-    { tool: "Image Metadata", file: fixturePath, command: "image_metadata", ready: async () => undefined },
 ];
 
 for (const { tool, file, command, ready } of runShortcutCases) {
@@ -1178,21 +1177,6 @@ const chooseFixture = async (page: Page, selectedPath: string) => {
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await expect(page.getByText(path.basename(selectedPath), { exact: true }).first()).toBeVisible();
 };
-
-test("image metadata inspection shows labelled categories for each file", async ({ page }) => {
-    await page.goto("/");
-    await openFromHome(page, "Image Metadata");
-    await chooseFixture(page, fixturePath);
-    await page.getByRole("radio", { name: "Inspect metadata" }).click();
-    await page.getByRole("button", { name: "Inspect metadata", exact: true }).click();
-
-    expect((await lastInvocation(page, "inspect_image_metadata"))?.args).toMatchObject({ request: { paths: [fixturePath] } });
-    const report = page.getByRole("region", { name: `Metadata in ${fixtureName}` });
-    await expect(report.locator(".image-metadata-row").filter({ hasText: "Camera" })).toContainText("Removed");
-    await expect(report.locator(".image-metadata-row").filter({ hasText: "Orientation" })).toContainText("Rotate 90° clockwise to show upright");
-    await expect(report).not.toContainText('"status"');
-    expect(await invocationCount(page, "image_metadata")).toBe(0);
-});
 
 test("crop is applied visually and exported as part of the scene", async ({ page }) => {
     await page.goto("/");
@@ -2867,8 +2851,8 @@ const storeOutputSettings = async (page: Page, settings: OutputSettings) => {
 const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[number], expectedOutputLocation: unknown = "alongsideInput") => {
     await page.goto("/");
     await openFromHome(page, utility.title);
-    // Image Metadata and Convert Image Format live in the Image Editor but run on their own screen, without an edit plan.
-    // Crop runs through the shared edit stack, which Crop fills with its default step.
+    // Convert Image Format lives in the Image Editor but runs on its own screen, without an edit plan.
+    // The stack tools run through the shared edit stack, which each fills with its default step.
     const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && !["image-metadata", "heic-convert", "crop", "resize", "rotate", "image-tone", "image-watermark"].includes(utility.id);
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
@@ -3512,7 +3496,7 @@ test("Edit Image tabs switch with arrow keys and keep the files and the edit pla
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     const tabs = page.getByRole("tablist", { name: "Edit Image" });
-    await expect(tabs.getByRole("tab")).toHaveText(["Resize", "Rotate", "Crop", "Watermark", "Adjust"]);
+    await expect(tabs.getByRole("tab")).toHaveText(["Resize", "Rotate", "Crop", "Watermark", "Remove Metadata", "Adjust"]);
     await tabs.getByRole("tab", { name: "Resize", exact: true }).click();
     await page.getByLabel("Longest side, pixels").fill("320");
 

@@ -3,7 +3,6 @@ import { convertImagesTool, type ConvertImagesOptions } from "./convertImages";
 import { gifCreateTool, type GifCreateOptions } from "./gifCreate";
 import { gifExtractTool } from "./gifExtract";
 import { iconSetTool, type IconSetOptions } from "./iconSet";
-import { imageMetadataTool, type ImageMetadataOptions } from "./imageMetadata";
 import type { TiffPagesState } from "./TiffPageInspector";
 import { tiffPagesTool } from "./tiffPages";
 import type { MediaTool } from "./types";
@@ -16,7 +15,6 @@ export type MediaOptions = {
   "gif-create": GifCreateOptions;
   "gif-extract": Record<string, never>;
   "tiff-pages": TiffPagesState;
-  "image-metadata": ImageMetadataOptions;
   "heic-convert": ConvertImagesOptions;
 };
 
@@ -27,7 +25,6 @@ export const mediaTools: { [Id in MediaToolId]: MediaTool<MediaOptions[Id]> } = 
   "gif-create": gifCreateTool,
   "gif-extract": gifExtractTool,
   "tiff-pages": tiffPagesTool,
-  "image-metadata": imageMetadataTool,
   "heic-convert": convertImagesTool,
 };
 
@@ -38,6 +35,5 @@ export const initialMediaOptions = (): MediaOptions => ({
   "gif-create": mediaTools["gif-create"].initialOptions,
   "gif-extract": mediaTools["gif-extract"].initialOptions,
   "tiff-pages": mediaTools["tiff-pages"].initialOptions,
-  "image-metadata": mediaTools["image-metadata"].initialOptions,
   "heic-convert": mediaTools["heic-convert"].initialOptions,
 });
