@@ -338,9 +338,10 @@ export const MainPage = () => {
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const name = activeDocumentPath?.split(/[\\/]/).pop();
-    const title = selectedWorkspace ? name ? `Toolbox — ${name}` : `Toolbox — ${selectedWorkspace.title}` : "Toolbox";
+    const title = settingsSection ? "Toolbox — Settings"
+      : selectedWorkspace ? name ? `Toolbox — ${name}` : `Toolbox — ${selectedWorkspace.title}` : "Toolbox";
     void invoke("set_document_title", { title }).catch(() => undefined);
-  }, [activeDocumentPath, selectedWorkspace?.id]);
+  }, [activeDocumentPath, selectedWorkspace?.id, settingsSection]);
   useEffect(() => {
     document.documentElement.style.zoom = viewZoom === 1 ? "" : String(viewZoom);
     localStorage.setItem("toolbox-view-zoom", String(viewZoom));
@@ -399,7 +400,10 @@ export const MainPage = () => {
   useEffect(() => {
     if (settingsSection || !focusAfterSettings) return;
     if (focusAfterSettings === "settings") settingsTriggerRef.current?.focus();
-    else searchInputRef.current?.focus();
+    else {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }
     setFocusAfterSettings(null);
   }, [settingsSection, focusAfterSettings]);
   useEffect(() => {
