@@ -2648,11 +2648,24 @@ kbd.shortcut-hint {
 .formatted-pdf { display: grid; gap: 16px; }
 .formatted-pdf-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); gap: 20px; align-items: start; }
 .formatted-pdf-editor { display: grid; gap: 8px; min-width: 0; }
-.formatted-pdf-toolbar { display: flex; align-items: center; gap: 4px; max-width: 200px; }
+.formatted-pdf-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.formatted-pdf-toolbar [data-slot="native-select-wrapper"] { width: 150px; }
+.formatted-pdf-toolbar-separator { height: 20px; margin: 0 4px; }
+.formatted-pdf-bold, .formatted-pdf-italic { font-family: Georgia, "Liberation Serif", serif; font-size: 14px; }
+.formatted-pdf-bold { font-weight: 700; }
+.formatted-pdf-italic { font-style: italic; }
 .formatted-pdf-blocks { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .formatted-pdf-block { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
 .formatted-pdf-gutter { padding-top: 8px; font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
-.formatted-pdf-block:not([data-kind="paragraph"]) textarea { font-weight: 600; }
+.formatted-pdf-block[data-kind^="heading"] [role="textbox"] { font-weight: 600; }
+.formatted-pdf-items { display: grid; gap: 4px; margin: 0; padding-left: 22px; }
+ul.formatted-pdf-items { list-style: disc; }
+ol.formatted-pdf-items { list-style: decimal; }
+.formatted-pdf-items > li { padding-left: 2px; }
+.formatted-pdf-items > li::marker { color: var(--muted-foreground); font-size: 13px; }
+.formatted-pdf-break { display: flex; align-items: center; gap: 10px; min-height: 36px; border-radius: 6px; color: var(--muted-foreground); font-size: 12px; outline: none; }
+.formatted-pdf-break::before, .formatted-pdf-break::after { content: ""; flex: 1; border-top: 1px dashed var(--border); }
+.formatted-pdf-break:focus-visible { box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent); }
 .formatted-pdf-block-actions { display: flex; gap: 2px; }
 .formatted-pdf-settings { display: grid; gap: 16px; }
 .formatted-pdf-defaults { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; }

@@ -41,6 +41,33 @@ const invocation = (page: Page, name: string) => page.evaluate((name) =>
 
 const block = (page: Page, label: string) => page.getByRole("list", { name: "Document blocks, in order" }).getByRole("textbox", { name: label });
 
+const run = (text: string, bold: boolean, italic: boolean) => ({ text, bold, italic });
+const plain = (text: string) => run(text, false, false);
+
+/** Saves through the save step and returns the blocks create_formatted_pdf received. */
+const savedBlocks = async (page: Page) => {
+    await saveButton(page).click();
+    await page.getByRole("dialog", { name: "Save the PDF" }).getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => invocation(page, "create_formatted_pdf")).toBeDefined();
+    return ((await invocation(page, "create_formatted_pdf")) as { document: { blocks: unknown } }).document.blocks;
+};
+
+/** Sends a key the way the browser does while an input method is composing text. */
+const composingKey = (page: Page, init: KeyboardEventInit, how: "isComposing" | "keyCode229") => page.evaluate(({ init, how }) => {
+    const event = new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true, isComposing: how === "isComposing" });
+    if (how === "keyCode229") Object.defineProperty(event, "keyCode", { value: 229 });
+    document.activeElement?.dispatchEvent(event);
+}, { init, how });
+
+/** Puts the caret at the start or end of the focused field (Home and End differ between macOS and other systems). */
+const caretAt = (page: Page, where: "start" | "end") => page.evaluate((where) => {
+    const range = document.createRange();
+    range.selectNodeContents(document.activeElement!);
+    range.collapse(where === "start");
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+}, where);
+
 const saveButton = (page: Page) => page.getByRole("button", { name: /^Save PDF/ });
 
 const resultRows = (page: Page) => page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
@@ -49,8 +76,9 @@ const resultRows = (page: Page) => page.getByRole("list", { name: "Results" }).g
 const writeChecklist = async (page: Page) => {
     await block(page, "Block 1, Paragraph").fill("Move-out checklist");
     await page.getByLabel("Block type").selectOption("heading1");
-    await block(page, "Block 1, Heading 1").press("End");
-    await block(page, "Block 1, Heading 1").press("Enter");
+    await expect(block(page, "Block 1, Heading 1")).toBeFocused();
+    await caretAt(page, "end");
+    await page.keyboard.press("Enter");
     const second = block(page, "Block 2, Paragraph");
     await expect(second).toBeFocused();
     await second.pressSequentially("Return the keys.");
@@ -93,7 +121,7 @@ test("Formatted PDF sends the exact structured document and shows the numbered n
             author: "Sam Lee",
             blocks: [
                 { kind: "heading1", text: "Move-out checklist" },
-                { kind: "paragraph", text: "Return the keys.\nRead the meters." },
+                { kind: "paragraph", runs: [plain("Return the keys.\nRead the meters.")] },
             ],
             page: { pageSize: "a4", margins: "normal" },
             font: { family: "Liberation Serif", size: 11 },
@@ -125,7 +153,7 @@ test("Formatted PDF sends the exact structured document and shows the numbered n
 
     await page.getByRole("button", { name: "New document" }).click();
     await expect(resultRows(page)).toHaveCount(0);
-    await expect(block(page, "Block 1, Paragraph")).toHaveValue("");
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("");
     await expect(saveButton(page)).toBeDisabled();
 });
 
@@ -157,10 +185,10 @@ test("Formatted PDF splits pasted paragraphs into blocks, reorders them and leav
         document.activeElement?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
     });
     await expect(page.getByRole("list", { name: "Document blocks, in order" }).getByRole("textbox")).toHaveCount(3);
-    await expect(block(page, "Block 3, Paragraph")).toHaveValue("Third part.");
+    await expect(block(page, "Block 3, Paragraph")).toHaveText("Third part.");
 
     await page.getByRole("button", { name: "Move block 3 up" }).click();
-    await expect(block(page, "Block 2, Paragraph")).toHaveValue("Third part.");
+    await expect(block(page, "Block 2, Paragraph")).toHaveText("Third part.");
     await block(page, "Block 1, Paragraph").fill("");
     await page.getByRole("button", { name: "Delete block 3" }).click();
     await expect(page.getByRole("list", { name: "Document blocks, in order" }).getByRole("textbox")).toHaveCount(2);
@@ -168,5 +196,174 @@ test("Formatted PDF splits pasted paragraphs into blocks, reorders them and leav
     await saveButton(page).click();
     await page.getByRole("dialog", { name: "Save the PDF" }).getByRole("button", { name: "Save" }).click();
     await expect.poll(async () => ((await invocation(page, "create_formatted_pdf")) as { document: { blocks: unknown } } | undefined)?.document.blocks)
-        .toEqual([{ kind: "paragraph", text: "Third part." }]);
+        .toEqual([{ kind: "paragraph", runs: [plain("Third part.")] }]);
+});
+
+test("Formatted PDF sends bold and italic runs set with the shortcuts, the toolbar and a selection", async ({ page }) => {
+    await openFormatted(page);
+    const paragraph = block(page, "Block 1, Paragraph");
+    const bold = page.getByRole("button", { name: "Bold" });
+    const italic = page.getByRole("button", { name: "Italic" });
+    await expect(bold).toHaveAttribute("aria-keyshortcuts", "Meta+B");
+    await expect(italic).toHaveAttribute("aria-keyshortcuts", "Meta+I");
+
+    await paragraph.click();
+    await paragraph.pressSequentially("Return ");
+    await page.keyboard.press("Meta+B");
+    await expect(bold).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.type("every key");
+    await page.keyboard.press("Meta+B");
+    await page.keyboard.type(" and ");
+    await italic.click();
+    await expect(paragraph).toBeFocused();
+    await page.keyboard.type("photograph");
+    await italic.click();
+    await page.keyboard.type(" each room.");
+    // A selection takes the style too: "each room" becomes italic.
+    await page.keyboard.press("ArrowLeft");
+    for (let index = 0; index < "each room".length; index += 1) await page.keyboard.press("Shift+ArrowLeft");
+    await page.keyboard.press("Meta+I");
+    await expect(paragraph.locator("i, em")).toHaveText(["photograph", "each room"]);
+
+    // Headings carry text only, so emphasis is off there.
+    await caretAt(page, "end");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Kitchen");
+    await page.keyboard.press("Meta+Alt+2");
+    await expect(block(page, "Block 2, Heading 2")).toBeFocused();
+    await expect(bold).toBeDisabled();
+    await page.keyboard.press("Meta+B");
+    await expect(block(page, "Block 2, Heading 2").locator("b, strong")).toHaveCount(0);
+
+    expect(await savedBlocks(page)).toEqual([
+        { kind: "paragraph", runs: [plain("Return "), run("every key", true, false), plain(" and "), run("photograph", false, true), plain(" "), run("each room", false, true), plain(".")] },
+        { kind: "heading2", text: "Kitchen" },
+    ]);
+});
+
+test("Formatted PDF makes bulleted and numbered lists, ends them on an empty item and splits a numbered list with a page break", async ({ page }) => {
+    await openFormatted(page);
+    const first = block(page, "Block 1, Paragraph");
+    await first.click();
+    await first.pressSequentially("Keys");
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.type("Meters");
+    // Each line becomes an item.
+    await page.keyboard.press("Meta+Shift+8");
+    await expect(page.getByRole("listitem", { name: "Block 1, Bulleted list, 2 items" })).toBeVisible();
+    await expect(block(page, "Block 1, Bulleted list, item 2")).toBeFocused();
+    await expect(page.getByRole("button", { name: "Bulleted list" })).toHaveAttribute("aria-pressed", "true");
+    await caretAt(page, "end");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Post");
+    await page.keyboard.press("Enter");
+    // Enter on an empty item ends the list with a new paragraph.
+    await page.keyboard.press("Enter");
+    const after = block(page, "Block 2, Paragraph");
+    await expect(after).toBeFocused();
+    await expect(page.getByRole("listitem", { name: "Block 1, Bulleted list, 3 items" })).toBeVisible();
+
+    await after.pressSequentially("Pack the van");
+    await page.getByRole("button", { name: "Numbered list" }).click();
+    const step = block(page, "Block 2, Numbered list, item 1");
+    await expect(step).toBeFocused();
+    await caretAt(page, "end");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Drive");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Unload");
+    // A page break between items splits the list, and the numbers carry on after it.
+    await caretAt(page, "start");
+    await page.keyboard.press("Meta+Shift+Enter");
+    await expect(saveButton(page)).toBeEnabled();
+    await expect(page.getByRole("dialog", { name: "Save the PDF" })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Block 3, Page break" })).toBeVisible();
+    await expect(block(page, "Block 4, Numbered list, item 1")).toBeFocused();
+    await expect(page.getByRole("listitem", { name: "Block 4, Numbered list, 1 item" }).locator("ol")).toHaveAttribute("start", "3");
+
+    expect(await savedBlocks(page)).toEqual([
+        { kind: "bulletedList", items: [{ runs: [plain("Keys")] }, { runs: [plain("Meters")] }, { runs: [plain("Post")] }] },
+        { kind: "numberedList", items: [{ runs: [plain("Pack the van")] }, { runs: [plain("Drive")] }] },
+        { kind: "pageBreak" },
+        { kind: "numberedList", items: [{ runs: [plain("Unload")] }] },
+    ]);
+});
+
+test("Formatted PDF inserts page breaks from the toolbar, changes block types by shortcut and moves blocks", async ({ page }) => {
+    await openFormatted(page);
+    const first = block(page, "Block 1, Paragraph");
+    await first.click();
+    await first.pressSequentially("Inventory");
+    await page.keyboard.press("Meta+Alt+1");
+    await expect(page.getByLabel("Block type")).toHaveValue("heading1");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Living room.");
+    await page.getByRole("button", { name: "Page break" }).click();
+    await expect(page.getByRole("group", { name: "Block 3, Page break" })).toBeVisible();
+    const bedroom = block(page, "Block 4, Paragraph");
+    await expect(bedroom).toBeFocused();
+    await page.keyboard.type("Bedroom.");
+    await page.keyboard.press("Meta+Alt+3");
+    await page.keyboard.press("Meta+Alt+0");
+    await expect(block(page, "Block 4, Paragraph")).toBeFocused();
+
+    // Option+Shift+Up moves the block, and the caret stays in it.
+    await page.keyboard.press("Alt+Shift+ArrowUp");
+    await expect(block(page, "Block 3, Paragraph")).toBeFocused();
+    await expect(block(page, "Block 3, Paragraph")).toHaveText("Bedroom.");
+    await page.keyboard.press("Alt+Shift+ArrowDown");
+    await expect(block(page, "Block 4, Paragraph")).toHaveText("Bedroom.");
+
+    // A page break block is removed with Delete.
+    await page.getByRole("group", { name: "Block 3, Page break" }).focus();
+    await expect(page.getByLabel("Block type")).toBeDisabled();
+    await page.keyboard.press("Meta+Shift+Enter");
+    await expect(page.getByRole("group", { name: "Block 4, Page break" })).toBeFocused();
+    await page.keyboard.press("Delete");
+    await expect(page.getByRole("group", { name: /Page break/ })).toHaveCount(1);
+
+    expect(await savedBlocks(page)).toEqual([
+        { kind: "heading1", text: "Inventory" },
+        { kind: "paragraph", runs: [plain("Living room.")] },
+        { kind: "pageBreak" },
+        { kind: "paragraph", runs: [plain("Bedroom.")] },
+    ]);
+});
+
+test("Formatted PDF format keys stay out of other text fields and IME composition, and the run key saves", async ({ page }) => {
+    await openFormatted(page);
+    const paragraph = block(page, "Block 1, Paragraph");
+    await paragraph.click();
+    await paragraph.pressSequentially("Keys");
+
+    // In the Title field the format keys do nothing to the document.
+    const title = page.getByLabel("Title", { exact: true });
+    await title.fill("Checklist");
+    await title.press("Meta+B");
+    await title.press("Meta+Shift+8");
+    await title.press("Meta+Alt+1");
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("Keys");
+    await expect(page.getByRole("list", { name: "Document blocks, in order" }).locator(":scope > li")).toHaveCount(1);
+    await expect(title).toHaveValue("Checklist");
+
+    // While an input method composes text, the same keys are left to it.
+    await paragraph.click();
+    for (const how of ["isComposing", "keyCode229"] as const) {
+        await composingKey(page, { key: "*", code: "Digit8", metaKey: true, shiftKey: true }, how);
+        await composingKey(page, { key: "Enter", code: "Enter", metaKey: true, shiftKey: true }, how);
+        await composingKey(page, { key: "Enter", code: "Enter" }, how);
+    }
+    await expect(block(page, "Block 1, Paragraph")).toHaveText("Keys");
+    await expect(page.getByRole("list", { name: "Document blocks, in order" }).locator(":scope > li")).toHaveCount(1);
+    // The same key sent outside composition does apply.
+    await page.evaluate(() => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "*", code: "Digit8", metaKey: true, shiftKey: true, bubbles: true, cancelable: true })));
+    await expect(block(page, "Block 1, Bulleted list, item 1")).toHaveText("Keys");
+
+    // Command+Return saves from inside a block.
+    await page.keyboard.press("Meta+Enter");
+    const save = page.getByRole("dialog", { name: "Save the PDF" });
+    await expect(save.getByLabel("File name")).toHaveValue("Checklist.pdf");
+    await save.getByRole("button", { name: "Save" }).click();
+    await expect.poll(async () => ((await invocation(page, "create_formatted_pdf")) as { document: { blocks: unknown } } | undefined)?.document.blocks)
+        .toEqual([{ kind: "bulletedList", items: [{ runs: [plain("Keys")] }] }]);
 });
