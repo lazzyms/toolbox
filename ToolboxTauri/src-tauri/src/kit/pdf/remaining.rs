@@ -1330,10 +1330,12 @@ pub const PDF_PASSWORD_PROTECTED: &str = "This PDF is password-protected. Unlock
 pub const NO_SAVINGS: &str = "No savings: already well compressed";
 const PAGE_BOXES: [&[u8]; 5] = [b"MediaBox", b"CropBox", b"BleedBox", b"TrimBox", b"ArtBox"];
 
-/// Repacks a PDF without loss: object streams, recompressed flate streams at level 9. The copy is
-/// published only when it opens with the same pages, page boxes and rotation and is smaller.
-pub fn compress_lossless(input: PathBuf, location: &OutputLocation) -> JobOutcome {
-    let source = match Document::load(&input) {
+/// Compresses one PDF for Compress Files. With `images`, eligible photographs are first recompressed
+/// in-process; the lossless qpdf repack (object streams, flate streams at level 9, deterministic ID)
+/// always runs afterwards. The copy is published only when it opens with the same pages, page boxes
+/// and rotation and is smaller.
+pub fn compress_pdf(input: PathBuf, location: &OutputLocation, images: Option<super::recompress::ImageSettings>) -> JobOutcome {
+    let mut source = match Document::load(&input) {
         Ok(document) => document,
         Err(_) => return JobOutcome::failure(input, crate::kit::password::unreadable(crate::kit::password::ProtectedFormat::Pdf)),
     };
@@ -1352,8 +1354,23 @@ pub fn compress_lossless(input: PathBuf, location: &OutputLocation) -> JobOutcom
         Ok(output) => output,
         Err(error) => return failure(input, format!("Could not reserve compressed PDF output: {error}")),
     };
+    let recompressed = images.map_or(0, |settings| super::recompress::recompress_images(&mut source, settings));
+    // Recompressed images go through a staged copy beside the reservation; it is removed on every path.
+    let staged = (recompressed > 0).then(|| StagedFile({
+        let mut path = output.path().as_os_str().to_owned();
+        path.push(".images");
+        PathBuf::from(path)
+    }));
+    let repack_from = match &staged {
+        Some(staged) => match source.save(&staged.0) {
+            Ok(_) => staged.0.clone(),
+            Err(error) => return failure(input, format!("Could not write the recompressed PDF: {error}")),
+        },
+        None => input.clone(),
+    };
     let result = Command::new(qpdf).arg("--object-streams=generate").arg("--recompress-flate").arg("--compression-level=9")
-        .arg(&input).arg(output.path()).output_until_stopped();
+        .arg("--deterministic-id").arg(&repack_from).arg(output.path()).output_until_stopped();
+    drop(staged);
     match result {
         // qpdf exits 3 when it succeeded with warnings; verification below decides whether the copy is sound.
         Ok(result) if result.status.success() || result.status.code() == Some(3) => {}
@@ -1372,8 +1389,25 @@ pub fn compress_lossless(input: PathBuf, location: &OutputLocation) -> JobOutcom
         return JobOutcome::skipped(input, SkipReason::new(SkipCode::NoSavings, NO_SAVINGS)).with_sizes(original_bytes, output_bytes);
     }
     match output.publish() {
-        Ok(path) => JobOutcome::succeeded(input, vec![path], "PDF repacked without loss").with_sizes(original_bytes, output_bytes),
+        Ok(path) => JobOutcome::succeeded(input, vec![path], compressed_detail(recompressed)).with_sizes(original_bytes, output_bytes),
         Err(error) => failure(input, format!("Could not publish compressed PDF: {error}")),
+    }
+}
+
+fn compressed_detail(recompressed: usize) -> String {
+    match recompressed {
+        0 => "PDF repacked without loss".to_string(),
+        1 => "1 image recompressed and PDF repacked".to_string(),
+        count => format!("{count} images recompressed and PDF repacked"),
+    }
+}
+
+/// A scratch file removed when it goes out of scope.
+struct StagedFile(PathBuf);
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
     }
 }
 
@@ -1700,7 +1734,7 @@ pub(crate) mod tests {
                 unsafe_mutation_fixture(&input, kind);
                 let output_location = OutputLocation::CustomFolder(output.clone());
                 let outcome = match operation {
-                    "compress" => compress_lossless(input.clone(), &output_location),
+                    "compress" => compress_pdf(input.clone(), &output_location, None),
                     "extract" => {
                         let mut request = request(None, vec![0]);
                         request.output_location = output_location;

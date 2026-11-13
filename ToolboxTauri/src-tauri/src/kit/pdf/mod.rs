@@ -32,6 +32,7 @@ pub mod convert;
 pub mod properties;
 mod embedded_image;
 mod inline_image;
+pub mod recompress;
 
 use std::collections::HashSet;
 use std::fs;
