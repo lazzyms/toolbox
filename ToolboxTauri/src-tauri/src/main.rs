@@ -2793,6 +2793,7 @@ mod command_tests {
         let rich_text = root.join("memo.rtf"); std::fs::write(&rich_text, r"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}}{\info{\title Team memo}}{\f1\b\fs32 Team memo\par}{\i Ship} the {\ul release}.\par\trowd\cellx2000\cellx4000\pard\intbl Owner\cell Date\cell\row\pard Done.\par}").unwrap();
         let rich_text_bytes = std::fs::read(&rich_text).unwrap();
         let word = root.join("brief.docx"); std::fs::write(&word, crate::kit::pdf::docx::fixtures::docx(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Project brief</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">Scope and </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>timeline</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Phase</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Week</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#, &[("rIdStyles", "styles", "styles.xml", false)], &[("word/styles.xml", br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style></w:styles>"#)])).unwrap();
+        let open_document = root.join("minutes.odt"); std::fs::write(&open_document, crate::kit::pdf::odt::fixtures::odt("", r#"<text:h text:outline-level="1">Meeting minutes</text:h><text:p>Agreed <text:span>actions</text:span></text:p><table:table><table:table-row><table:table-cell><text:p>Owner</text:p></table:table-cell><table:table-cell><text:p>Due</text:p></table:table-cell></table:table-row></table:table>"#, &[], &[])).unwrap();
         let table = root.join("orders.csv"); std::fs::write(&table, "Order;Customer;Note\n1001;\"Smith; Jo\";\"said \"\"hi\"\"\"\n1002;Lee;plain\n").unwrap();
         let table_bytes = std::fs::read(&table).unwrap();
 
@@ -2900,6 +2901,14 @@ mod command_tests {
         assert!(["Project brief", "Scope and", "timeline", "Phase", "Week"].iter().all(|expected| word_text.contains(expected)), "converted DOCX must stay searchable: {word_text}");
         assert!(word_pdf.catalog().unwrap().has(b"Outlines"), "Word headings become bookmarks");
         outputs.extend(named(&mut naming, "convert_to_pdf", word.clone(), converted_word));
+        let odt_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [open_document.clone()], "outputLocation": location(&root, "convert odt to pdf") })));
+        assert_eq!(odt_outcomes[0].detail, "1 page.", "{odt_outcomes:?}");
+        let converted_odt = odt_outcomes[0].output_paths().to_vec();
+        let odt_pdf = lopdf::Document::load(&converted_odt[0]).unwrap();
+        let odt_text = odt_pdf.extract_text(&[1]).unwrap();
+        assert!(["Meeting minutes", "Agreed", "actions", "Owner", "Due"].iter().all(|expected| odt_text.contains(expected)), "converted ODT must stay searchable: {odt_text}");
+        assert!(odt_pdf.catalog().unwrap().has(b"Outlines"), "ODT headings become bookmarks");
+        outputs.extend(named(&mut naming, "convert_to_pdf", open_document.clone(), converted_odt));
         let table_outcomes = tauri::async_runtime::block_on(convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [table.clone()], "outputLocation": location(&root, "convert table to pdf"), "tables": { "delimiter": "semicolon", "headerRow": true, "encoding": "detect", "orientation": "landscape", "fit": "width" } })));
         assert_eq!(table_outcomes[0].detail, "1 page. 2 rows, semicolon. Read as UTF-8.", "{table_outcomes:?}");
         let converted_table = table_outcomes[0].output_paths().to_vec();
