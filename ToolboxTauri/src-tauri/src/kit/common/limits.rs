@@ -51,7 +51,7 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         | "compress_files"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "extract_from_pdf"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" | "inspect_pdf_privacy" | "convert_to_pdf" | "edit_pdf_properties" | "bates_number_pdfs" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "blur_faces"
+        "convert_images" | "export_image_edit_plan" | "blur_faces"
         | "remove_image_background" | "generate_icon_set" | "create_gif" => IMAGE,
         "extract_gif_frames" | "process_tiff_pages" | "images_to_pdf" => PAGED_IMAGE,
         "export_image_edit_stack" => EDIT_IMAGE,
@@ -609,7 +609,7 @@ mod tests {
             assert_eq!(limits.max_duration, FIVE_MINUTES, "{}", capability.command);
         }
         assert_eq!(recorded("compress_files"), Some(ToolLimits { max_bytes: GB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None }));
-        assert_eq!(recorded("compress_images"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: None, max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None }));
+        assert_eq!(recorded("compress_images"), None, "Compress Images is retired into compress_files");
         assert_eq!(recorded("export_image_edit_stack"), Some(ToolLimits { max_bytes: 250 * MB, max_pages: Some(1_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: Some(16_384) }));
         for capability in native_capabilities() {
             let max_side = recorded(&capability.command).and_then(|limits| limits.max_side);

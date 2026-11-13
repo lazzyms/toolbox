@@ -485,15 +485,6 @@ impl Drop for TempDir {
     }
 }
 
-pub fn with_measured_sizes(outcome: JobOutcome) -> JobOutcome {
-    let OutcomeState::Succeeded { output_paths } = &outcome.state else { return outcome };
-    let [output] = output_paths.as_slice() else { return outcome };
-    match (std::fs::metadata(&outcome.input_path), std::fs::metadata(output)) {
-        (Ok(original), Ok(output)) => outcome.with_sizes(original.len(), output.len()),
-        _ => outcome,
-    }
-}
-
 pub fn note_renamed(outcome: JobOutcome, chosen_path: Option<&Path>) -> JobOutcome {
     let Some(chosen) = chosen_path else { return outcome };
     let renamed = match &outcome.state {

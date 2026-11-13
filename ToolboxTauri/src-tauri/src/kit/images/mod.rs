@@ -64,9 +64,8 @@ fn already_in_format(path: &std::path::Path, format: OutputFormat) -> Option<Str
 pub struct ImageProcessor;
 
 pub struct Options {
-    pub target_format: Option<OutputFormat>,
+    pub target_format: OutputFormat,
     pub quality: u8, // 1-100
-    pub keep_smaller_original: bool,
     pub suffix: String,
     pub output_location: OutputLocation,
 }
@@ -156,9 +155,8 @@ fn encode_jpeg_with_profile(img: &image::DynamicImage, quality: u8, icc: Option<
     Ok(buf)
 }
 
-// Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
-// anyway, and buffering lets the no-inflation guard compare sizes before
-// touching the destination (JPEG/PNG write through the same path).
+// Encoders write to a buffer first because WebP and HEIC only expose buffer
+// encoders; JPEG and PNG go through the same path.
 pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u8) -> Result<Vec<u8>, String> {
     encode_with_profile(img, format, quality, None)
 }
@@ -226,36 +224,16 @@ impl ImageProcessor {
             return JobOutcome::skipped(input_path, SkipReason::new(SkipCode::AlreadyInTargetFormat, message));
         }
         Self::run(input_path, Options {
-            target_format: Some(format),
+            target_format: format,
             quality: DEFAULT_QUALITY,
-            keep_smaller_original: false,
             suffix: "-converted".to_string(),
             output_location,
         })
     }
 
     pub fn run(input_path: PathBuf, options: Options) -> JobOutcome {
-        let original_bytes = std::fs::metadata(&input_path).map(|m| m.len()).unwrap_or(0);
-
-        if options.quality == 0 && options.target_format.is_none() {
-            let extension = input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin");
-            let output_path = match OutputNaming::reserve_destination(&input_path, &options.output_location, &options.suffix, extension) {
-                Ok(output) => output,
-                Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve output: {error}"))),
-            };
-            return match std::fs::copy(&input_path, output_path.path()) {
-                Ok(_) => match output_path.publish() {
-                    Ok(path) => JobOutcome::succeeded(input_path, vec![path], "Kept original bytes (lossless mode)"),
-                    Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish output: {error}"))),
-                },
-                Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Lossless copy failed: {error}"))),
-            };
-        }
-
-        if options.target_format.is_some() {
-            if let Err(error) = reject_animated_input(&input_path) {
-                return JobOutcome::failure(input_path, ToolError::processing(error));
-            }
+        if let Err(error) = reject_animated_input(&input_path) {
+            return JobOutcome::failure(input_path, ToolError::processing(error));
         }
 
         let decoded = match decode(&input_path) {
@@ -265,9 +243,7 @@ impl ImageProcessor {
             }
         };
 
-        let format = options
-            .target_format
-            .unwrap_or_else(|| decoded.family.output_format());
+        let format = options.target_format;
         let img = decoded.into_first_page();
         let extension = format.extension();
 
@@ -295,28 +271,6 @@ impl ImageProcessor {
 
         if let Err(error) = validate_encoded_output(output_path.path(), img.width(), img.height()) {
             return JobOutcome::failure(input_path, ToolError::processing(error));
-        }
-
-        let new_bytes = std::fs::metadata(output_path.path()).map(|m| m.len()).unwrap_or(0);
-
-        if options.keep_smaller_original && new_bytes >= original_bytes {
-            drop(output_path);
-            let fallback_path = match OutputNaming::reserve_destination(
-                &input_path,
-                &options.output_location,
-                &options.suffix,
-                input_path.extension().and_then(|e| e.to_str()).unwrap_or("bin"),
-            ) {
-                Ok(output) => output,
-                Err(error) => return JobOutcome::failure(input_path, ToolError::processing(format!("Could not reserve fallback output: {error}"))),
-            };
-            if let Err(e) = std::fs::copy(&input_path, fallback_path.path()) {
-                return JobOutcome::failure(input_path, ToolError::processing(format!("Fallback copy failed: {}", e)));
-            }
-            return match fallback_path.publish() {
-                Ok(path) => JobOutcome::succeeded(input_path, vec![path], "Kept original (compressed version was larger)"),
-                Err(error) => JobOutcome::failure(input_path, ToolError::processing(format!("Could not publish fallback output: {error}"))),
-            };
         }
 
         match output_path.publish() {
@@ -378,9 +332,8 @@ mod tests {
         let out = ImageProcessor::run(
             src.clone(),
             Options {
-                target_format: Some(OutputFormat::Jpeg),
+                target_format: OutputFormat::Jpeg,
                 quality: 80,
-                keep_smaller_original: false,
                 suffix: "-converted".to_string(),
                 output_location: OutputLocation::AlongsideInput,
             },
@@ -395,49 +348,25 @@ mod tests {
     }
 
     #[test]
-    fn compress_keeps_a_file_unmodified_never_overwrites() {
-        let src = temp_path("compress_src.png");
+    fn conversion_never_overwrites_or_modifies_the_original() {
+        let src = temp_path("same_format_src.png");
         image::RgbaImage::from_pixel(64, 64, Rgba([10, 10, 10, 255]))
             .save(&src)
             .unwrap();
-        let before = std::fs::metadata(&src).unwrap().len();
+        let before = std::fs::read(&src).unwrap();
 
-        let out = ImageProcessor::run(
-            src.clone(),
-            Options {
-                target_format: None,
-                quality: 50,
-                keep_smaller_original: true,
-                suffix: "-compressed".to_string(),
-                output_location: OutputLocation::AlongsideInput,
-            },
-        );
+        let out = ImageProcessor::run(src.clone(), Options { target_format: OutputFormat::Png, quality: 80, suffix: "-converted".to_string(), output_location: OutputLocation::AlongsideInput });
 
         assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
         assert_eq!(out.output_paths().len(), 1);
         assert_ne!(&out.output_paths()[0], &src, "must never write over the input");
-
-        let after = std::fs::metadata(&src).unwrap().len();
-        assert_eq!(before, after, "originals must never be modified");
+        assert_eq!(std::fs::read(&src).unwrap(), before, "originals must never be modified");
 
         cleanup(&out.output_paths());
         let _ = std::fs::remove_file(&src);
     }
 
-    #[test]
-    fn lossless_compression_preserves_source_bytes() {
-        let src = temp_path("lossless_src.png");
-        let original = b"deliberate source bytes";
-        std::fs::write(&src, original).unwrap();
-        let out = ImageProcessor::run(src.clone(), Options { target_format: None, quality: 0, keep_smaller_original: true, suffix: "-compressed".to_string(), output_location: OutputLocation::AlongsideInput });
-        assert!(out.error().is_none(), "{}", out.error().cloned().unwrap_or_default());
-        assert_eq!(std::fs::read(&out.output_paths()[0]).unwrap(), original);
-        cleanup(&out.output_paths());
-        let _ = std::fs::remove_file(src);
-    }
-
-    // Photo-size image: x265 rejects tiny frames on some builds, and the
-    // no-inflation guard would quietly keep the original and skip the assert.
+    // Photo-size image: x265 rejects tiny frames on some builds.
     #[test]
     fn heic_roundtrip_png_to_heic_to_png() {
         let src = temp_path("heic_src.png");
@@ -448,9 +377,8 @@ mod tests {
         let heic = ImageProcessor::run(
             src.clone(),
             Options {
-                target_format: Some(OutputFormat::Heic),
+                target_format: OutputFormat::Heic,
                 quality: 80,
-                keep_smaller_original: false,
                 suffix: "-heic".to_string(),
                 output_location: OutputLocation::AlongsideInput,
             },
@@ -464,9 +392,8 @@ mod tests {
         let back = ImageProcessor::run(
             heic.output_paths()[0].clone(),
             Options {
-                target_format: Some(OutputFormat::Png),
+                target_format: OutputFormat::Png,
                 quality: 80,
-                keep_smaller_original: false,
                 suffix: "-back".to_string(),
                 output_location: OutputLocation::AlongsideInput,
             },
@@ -490,9 +417,8 @@ mod tests {
         let out = ImageProcessor::run(
             src.clone(),
             Options {
-                target_format: Some(OutputFormat::WebP),
+                target_format: OutputFormat::WebP,
                 quality: 60,
-                keep_smaller_original: false,
                 suffix: "-webp".to_string(),
                 output_location: OutputLocation::AlongsideInput,
             },
@@ -528,7 +454,7 @@ mod tests {
         let frames = (0..2).map(|value| image::Frame::from_parts(image::RgbaImage::from_pixel(2, 2, Rgba([value * 100, 0, 0, 255])), 0, 0, image::Delay::from_numer_denom_ms(100, 1))).collect::<Vec<_>>();
         encoder.encode_frames(frames).unwrap();
         let before = std::fs::read(&src).unwrap();
-        let result = ImageProcessor::run(src.clone(), Options { target_format: Some(OutputFormat::Png), quality: 80, keep_smaller_original: false, suffix: "-converted".to_string(), output_location: OutputLocation::AlongsideInput });
+        let result = ImageProcessor::run(src.clone(), Options { target_format: OutputFormat::Png, quality: 80, suffix: "-converted".to_string(), output_location: OutputLocation::AlongsideInput });
         assert!(result.error().is_some());
         assert_eq!(std::fs::read(&src).unwrap(), before);
         cleanup(&result.output_paths());

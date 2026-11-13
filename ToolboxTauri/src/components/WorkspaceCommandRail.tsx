@@ -43,7 +43,6 @@ const designIconByToolId: Record<AtomicToolId, string> = {
   "pdf-properties": "edit-properties",
   "pdf-bates": "page-numbers",
   "heic-convert": "convert-format",
-  compress: "compress-images",
   resize: "resize-images",
   rotate: "rotate-images",
   crop: "crop-images",
