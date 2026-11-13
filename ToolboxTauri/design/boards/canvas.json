@@ -227,11 +227,11 @@
 "expand": "fill"
 },
 "FormattedPdf.dc.html": {
-"x": 4080,
-"y": 7280,
+"x": 2720,
+"y": 14240,
 "w": 1280,
 "h": 800,
-"title": "Formatted PDF: blocks, preview, draft",
+"title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
 "expand": "fill"
 },
 "ImageEdit.dc.html": {
@@ -368,6 +368,22 @@
 "w": 1280,
 "h": 800,
 "title": "Results: every lock and unlock outcome",
+"expand": "fill"
+},
+"PdfToEpub.dc.html": {
+"x": 0,
+"y": 14240,
+"w": 1280,
+"h": 800,
+"title": "PDF to EPUB: files, options, per-run folder, converting",
+"expand": "fill"
+},
+"PdfToEpubResults.dc.html": {
+"x": 1360,
+"y": 14240,
+"w": 1280,
+"h": 800,
+"title": "PDF to EPUB results: converted, skipped, failed, details",
 "expand": "fill"
 },
 "MediaEmpty.dc.html": {
@@ -559,7 +575,6 @@
 "ConvertBatch.dc.html",
 "OCR.dc.html",
 "ImagesToPdf.dc.html",
-"FormattedPdf.dc.html",
 "ImageEdit.dc.html",
 "ImageConvert.dc.html",
 "Compress.dc.html",
@@ -577,6 +592,9 @@
 "SecOptions.dc.html",
 "SecRunning.dc.html",
 "SecResults.dc.html",
+"PdfToEpub.dc.html",
+"PdfToEpubResults.dc.html",
+"FormattedPdf.dc.html",
 "MediaEmpty.dc.html",
 "MediaIcons.dc.html",
 "MediaGif.dc.html",
@@ -812,6 +830,93 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"row13": {
+"x": 0,
+"y": 13980,
+"text": "PDF Conversion: PDF to EPUB and Formatted PDF",
+"kind": "title1",
+"maxW": 8000
+},
+"fq1": {
+"x": 4080,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q1. Block formatting (Formatted PDF)\n\nOne toolbar above the document, nothing more: a block-type menu (Paragraph, Heading 1 to 3), Bold, Italic, bulleted and numbered list, then Table, Image… and Page break. There are no fonts, colours or alignment per block; the look comes from Page and Font in the right panel, so this stays a document builder, not a word processor.\n\nEvery toolbar button has a shortcut and shows it in its tooltip only. The document is a list of block cards with a type label in the gutter. The selected block gets a ring and Move up, Move down and Delete. Pasted text keeps paragraphs, headings, lists and bold or italic and drops the rest."
+},
+"fq2": {
+"x": 4480,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q2. Live preview (Formatted PDF)\n\nThe preview is the top of the right panel: one real-size page scaled to fit, with Page 1 of 2 and previous/next buttons. It redraws about half a second after typing stops. While it redraws, the old page dims and an Updating preview chip shows; the editor never waits for it.\n\nWhen a settings section is open, the page shrinks so Page, Font, Header and footer and Title and author fit without scrolling. Text the app can't draw pauses the preview instead of showing wrong glyphs."
+},
+"fq3": {
+"x": 4880,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q3. Draft restore, discard and autosave (Formatted PDF)\n\nThere is one draft, kept in app data on this device. The toolbar status reads Draft saved on this device, or Saving draft… while writing. Opening the tool with a draft restores it and shows a quiet note with when it was saved, Discard draft… and Dismiss.\n\nDiscard draft… sits in the panel footer next to Save PDF… and asks in an alert dialog, with Keep editing focused and Esc to cancel. Discard says the draft can't be brought back and that images on disk are not touched. A successful save clears the draft; a failed save keeps it."
+},
+"fq4": {
+"x": 5280,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q4. Fonts used and platform note (Formatted PDF)\n\nThe font picker has two groups. Bundled with Toolbox lists the metric-compatible fonts, the same on every computer. On this computer lists system fonts, each tagged This computer only, with a line saying they can look slightly different on the other platform.\n\nAfter saving, a Fonts used table shows what you chose, what went into the PDF and where it came from. A system font adds one platform note. A missing font, such as Calibri on a Mac, names the bundled substitute (Carlito) and says line breaks match. There is no platform note then, because bundled fonts are the same everywhere."
+},
+"fq5": {
+"x": 5680,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "blue",
+"text": "Q5. Script-pack prompt (Formatted PDF)\n\nText outside Latin, Cyrillic and Greek is marked on its own block with a warning line. The preview pauses, and a note above the page names the script, says the pack is needed, and offers one Install script pack button with the 38 MB size. This is the same wording as Add text and the row patterns.\n\nSave PDF… is disabled and the estimate says why: install the pack or remove that text. Nothing downloads until Install is chosen, and installing never saves on its own."
+},
+"fq6": {
+"x": 6080,
+"y": 14240,
+"w": 360,
+"maxH": 760,
+"fill": "green",
+"text": "Q6. EPUB options, reflow notes and Skipped rows\n\nOptions in order: Pages (All pages or a Range, using the shared syntax and clamp hints), Clean up (remove running headers, footers and page numbers, on by default), Cover (First page or No cover), Book details and Save to. Title and Author fields appear only when one PDF is in the list; for a batch, each book takes its details from its PDF.\n\nResults keep Converted, Skipped and Failed rows in one list. Skipped is neutral and gives the reason (no text, range outside the PDF). Details open per row and list facts and notes: pages converted, images kept, where the table of contents came from, and content that couldn't reflow (two columns, tables, formulas, unreadable images) with page numbers."
+},
+"fq7": {
+"x": 6480,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Q7. Scanned PDFs and OCR\n\nA PDF with no text layer is Skipped, not Failed: There's no text to put in a book. It ends with one Open in OCR button, the shared pattern for a reason another tool fixes. Opening OCR keeps the files and selects OCR in the rail.\n\nA PDF where only some pages have no text still converts. Its details list those pages and offer the same Open in OCR. Nothing runs OCR automatically."
+},
+"fq8": {
+"x": 6880,
+"y": 14240,
+"w": 360,
+"maxH": 640,
+"fill": "green",
+"text": "Q8. Destination and per-run change\n\nPDF to EPUB uses the shared Save to row with an example name (the-long-road-home.epub, no suffix). Change… sets a folder for this run only, shown with a This run badge and Reset to default; it goes back to the default after the run. A clash gets -1, -2 and the row says Renamed to avoid replacing.\n\nFormatted PDF makes one file, so Save PDF… ends in an ellipsis and opens the native save dialog. It starts in the last folder used by this tool, or Documents the first time, and suggests the title as the name. A name clash gets a number; nothing is replaced."
+},
+"fq9": {
+"x": 7280,
+"y": 14240,
+"w": 360,
+"maxH": 700,
+"fill": "purple",
+"text": "Q9. Multi-select (PDF to EPUB)\n\nThe file list is a multi-select listbox: click, Shift-click for a range, Cmd-click (Ctrl-click on Windows) to add, Cmd+A (Ctrl+A) for all, Up and Down to move, Delete to remove. A quiet line above the list says this only while two or more rows are selected, next to Remove 2 selected with its Delete hint.\n\nOptions lock while converting; Esc cancels the batch after the current PDF.\n\nOpen questions: should Cmd+S also save in Formatted PDF? Are Ctrl+Alt heading keys safe with AltGr layouts? Are the bundled font names final? Should a save clear the draft, or keep it until the editor is reset?"
+},
+"fkeys": {
+"x": 7680,
+"y": 14240,
+"w": 360,
+"maxH": 820,
+"fill": "green",
+"text": "Shortcuts, checked against the shell list (#429)\n\nFormatted PDF, Mac (Windows):\nBold Cmd+B (Ctrl+B)\nItalic Cmd+I (Ctrl+I)\nHeading 1 to 3 Opt+Cmd+1 to 3 (Ctrl+Alt+1 to 3)\nParagraph Opt+Cmd+0 (Ctrl+Alt+0)\nBulleted list Shift+Cmd+8 (Ctrl+Shift+8)\nNumbered list Shift+Cmd+7 (Ctrl+Shift+7)\nPage break Shift+Cmd+Return (Ctrl+Shift+Enter)\nMove block Opt+Shift+Up/Down (Alt+Shift+Up/Down)\nInsert image Cmd+O (Ctrl+O), the shell's open key\nEsc selects the block; then Delete removes it and Up/Down move between blocks\nUndo and Redo as in PDF Editor\nSave PDF… Cmd+Return (Ctrl+Enter), the shell's primary action\n\nPDF to EPUB uses the batch keys: Cmd+Return converts, Esc cancels, Cmd+A, Delete, Up/Down.\n\nNo clash with Cmd+K, Cmd+comma, Cmd+/, Cmd+W, F6, Cmd+E, Cmd+D, Cmd+plus/minus/0 or Shift+Cmd+V."
 },
 "row9m": {
 "x": 11800,

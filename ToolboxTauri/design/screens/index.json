@@ -1023,17 +1023,94 @@
   },
   {
     "board": "FormattedPdf.dc.html",
-    "title": "Formatted PDF: blocks, preview, draft",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
     "state": "default",
     "query": "",
     "screen": "FormattedPdf--default.jpg"
   },
   {
     "board": "FormattedPdf.dc.html",
-    "title": "Formatted PDF: blocks, preview, draft",
-    "state": "draft-restored",
-    "query": "draft=Restored",
-    "screen": "FormattedPdf--draft-restored.jpg"
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "FormattedPdf--state-empty.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-draft-restored",
+    "query": "state=Draft%20restored",
+    "screen": "FormattedPdf--state-draft-restored.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-preview-updating",
+    "query": "state=Preview%20updating",
+    "screen": "FormattedPdf--state-preview-updating.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-page-setup",
+    "query": "state=Page%20setup",
+    "screen": "FormattedPdf--state-page-setup.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-font-picker",
+    "query": "state=Font%20picker",
+    "screen": "FormattedPdf--state-font-picker.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-header-and-details",
+    "query": "state=Header%20and%20details",
+    "screen": "FormattedPdf--state-header-and-details.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-discard-draft",
+    "query": "state=Discard%20draft",
+    "screen": "FormattedPdf--state-discard-draft.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-script-pack-needed",
+    "query": "state=Script%20pack%20needed",
+    "screen": "FormattedPdf--state-script-pack-needed.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-save-dialog",
+    "query": "state=Save%20dialog",
+    "screen": "FormattedPdf--state-save-dialog.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-saved",
+    "query": "state=Saved",
+    "screen": "FormattedPdf--state-saved.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-saved-with-substitute-font",
+    "query": "state=Saved%20with%20substitute%20font",
+    "screen": "FormattedPdf--state-saved-with-substitute-font.jpg"
+  },
+  {
+    "board": "FormattedPdf.dc.html",
+    "title": "Formatted PDF: editor, preview, page setup, draft, save, errors",
+    "state": "state-missing-image",
+    "query": "state=Missing%20image",
+    "screen": "FormattedPdf--state-missing-image.jpg"
   },
   {
     "board": "ImageEdit.dc.html",
@@ -1713,6 +1790,90 @@
     "state": "retryOpen-true",
     "query": "retryOpen=true",
     "screen": "SecResults--retryOpen-true.jpg"
+  },
+  {
+    "board": "PdfToEpub.dc.html",
+    "title": "PDF to EPUB: files, options, per-run folder, converting",
+    "state": "default",
+    "query": "",
+    "screen": "PdfToEpub--default.jpg"
+  },
+  {
+    "board": "PdfToEpub.dc.html",
+    "title": "PDF to EPUB: files, options, per-run folder, converting",
+    "state": "state-empty",
+    "query": "state=Empty",
+    "screen": "PdfToEpub--state-empty.jpg"
+  },
+  {
+    "board": "PdfToEpub.dc.html",
+    "title": "PDF to EPUB: files, options, per-run folder, converting",
+    "state": "state-dragging",
+    "query": "state=Dragging",
+    "screen": "PdfToEpub--state-dragging.jpg"
+  },
+  {
+    "board": "PdfToEpub.dc.html",
+    "title": "PDF to EPUB: files, options, per-run folder, converting",
+    "state": "state-single-file",
+    "query": "state=Single%20file",
+    "screen": "PdfToEpub--state-single-file.jpg"
+  },
+  {
+    "board": "PdfToEpub.dc.html",
+    "title": "PDF to EPUB: files, options, per-run folder, converting",
+    "state": "state-page-range",
+    "query": "state=Page%20range",
+    "screen": "PdfToEpub--state-page-range.jpg"
+  },
+  {
+    "board": "PdfToEpub.dc.html",
+    "title": "PDF to EPUB: files, options, per-run folder, converting",
+    "state": "state-changed-save-location",
+    "query": "state=Changed%20save%20location",
+    "screen": "PdfToEpub--state-changed-save-location.jpg"
+  },
+  {
+    "board": "PdfToEpub.dc.html",
+    "title": "PDF to EPUB: files, options, per-run folder, converting",
+    "state": "state-converting",
+    "query": "state=Converting",
+    "screen": "PdfToEpub--state-converting.jpg"
+  },
+  {
+    "board": "PdfToEpubResults.dc.html",
+    "title": "PDF to EPUB results: converted, skipped, failed, details",
+    "state": "default",
+    "query": "",
+    "screen": "PdfToEpubResults--default.jpg"
+  },
+  {
+    "board": "PdfToEpubResults.dc.html",
+    "title": "PDF to EPUB results: converted, skipped, failed, details",
+    "state": "state-book-details-open",
+    "query": "state=Book%20details%20open",
+    "screen": "PdfToEpubResults--state-book-details-open.jpg"
+  },
+  {
+    "board": "PdfToEpubResults.dc.html",
+    "title": "PDF to EPUB results: converted, skipped, failed, details",
+    "state": "state-needs-attention",
+    "query": "state=Needs%20attention",
+    "screen": "PdfToEpubResults--state-needs-attention.jpg"
+  },
+  {
+    "board": "PdfToEpubResults.dc.html",
+    "title": "PDF to EPUB results: converted, skipped, failed, details",
+    "state": "state-warnings-and-notes",
+    "query": "state=Warnings%20and%20notes",
+    "screen": "PdfToEpubResults--state-warnings-and-notes.jpg"
+  },
+  {
+    "board": "PdfToEpubResults.dc.html",
+    "title": "PDF to EPUB results: converted, skipped, failed, details",
+    "state": "state-single-book",
+    "query": "state=Single%20book",
+    "screen": "PdfToEpubResults--state-single-book.jpg"
   },
   {
     "board": "MediaEmpty.dc.html",
