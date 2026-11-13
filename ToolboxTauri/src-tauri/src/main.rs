@@ -3678,9 +3678,70 @@ mod command_tests {
         }));
         assert_warned_only_on_signed(&unlocked);
         assert!(opens_without_password(&unlocked[0].output_paths()[0]));
+        for outcome in &unlocked[..2] {
+            assert!(!crate::kit::pdf::tests::holds_a_signature(&lopdf::Document::load(&outcome.output_paths()[0]).unwrap()), "{} still holds a signature", outcome.input_path.display());
+        }
         for (input, original) in inputs.iter().zip(originals) {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removing_restrictions_from_a_signed_pdf_strips_the_signature_and_warns_on_that_file_only() {
+        use crate::kit::contracts::{OutcomeState, OutcomeWarning, WarningKind};
+        let qpdf = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
+        let root = sandbox("unrestrict-signed");
+        let inputs_dir = root.join("inputs");
+        std::fs::create_dir_all(&inputs_dir).unwrap();
+        let restrict = |source: &std::path::Path, name: &str| {
+            let restricted = inputs_dir.join(name);
+            let status = std::process::Command::new(&qpdf)
+                .arg(source).arg(&restricted)
+                .args(["--encrypt", "--user-password=", "--owner-password=owner-secret", "--bits=256", "--print=none", "--extract=n", "--"])
+                .status().unwrap();
+            assert!(status.success(), "qpdf made the owner-only fixture {name}");
+            restricted
+        };
+        let signed_plain = root.join("vendor-nda-plain.pdf");
+        make_pdf(&signed_plain, 2);
+        let mut document = lopdf::Document::load(&signed_plain).unwrap();
+        crate::kit::pdf::tests::sign(&mut document);
+        document.save(&signed_plain).unwrap();
+        let unsigned_plain = root.join("lease-plain.pdf");
+        make_pdf(&unsigned_plain, 1);
+        let signed = restrict(&signed_plain, "vendor-nda.pdf");
+        let unsigned = restrict(&unsigned_plain, "lease.pdf");
+        assert!(crate::kit::pdf::tests::holds_a_signature(&lopdf::Document::load(&signed).unwrap()), "the fixture is signed");
+        let inputs = vec![signed.clone(), unsigned.clone()];
+        let originals = inputs.iter().map(|input| std::fs::read(input).unwrap()).collect::<Vec<_>>();
+
+        let output = location(&root, "unlocked");
+        let OutputLocation::CustomFolder(output_dir) = &output else { unreachable!() };
+        let outcomes = tauri::async_runtime::block_on(remove_password(RunEvents::silent(), PasswordRequest {
+            paths: inputs.clone(),
+            password: String::new(),
+            password_overrides: Default::default(),
+            output_location: output.clone(),
+        }));
+
+        let removed = vec![OutcomeWarning { kind: WarningKind::SignatureRemoved, message: crate::kit::pdf::SIGNATURE_REMOVED.into() }];
+        assert_eq!(outcomes.iter().map(|outcome| outcome.warnings.clone()).collect::<Vec<_>>(), [removed, vec![]]);
+        for (outcome, name, pages) in [(&outcomes[0], "vendor-nda-unlocked.pdf", 2), (&outcomes[1], "lease-unlocked.pdf", 1)] {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{}: {:?}", outcome.input_path.display(), outcome.state);
+            assert_eq!(outcome.detail, "Unlocked. Restrictions removed.");
+            let path = &outcome.output_paths()[0];
+            assert_eq!(path, &output_dir.join(name));
+            assert!(opens_without_password(path), "{} still has encryption", path.display());
+            let unlocked = lopdf::Document::load(path).unwrap();
+            assert!(unlocked.trailer.get(b"Encrypt").is_err(), "{} keeps an /Encrypt dictionary", path.display());
+            assert!(!crate::kit::pdf::tests::holds_a_signature(&unlocked), "{} still holds a signature", path.display());
+            assert_eq!(unlocked.get_pages().len(), pages);
+        }
+        for (input, original) in inputs.iter().zip(originals) {
+            assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
+        }
+        assert!(crate::kit::pdf::tests::holds_a_signature(&lopdf::Document::load(&signed).unwrap()), "the original keeps its signature");
         let _ = std::fs::remove_dir_all(root);
     }
 

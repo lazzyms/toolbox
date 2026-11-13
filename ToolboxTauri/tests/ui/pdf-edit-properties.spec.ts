@@ -5,9 +5,12 @@ const minutesPath = "/Users/test/Documents/minutes.pdf";
 const scanPath = "/Users/test/Scans/scan.pdf";
 const lockedPath = "/Users/test/Documents/locked.pdf";
 const brokenPath = "/Users/test/Documents/broken.pdf";
+const signedPath = "/Users/test/Contracts/vendor-nda.pdf";
 const lockedPassword = "locked-secret-7";
 const wrongMessage = "The password didn't open this file. Check it, or try the password this file was sent with.";
 const lockedNote = "Needs an open password. The one for all files is tried.";
+const signedNote = "Signed. Saving removes the signature.";
+const removed = "Saved. The digital signature was removed, because changing the file breaks it.";
 
 const none = { keywords: null, creator: null, producer: null };
 const current: Record<string, unknown> = {
@@ -15,6 +18,7 @@ const current: Record<string, unknown> = {
   [minutesPath]: { ...none, title: "Board minutes", author: "R. Okafor", subject: null, creationDate: "2026-09-14T16:02:00+01:00", modificationDate: "2026-09-15T08:40:00+01:00" },
   [scanPath]: { ...none, title: null, author: null, subject: null, creationDate: null, modificationDate: null },
   [lockedPath]: { ...none, title: "Sealed contract", author: "Legal", subject: null, creationDate: null, modificationDate: null },
+  [signedPath]: { ...none, title: "NDA draft v7", author: "Legal Ops", subject: null, creationDate: null, modificationDate: null, signed: true },
 };
 const keptDates = { creationDate: { action: "keep" }, modificationDate: { action: "keep" } };
 
@@ -46,7 +50,7 @@ test.beforeEach(async ({ page }) => {
           return args.request.paths.map((path: string) => path.endsWith("scan.pdf")
             ? outcome(path, { state: "skipped", reason: { code: "noEffectiveChange", message: "No effective change: title and author are already empty. No copy was made.", pointer: null } })
             : current[path] && opens(path, args.request)
-            ? outcome(path, { state: "succeeded", outputPaths: [path.replace(/\.pdf$/, "-edited.pdf")], detail: path === lockedPath ? "Title cleared. It keeps its open password." : "Title set, author cleared." })
+            ? outcome(path, { state: "succeeded", outputPaths: [path.replace(/\.pdf$/, "-edited.pdf")], detail: path === lockedPath ? "Title cleared. It keeps its open password." : "Title set, author cleared.", warnings: (current[path] as { signed?: boolean }).signed ? [{ code: "signatureRemoved", message: "native wording" }] : [] })
             : failed(path));
         }
         return null;
@@ -197,6 +201,31 @@ test("a locked or broken file fails on its own row while the others save", async
   await expect(results(page).filter({ hasText: "locked.pdf" })).toContainText(wrongMessage);
   await expect(results(page).filter({ hasText: "broken.pdf" })).toHaveAttribute("data-state", "failed");
   await expect(results(page).filter({ hasText: "deck.pdf" })).toHaveAttribute("data-state", "succeeded");
+});
+
+test("a signed PDF is noted before the run and only its row warns that the signature was removed", async ({ page }) => {
+  await addFiles(page, [deckPath, signedPath]);
+  await expect(row(page, "vendor-nda.pdf").getByLabel("Title now: NDA draft v7")).toBeVisible();
+  const note = row(page, "vendor-nda.pdf").locator(".file-selection-detail");
+  await expect(note).toHaveText(signedNote);
+  await expect(note).toHaveAttribute("data-tone", "warning");
+  await expect(row(page, "deck.pdf").locator(".file-selection-detail")).not.toHaveText(signedNote);
+  await expect(row(page, "deck.pdf").locator(".file-selection-detail")).not.toHaveAttribute("data-tone", "warning");
+
+  await choose(page, "Title", "Set");
+  await field(page, "Title").getByRole("textbox", { name: "New Title" }).fill("Final");
+  await page.getByRole("button", { name: /^Save 2 edited copies/ }).click();
+
+  await expect(results(page)).toHaveCount(2);
+  const signed = results(page).filter({ hasText: "vendor-nda.pdf" });
+  await expect(signed).toHaveAttribute("data-state", "succeeded");
+  await expect(signed).toHaveAttribute("data-tone", "warn");
+  await expect(signed).toContainText(removed);
+  await expect(signed).not.toContainText("native wording");
+  const unsigned = results(page).filter({ hasText: "deck.pdf" });
+  await expect(unsigned).toHaveAttribute("data-tone", "ok");
+  await expect(unsigned).not.toContainText(removed);
+  await expect(page.locator(".result-summary")).toContainText("1 saved file has a warning.");
 });
 
 test("the open password for all files reads a locked file's values and travels with each run, and an own password wins", async ({ page }) => {
