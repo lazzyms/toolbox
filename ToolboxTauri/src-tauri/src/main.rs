@@ -5054,7 +5054,7 @@ mod command_tests {
             let name = format!("{level:?}");
             let outcomes = compress(&[pdf.clone()], level, location(&root, &name));
             let [outcome] = outcomes.as_slice() else { panic!("{name}: one outcome per input") };
-            assert!(outcome.error().is_none(), "{name}: {}", outcome.error().cloned().unwrap_or_default());
+            assert!(outcome.error().is_none(), "{name}: {outcome:?}");
             let [output] = outcome.output_paths() else { panic!("{name}: one output") };
             assert_eq!(output, &root.join(&name).join("report-compressed.pdf"));
             assert_eq!(page_geometry(output), geometry, "{name} changed the page geometry");
@@ -5136,6 +5136,224 @@ mod command_tests {
         assert_eq!(first[0].output_paths(), [folder.join("report-compressed-1.pdf")]);
         assert_eq!(second[0].output_paths(), [folder.join("report-compressed-2.pdf")]);
         assert_eq!(std::fs::read(folder.join("report-compressed.pdf")).unwrap(), b"an earlier copy");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Deterministic noise so fixture photographs have thousands of colours and deflate poorly.
+    fn noise(seed: &mut u32) -> i32 {
+        *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        ((*seed >> 24) as i32 % 61) - 30
+    }
+
+    fn photo_rgb(width: u32, height: u32, seed: u32) -> image::RgbImage {
+        let mut seed = seed;
+        image::RgbImage::from_fn(width, height, |x, y| {
+            let mut channel = |base: u32| (base as i32 + noise(&mut seed)).clamp(0, 255) as u8;
+            image::Rgb([channel(x * 255 / width), channel(y * 255 / height), channel((x + y) * 127 / (width + height) + 64)])
+        })
+    }
+
+    fn deflate(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn jpeg(image: &image::DynamicImage, quality: u8) -> Vec<u8> {
+        crate::kit::images::encode_jpeg(image, quality).unwrap()
+    }
+
+    /// One page with three photographs (a deflated RGB photo with a soft mask, a JPEG photo and a
+    /// deflated greyscale photo), plus a stencil mask, a CMYK image, flat line art and a JPEG with
+    /// DecodeParms, each tagged with /ToolboxFixture so the test can find it in the output.
+    fn make_photo_pdf(path: &PathBuf) {
+        use lopdf::{dictionary, Document, Object, Stream};
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let image = |document: &mut Document, name: &str, dict: lopdf::Dictionary, content: Vec<u8>| {
+            let mut dict = dict;
+            dict.set("Type", "XObject");
+            dict.set("Subtype", "Image");
+            dict.set("ToolboxFixture", Object::string_literal(name));
+            document.add_object(Stream::new(dict, content).with_compression(false))
+        };
+        let mask_pixels = image::GrayImage::from_fn(90, 60, |x, y| image::Luma([((x * 2 + y) % 256) as u8]));
+        let soft_mask = image(&mut document, "soft-mask", dictionary! { "Width" => 90, "Height" => 60, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8, "Filter" => "FlateDecode" }, deflate(mask_pixels.as_raw()));
+        let photo = photo_rgb(900, 675, 7);
+        let photo = image(&mut document, "photo", dictionary! { "Width" => 900, "Height" => 675, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "FlateDecode", "SMask" => soft_mask }, deflate(photo.as_raw()));
+        let camera = image::DynamicImage::ImageRgb8(photo_rgb(800, 600, 11));
+        let camera = image(&mut document, "camera", dictionary! { "Width" => 800, "Height" => 600, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" }, jpeg(&camera, 95));
+        let mut seed = 3;
+        let grey = image::GrayImage::from_fn(600, 600, |x, y| image::Luma([(((x + y) * 255 / 1200) as i32 + noise(&mut seed)).clamp(0, 255) as u8]));
+        let grey = image(&mut document, "grey", dictionary! { "Width" => 600, "Height" => 600, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8, "Filter" => "FlateDecode" }, deflate(grey.as_raw()));
+        let stencil = image(&mut document, "stencil", dictionary! { "Width" => 64, "Height" => 64, "ImageMask" => true, "BitsPerComponent" => 1, "Filter" => "FlateDecode" }, deflate(&(0..512).map(|index| if index % 3 == 0 { 0xF0 } else { 0x0F }).collect::<Vec<u8>>()));
+        let mut seed = 5;
+        let cmyk = (0..200 * 200 * 4).map(|index| ((index % 251) as i32 + noise(&mut seed)).clamp(0, 255) as u8).collect::<Vec<_>>();
+        let cmyk = image(&mut document, "cmyk", dictionary! { "Width" => 200, "Height" => 200, "ColorSpace" => "DeviceCMYK", "BitsPerComponent" => 8, "Filter" => "FlateDecode" }, deflate(&cmyk));
+        let flat = image::RgbImage::from_fn(400, 400, |x, y| [image::Rgb([255, 255, 255]), image::Rgb([20, 40, 200]), image::Rgb([200, 30, 30]), image::Rgb([0, 0, 0])][((x / 50 + y / 50) % 4) as usize]);
+        let line_art = image(&mut document, "line-art", dictionary! { "Width" => 400, "Height" => 400, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "FlateDecode" }, deflate(flat.as_raw()));
+        let parms = image::DynamicImage::ImageRgb8(photo_rgb(300, 200, 13));
+        let parms = image(&mut document, "decode-parms", dictionary! { "Width" => 300, "Height" => 200, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode", "DecodeParms" => dictionary! { "ColorTransform" => 1 } }, jpeg(&parms, 95));
+        let font_id = document.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let text = (0..60).map(|line| format!("BT /F1 9 Tf 36 {} Td (Toolbox photo page line {line} stays as text) Tj ET\n", 780 - line * 12)).collect::<String>();
+        let drawing = "q 300 0 0 225 50 450 cm /Photo Do Q\nq 0 400 -300 0 500 100 cm /Camera Do Q\nq 144 0 0 144 400 600 cm /Grey Do Q\nq 64 0 0 64 20 20 cm /Stencil Do Q\nq 100 0 0 100 100 20 cm /Cmyk Do Q\nq 200 0 0 200 220 20 cm /LineArt Do Q\nq 150 0 0 100 420 20 cm /Parms Do Q\n";
+        let content_id = document.add_object(Stream::new(dictionary! {}, format!("{text}{drawing}").into_bytes()));
+        let page = document.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => content_id, "Rotate" => 90,
+            "CropBox" => vec![Object::Real(10.0), Object::Real(12.0), Object::Real(600.0), Object::Real(780.0)],
+            "Resources" => dictionary! {
+                "Font" => dictionary! { "F1" => font_id },
+                "XObject" => dictionary! { "Photo" => photo, "Camera" => camera, "Grey" => grey, "Stencil" => stencil, "Cmyk" => cmyk, "LineArt" => line_art, "Parms" => parms },
+            },
+        });
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1, "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()] }.into());
+        let catalog_id = document.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        document.trailer.set("Root", catalog_id);
+        document.save(path).unwrap();
+    }
+
+    /// Each tagged fixture image in `path`, keyed by its tag.
+    fn fixture_images(path: &PathBuf) -> std::collections::BTreeMap<String, lopdf::Stream> {
+        let document = lopdf::Document::load(path).unwrap();
+        document.objects.values().filter_map(|object| object.as_stream().ok()).filter_map(|stream| {
+            let tag = stream.dict.get(b"ToolboxFixture").ok()?.as_str().ok()?;
+            Some((String::from_utf8(tag.to_vec()).unwrap(), stream.clone()))
+        }).collect()
+    }
+
+    /// The decoded samples of an image stream: JPEG data as stored, everything else inflated.
+    fn image_samples(stream: &lopdf::Stream) -> Vec<u8> {
+        if stream.filters().is_ok_and(|filters| filters == [b"DCTDecode".as_slice()]) { stream.content.clone() } else { stream.get_plain_content().unwrap() }
+    }
+
+    fn integer(stream: &lopdf::Stream, key: &[u8]) -> i64 { stream.dict.get(key).unwrap().as_i64().unwrap() }
+
+    /// Each quantisation table in a JPEG, keyed by its table id.
+    fn quantisation_tables(jpeg: &[u8]) -> std::collections::BTreeMap<u8, Vec<u8>> {
+        let mut tables = std::collections::BTreeMap::new();
+        let mut at = 2;
+        while at + 4 <= jpeg.len() && jpeg[at] == 0xFF {
+            let marker = jpeg[at + 1];
+            let length = u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]) as usize;
+            if marker == 0xDB {
+                let mut table = at + 4;
+                while table < at + 2 + length {
+                    tables.insert(jpeg[table] & 0x0F, jpeg[table + 1..table + 65].to_vec());
+                    table += 65;
+                }
+            }
+            if marker == 0xDA { break; }
+            at += 2 + length;
+        }
+        tables
+    }
+
+    /// Asserts `stream` is a JPEG of `size` pixels written at `quality`, with `channels` components.
+    fn assert_recompressed(name: &str, stream: &lopdf::Stream, size: (u32, u32), quality: u8, channels: u8) {
+        assert_eq!(stream.dict.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode", "{name} is not a JPEG");
+        assert!(!stream.dict.has(b"DecodeParms"), "{name} kept DecodeParms");
+        assert_eq!((integer(stream, b"Width"), integer(stream, b"Height")), (size.0 as i64, size.1 as i64), "{name} size");
+        let decoded = image::load_from_memory_with_format(&stream.content, image::ImageFormat::Jpeg).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), size, "{name} JPEG pixel size");
+        assert_eq!(decoded.color().channel_count(), channels, "{name} channels");
+        let reference = quantisation_tables(&jpeg(&image::DynamicImage::ImageRgb8(image::RgbImage::new(8, 8)), quality));
+        let tables = quantisation_tables(&stream.content);
+        assert!(!tables.is_empty(), "{name} has no quantisation tables");
+        for (id, table) in tables {
+            assert_eq!(Some(&table), reference.get(&id), "{name} table {id} is not quality {quality}");
+        }
+    }
+
+    const UNTOUCHED: [&str; 5] = ["soft-mask", "stencil", "cmyk", "line-art", "decode-parms"];
+
+    fn assert_untouched(level: &str, source: &std::collections::BTreeMap<String, lopdf::Stream>, output: &std::collections::BTreeMap<String, lopdf::Stream>, names: &[&str]) {
+        for name in names {
+            let (before, after) = (&source[*name], &output[*name]);
+            assert_eq!(image_samples(after), image_samples(before), "{level}: {name} samples changed");
+            for key in [b"Width".as_slice(), b"Height", b"ColorSpace", b"BitsPerComponent", b"ImageMask", b"Filter", b"DecodeParms"] {
+                assert_eq!(after.dict.get(key).ok(), before.dict.get(key).ok(), "{level}: {name} {} changed", String::from_utf8_lossy(key));
+            }
+        }
+    }
+
+    #[test]
+    fn compress_files_records_the_pdf_image_quality_and_resolution_for_each_level() {
+        use crate::kit::pdf::recompress::ImageSettings;
+        assert_eq!(CompressLevel::Low.pdf_images(), None);
+        assert_eq!(CompressLevel::Medium.pdf_images(), Some(ImageSettings { quality: 75, max_ppi: 150 }));
+        assert_eq!(CompressLevel::High.pdf_images(), Some(ImageSettings { quality: 50, max_ppi: 96 }));
+    }
+
+    #[test]
+    fn compress_files_recompresses_and_downsamples_pdf_photos_at_medium_and_high_only() {
+        let root = sandbox("compress-files-photos");
+        let pdf = root.join("survey.pdf");
+        make_photo_pdf(&pdf);
+        let original = std::fs::read(&pdf).unwrap();
+        let geometry = page_geometry(&pdf);
+        let source = fixture_images(&pdf);
+        assert_eq!(source.len(), 8);
+
+        let mut sizes = Vec::new();
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            let name = format!("{level:?}");
+            let outcomes = compress(&[pdf.clone()], level, location(&root, &name));
+            let [outcome] = outcomes.as_slice() else { panic!("{name}: one outcome per input") };
+            assert!(outcome.error().is_none(), "{name}: {outcome:?}");
+            let [output] = outcome.output_paths() else { panic!("{name}: one output") };
+            assert_eq!(page_geometry(output), geometry, "{name} changed the page count, boxes or rotation");
+            assert_eq!(outcome.output_bytes, Some(std::fs::metadata(output).unwrap().len()));
+            let images = fixture_images(output);
+            assert_eq!(images.keys().collect::<Vec<_>>(), source.keys().collect::<Vec<_>>(), "{name} lost an image");
+            assert_untouched(&name, &source, &images, &UNTOUCHED);
+            let text = lopdf::Document::load(output).unwrap().extract_text(&[1]).unwrap();
+            assert!(text.contains("Toolbox photo page line 59 stays as text"), "{name} lost the page text");
+            match level {
+                CompressLevel::Low => {
+                    assert_eq!(outcome.detail, "PDF repacked without loss");
+                    assert_untouched(&name, &source, &images, &["photo", "camera", "grey"]);
+                }
+                CompressLevel::Medium => {
+                    assert_eq!(outcome.detail, "3 images recompressed and PDF repacked");
+                    // 900 × 675 drawn 300 × 225 pt (216 ppi) drops to 150 ppi; the camera photo is drawn at 144 ppi and keeps its pixels.
+                    assert_recompressed(&name, &images["photo"], (625, 469), 75, 3);
+                    assert_recompressed(&name, &images["camera"], (800, 600), 75, 3);
+                    assert_recompressed(&name, &images["grey"], (300, 300), 75, 1);
+                }
+                CompressLevel::High => {
+                    assert_eq!(outcome.detail, "3 images recompressed and PDF repacked");
+                    assert_recompressed(&name, &images["photo"], (400, 300), 50, 3);
+                    // The camera photo is rotated on the page: its 800 px side is drawn 400 pt long.
+                    assert_recompressed(&name, &images["camera"], (534, 400), 50, 3);
+                    assert_recompressed(&name, &images["grey"], (192, 192), 50, 1);
+                }
+            }
+            assert!(images["photo"].dict.get(b"SMask").is_ok(), "{name} dropped the photo's soft mask");
+            sizes.push(outcome.output_bytes.unwrap());
+        }
+        assert!(sizes[0] < original.len() as u64, "Low must save space");
+        assert!(sizes[1] < sizes[0], "Medium {} must be smaller than Low {}", sizes[1], sizes[0]);
+        assert!(sizes[2] <= sizes[1], "High {} must not be larger than Medium {}", sizes[2], sizes[1]);
+        assert_eq!(std::fs::read(&pdf).unwrap(), original, "the original was modified");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compress_files_writes_byte_identical_pdfs_on_a_repeat_run_and_leaves_no_staged_files() {
+        let root = sandbox("compress-files-repeat");
+        let pdf = root.join("survey.pdf");
+        make_photo_pdf(&pdf);
+        for level in [CompressLevel::Low, CompressLevel::Medium, CompressLevel::High] {
+            let runs = ["first", "second"].map(|run| {
+                let folder = format!("{level:?}-{run}");
+                let outcomes = compress(&[pdf.clone()], level, location(&root, &folder));
+                let written = std::fs::read_dir(root.join(&folder)).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+                assert_eq!(written, ["survey-compressed.pdf"], "{folder} left extra files");
+                std::fs::read(&outcomes[0].output_paths()[0]).unwrap()
+            });
+            assert!(runs[0] == runs[1], "{level:?} output differs between runs");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

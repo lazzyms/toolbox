@@ -133,6 +133,22 @@ pub(crate) fn flatten_onto_white(img: &image::DynamicImage) -> image::RgbImage {
     })
 }
 
+/// Baseline JPEG at `quality`. A greyscale image stays one channel; anything else is written as RGB
+/// with alpha dropped.
+pub(crate) fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
+    match img {
+        image::DynamicImage::ImageLuma8(grey) => encoder.write_image(grey.as_raw(), grey.width(), grey.height(), image::ExtendedColorType::L8),
+        _ => {
+            let rgb = img.to_rgb8();
+            encoder.write_image(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+        }
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
 // Encoders write to a buffer first: WebP and HEIC only expose buffer encoders
 // anyway, and buffering lets the no-inflation guard compare sizes before
 // touching the destination (JPEG/PNG write through the same path).
@@ -140,16 +156,7 @@ pub(crate) fn encode(img: &image::DynamicImage, format: OutputFormat, quality: u
     match format {
         OutputFormat::Jpeg => {
             let rgb = if img.color().has_alpha() { flatten_onto_white(img) } else { img.to_rgb8() };
-            let mut buf = Vec::new();
-            JpegEncoder::new_with_quality(&mut buf, quality)
-                .write_image(
-                    rgb.as_raw(),
-                    rgb.width(),
-                    rgb.height(),
-                    image::ExtendedColorType::Rgb8,
-                )
-                .map_err(|e| e.to_string())?;
-            Ok(buf)
+            encode_jpeg(&image::DynamicImage::ImageRgb8(rgb), quality)
         }
         OutputFormat::Png => {
             let mut buf = Vec::new();
