@@ -2643,3 +2643,20 @@ kbd.shortcut-hint {
   gap: 8px;
   justify-items: start;
 }
+
+/* Formatted PDF: the block editor beside the document settings, as the FormattedPdf board lays them out. */
+.formatted-pdf { display: grid; gap: 16px; }
+.formatted-pdf-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); gap: 20px; align-items: start; }
+.formatted-pdf-editor { display: grid; gap: 8px; min-width: 0; }
+.formatted-pdf-toolbar { display: flex; align-items: center; gap: 4px; max-width: 200px; }
+.formatted-pdf-blocks { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.formatted-pdf-block { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.formatted-pdf-gutter { padding-top: 8px; font-size: 11px; font-weight: 600; color: var(--muted-foreground); }
+.formatted-pdf-block:not([data-kind="paragraph"]) textarea { font-weight: 600; }
+.formatted-pdf-block-actions { display: flex; gap: 2px; }
+.formatted-pdf-settings { display: grid; gap: 16px; }
+.formatted-pdf-defaults { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; }
+.formatted-pdf-defaults dd { margin: 0; }
+.formatted-pdf-footer { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.formatted-pdf-new { justify-self: start; }
+@media (max-width: 900px) { .formatted-pdf-layout { grid-template-columns: minmax(0, 1fr); } }

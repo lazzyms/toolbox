@@ -13,7 +13,7 @@ use crate::kit::common::{note_renamed, JobOutcome};
 use crate::kit::images::ImageProcessor;
 use crate::kit::images::tools;
 use crate::kit::compress::{compress_file, CompressFilesRequest};
-use crate::kit::pdf::{bates, convert, editor, metadata, privacy, properties, remaining, scene, to_epub, PDFProcessor};
+use crate::kit::pdf::{bates, convert, editor, formatted, metadata, privacy, properties, remaining, scene, to_epub, PDFProcessor};
 use crate::kit::pdf::page_ranges::{require_page_ranges, validate_page_ranges};
 use crate::kit::vision;
 use crate::packs::uninstall::RunPacks;
@@ -370,6 +370,21 @@ async fn run_convert_pasted_html(request: convert::PastedHtmlRequest, packs: Run
 }
 
 #[tauri::command]
+async fn create_formatted_pdf(app: tauri::AppHandle, request: formatted::FormattedPdfRequest) -> Vec<JobOutcome> {
+    let outcomes = run_create_formatted_pdf(request.clone(), run_packs(&app)).await;
+    settings::remember_chosen_save(&app, Some(&request.output_path), outcomes)
+}
+
+async fn run_create_formatted_pdf(request: formatted::FormattedPdfRequest, packs: RunPacks) -> Vec<JobOutcome> {
+    if let Err(outcomes) = validate_command_inputs(formatted::COMMAND, &[]) { return outcomes; }
+    let output_path = request.output_path.clone();
+    // The document is in memory, so there is no input file to check; the run still gets the time limit.
+    let mut outcome = formatted::limits().run_all(&[], move || formatted::create(&request, &packs));
+    outcome.input_path = output_path;
+    vec![outcome]
+}
+
+#[tauri::command]
 async fn extract_from_pdf(events: RunEvents, request: remaining::ExtractFromPdfRequest) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs("extract_from_pdf", &request.paths) { return outcomes; }
     let request = Arc::new(request);
@@ -627,6 +642,7 @@ fn main() {
             pdf_to_epub,
             convert_to_pdf,
             convert_pasted_html,
+            create_formatted_pdf,
             images_to_pdf,
             ocr_pdf,
             blur_faces,
@@ -716,7 +732,7 @@ mod command_tests {
     }
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::Rgba;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::future::Future;
 
     fn temp_path(name: &str) -> PathBuf {
@@ -852,7 +868,9 @@ mod command_tests {
         let gif = chosen("loop.gif");
         let tiff_out = chosen("pages.tiff");
         let pasted = chosen("receipt.pdf");
+        let checklist = chosen("checklist.pdf");
         let runs = [
+            (checklist.clone(), "checklist-1.pdf", 1, tauri::async_runtime::block_on(run_create_formatted_pdf(formatted_request(&checklist), no_packs()))),
             (pasted.clone(), "receipt-1.pdf", 1, tauri::async_runtime::block_on(run_convert_pasted_html(convert::PastedHtmlRequest { markup: "<h1>Receipt</h1><p>Paid</p>".into(), output_path: pasted.clone(), page_defaults: Default::default(), web_pages: None }, no_packs()))),
             (merge.clone(), "statement-1.pdf", 2, tauri::async_runtime::block_on(run_merge_pdfs(&MergePdfRequest { paths: vec![pdf.clone(), pdf_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(merge.clone()) }))),
             (combined.clone(), "scans-1.pdf", 1, tauri::async_runtime::block_on(run_images_to_pdf(&ImagesToPdfRequest { layout: Default::default(), paths: vec![image.clone(), image_two.clone()], output_location: OutputLocation::AlongsideInput, output_path: Some(combined.clone()) }))),
@@ -4609,6 +4627,18 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The structured document Formatted PDF's view sends.
+    fn formatted_request(output_path: &Path) -> formatted::FormattedPdfRequest {
+        serde_json::from_value(serde_json::json!({
+            "document": {
+                "title": "Move-out checklist", "author": "Sam Lee",
+                "blocks": [{ "kind": "heading1", "text": "Move-out checklist" }, { "kind": "paragraph", "text": "Return the keys." }],
+                "page": { "pageSize": "a4", "margins": "normal" }, "font": { "family": "Liberation Serif", "size": 11 },
+            },
+            "outputPath": output_path,
+        })).unwrap()
+    }
+
     fn named(naming: &mut Vec<(&'static str, PathBuf, Vec<PathBuf>)>, command: &'static str, input: PathBuf, outputs: Vec<PathBuf>) -> Vec<PathBuf> {
         naming.push((command, input, outputs.clone()));
         outputs
@@ -5526,6 +5556,12 @@ mod command_tests {
         let epub = assert_success("pdf to epub", pdf_to_epub(RunEvents::silent(), to_epub::PdfToEpubRequest { paths: vec![pdf.clone()], output_location: location(&root, "pdf to epub"), remove_headers_and_footers: true, cover: to_epub::EpubCover::NoCover, title: None, author: None, page_range: None }));
         assert_eq!(epub, [root.join("pdf to epub").join("document.epub")], "PDF to EPUB names its book after the PDF with no suffix");
         outputs.extend(named(&mut naming, "pdf_to_epub", pdf.clone(), epub));
+        let formatted_folder = root.join("formatted pdf"); std::fs::create_dir_all(&formatted_folder).unwrap();
+        let formatted_path = formatted_folder.join("Move-out checklist.pdf");
+        let formatted_pdf = assert_aggregate_success("formatted pdf", std::slice::from_ref(&formatted_path), run_create_formatted_pdf(formatted_request(&formatted_path), no_packs()));
+        assert_eq!(formatted_pdf, [formatted_path.clone()]);
+        assert!(lopdf::Document::load(&formatted_path).unwrap().extract_text(&[1]).unwrap().contains("Return the keys."));
+        outputs.extend(named(&mut naming, "create_formatted_pdf", formatted_path.clone(), formatted_pdf));
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
         assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
         outputs.extend(named(&mut naming, "convert_to_pdf", text.clone(), converted));

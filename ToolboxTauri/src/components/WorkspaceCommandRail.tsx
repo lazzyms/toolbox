@@ -29,6 +29,7 @@ const designIconByToolId: Record<AtomicToolId, string> = {
   "pdf-extract": "layers",
   "pdf-to-epub": "book",
   "convert-to-pdf": "convert-format",
+  "formatted-pdf": "formatted-pdf",
   "pdf-split": "split-pdf",
   "pdf-sign": "signature",
   "pdf-ocr": "ocr-pdf",
