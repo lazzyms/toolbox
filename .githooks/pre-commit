@@ -3,5 +3,12 @@
 set -eu
 
 repository_root=$(git rev-parse --show-toplevel)
+
+if command -v ggshield >/dev/null 2>&1 && ggshield api-status >/dev/null 2>&1; then
+  ggshield secret scan pre-commit
+else
+  echo "pre-commit: skipping the GitGuardian secret scan; install ggshield and run 'ggshield auth login' to enable it." >&2
+fi
+
 cd "$repository_root/ToolboxTauri"
 npm run test:ui
