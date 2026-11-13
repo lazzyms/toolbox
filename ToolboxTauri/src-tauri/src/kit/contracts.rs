@@ -590,7 +590,16 @@ pub enum WarningKind {
     TransparencyFlattened,
     /// The squared master was smaller than the largest size made, so that size was enlarged.
     Upscaled { from: u32, to: u32 },
+    /// Pages laid out in a way reflowed text may not follow, such as columns, a table or formulas.
+    NotReflowed { layout: ReflowLayout, pages: Vec<u32> },
+    /// Pages with text in a font that has no reliable Unicode mapping.
+    UnmappedText { pages: Vec<u32> },
 }
+
+/// A page layout that reflowing joins into a single run of paragraphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReflowLayout { Columns, Table, Formula }
 
 /// Why a JPEG copied byte for byte may show the wrong colours in some viewers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -926,9 +935,11 @@ mod tests {
             WarningKind::PagesWithoutText { pages: vec![1] },
             WarningKind::TransparencyFlattened,
             WarningKind::Upscaled { from: 512, to: 1024 },
+            WarningKind::NotReflowed { layout: ReflowLayout::Columns, pages: vec![1] },
+            WarningKind::UnmappedText { pages: vec![1] },
         ];
         let codes = warnings.into_iter().map(|kind| serde_json::to_value(kind).unwrap()["code"].clone()).collect::<Vec<_>>();
-        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried", "omittedContent", "approximateLayout", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept", "pagesWithoutText", "transparencyFlattened", "upscaled"]);
+        assert_eq!(codes, ["signatureRemoved", "fontSubstituted", "renamedToAvoidReplacing", "precisionReduced", "bookmarksNotCarried", "tagsNotCarried", "omittedContent", "approximateLayout", "imageUnsupported", "imageDamaged", "imageTooLarge", "jpegColourKept", "pagesWithoutText", "transparencyFlattened", "upscaled", "notReflowed", "unmappedText"]);
     }
 
     #[test]
@@ -1002,6 +1013,11 @@ mod tests {
                     OutcomeDetail { label: "Languages".into(), value: "English".into() },
                 ]),
             JobOutcome::succeeded(PathBuf::from("minutes.doc"), vec![PathBuf::from("minutes.pdf")], "2 pages.").with_basic_fidelity(),
+            JobOutcome::succeeded(PathBuf::from("climate-study.pdf"), vec![PathBuf::from("climate-study.epub")], "18 pages. Contents from headings in the text, 6 entries. 3 parts may read out of order.")
+                .with_warning(OutcomeWarning { kind: WarningKind::NotReflowed { layout: ReflowLayout::Columns, pages: vec![4, 5, 6] }, message: "Pages 4-6 — Two-column layout. Joined into one column, so captions may sit away from their pictures.".into() })
+                .with_warning(OutcomeWarning { kind: WarningKind::NotReflowed { layout: ReflowLayout::Table, pages: vec![8] }, message: "Page 8 — A table was flowed as plain paragraphs.".into() })
+                .with_warning(OutcomeWarning { kind: WarningKind::NotReflowed { layout: ReflowLayout::Formula, pages: vec![9, 10] }, message: "Pages 9-10 — Formulas may read out of order.".into() })
+                .with_warning(OutcomeWarning { kind: WarningKind::UnmappedText { pages: vec![15] }, message: "Page 15 — Some text has no reliable character mapping, so it was left out.".into() }),
         ];
 
         assert_eq!(serde_json::to_value(&samples).unwrap(), shared);

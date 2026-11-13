@@ -1,4 +1,4 @@
-import type { ErrorKind, FontSource, JobOutcome, JpegColour, OutcomePointer, OutcomeWarning, PackNeed, SucceededJobOutcome, ToolError } from "../contracts";
+import type { ErrorKind, FontSource, JobOutcome, JpegColour, OutcomePointer, OutcomeWarning, PackNeed, ReflowLayout, SucceededJobOutcome, ToolError } from "../contracts";
 import { UtilityRegistry } from "../registry";
 import { formatBatchSaving, formatBytes, formatSizeChange } from "../shared/fileSize";
 
@@ -120,6 +120,22 @@ export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: stri
             return `Upscaled to ${warning.details.to} from ${warning.details.from} pixels.`;
         case "transparencyFlattened":
             return "Transparent areas were flattened onto white, because JPEG has none.";
+        case "notReflowed":
+            return `${pageList(warning.details.pages)} — ${notReflowedText(warning.details.layout, warning.details.pages.length)}`;
+        case "unmappedText":
+            return `${pageList(warning.details.pages)} — Some text has no reliable character mapping, so it was left out.`;
+    }
+};
+
+/** What PDF to EPUB says about a layout it joined into plain paragraphs. */
+const notReflowedText = (layout: ReflowLayout, pages: number) => {
+    switch (layout) {
+        case "columns":
+            return "Two-column layout. Joined into one column, so captions may sit away from their pictures.";
+        case "table":
+            return pages === 1 ? "A table was flowed as plain paragraphs." : "Tables were flowed as plain paragraphs.";
+        case "formula":
+            return "Formulas may read out of order.";
     }
 };
 
@@ -159,11 +175,11 @@ export const packVerbs: Record<PackNeed, string> = { notInstalled: "Install", da
  * A lower bit depth is a note only on tools that set `precisionReducedIsNote`; image tools keep it a warning.
  */
 const isNote = (warning: OutcomeWarning, precisionReducedIsNote = false) =>
-    warning.code === "approximateLayout" || warning.code === "pagesWithoutText" || (precisionReducedIsNote && warning.code === "precisionReduced");
+    warning.code === "approximateLayout" || warning.code === "pagesWithoutText" || warning.code === "unmappedText" || (precisionReducedIsNote && warning.code === "precisionReduced");
 /** Saved-as notes say how a finished file was saved. They show on its row after the detail but leave it done, not warned. */
 const isSavedAs = (warning: OutcomeWarning) => warning.code === "transparencyFlattened";
 
-export const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): RowDetail => ({ text: warningText(warning, signatureRemovedNote), tone: warning.code === "omittedContent" || warning.code === "upscaled" ? "warn" : null });
+export const warningDetail = (warning: OutcomeWarning, signatureRemovedNote?: string): RowDetail => ({ text: warningText(warning, signatureRemovedNote), tone: warning.code === "omittedContent" || warning.code === "upscaled" || warning.code === "notReflowed" ? "warn" : null });
 
 const pointerView = (pointer: OutcomePointer | null): RowPointer | null => {
     if (!pointer) return null;

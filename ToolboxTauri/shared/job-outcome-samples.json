@@ -224,5 +224,35 @@
     "reason": null,
     "warnings": [],
     "basicFidelity": true
+  },
+  {
+    "inputPath": "climate-study.pdf",
+    "state": "succeeded",
+    "outputPaths": ["climate-study.epub"],
+    "detail": "18 pages. Contents from headings in the text, 6 entries. 3 parts may read out of order.",
+    "failure": null,
+    "reason": null,
+    "warnings": [
+      {
+        "code": "notReflowed",
+        "details": { "layout": "columns", "pages": [4, 5, 6] },
+        "message": "Pages 4-6 — Two-column layout. Joined into one column, so captions may sit away from their pictures."
+      },
+      {
+        "code": "notReflowed",
+        "details": { "layout": "table", "pages": [8] },
+        "message": "Page 8 — A table was flowed as plain paragraphs."
+      },
+      {
+        "code": "notReflowed",
+        "details": { "layout": "formula", "pages": [9, 10] },
+        "message": "Pages 9-10 — Formulas may read out of order."
+      },
+      {
+        "code": "unmappedText",
+        "details": { "pages": [15] },
+        "message": "Page 15 — Some text has no reliable character mapping, so it was left out."
+      }
+    ]
   }
 ]

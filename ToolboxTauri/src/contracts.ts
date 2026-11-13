@@ -171,7 +171,13 @@ export type OutcomeWarning =
   | { code: "jpegColourKept"; message: string; details: { colour: JpegColour; pages: number[]; images: number } }
   | { code: "pagesWithoutText"; message: string; details: { pages: number[] } }
   | { code: "transparencyFlattened"; message: string }
-  | { code: "upscaled"; message: string; details: { from: number; to: number } };
+  | { code: "upscaled"; message: string; details: { from: number; to: number } }
+  | { code: "notReflowed"; message: string; details: { layout: ReflowLayout; pages: number[] } }
+  | { code: "unmappedText"; message: string; details: { pages: number[] } };
+
+/** A page layout that reflowing joins into plain paragraphs, so it may read out of order. */
+export const reflowLayouts = ["columns", "table", "formula"] as const;
+export type ReflowLayout = (typeof reflowLayouts)[number];
 
 export const jpegColours = ["cmyk", "inverted"] as const;
 export type JpegColour = (typeof jpegColours)[number];
