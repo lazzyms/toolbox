@@ -117,7 +117,8 @@ pub async fn install_pack(app: tauri::AppHandle, pack_id: String, run_id: String
         let catalog = load_catalog().map_err(unavailable)?;
         let public_key = install::trusted_public_key().map_err(unavailable)?;
         let target = super::current_target();
-        let context = InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: &app_version, public_key: &public_key, limits: install::PackLimits::DEFAULT, cancel: Some(cancel.flag()) };
+        let changed = |pack_id: &str| install::emit_changed(&app, pack_id);
+        let context = InstallContext { catalog: &catalog, app_data: &app_data, target: &target, app_version: &app_version, public_key: &public_key, limits: install::PackLimits::DEFAULT, cancel: Some(cancel.flag()), changed: Some(&changed) };
         downloads.install(&pack_id, &context, &|phase, received_bytes, total_bytes| {
             use tauri::Emitter;
             let _ = app.emit(PROGRESS_EVENT, Progress { run_id: &run_id, pack_id: &pack_id, phase, received_bytes, total_bytes });
@@ -494,6 +495,8 @@ mod tests {
         catalog: Catalog,
         key: TestKey,
         files: HashMap<String, Vec<u8>>,
+        /// The pack ids installs reported as changed, in order.
+        changed: std::sync::Mutex<Vec<String>>,
     }
 
     impl Setup {
@@ -513,7 +516,7 @@ mod tests {
                 files.insert(id.to_string(), file);
             }
             let catalog = parse_catalog(&serde_json::json!({ "formatVersion": 1, "packs": packs }).to_string()).unwrap();
-            Self { app_data: sandbox(&format!("download-{name}")).join("app-data"), catalog, key, files }
+            Self { app_data: sandbox(&format!("download-{name}")).join("app-data"), catalog, key, files, changed: Default::default() }
         }
 
         fn file(&self, id: &str) -> Vec<u8> {
@@ -530,8 +533,14 @@ mod tests {
         fn install(&self, downloads: &Downloads, id: &str, cancel: &CancelFlag, events: &(dyn Fn(Phase, u64, u64) + Sync)) -> Result<()> {
             let target = current_target();
             let public_key = self.key.public_key();
-            let context = InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version: APP, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: Some(cancel) };
+            let changed = |pack_id: &str| self.changed.lock().unwrap().push(pack_id.to_string());
+            let context = InstallContext { catalog: &self.catalog, app_data: &self.app_data, target: &target, app_version: APP, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: Some(cancel), changed: Some(&changed) };
             downloads.install(id, &context, events)
+        }
+
+        /// How many times installs reported `id` as changed.
+        fn changes(&self, id: &str) -> usize {
+            self.changed.lock().unwrap().iter().filter(|changed| *changed == id).count()
         }
 
         fn status(&self, id: &str) -> PackStatus {
@@ -546,7 +555,7 @@ mod tests {
             let file = self.app_data.with_file_name(format!("{id}-1.0.toolboxpack"));
             std::fs::write(&file, old.file(&self.key)).unwrap();
             let (catalog, target, public_key) = (old.catalog(), current_target(), self.key.public_key());
-            install::install(&file, &InstallContext { catalog: &catalog, app_data: &self.app_data, target: &target, app_version: APP, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: None }).unwrap();
+            install::install(&file, &InstallContext { catalog: &catalog, app_data: &self.app_data, target: &target, app_version: APP, public_key: &public_key, limits: PackLimits::DEFAULT, cancel: None, changed: None }).unwrap();
         }
 
         fn installed_version(&self, id: &str) -> Option<String> {
@@ -614,7 +623,7 @@ mod tests {
 
     #[test]
     fn repair_downloads_the_pack_again_and_a_failed_repair_leaves_it_damaged_with_nothing_left_over() {
-        use super::super::uninstall::{resolve_pack_resource, PackHolds};
+        use super::super::uninstall::{resolve_pack_resource, PackHolds, RequiredPack};
         const MODEL: &str = "tessdata/hin.traineddata";
         let setup = Setup::new("repair", &["ocr-hindi"]);
         let server = Server::start();
@@ -622,12 +631,13 @@ mod tests {
         let downloads = Downloads::new(transport(server.base())).unwrap();
         let attempt = || setup.install(&downloads, "ocr-hindi", &CancelFlag::default(), &|_, _, _| {});
         attempt().unwrap();
+        assert_eq!(setup.changes("ocr-hindi"), 1, "the install reports the pack changed");
         let model = setup.app_data.join(PACKS_DIR).join("ocr-hindi/2.0").join(MODEL);
         let original = std::fs::read(&model).unwrap();
         let mut changed = original.clone();
         changed[0] ^= 1;
         std::fs::write(&model, changed).unwrap();
-        let resolve = || resolve_pack_resource(MODEL, &setup.app_data, "ocr-hindi", APP, None, None, &mut PackHolds::default());
+        let resolve = || resolve_pack_resource(MODEL, &setup.app_data, RequiredPack { id: "ocr-hindi", name: "Hindi" }, APP, None, None, &mut PackHolds::default());
         assert!(resolve().is_err());
         assert_eq!(setup.status("ocr-hindi"), PackStatus::Damaged);
 
@@ -641,10 +651,12 @@ mod tests {
             assert_eq!(setup.status("ocr-hindi"), PackStatus::Damaged, "{case}");
             assert!(resolve().is_err(), "{case}");
             assert!(!setup.app_data.join("pack-staging").exists() && !setup.app_data.join(DOWNLOADS_DIR).exists(), "{case}: files were left");
+            assert_eq!(setup.changes("ocr-hindi"), 1, "{case}: a failed repair changes nothing");
         }
 
         setup.serve(&server);
         attempt().unwrap();
+        assert_eq!(setup.changes("ocr-hindi"), 2, "the repair reports the pack changed");
         assert_eq!(setup.status("ocr-hindi"), PackStatus::Installed);
         assert!(!setup.app_data.join("pack-staging").exists() && !setup.app_data.join(DOWNLOADS_DIR).exists());
         let resolved = resolve().unwrap();
@@ -654,7 +666,7 @@ mod tests {
     const MODEL: &str = "tessdata/hin.traineddata";
 
     fn resolve(setup: &Setup, run: &mut super::super::uninstall::PackHolds) -> std::result::Result<PathBuf, crate::kit::contracts::ToolError> {
-        super::super::uninstall::resolve_pack_resource(MODEL, &setup.app_data, "ocr-hindi", APP, None, None, run).map(|resolved| resolved.path)
+        super::super::uninstall::resolve_pack_resource(MODEL, &setup.app_data, super::super::uninstall::RequiredPack { id: "ocr-hindi", name: "Hindi" }, APP, None, None, run).map(|resolved| resolved.path)
     }
 
     #[test]
@@ -672,6 +684,7 @@ mod tests {
         setup.install(&Downloads::new(transport(server.base())).unwrap(), "ocr-hindi", &CancelFlag::default(), &recorder(&events)).unwrap();
         assert_eq!(server.requests(), [format!("/releases/{}", pack_path("ocr-hindi"))]);
         assert!(!events.into_inner().unwrap().is_empty(), "the update reports its progress");
+        assert_eq!(setup.changes("ocr-hindi"), 1, "the update reports the pack changed");
         assert_eq!((setup.status("ocr-hindi"), setup.installed_version("ocr-hindi").as_deref()), (PackStatus::Installed, Some("2.0")));
         assert_eq!(setup.version_folders("ocr-hindi"), ["2.0"], "the old version is removed");
         assert!(resolve(&setup, &mut Default::default()).unwrap().starts_with(setup.app_data.join("packs/ocr-hindi/2.0")));
@@ -716,8 +729,10 @@ mod tests {
         let during_check = setup.install(&downloads, "ocr-hindi", &cancel, &|phase, _, _| if phase == Phase::Verifying { cancel.cancel() });
         assert_eq!(kind(during_check), PackInstallErrorKind::Cancelled);
         assert_old_kept("cancelled while checking");
+        assert_eq!(setup.changes("ocr-hindi"), 0, "failed and cancelled updates change nothing");
 
         setup.install(&downloads, "ocr-hindi", &CancelFlag::default(), &|_, _, _| {}).unwrap();
+        assert_eq!(setup.changes("ocr-hindi"), 1);
         assert_eq!(setup.installed_version("ocr-hindi").as_deref(), Some("2.0"));
     }
 
