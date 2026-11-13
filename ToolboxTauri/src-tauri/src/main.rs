@@ -2235,6 +2235,7 @@ mod command_tests {
 
     #[test]
     fn extract_from_pdf_hands_a_scan_to_ocr_while_a_text_pdf_in_the_same_batch_succeeds() {
+        if !pdftotext_available() { return; }
         use crate::kit::contracts::{OutcomePointer, SkipCode};
         let root = sandbox("pdf-to-text-needs-ocr");
         let scan = root.join("scan.pdf");
@@ -2577,11 +2578,15 @@ mod command_tests {
         ExtractFromPdfRequest { paths, mode, page_range: page_range.map(str::to_string), output_location, preserve_layout: false, min_image_size: None }
     }
 
-    fn pdf_to_text_pair(root: &PathBuf, offender: &PathBuf, name: &str) -> (PathBuf, Vec<JobOutcome>) {
+    fn pdftotext_available() -> bool {
+        crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_TEXT_EXTRACTOR).is_ok()
+    }
+
+    fn extract_pair(root: &PathBuf, offender: &PathBuf, name: &str) -> (PathBuf, Vec<JobOutcome>) {
         let good = root.join("good.pdf");
-        make_pdf(&good, 1);
+        make_extract_pdf(&good, &[(false, true)]);
         let originals = [Original::of(offender), Original::of(&good)];
-        let outcomes = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(vec![offender.clone(), good.clone()], ExtractMode::Text, None, location(root, name))));
+        let outcomes = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(vec![offender.clone(), good.clone()], ExtractMode::Images, None, location(root, name))));
         for original in &originals { original.assert_untouched(); }
         (good, outcomes)
     }
@@ -2623,7 +2628,7 @@ mod command_tests {
         let offender = root.join("oversized.pdf");
         std::fs::write(&offender, b"%PDF-1.7\n").unwrap();
         std::fs::OpenOptions::new().write(true).open(&offender).unwrap().set_len(1_000_000_001).unwrap();
-        let (_, outcomes) = pdf_to_text_pair(&root, &offender, "out");
+        let (_, outcomes) = extract_pair(&root, &offender, "out");
         assert_only_offender_limited(&outcomes, &offender, LimitKind::FileSize, "1 GB");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2633,7 +2638,7 @@ mod command_tests {
         let root = sandbox("limit-pages");
         let offender = root.join("long.pdf");
         make_pdf(&offender, 5_001);
-        let (_, outcomes) = pdf_to_text_pair(&root, &offender, "out");
+        let (_, outcomes) = extract_pair(&root, &offender, "out");
         assert_only_offender_limited(&outcomes, &offender, LimitKind::PageCount, "5,000");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2643,7 +2648,7 @@ mod command_tests {
         let root = sandbox("limit-pdf-expansion");
         let offender = root.join("bomb.pdf");
         std::fs::write(&offender, crate::kit::common::limits::fixtures::pdf_with_stream(&crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001))).unwrap();
-        let (_, outcomes) = pdf_to_text_pair(&root, &offender, "out");
+        let (_, outcomes) = extract_pair(&root, &offender, "out");
         assert_only_offender_limited(&outcomes, &offender, LimitKind::Decompression, "500 MB");
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2670,10 +2675,10 @@ mod command_tests {
         let root = sandbox("limit-time");
         let slow = root.join("slow.pdf");
         let good = root.join("good.pdf");
-        make_pdf(&slow, 1);
-        make_pdf(&good, 1);
+        make_extract_pdf(&slow, &[(false, true)]);
+        make_extract_pdf(&good, &[(false, true)]);
         let originals = [std::fs::read(&slow).unwrap(), std::fs::read(&good).unwrap()];
-        let request = Arc::new(extract_request(vec![slow.clone(), good.clone()], ExtractMode::Text, None, location(&root, "out")));
+        let request = Arc::new(extract_request(vec![slow.clone(), good.clone()], ExtractMode::Images, None, location(&root, "out")));
         let released = Arc::new(AtomicBool::new(false));
         let limits = crate::kit::common::limits::ToolLimits { max_duration: std::time::Duration::from_secs(1), ..crate::kit::common::limits::recorded("extract_from_pdf").unwrap() };
         let job_released = Arc::clone(&released);
@@ -2865,7 +2870,9 @@ mod command_tests {
         let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), picks: Vec::new(), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
-        outputs.extend(named(&mut naming, "extract_from_pdf", pdf.clone(), assert_success("extract text from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, None, location(&root, "extract text"))))));
+        if pdftotext_available() {
+            outputs.extend(named(&mut naming, "extract_from_pdf", pdf.clone(), assert_success("extract text from pdf", extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, None, location(&root, "extract text"))))));
+        }
         let converted = assert_success("convert to pdf", convert_to_pdf(RunEvents::silent(), serde_json::json!({ "paths": [text.clone()], "outputLocation": location(&root, "convert to pdf"), "plainText": { "font": "monospace", "encoding": "detect", "wrapLines": true } })));
         assert!(lopdf::Document::load(&converted[0]).unwrap().extract_text(&[1]).unwrap().contains("Caf\u{e9} notes"), "converted text must stay searchable");
         outputs.extend(named(&mut naming, "convert_to_pdf", text.clone(), converted));
@@ -4660,13 +4667,14 @@ mod command_tests {
         assert_eq!(wrong_cardinality.len(), 2);
         assert!(wrong_cardinality.iter().all(|outcome| outcome.output_paths().is_empty() && outcome.error().is_some()));
 
-        let selected = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, Some("2"), location(&root, "selected-text"))));
-        let output = selected[0].output_paths().first().expect("selected text should produce an output");
-        let text = std::fs::read_to_string(output).unwrap();
-        assert!(text.contains("Toolbox page 2"), "selected text: {text}");
-        assert!(!text.contains("Toolbox page 1"), "unselected text: {text}");
-
-        cleanup(&selected.iter().flat_map(|outcome| outcome.output_paths().to_vec()).collect::<Vec<_>>());
+        if pdftotext_available() {
+            let selected = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), extract_request(vec![pdf.clone()], ExtractMode::Text, Some("2"), location(&root, "selected-text"))));
+            let output = selected[0].output_paths().first().expect("selected text should produce an output");
+            let text = std::fs::read_to_string(output).unwrap();
+            assert!(text.contains("Toolbox page 2"), "selected text: {text}");
+            assert!(!text.contains("Toolbox page 1"), "unselected text: {text}");
+            cleanup(&selected.iter().flat_map(|outcome| outcome.output_paths().to_vec()).collect::<Vec<_>>());
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -4711,6 +4719,7 @@ mod command_tests {
 
     #[test]
     fn extract_from_pdf_runs_each_mode_with_one_outcome_per_pdf() {
+        if !pdftotext_available() { return; }
         use crate::kit::contracts::{OutcomePointer, OutcomeState, SkipCode};
         use crate::kit::pdf::remaining::{BOTH_WITHOUT_IMAGES, BOTH_WITHOUT_TEXT, NEEDS_OCR_MESSAGE, NOTHING_TO_EXTRACT, NO_EMBEDDED_IMAGES};
         let root = sandbox("extract-from-pdf");

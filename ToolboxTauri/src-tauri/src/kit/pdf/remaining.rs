@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::kit::common::limits::{self, StoppableHelper};
+use crate::kit::common::limits::{self, bytes_label, duration_label, StoppableHelper};
 use crate::kit::common::{renamed_warning, JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
 use crate::kit::contracts::{LimitKind, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
@@ -777,7 +777,7 @@ impl ExtractMode {
 }
 
 /// One request for Extract from PDF. `pageRange` uses the shared syntax ("1-3, 5, 8-") and applies to every PDF.
-/// `preserveLayout` is accepted for the Text part; today's text routine always follows reading order (#625 reads it).
+/// `preserveLayout` keeps columns lined up in the text; off, the text follows reading order.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractFromPdfRequest {
@@ -785,23 +785,55 @@ pub struct ExtractFromPdfRequest {
     pub mode: ExtractMode,
     #[serde(default)] pub page_range: Option<String>,
     pub output_location: OutputLocation,
-    #[allow(dead_code)]
     #[serde(default)] pub preserve_layout: bool,
     #[serde(default)] pub min_image_size: Option<u32>,
 }
 
+pub const PDF_DAMAGED: &str = "This file is damaged or isn't a PDF, so it couldn't be read.";
+pub const EXTRACT_PASSWORD_PROTECTED: &str = "This PDF is password-protected. Remove the password, then extract again.";
+pub const PDF_TEXT_HELPER_MISSING: &str = "Not read: the text helper is missing. Reinstall Toolbox to restore it.";
+pub(crate) const PDF_TEXT_TIME_PER_FILE: Duration = Duration::from_secs(20);
+pub(crate) const PDF_TEXT_TIME_PER_PAGE: Duration = Duration::from_millis(50);
+pub(crate) const PDF_TEXT_FILE_MAX_BYTES: usize = 100_000_000;
+
+/// The pdftotext that Extract from PDF runs, and how long it may take for one PDF.
+struct TextHelper {
+    path: Result<PathBuf, String>,
+    per_file: Duration,
+    per_page: Duration,
+}
+
+impl TextHelper {
+    fn bundled() -> Self {
+        Self { path: crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_TEXT_EXTRACTOR), per_file: PDF_TEXT_TIME_PER_FILE, per_page: PDF_TEXT_TIME_PER_PAGE }
+    }
+
+    fn time_limit(&self, page_count: usize) -> Duration {
+        self.per_file + self.per_page * u32::try_from(page_count).unwrap_or(u32::MAX)
+    }
+}
+
 /// Saves the text, the images, or both from one PDF and reports them as one outcome.
 pub fn extract(request: &ExtractFromPdfRequest, input: PathBuf) -> JobOutcome {
-    let document = match Document::load(&input) { Ok(document) => document, Err(error) => return failure(input, error.to_string()) };
+    extract_with(request, input, &TextHelper::bundled())
+}
+
+fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHelper) -> JobOutcome {
+    let document = match Document::load(&input) {
+        Ok(document) if document.is_encrypted() => return password_protected(input),
+        Ok(document) => document,
+        Err(lopdf::Error::InvalidPassword | lopdf::Error::Decryption(_)) => return password_protected(input),
+        Err(_) => return JobOutcome::failure(input, ToolError::invalid_input(PDF_DAMAGED)),
+    };
     let pages = match pages_in_range(&document, request.page_range.as_deref()) {
         Ok(pages) if !pages.is_empty() => pages,
         Ok(_) => return failure(input, "Select at least one PDF page.".to_string()),
         Err(error) => return failure(input, error),
     };
     let text = if request.mode.wants_text() {
-        match write_text(&input, &document, &pages, &request.output_location) {
+        match write_text(&input, &pages, helper, request.preserve_layout, &request.output_location) {
             Ok(text) => text,
-            Err(error) => return failure(input, error),
+            Err(error) => return JobOutcome::failure(input, error),
         }
     } else { None };
     let images = if request.mode.wants_images() {
@@ -814,7 +846,7 @@ pub fn extract(request: &ExtractFromPdfRequest, input: PathBuf) -> JobOutcome {
         }
     } else { Vec::new() };
     match (request.mode, text, images.is_empty()) {
-        (ExtractMode::Text, Some(text), _) => JobOutcome::succeeded(input, vec![text], "PDF text extracted in page order"),
+        (ExtractMode::Text, Some(text), _) => JobOutcome::succeeded(input, vec![text], if request.preserve_layout { "PDF text extracted with its layout preserved" } else { "PDF text extracted in reading order" }),
         (ExtractMode::Text, None, _) => JobOutcome::skipped(input, SkipReason::new(SkipCode::NeedsOcr, NEEDS_OCR_MESSAGE).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() })),
         (ExtractMode::Images, _, true) => failure(input, NO_EMBEDDED_IMAGES.to_string()),
         (ExtractMode::Images, _, false) => JobOutcome::succeeded(input, images, "Embedded JPEG images extracted without recompression"),
@@ -836,15 +868,56 @@ fn pages_in_range(document: &Document, range: Option<&str>) -> Result<Vec<u32>, 
     Ok(spans.into_iter().flat_map(|(first, last)| first as u32..=last as u32).collect::<std::collections::BTreeSet<_>>().into_iter().collect())
 }
 
-/// Writes the selected pages' text. `None` means the pages hold no selectable text, and nothing is written.
-fn write_text(input: &Path, document: &Document, pages: &[u32], location: &OutputLocation) -> Result<Option<PathBuf>, String> {
-    let text = document.extract_text(pages).map_err(|error| format!("Could not extract selectable PDF text: {error}"))?;
-    let text = normalize_pdf_text(&text);
-    if text.is_empty() { return Ok(None); }
-    let output = OutputNaming::reserve_destination(input, location, "-text", "txt").map_err(|error| format!("Could not reserve PDF text output: {error}"))?;
-    fs::write(output.path(), text).map_err(|error| format!("Could not write text output: {error}"))?;
-    output.publish().map(Some).map_err(|error| format!("Could not publish text output: {error}"))
+fn password_protected(input: PathBuf) -> JobOutcome {
+    JobOutcome::failure(input, ToolError::invalid_input(EXTRACT_PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }))
 }
+
+/// Writes the selected pages' text with pdftotext. `None` means the pages hold no selectable text, and nothing is written.
+fn write_text(input: &Path, pages: &[u32], helper: &TextHelper, preserve_layout: bool, location: &OutputLocation) -> Result<Option<PathBuf>, ToolError> {
+    let Ok(pdftotext) = &helper.path else { return Err(ToolError::unavailable(PDF_TEXT_HELPER_MISSING)) };
+    let limit = helper.time_limit(pages.len());
+    let deadline = Instant::now() + limit;
+    let timed_out = format!("Reading text took longer than {}, so it was stopped. The other PDFs weren't affected.", duration_label(Duration::from_secs(limit.as_secs())));
+    let mut text = Vec::new();
+    for (first, last) in page_runs(pages) {
+        let mut command = Command::new(pdftotext);
+        command.args(["-enc", "UTF-8", "-eol", "unix"]);
+        if preserve_layout { command.arg("-layout"); }
+        command.arg("-f").arg(first.to_string()).arg("-l").arg(last.to_string()).arg(input).arg("-");
+        let output = match super::run_bounded_helper(command, deadline, PDF_TEXT_FILE_MAX_BYTES - text.len(), super::PDF_TEXT_MAX_ERROR_BYTES, &timed_out) {
+            Ok(output) => output,
+            Err(message) if message == timed_out => return Err(ToolError::processing(message)),
+            Err(message) if message.contains("stdout output exceeds") => return Err(ToolError::processing(format!("The text is over {}, so nothing was saved.", bytes_label(PDF_TEXT_FILE_MAX_BYTES as u64)))),
+            Err(message) => return Err(ToolError::processing(message)),
+        };
+        if !output.status.success() { return Err(ToolError::processing(stderr(output, "The text helper couldn't read this PDF."))); }
+        text.extend_from_slice(&output.stdout);
+    }
+    let text = unix_text(&String::from_utf8_lossy(&text));
+    if text.trim_matches(|character: char| character.is_whitespace() || character == '\u{c}').is_empty() { return Ok(None); }
+    let output = OutputNaming::reserve_destination(input, location, "-text", "txt").map_err(|error| ToolError::processing(format!("Could not reserve PDF text output: {error}")))?;
+    fs::write(output.path(), text).map_err(|error| ToolError::processing(format!("Could not write text output: {error}")))?;
+    output.publish().map(Some).map_err(|error| ToolError::processing(format!("Could not publish text output: {error}")))
+}
+
+/// Groups sorted page numbers into the contiguous runs pdftotext reads with -f and -l.
+fn page_runs(pages: &[u32]) -> Vec<(u32, u32)> {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for &page in pages {
+        match runs.last_mut() {
+            Some((_, last)) if *last + 1 == page => *last = page,
+            _ => runs.push((page, page)),
+        }
+    }
+    runs
+}
+
+/// LF line endings only, with pdftotext's form feed between pages but not after the last one.
+fn unix_text(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    text.strip_suffix('\u{c}').map(str::to_string).unwrap_or(text)
+}
+
 
 fn normalize_pdf_text(text: &str) -> String {
     text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
@@ -3039,5 +3112,348 @@ pub(crate) mod tests {
         }
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 0, "a timed-out render leaves nothing behind");
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod text_extraction_tests {
+    use super::*;
+    use crate::kit::contracts::ErrorKind;
+    use lopdf::StringFormat;
+
+    enum Run<'a> { Latin(&'a str), Cid(&'a str) }
+    struct Line<'a> { x: f32, y: f32, run: Run<'a> }
+
+    fn sandbox(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("toolbox_pdftotext_{name}_{}_{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// Writes a PDF whose pages hold the given lines. Latin runs use WinAnsi Helvetica; CID runs use an
+    /// Identity-H font whose ToUnicode map covers every character, so Greek, Cyrillic and CJK read back exactly.
+    fn lines_pdf(path: &Path, pages: &[Vec<Line>]) {
+        let mut characters: Vec<char> = Vec::new();
+        for line in pages.iter().flatten() {
+            if let Run::Cid(text) = line.run { for character in text.chars() { if !characters.contains(&character) { characters.push(character); } } }
+        }
+        let cid = |character: char| characters.iter().position(|known| *known == character).unwrap() as u16 + 1;
+        let mut document = Document::with_version("1.7");
+        let pages_id = document.new_object_id();
+        let latin = document.add_object(dictionary! { "Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica", "Encoding"=>"WinAnsiEncoding" });
+        let mut cmap = format!("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /Toolbox-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n{} beginbfchar\n", characters.len());
+        for character in &characters {
+            let mut units = [0u16; 2];
+            let hex: String = character.encode_utf16(&mut units).iter().map(|unit| format!("{unit:04X}")).collect();
+            cmap.push_str(&format!("<{:04X}> <{hex}>\n", cid(*character)));
+        }
+        cmap.push_str("endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+        let to_unicode = document.add_object(Stream::new(dictionary! {}, cmap.into_bytes()));
+        let descendant = document.add_object(dictionary! {
+            "Type"=>"Font", "Subtype"=>"CIDFontType2", "BaseFont"=>"ToolboxSans",
+            "CIDSystemInfo"=>dictionary! { "Registry"=>Object::String(b"Adobe".to_vec(), StringFormat::Literal), "Ordering"=>Object::String(b"Identity".to_vec(), StringFormat::Literal), "Supplement"=>0 },
+            "DW"=>600, "CIDToGIDMap"=>"Identity"
+        });
+        let unicode = document.add_object(dictionary! { "Type"=>"Font", "Subtype"=>"Type0", "BaseFont"=>"ToolboxSans", "Encoding"=>"Identity-H", "DescendantFonts"=>vec![Object::Reference(descendant)], "ToUnicode"=>to_unicode });
+        let mut kids = Vec::new();
+        for lines in pages {
+            let mut content = Vec::new();
+            for line in lines {
+                content.extend_from_slice(format!("BT {} 12 Tf {} {} Td ", if matches!(line.run, Run::Latin(_)) { "/F1" } else { "/F2" }, line.x, line.y).as_bytes());
+                match line.run {
+                    Run::Latin(text) => {
+                        content.push(b'(');
+                        content.extend(text.chars().map(|character| u8::try_from(u32::from(character)).unwrap()));
+                        content.extend_from_slice(b") Tj ET\n");
+                    }
+                    Run::Cid(text) => content.extend_from_slice(format!("<{}> Tj ET\n", text.chars().map(|character| format!("{:04X}", cid(character))).collect::<String>()).as_bytes()),
+                }
+            }
+            let contents = document.add_object(Stream::new(dictionary! {}, content));
+            kids.push(Object::Reference(document.add_object(dictionary! {
+                "Type"=>"Page", "Parent"=>pages_id, "Contents"=>contents, "MediaBox"=>vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Resources"=>dictionary! { "Font"=>dictionary! { "F1"=>latin, "F2"=>unicode } }
+            })));
+        }
+        let count = kids.len() as i64;
+        document.objects.insert(pages_id, dictionary! { "Type"=>"Pages", "Kids"=>kids, "Count"=>count }.into());
+        let catalog = document.add_object(dictionary! { "Type"=>"Catalog", "Pages"=>pages_id });
+        document.trailer.set("Root", catalog);
+        document.save(path).unwrap();
+    }
+
+    fn multi_language_pdf(path: &Path) {
+        lines_pdf(path, &[vec![
+            Line { x: 72., y: 720., run: Run::Latin("Café naïve façade Ångström") },
+            Line { x: 72., y: 690., run: Run::Cid("Καλημέρα κόσμε") },
+            Line { x: 72., y: 660., run: Run::Cid("Привет мир") },
+            Line { x: 72., y: 630., run: Run::Cid("你好 世界 こんにちは 안녕하세요") },
+        ]]);
+    }
+
+    fn two_column_pdf(path: &Path) {
+        let left = ["Left alpha", "Left bravo", "Left charlie"];
+        let right = ["Right delta", "Right echo", "Right foxtrot"];
+        let mut lines = Vec::new();
+        for (row, (left, right)) in left.iter().zip(right).enumerate() {
+            let y = 720. - row as f32 * 16.;
+            lines.push(Line { x: 72., y, run: Run::Latin(left) });
+            lines.push(Line { x: 340., y, run: Run::Latin(right) });
+        }
+        lines_pdf(path, &[lines]);
+    }
+
+    fn pages_pdf(path: &Path, count: usize) {
+        let texts: Vec<String> = (1..=count).map(|page| format!("Toolbox page {page}")).collect();
+        lines_pdf(path, &texts.iter().map(|text| vec![Line { x: 72., y: 720., run: Run::Latin(text) }]).collect::<Vec<_>>());
+    }
+
+    fn request(input: &Path, mode: ExtractMode, page_range: Option<&str>, preserve_layout: bool) -> ExtractFromPdfRequest {
+        ExtractFromPdfRequest { paths: vec![input.to_path_buf()], mode, page_range: page_range.map(str::to_string), output_location: OutputLocation::AlongsideInput, preserve_layout, min_image_size: None }
+    }
+
+    fn real_helper() -> Option<TextHelper> {
+        let helper = TextHelper::bundled();
+        helper.path.is_ok().then_some(helper)
+    }
+
+    fn text_of(outcome: &JobOutcome) -> String {
+        assert!(outcome.error().is_none(), "{:?}", outcome.error());
+        fs::read_to_string(&outcome.output_paths()[0]).unwrap()
+    }
+
+    #[cfg(unix)]
+    fn stand_in(root: &Path, script: &str) -> TextHelper {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("pdftotext-stand-in");
+        fs::write(&path, format!("#!/bin/sh\n{script}")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        TextHelper { path: Ok(path), per_file: PDF_TEXT_TIME_PER_FILE, per_page: PDF_TEXT_TIME_PER_PAGE }
+    }
+
+    fn files_in(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(folder).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn accented_greek_cyrillic_and_cjk_text_survives_with_its_word_spacing() {
+        let Some(helper) = real_helper() else { return };
+        let root = sandbox("languages");
+        let input = root.join("languages.pdf");
+        multi_language_pdf(&input);
+        let text = text_of(&extract_with(&request(&input, ExtractMode::Text, None, false), input.clone(), &helper));
+        let lines: Vec<&str> = text.lines().filter(|line| !line.is_empty()).collect();
+        assert_eq!(lines, ["Café naïve façade Ångström", "Καλημέρα κόσμε", "Привет мир", "你好 世界 こんにちは 안녕하세요"], "{text:?}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reading_order_is_the_default_and_preserve_layout_keeps_two_columns_aligned() {
+        let Some(helper) = real_helper() else { return };
+        let root = sandbox("columns");
+        let input = root.join("columns.pdf");
+        two_column_pdf(&input);
+        let reading = extract_with(&request(&input, ExtractMode::Text, None, false), input.clone(), &helper);
+        assert_eq!(reading.detail, ("PDF text extracted in reading order"));
+        let text = text_of(&reading);
+        assert!(text.contains("Left alpha\nLeft bravo\nLeft charlie\n\nRight delta\nRight echo\nRight foxtrot"), "{text:?}");
+        let layout = extract_with(&request(&input, ExtractMode::Text, None, true), input.clone(), &helper);
+        assert_eq!(layout.detail, ("PDF text extracted with its layout preserved"));
+        let text = text_of(&layout);
+        let rows: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+        assert_eq!(rows.len(), 3, "{text:?}");
+        for (row, (left, right)) in rows.iter().zip([("Left alpha", "Right delta"), ("Left bravo", "Right echo"), ("Left charlie", "Right foxtrot")]) {
+            assert!(row.trim_start().starts_with(left) && row.ends_with(right), "{row:?}");
+        }
+        let column = |row: &str, right: &str| row.find(right).unwrap();
+        assert_eq!(column(rows[0], "Right"), column(rows[2], "Right"), "{text:?}");
+        assert_eq!(files_in(&root), ["columns-text-1.txt", "columns-text.txt", "columns.pdf"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pages_are_split_by_form_feeds_with_lf_line_endings_and_repeat_byte_for_byte() {
+        let Some(helper) = real_helper() else { return };
+        let root = sandbox("pages");
+        let input = root.join("pages.pdf");
+        pages_pdf(&input, 3);
+        let original = fs::read(&input).unwrap();
+        let first = extract_with(&request(&input, ExtractMode::Text, None, false), input.clone(), &helper);
+        let text = text_of(&first);
+        assert_eq!(text, "Toolbox page 1\n\n\u{c}Toolbox page 2\n\n\u{c}Toolbox page 3\n\n");
+        assert!(!text.contains('\r'));
+        let second = extract_with(&request(&input, ExtractMode::Text, None, false), input.clone(), &helper);
+        assert_eq!(first.output_paths(), [root.join("pages-text.txt")]);
+        assert_eq!(second.output_paths(), [root.join("pages-text-1.txt")]);
+        assert_eq!(fs::read(&first.output_paths()[0]).unwrap(), fs::read(&second.output_paths()[0]).unwrap());
+        assert_eq!(fs::read(&input).unwrap(), original);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn only_the_selected_pages_are_read() {
+        let Some(helper) = real_helper() else { return };
+        let root = sandbox("selected");
+        let input = root.join("selected.pdf");
+        pages_pdf(&input, 5);
+        let text = text_of(&extract_with(&request(&input, ExtractMode::Text, Some("4, 1-2"), false), input.clone(), &helper));
+        assert_eq!(text, "Toolbox page 1\n\n\u{c}Toolbox page 2\n\n\u{c}Toolbox page 4\n\n");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_helper_gets_utf8_unix_line_endings_the_layout_flag_and_one_call_per_page_run() {
+        let root = sandbox("arguments");
+        let input = root.join("arguments.pdf");
+        pages_pdf(&input, 5);
+        let helper = stand_in(&root, "printf '%s\\r\\n\\f' \"$*\"\n");
+        let argument_lines = |preserve_layout: bool| {
+            let outcome = extract_with(&request(&input, ExtractMode::Text, Some("1-2, 4"), preserve_layout), input.clone(), &helper);
+            let text = text_of(&outcome);
+            assert!(!text.contains('\r') && !text.ends_with('\u{c}'), "{text:?}");
+            text.split('\u{c}').map(|line| line.trim_end().replace(&*input.to_string_lossy(), "INPUT")).collect::<Vec<_>>()
+        };
+        assert_eq!(argument_lines(false), ["-enc UTF-8 -eol unix -f 1 -l 2 INPUT -", "-enc UTF-8 -eol unix -f 4 -l 4 INPUT -"]);
+        assert_eq!(argument_lines(true), ["-enc UTF-8 -eol unix -layout -f 1 -l 2 INPUT -", "-enc UTF-8 -eol unix -layout -f 4 -l 4 INPUT -"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn encrypted_and_damaged_pdfs_fail_as_invalid_input_before_the_helper_runs() {
+        let root = sandbox("unreadable");
+        let helper = TextHelper { path: Ok(root.join("never-run")), per_file: PDF_TEXT_TIME_PER_FILE, per_page: PDF_TEXT_TIME_PER_PAGE };
+        let locked = root.join("locked.pdf");
+        fs::write(&locked, crate::kit::password::tests::pdf(Some(("owner", "user")))).unwrap();
+        let damaged = root.join("damaged.pdf");
+        fs::write(&damaged, b"%PDF-1.7\nthis is not really a PDF").unwrap();
+        for mode in [ExtractMode::Text, ExtractMode::Images, ExtractMode::Both] {
+            let outcome = extract_with(&request(&locked, mode, None, false), locked.clone(), &helper);
+            let error = outcome.error().unwrap();
+            assert_eq!((&error.kind, error.message.as_str()), (&ErrorKind::InvalidInput, EXTRACT_PASSWORD_PROTECTED));
+            assert_eq!(error.pointer, Some(OutcomePointer::Tool { tool_id: "lock-unlock".into() }));
+            let outcome = extract_with(&request(&damaged, mode, None, false), damaged.clone(), &helper);
+            let error = outcome.error().unwrap();
+            assert_eq!((&error.kind, error.message.as_str(), &error.pointer), (&ErrorKind::InvalidInput, PDF_DAMAGED, &None));
+        }
+        assert_eq!(files_in(&root), ["damaged.pdf", "locked.pdf"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pdf_with_only_an_owner_password_is_read() {
+        let root = sandbox("owner_only");
+        let input = root.join("restricted.pdf");
+        fs::write(&input, crate::kit::password::tests::pdf(Some(("owner", "")))).unwrap();
+        let helper = stand_in(&root, "printf 'Restricted\\n\\f'\n");
+        let outcome = extract_with(&request(&input, ExtractMode::Text, None, false), input.clone(), &helper);
+        assert_eq!(text_of(&outcome), "Restricted\n");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_missing_helper_is_unavailable_with_a_reinstall_hint_and_images_mode_still_runs() {
+        let root = sandbox("missing");
+        let input = root.join("missing.pdf");
+        pages_pdf(&input, 1);
+        let helper = TextHelper { path: Err("missing".into()), per_file: PDF_TEXT_TIME_PER_FILE, per_page: PDF_TEXT_TIME_PER_PAGE };
+        for mode in [ExtractMode::Text, ExtractMode::Both] {
+            let outcome = extract_with(&request(&input, mode, None, false), input.clone(), &helper);
+            let error = outcome.error().unwrap();
+            assert_eq!((&error.kind, error.message.as_str()), (&ErrorKind::Unavailable, PDF_TEXT_HELPER_MISSING));
+            assert!(error.message.contains("Reinstall Toolbox"));
+        }
+        let images = extract_with(&request(&input, ExtractMode::Images, None, false), input.clone(), &helper);
+        assert_eq!(images.error().map(|error| error.message.as_str()), Some(NO_EMBEDDED_IMAGES));
+        assert_eq!(files_in(&root), ["missing.pdf"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_text_deadline_is_twenty_seconds_per_file_plus_fifty_milliseconds_per_page() {
+        assert_eq!(PDF_TEXT_TIME_PER_FILE, Duration::from_secs(20));
+        assert_eq!(PDF_TEXT_TIME_PER_PAGE, Duration::from_millis(50));
+        let helper = TextHelper { path: Err(String::new()), per_file: PDF_TEXT_TIME_PER_FILE, per_page: PDF_TEXT_TIME_PER_PAGE };
+        assert_eq!(helper.time_limit(1), Duration::from_millis(20_050));
+        assert_eq!(helper.time_limit(200), Duration::from_secs(30));
+        let longest = crate::kit::common::limits::recorded("extract_from_pdf").unwrap();
+        assert_eq!(helper.time_limit(longest.max_pages.unwrap() as usize), Duration::from_secs(270));
+        assert!(helper.time_limit(longest.max_pages.unwrap() as usize) < longest.max_duration, "the helper deadline ends a long read before the job limit does");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_past_its_deadline_fails_alone_with_nothing_saved() {
+        let root = sandbox("deadline");
+        let slow = root.join("slow.pdf");
+        let quick = root.join("quick.pdf");
+        pages_pdf(&slow, 1);
+        pages_pdf(&quick, 1);
+        let mut helper = stand_in(&root, "case \"$*\" in *slow.pdf*) exec /bin/sleep 5;; esac\nprintf 'Quick\\n\\f'\n");
+        helper.per_file = Duration::from_millis(1_000);
+        helper.per_page = Duration::from_millis(20);
+        let started = Instant::now();
+        let outcome = extract_with(&request(&slow, ExtractMode::Text, None, false), slow.clone(), &helper);
+        assert!(started.elapsed() < Duration::from_secs(4), "the helper must be stopped at its deadline");
+        let error = outcome.error().unwrap();
+        assert_eq!(error.kind, ErrorKind::Processing);
+        assert_eq!(error.message, "Reading text took longer than 1 second, so it was stopped. The other PDFs weren't affected.");
+        assert!(outcome.output_paths().is_empty());
+        assert_eq!(text_of(&extract_with(&request(&quick, ExtractMode::Text, None, false), quick.clone(), &helper)), "Quick\n");
+        assert_eq!(files_in(&root), ["pdftotext-stand-in", "quick-text.txt", "quick.pdf", "slow.pdf"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn text_past_its_size_cap_fails_with_nothing_saved() {
+        let root = sandbox("size_cap");
+        let input = root.join("huge.pdf");
+        pages_pdf(&input, 1);
+        let helper = stand_in(&root, &format!("exec /bin/dd if=/dev/zero bs=1048576 count={} 2>/dev/null\n", PDF_TEXT_FILE_MAX_BYTES / 1_048_576 + 1));
+        let outcome = extract_with(&request(&input, ExtractMode::Text, None, false), input.clone(), &helper);
+        let error = outcome.error().unwrap();
+        assert_eq!((&error.kind, error.message.as_str()), (&ErrorKind::Processing, "The text is over 100 MB, so nothing was saved."));
+        assert_eq!(files_in(&root), ["huge.pdf", "pdftotext-stand-in"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    const BUNDLED_CHILD: &str = "TOOLBOX_EXTRACT_TEXT_BUNDLED_CHILD";
+
+    #[cfg(unix)]
+    #[test]
+    fn extraction_uses_the_bundled_pdftotext_when_path_is_empty() {
+        if std::env::var_os(BUNDLED_CHILD).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let _guard = crate::kit::lock_process_env();
+            let root = sandbox("bundled");
+            let pdf_bin = root.join("Resources").join("pdf-bin");
+            fs::create_dir_all(&pdf_bin).unwrap();
+            let helper = pdf_bin.join("pdftotext");
+            fs::write(&helper, "#!/bin/sh\nprintf 'BundledStandIn\\n\\f'\n").unwrap();
+            fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args(["kit::pdf::remaining::text_extraction_tests::extraction_uses_the_bundled_pdftotext_when_path_is_empty", "--exact", "--nocapture", "--test-threads=1"])
+                .env(BUNDLED_CHILD, root.join("work"))
+                .env("PATH", "")
+                .env("TOOLBOX_RESOURCE_ROOT", root.join("Resources"))
+                .env_remove("TOOLBOX_PDFTOTEXT_PATH")
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        assert_eq!(std::env::var_os("PATH").unwrap_or_default(), "");
+        let root = PathBuf::from(std::env::var_os(BUNDLED_CHILD).unwrap());
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("bundled.pdf");
+        pages_pdf(&input, 1);
+        assert_eq!(text_of(&extract(&request(&input, ExtractMode::Text, None, false), input.clone())), "BundledStandIn\n");
     }
 }
