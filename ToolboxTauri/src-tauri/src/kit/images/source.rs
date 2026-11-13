@@ -194,8 +194,8 @@ fn read_tiff_page(decoder: &mut tiff::decoder::Decoder<File>) -> Result<DynamicI
     use tiff::decoder::DecodingResult;
     let (width, height) = decoder.dimensions().map_err(|error| format!("Could not read TIFF dimensions: {error}"))?;
     let compression = decoder.find_tag_unsigned::<u16>(tiff::tags::Tag::Compression).ok().flatten().unwrap_or(1);
-    if compression == FAX3_COMPRESSION {
-        return read_fax3_page(decoder, width, height);
+    if matches!(compression, 3 | 4) && decoder.find_tag_unsigned::<u32>(tiff::tags::Tag::TileWidth).ok().flatten().is_none() {
+        return read_ccitt_page(decoder, compression, width, height);
     }
     if let Some(message) = unsupported_compression(compression) {
         return Err(message);
@@ -264,8 +264,6 @@ fn describe_variant(decoder: &mut tiff::decoder::Decoder<File>, color: tiff::Col
     format!("{bits}-bit {format}{model}")
 }
 
-const FAX3_COMPRESSION: u16 = 3;
-
 fn expand_bilevel(data: &[u8], width: u32, height: u32) -> Option<ImageBuffer<Luma<u8>, Vec<u8>>> {
     let stride = (width as usize).div_ceil(8);
     if data.len() < stride * height as usize { return None; }
@@ -285,40 +283,89 @@ fn ycbcr_to_rgb(mut data: Vec<u8>) -> Vec<u8> {
     data
 }
 
-// tiff 0.11 decodes Group 4 but not Group 3, so one-dimensional Group 3
-// strips go through the fax crate that tiff already uses for Group 4.
-fn read_fax3_page(decoder: &mut tiff::decoder::Decoder<File>, width: u32, height: u32) -> Result<DynamicImage, String> {
+/// The most pixels a fax page may decode to, matching the tiff crate's default decoding buffer limit.
+const MAX_FAX_PIXELS: u64 = 256 * 1024 * 1024;
+
+/// Decodes a stripped CCITT Group 3 (one- or two-dimensional, compression 3) or Group 4 (compression 4) page with
+/// hayro-ccitt, in-process and in pure Rust, into 8-bit greyscale.
+///
+/// Each strip is decoded on its own, `RowsPerStrip` rows at a time. `FillOrder` 2 strips are bit-reversed first.
+/// As in libtiff, a decoded black run is a sample bit of 1, so with `WhiteIsZero` (the fax default) it is black and
+/// with `BlackIsZero` it is white. A strip that ends before its rows are decoded fails the page. Tiled fax pages go
+/// through the tiff crate instead.
+fn read_ccitt_page(decoder: &mut tiff::decoder::Decoder<File>, compression: u16, width: u32, height: u32) -> Result<DynamicImage, String> {
+    use hayro_ccitt::{DecodeSettings, DecoderContext, EncodingMode};
     use std::io::{Read, Seek, SeekFrom};
     use tiff::tags::Tag;
-    let options = decoder.find_tag_unsigned::<u32>(Tag::Unknown(292)).ok().flatten().unwrap_or(0);
-    if options & 1 != 0 { return Err("Two-dimensional Group 3 fax pages aren't supported.".to_string()); }
-    let line_width = u16::try_from(width).map_err(|_| "The Group 3 fax page is too wide.".to_string())?;
+    let group = if compression == 3 { "Group 3" } else { "Group 4" };
+    let bits = decoder.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample).ok().flatten().unwrap_or_else(|| vec![1]);
+    let samples = decoder.find_tag_unsigned::<u16>(Tag::SamplesPerPixel).ok().flatten().unwrap_or(1);
+    if bits != [1] || samples != 1 { return Err(format!("{group} fax pages must be 1-bit black and white.")); }
+    if u64::from(width) * u64::from(height) > MAX_FAX_PIXELS { return Err(format!("The {group} fax page is too large to read.")); }
+    // T4Options bit 0 marks two-dimensional Group 3 coding and bit 2 byte-aligned EOLs, which the decoder reads as
+    // fill. Uncompressed mode (bit 1) isn't decoded, so its rows come up missing and fail the page.
+    let encoding = match compression {
+        3 if decoder.find_tag_unsigned::<u32>(Tag::Unknown(292)).ok().flatten().unwrap_or(0) & 1 != 0 => EncodingMode::Group3_2D,
+        3 => EncodingMode::Group3_1D,
+        _ => EncodingMode::Group4,
+    };
     let white_is_zero = decoder.find_tag_unsigned::<u16>(Tag::PhotometricInterpretation).ok().flatten() != Some(1);
     let reversed = decoder.find_tag_unsigned::<u16>(Tag::FillOrder).ok().flatten() == Some(2);
-    let rows_per_strip = decoder.find_tag_unsigned::<u32>(Tag::RowsPerStrip).ok().flatten().unwrap_or(height).max(1);
-    let offsets = decoder.get_tag_u64_vec(Tag::StripOffsets).map_err(|error| format!("Could not read the Group 3 fax strips: {error}"))?;
-    let counts = decoder.get_tag_u64_vec(Tag::StripByteCounts).map_err(|error| format!("Could not read the Group 3 fax strips: {error}"))?;
-    if offsets.len() != counts.len() { return Err("The Group 3 fax strips are damaged.".to_string()); }
-    let mut pixels = Vec::with_capacity(width as usize * height as usize);
+    let rows_per_strip = decoder.find_tag_unsigned::<u32>(Tag::RowsPerStrip).ok().flatten().unwrap_or(height).clamp(1, height.max(1));
+    let strips_failed = |error: tiff::TiffError| format!("Could not read the {group} fax strips: {error}");
+    let offsets = decoder.get_tag_u64_vec(Tag::StripOffsets).map_err(strips_failed)?;
+    let counts = decoder.get_tag_u64_vec(Tag::StripByteCounts).map_err(strips_failed)?;
+    if offsets.len() != counts.len() { return Err(format!("The {group} fax strips are damaged.")); }
+    let mut rows = FaxRows { width: width as usize, black: if white_is_zero { 0 } else { 255 }, wanted: 0, pixels: Vec::new() };
     for (offset, count) in offsets.into_iter().zip(counts) {
-        let rows = rows_per_strip.min(height - (pixels.len() / width as usize) as u32);
+        let decoded = (rows.pixels.len() / (width as usize).max(1)) as u32;
+        if decoded == height { break; }
+        let strip_rows = rows_per_strip.min(height - decoded);
         let mut strip = Vec::new();
         let reader = decoder.inner();
-        reader.seek(SeekFrom::Start(offset)).map_err(|error| format!("Could not read the Group 3 fax strip: {error}"))?;
-        reader.take(count).read_to_end(&mut strip).map_err(|error| format!("Could not read the Group 3 fax strip: {error}"))?;
+        let read_failed = |error: std::io::Error| format!("Could not read the {group} fax strip: {error}");
+        reader.seek(SeekFrom::Start(offset)).map_err(read_failed)?;
+        reader.take(count).read_to_end(&mut strip).map_err(read_failed)?;
         if reversed { strip.iter_mut().for_each(|byte| *byte = byte.reverse_bits()); }
-        strip.extend_from_slice(&[0x00, 0x01]);
-        let mut decoded = 0;
-        fax::decoder::decode_g3(strip.into_iter(), |transitions| {
-            if decoded < rows {
-                pixels.extend(fax::decoder::pels(transitions, line_width).map(|color| if (color == fax::Color::Black) == white_is_zero { 0 } else { 255 }));
-                decoded += 1;
-            }
-        });
-        if decoded < rows { return Err("The Group 3 fax data ends before the page does.".to_string()); }
-        if pixels.len() == width as usize * height as usize { break; }
+        let settings = DecodeSettings {
+            columns: width,
+            rows: strip_rows,
+            end_of_block: true,
+            // TIFF Group 3 rows start with EOL codes; Group 4 has none.
+            end_of_line: encoding != EncodingMode::Group4,
+            rows_are_byte_aligned: false,
+            encoding,
+            strict: false,
+        };
+        rows.wanted = rows.pixels.len() + strip_rows as usize * width as usize;
+        // Rows decoded before an error are kept, so the page fails only when rows are missing.
+        let _ = hayro_ccitt::decode(&strip, &mut rows, &mut DecoderContext::new(settings));
+        if rows.pixels.len() < rows.wanted { break; }
     }
-    ImageBuffer::<Luma<u8>, _>::from_raw(width, height, pixels)
+    ImageBuffer::<Luma<u8>, _>::from_raw(width, height, rows.pixels)
+        .filter(|page| page.len() == width as usize * height as usize)
         .map(DynamicImage::ImageLuma8)
-        .ok_or_else(|| "The Group 3 fax data ends before the page does.".to_string())
+        .ok_or_else(|| format!("The {group} fax data ends before the page does."))
+}
+
+/// Expands the rows hayro-ccitt reports as colour changes into 8-bit greyscale rows, up to the strip's last row.
+struct FaxRows {
+    width: usize,
+    black: u8,
+    wanted: usize,
+    pixels: Vec<u8>,
+}
+
+impl hayro_ccitt::Decoder for FaxRows {
+    fn push_row(&mut self, changes: &[u32]) {
+        if self.pixels.len() >= self.wanted { return; }
+        let start = self.pixels.len();
+        self.pixels.resize(start + self.width, 255 - self.black);
+        let row = &mut self.pixels[start..];
+        for span in changes.chunks(2) {
+            let from = (span[0] as usize).min(self.width);
+            let to = span.get(1).map_or(self.width, |end| (*end as usize).min(self.width));
+            row[from..to].fill(self.black);
+        }
+    }
 }

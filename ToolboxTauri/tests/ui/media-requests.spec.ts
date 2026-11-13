@@ -1145,6 +1145,35 @@ test.describe("Media requests", () => {
         await expect(page.getByRole("dialog")).toHaveCount(0);
     });
 
+    test("TIFF Pages takes fax and JPEG-compressed TIFFs in Split and Combine without a validation message", async ({ page }) => {
+        const scans = ["/local/tiff/fax-g3.tif", "/local/tiff/fax-g4.tiff", "/local/tiff/scan-jpeg.tif"];
+        await start(page, customFolder);
+        await openToolBySearch(page, "Split and Combine TIFF");
+        await choose(page, scans);
+        await expect(page.getByRole("region", { name: "Not added" })).toHaveCount(0);
+        await expect(page.locator(".file-selection-row")).toHaveCount(3);
+        await expect(page.locator(".file-selection-row[data-flag]")).toHaveCount(0);
+        await expect(page.locator(".workspace-primary-action")).toContainText("Split 3 TIFFs");
+        expect(await runOnce(page, "process_tiff_pages")).toEqual({ runId, request: {
+            mode: "split", paths: scans, outputLocation: { customFolder: "/Users/test/Media out" }, compression: "lzw",
+        } });
+
+        await tiffMode(page).getByRole("radio", { name: "Combine into one TIFF" }).click();
+        const grid = page.getByRole("listbox", { name: "Pages, in order" });
+        expect(await pageNames(grid)).toEqual([
+            "Position 1, fax-g3.tif page 1",
+            "Position 2, fax-g4.tiff page 1",
+            "Position 3, scan-jpeg.tif page 1",
+        ]);
+        await expect(page.getByRole("region", { name: "Pages" }).getByRole("alert")).toHaveCount(0);
+        const previewed = (await invocationsOf(page, "inspect_tiff_pages")).map((args) => (args as { request: { path: string } }).request.path);
+        expect([...new Set(previewed)]).toEqual(scans);
+        expect(await runOnce(page, "process_tiff_pages", "fax-g3-combined.tif")).toEqual({ runId, request: {
+            mode: "combine", paths: scans, pages: scans.map((path) => ({ path, page: 0 })),
+            outputLocation: { customFolder: "/Users/test/Media out" }, outputPath: "/Users/test/Media out/fax-g3-combined.tif", compression: "lzw",
+        } });
+    });
+
     test("TIFF Pages sends the chosen output compression in Split and Combine", async ({ page }) => {
         await start(page);
         await openToolBySearch(page, "Split and Combine TIFF");

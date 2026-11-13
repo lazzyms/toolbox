@@ -1192,6 +1192,10 @@ mod tests {
         many_to_one.sort_unstable();
         // process_tiff_pages is many-to-one in its explicit Combine mode; its explicit Split mode runs per file.
         assert_eq!(many_to_one, ["compare_pdfs", "create_gif", "images_to_pdf", "merge_pdfs", "process_tiff_pages"]);
+        let tiff_pages = native_capability("process_tiff_pages").unwrap();
+        assert_eq!(tiff_pages.accepted_extensions, [".tif", ".tiff"]);
+        // Fax (Group 3 and 4) and JPEG-compressed scans decode in-process, so the boundary takes them like any TIFF.
+        assert!(validate_command_inputs("process_tiff_pages", &[PathBuf::from("fax-g3.tif"), PathBuf::from("fax-g4.TIFF"), PathBuf::from("scan-jpeg.tif")]).is_ok());
 
         let office = native_capability("remove_password").unwrap();
         assert_eq!(office.accepted_extensions, [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"]);
