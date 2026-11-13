@@ -113,3 +113,60 @@ export const matchReportKey = (event: KeyboardEvent): ReportKeyId | null => {
   if (primary && event.shiftKey && !event.altKey && event.key.toLowerCase() === "c") return "copyReport";
   return null;
 };
+
+// Keys inside Formatted PDF's block editor (FormattedPdf board). They act on the block field that has focus, so
+// they are not window shortcuts and are not listed on the Shortcuts board. They are matched by KeyboardEvent.code
+// because Option and Shift change KeyboardEvent.key for digits.
+export type FormatKeyId =
+  | "bold"
+  | "italic"
+  | "heading1"
+  | "heading2"
+  | "heading3"
+  | "paragraph"
+  | "bulletedList"
+  | "numberedList"
+  | "pageBreak"
+  | "moveUp"
+  | "moveDown";
+
+interface FormatKey { code: string; primary: boolean; shift: boolean; alt: boolean; key: string; aria: string }
+
+const formatKeys: Record<FormatKeyId, FormatKey> = {
+  bold: { code: "KeyB", primary: true, shift: false, alt: false, key: "B", aria: "B" },
+  italic: { code: "KeyI", primary: true, shift: false, alt: false, key: "I", aria: "I" },
+  heading1: { code: "Digit1", primary: true, shift: false, alt: true, key: "1", aria: "1" },
+  heading2: { code: "Digit2", primary: true, shift: false, alt: true, key: "2", aria: "2" },
+  heading3: { code: "Digit3", primary: true, shift: false, alt: true, key: "3", aria: "3" },
+  paragraph: { code: "Digit0", primary: true, shift: false, alt: true, key: "0", aria: "0" },
+  bulletedList: { code: "Digit8", primary: true, shift: true, alt: false, key: "8", aria: "8" },
+  numberedList: { code: "Digit7", primary: true, shift: true, alt: false, key: "7", aria: "7" },
+  pageBreak: { code: "Enter", primary: true, shift: true, alt: false, key: "↵", aria: "Enter" },
+  moveUp: { code: "ArrowUp", primary: false, shift: true, alt: true, key: "↑", aria: "ArrowUp" },
+  moveDown: { code: "ArrowDown", primary: false, shift: true, alt: true, key: "↓", aria: "ArrowDown" },
+};
+
+export const formatKeyLabel = (id: FormatKeyId) => {
+  const { primary, shift, alt, key } = formatKeys[id];
+  if (isWindows()) return [primary && "Ctrl", alt && "Alt", shift && "Shift", key === "↵" ? "Enter" : key].filter(Boolean).join("+");
+  return `${alt ? "⌥" : ""}${shift ? "⇧" : ""}${primary ? "⌘" : ""}${key}`;
+};
+
+export const formatKeyAria = (id: FormatKeyId) => {
+  const { primary, shift, alt, aria } = formatKeys[id];
+  return [primary && (isWindows() ? "Control" : "Meta"), alt && "Alt", shift && "Shift", aria].filter(Boolean).join("+");
+};
+
+/** The format key an event presses, or null. IME composition never formats; the caller decides which fields listen. */
+export const matchFormatKey = (event: KeyboardEvent): FormatKeyId | null => {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return null;
+  const primary = primaryModifierPressed(event);
+  // The other platform's primary key (Ctrl on macOS, the Windows key on Windows) is never part of a format key.
+  if (isWindows() ? event.metaKey : event.ctrlKey) return null;
+  const code = event.code === "NumpadEnter" ? "Enter" : event.code;
+  const match = (Object.keys(formatKeys) as FormatKeyId[]).find((id) => {
+    const key = formatKeys[id];
+    return key.code === code && key.primary === primary && key.shift === event.shiftKey && key.alt === event.altKey;
+  });
+  return match ?? null;
+};
