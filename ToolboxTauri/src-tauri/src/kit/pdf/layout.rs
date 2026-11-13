@@ -846,7 +846,8 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
         let columns = rows.iter().map(Vec::len).chain([head.len(), aligns.len()]).max().unwrap_or(0);
         if columns == 0 { return Ok(()); }
         let (natural, minimum) = self.column_widths(head, rows, columns, size)?;
-        let wanted = natural.iter().map(|value| value + 2. * pad).collect::<Vec<_>>();
+        // A hair over the natural width, so the widest cell is not wrapped by rounding when the padding comes off again.
+        let wanted = natural.iter().map(|value| value + 2. * pad + 0.01).collect::<Vec<_>>();
         let total = wanted.iter().sum::<f32>();
         let mut widths = if total <= width { wanted } else {
             let floors = minimum.iter().map(|value| (value + 2. * pad).min(width / columns as f32)).collect::<Vec<_>>();
@@ -857,7 +858,13 @@ impl<'b, 'r, S: SystemFontLookup> Flow<'b, 'r, S> {
         let align = |column: usize| aligns.get(column).copied().unwrap_or(Align::Left);
 
         let has_head = head.iter().any(|cell| !cell.is_empty());
-        if has_head { self.table_row(head, &widths, x, size, pad, true, &align)?; }
+        if has_head {
+            // The header starts the next page rather than sit alone at the foot of this one.
+            let first = match rows.first() { Some(row) => self.row_height(row, &widths, size, pad, false)?, None => 0. };
+            let head_height = self.row_height(head, &widths, size, pad, true)?;
+            self.need(head_height + first);
+            self.table_row(head, &widths, x, size, pad, true, &align)?;
+        }
         for row in rows {
             let height = self.row_height(row, &widths, size, pad, false)?;
             if self.need(height) && has_head { self.table_row(head, &widths, x, size, pad, true, &align)?; }
