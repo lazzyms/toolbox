@@ -61,6 +61,14 @@ export const RunStateContext = createContext<((running: boolean) => void) | null
 
 export type RunContext = { outputPath: string | null; runId: string };
 
+/** What a report can do after its run: retry one file, and save to this run's destination. */
+export interface ReportRun {
+    withPassword?: (inputPath: string, password: string) => Promise<void>;
+    destination: { location: OutputLocation; change: () => void };
+    /** Checks the destination folder first and offers another one when it can't be used. */
+    saveTo: (save: (location: OutputLocation) => Promise<void>) => Promise<void>;
+}
+
 export type RunHandler = (files: string[], outputLocation: OutputLocation, run: RunContext) => Promise<JobOutcome[]>;
 
 /** Save As for a tool that writes one file per input: the person names the file in the shared, never-replace save step. */
@@ -107,10 +115,12 @@ interface ToolScaffoldProps {
     /** Replaces the list's default hint, for example when the view needs more files. */
     listHint?: string;
     /**
-     * Marks a read-only tool that saves nothing: the run skips the output-folder check
-     * and the finished results show through this instead of the result list.
+     * Marks a read-only tool: the run skips the output-folder check and the finished
+     * results show through this instead of the result list.
      */
-    renderReport?: (results: JobOutcome[], retry: { withPassword?: (inputPath: string, password: string) => Promise<void> }) => React.ReactNode;
+    renderReport?: (results: JobOutcome[], run: ReportRun) => React.ReactNode;
+    /** Replaces the destination's label and example for a tool whose saves are not its run. */
+    destinationCopy?: (files: string[]) => { label: string; note: string };
     children: (props: {
         files: string[];
         failingFiles: string[];
@@ -137,7 +147,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, confirmDiscard, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, renderReport, destinationCopy, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -158,7 +168,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
     const [retrying, setRetrying] = useState(false);
     const defaultLocation = useOutputLocation();
     const [runOverride, setRunOverride] = useState<OutputLocation | null>(null);
-    const [blocked, setBlocked] = useState<(BlockedDestination & { handler: RunHandler }) | null>(null);
+    const [blocked, setBlocked] = useState<(BlockedDestination & { retry: (location: OutputLocation) => void }) | null>(null);
     const outputLocation = runOverride ?? defaultLocation;
     const runGeneration = useRef(0);
     const browseRef = useRef<WorkspaceSourceAction>(() => undefined);
@@ -243,7 +253,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
             if (!renderReport && location !== 'alongsideInput' && !saveAs) {
                 const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
                 if (check !== 'ready') {
-                    if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, handler });
+                    if (generation === runGeneration.current) setBlocked({ folder: location.customFolder, check, retry: (next) => void runWith(handler, next) });
                     return;
                 }
             }
@@ -323,7 +333,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         if (!blocked) return;
         setBlocked(null);
         overrideWith('alongsideInput');
-        void runWith(blocked.handler, 'alongsideInput');
+        blocked.retry('alongsideInput');
     };
 
     const chooseBlockedFolder = async () => {
@@ -340,7 +350,18 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
         const location = { customFolder: folder };
         setBlocked(null);
         overrideWith(location);
-        void runWith(blocked.handler, location);
+        blocked.retry(location);
+    };
+
+    const saveTo = async (save: (location: OutputLocation) => Promise<void>, location: OutputLocation = outputLocation) => {
+        if (location !== 'alongsideInput') {
+            const check = await invoke<FolderCheck>('check_output_folder', { folder: location.customFolder });
+            if (check !== 'ready') {
+                setBlocked({ folder: location.customFolder, check, retry: (next) => void saveTo(save, next) });
+                return;
+            }
+        }
+        await save(location);
     };
 
     const rerun = async (paths: string[], handler = perFileRun?.handler) => {
@@ -852,7 +873,9 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         defaultLocation={defaultLocation}
                         overridden={runOverride !== null}
                         toolTitle={utility.title}
-                        exampleName={files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
+                        label={destinationCopy?.(files).label}
+                        note={destinationCopy?.(files).note}
+                        exampleName={destinationCopy ? null : files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
                         exampleHint={exampleHint}
                         savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
                         onChange={() => void changeForRun()}
@@ -880,6 +903,8 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
 
             {renderReport && !loading && results.length > 0 ? renderReport(results, {
                 withPassword: perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined,
+                destination: { location: outputLocation, change: () => void changeForRun() },
+                saveTo,
             }) : <ResultList
                 results={results}
                 progress={progress}

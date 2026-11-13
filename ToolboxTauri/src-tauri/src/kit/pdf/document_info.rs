@@ -6,7 +6,7 @@ use lopdf::{Document, LoadOptions, Object};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::{escape::unescape, NsReader, XmlVersion};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::kit::contracts::ToolError;
 use crate::kit::password::WRONG_PASSWORD;
@@ -17,7 +17,7 @@ const DC: &[u8] = b"http://purl.org/dc/elements/1.1/";
 const XMP: &[u8] = b"http://ns.adobe.com/xap/1.0/";
 const PDF: &[u8] = b"http://ns.adobe.com/pdf/1.3/";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DocumentProperty {
     Title,
@@ -116,7 +116,14 @@ impl Serialize for PdfDate {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+impl<'de> Deserialize<'de> for PdfDate {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        parse_xmp_date(&text).ok_or_else(|| serde::de::Error::custom(format!("invalid date {text:?}")))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PdfProperties {
     pub title: Option<String>,
@@ -183,7 +190,7 @@ impl PdfProperties {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XmpSummary {
     #[serde(flatten)]
@@ -191,7 +198,7 @@ pub struct XmpSummary {
     pub properties: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PropertyConflict {
     pub property: DocumentProperty,

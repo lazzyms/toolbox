@@ -80,12 +80,22 @@ const ndaReport = {
   unsupported: ["The file's save history could not be read."],
 };
 
-type HarnessWindow = Window & { calls: Array<{ command: string; args: any }>; navigations: unknown[]; picked?: string[] };
+type HarnessWindow = Window & {
+  calls: Array<{ command: string; args: any }>;
+  navigations: unknown[];
+  picked?: string[] | string;
+  clipboard: string[];
+  folderCheck?: string;
+  taken?: string[];
+  unsaved?: string[];
+};
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(({ cleanPath, leakyPath, ndaPath, brokenPath, lockedPath, lockedPassword, cleanReport, leakyReport, ndaReport }) => {
     const w = window as unknown as HarnessWindow;
     w.calls = [];
+    w.clipboard = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { w.clipboard.push(text); } } });
     const reports: Record<string, unknown> = { [cleanPath]: cleanReport, [leakyPath]: leakyReport, [ndaPath]: ndaReport };
     (window as any).__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" } },
@@ -94,7 +104,19 @@ test.beforeEach(async ({ page }) => {
         w.calls.push({ command, args });
         if (command === "plugin:dialog|open") return w.picked ?? [cleanPath, leakyPath, ndaPath, brokenPath];
         if (command === "plugin:path|resolve_directory") return "/Users/test";
-        if (command === "check_output_folder") return "ready";
+        if (command === "check_output_folder") return w.folderCheck ?? "ready";
+        if (command === "save_privacy_reports") {
+          const { reports: saved, format, outputLocation } = args.request;
+          return saved.map(({ inputPath }: { inputPath: string }) => {
+            const stem = inputPath.split("/").pop()!.replace(/\.pdf$/, "");
+            if (w.unsaved?.includes(stem)) {
+              return { inputPath, outputPaths: [], state: "failed", detail: "", failure: { kind: "processing", message: "The output folder is read-only.", pointer: { kind: "outputFolder" } }, reason: null, warnings: [] };
+            }
+            const folder = outputLocation === "alongsideInput" ? inputPath.slice(0, inputPath.lastIndexOf("/")) : outputLocation.customFolder;
+            const name = `${stem}-details${w.taken?.includes(stem) ? "-1" : ""}.${format === "json" ? "json" : "md"}`;
+            return { inputPath, outputPaths: [`${folder}/${name}`], state: "succeeded", detail: "", failure: null, reason: null, warnings: [] };
+          });
+        }
         if (command === "inspect_pdf_privacy") {
           const { paths, password, passwordOverrides } = args.request;
           return paths.map((inputPath: string) => inputPath === lockedPath && (passwordOverrides?.[inputPath] || password) !== lockedPassword
@@ -156,7 +178,11 @@ test("Privacy Check sends the paths with no password and shows one report or err
   await page.getByRole("button", { name: "Choose files to process" }).click();
   await expect(page.getByText("Nothing is changed or saved. Your original stays unchanged.")).toBeVisible();
   await expect(page.getByText("Reads each PDF and makes a report. No file is changed or saved.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Change for this run" })).toHaveCount(0);
+  const destination = page.getByRole("region", { name: "Destination" });
+  await expect(destination.getByText("Save reports to")).toBeVisible();
+  await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Reports");
+  await expect(destination.getByText("Reports are only saved when you choose Save. Names: clean-details.json or .md. An existing name gets -1, -2 and so on.")).toBeVisible();
+  await expect(destination.getByTestId("run-destination-example")).toHaveCount(0);
 
   await page.getByRole("button", { name: /^Check 4 PDFs/ }).click();
 
@@ -173,7 +199,7 @@ test("Privacy Check sends the paths with no password and shows one report or err
   await expect(clean.getByRole("list", { name: "Report categories" }).getByRole("heading")).toHaveText(categoryNames);
   await expectNoneFound(clean, categoryNames);
   await expect(clean.getByText("14 categories with none found. Everything was checked.")).toBeVisible();
-  await expect(clean.getByRole("button")).toHaveCount(0);
+  await expect(clean.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown"]);
   await expect(clean.getByRole("alert")).toHaveCount(0);
 
   const leaky = report(page, "lease.pdf");
@@ -232,7 +258,7 @@ test("Privacy Check sends the paths with no password and shows one report or err
     ]],
   ]);
   await expectNoneFound(leaky, ["Digital signatures"]);
-  await expect(leaky.getByRole("button")).toHaveText(["Open Edit PDF"]);
+  await expect(leaky.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown", "Open Edit PDF"]);
   await expect(category(leaky, "Filled form fields").getByRole("button", { name: "Open Edit PDF" })).toBeVisible();
 
   const nda = report(page, "nda.pdf");
@@ -254,7 +280,7 @@ test("Privacy Check sends the paths with no password and shows one report or err
   await expect(unchecked).toHaveText("Earlier versions (incremental updates)Couldn't be read. See Unsupported items.");
   await expect(unchecked).toHaveAttribute("data-found", "unchecked");
   await expectNoneFound(nda, ["Document information", "XMP metadata", "Embedded files", "JavaScript and automatic actions", "Filled form fields", "Encryption and permissions", "Document IDs", "Thumbnails and page piece data"]);
-  await expect(nda.getByRole("button")).toHaveCount(0);
+  await expect(nda.getByRole("button")).toHaveText(["Copy", "Save as JSON", "Save as Markdown"]);
 
   const broken = report(page, "broken.pdf");
   await expect(broken.getByText("~/Documents · Not read")).toBeVisible();
@@ -383,4 +409,162 @@ test("PDFs that need no password are checked without one, and clearing the list 
   await pick(page, [cleanPath, lockedPath]);
   await expect(page.getByLabel("Open password for all files", { exact: true })).toHaveValue("");
   await expect(page.getByText("Own password", { exact: true })).toHaveCount(0);
+});
+
+const setHarness = (page: Page, values: Partial<Pick<HarnessWindow, "picked" | "folderCheck" | "taken" | "unsaved">>) =>
+  page.evaluate((values) => Object.assign(window as unknown as HarnessWindow, values), values);
+const clipboard = (page: Page) => page.evaluate(() => (window as unknown as HarnessWindow).clipboard);
+const checkAll = async (page: Page) => {
+  await page.getByRole("button", { name: "Choose files to process" }).click();
+  await page.getByRole("button", { name: /^Check 4 PDFs/ }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Done." })).toBeVisible();
+};
+const savedFlag = (page: Page) => page.locator(".privacy-report-saved");
+const savedRows = (page: Page) => page.getByRole("list", { name: "Results" }).getByRole("listitem");
+const cleanMarkdown = `# clean.pdf
+
+~/Documents · 1 page
+
+0 high, 0 medium, 0 low. 14 categories with none found. Everything was checked.
+${categoryNames.map((name) => `\n## ${name}\n\nNone found\n`).join("")}`;
+
+test("Copy places one report's Markdown on the clipboard, and Copy all places every report's", async ({ page }) => {
+  await checkAll(page);
+  await expect(report(page, "broken.pdf").getByRole("button")).toHaveCount(0);
+
+  await report(page, "clean.pdf").getByRole("group", { name: "This report" }).getByRole("button", { name: "Copy" }).click();
+  await expect(report(page, "clean.pdf").getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await clipboard(page)).toEqual([cleanMarkdown]);
+
+  await report(page, "lease.pdf").getByRole("button", { name: "Copy" }).click();
+  await report(page, "nda.pdf").getByRole("button", { name: "Copy" }).click();
+  const [, lease, nda] = await clipboard(page);
+  expect(lease).toContain(`# lease.pdf
+
+~/Documents · 14 pages
+
+3 high, 6 medium, 4 low. 1 category with none found. 1 item wasn't checked.
+
+## Document information
+
+Medium · 4 fields
+
+Why it matters: Anyone you send the file to can see who made it, with which apps, and when.
+
+- Author: Asha Patel
+- Created with: Microsoft Word
+- Saved as PDF by: Acrobat Distiller 9.0.1 (Windows)
+- Created: 2026-03-02 09:14
+
+## XMP metadata
+`);
+  expect(nda).toContain("## Earlier versions (incremental updates)\n\nCouldn't be read. See Unsupported items.\n");
+  expect(`${lease}${nda}`).not.toContain(lockedPassword);
+
+  const all = page.getByRole("group", { name: "All 3 reports" });
+  await expect(all).toHaveText(/^All 3 reports:/);
+  await all.getByRole("button", { name: "Copy all" }).click();
+  expect((await clipboard(page)).at(-1)).toBe([cleanMarkdown, lease, nda].join("\n"));
+  expect(await calls(page, "save_privacy_reports")).toEqual([]);
+  expect(await calls(page, "inspect_pdf_privacy")).toHaveLength(1);
+});
+
+test("Save as JSON sends that report to the run's destination and the saved row opens and reveals the file", async ({ page }) => {
+  await setHarness(page, { picked: [leakyPath] });
+  await page.getByRole("button", { name: "Choose files to process" }).click();
+  await page.getByRole("button", { name: /^Check 1 PDF/ }).click();
+  await expect(page.getByRole("group", { name: /^All / })).toHaveCount(0);
+  await expect(page.getByTestId("report-destination")).toHaveText("~/Reports");
+
+  await report(page, "lease.pdf").getByRole("button", { name: "Save as JSON" }).click();
+  await expect(savedFlag(page)).toContainText("Saved 1 JSON report to ~/Reports.");
+  expect((await calls(page, "check_output_folder")).map((call) => call.args)).toEqual([{ folder: "/Users/test/Reports" }]);
+  expect((await calls(page, "save_privacy_reports")).map((call) => call.args)).toEqual([
+    { request: { reports: [{ inputPath: leakyPath, report: leakyReport }], format: "json", outputLocation: { customFolder: "/Users/test/Reports" } } },
+  ]);
+  expect(await calls(page, "inspect_pdf_privacy")).toHaveLength(1);
+
+  await expect(savedRows(page)).toHaveCount(1);
+  await expect(savedRows(page).first()).toContainText("lease-details.json");
+  await savedRows(page).first().getByRole("button", { name: "Open lease-details.json" }).click();
+  await savedRows(page).first().getByRole("button", { name: /^Show in .*: lease-details\.json$/ }).click();
+  await savedFlag(page).getByRole("button", { name: /^Show in / }).click();
+  expect((await calls(page, "open_output_path")).map((call) => call.args)).toEqual([{ path: "/Users/test/Reports/lease-details.json" }]);
+  expect((await calls(page, "reveal_output_path")).map((call) => call.args)).toEqual([
+    { path: "/Users/test/Reports/lease-details.json" }, { path: "/Users/test/Reports/lease-details.json" },
+  ]);
+});
+
+test("Save all as Markdown sends every readable report with its Markdown and names a taken name", async ({ page }) => {
+  await setHarness(page, { taken: ["nda"] });
+  await checkAll(page);
+  await page.getByRole("button", { name: "Copy all" }).click();
+  const [all] = await clipboard(page);
+
+  await page.getByRole("group", { name: "All 3 reports" }).getByRole("button", { name: "Save all as Markdown" }).click();
+  await expect(savedFlag(page)).toContainText("Saved 3 Markdown reports to ~/Reports. One name was taken, so it was saved as nda-details-1.md.");
+  const [save] = (await calls(page, "save_privacy_reports")).map((call) => call.args);
+  expect(save.request.format).toBe("markdown");
+  expect(save.request.outputLocation).toEqual({ customFolder: "/Users/test/Reports" });
+  expect(save.request.reports.map(({ inputPath, report }: { inputPath: string; report: unknown }) => [inputPath, report])).toEqual([
+    [cleanPath, cleanReport], [leakyPath, leakyReport], [ndaPath, ndaReport],
+  ]);
+  expect(save.request.reports.map(({ markdown }: { markdown: string }) => markdown).join("\n")).toBe(all);
+  await expect(savedRows(page).locator(".result-row-name")).toHaveText(["clean-details.md", "lease-details.md", "nda-details-1.md"]);
+});
+
+test("A report that can't be saved fails alone and points at the output folder", async ({ page }) => {
+  await setHarness(page, { unsaved: ["lease"] });
+  await checkAll(page);
+  await page.getByRole("button", { name: "Save all as JSON" }).click();
+  await expect(savedFlag(page)).toContainText("Saved 2 of 3 JSON reports to ~/Reports. 1 couldn't be saved.");
+  await expect(savedRows(page).filter({ hasText: "lease.pdf" })).toContainText("The output folder is read-only.");
+  await expect(savedRows(page).filter({ hasText: "lease.pdf" }).getByRole("button", { name: "Choose output folder" })).toBeVisible();
+});
+
+test("A per-run destination is shown, sent with the save, and leaves the default unchanged", async ({ page }) => {
+  await checkAll(page);
+  await setHarness(page, { picked: "/Users/test/Shared/Run" });
+  await page.locator(".privacy-reports-footer").getByRole("button", { name: "Change for this run" }).click();
+
+  const destination = page.getByRole("region", { name: "Destination" });
+  await expect(destination.getByText("This run only")).toBeVisible();
+  await expect(destination.getByTestId("run-destination-path")).toHaveText("~/Shared/Run");
+  await expect(destination.getByText("Your default is ~/Reports. This change ends when you leave Privacy Check.")).toBeVisible();
+  await expect(page.getByTestId("report-destination")).toHaveText("~/Shared/Run");
+  const folderDialog = (await calls(page, "plugin:dialog|open")).at(-1)!.args;
+  expect(folderDialog.options).toMatchObject({ directory: true, multiple: false });
+
+  await report(page, "clean.pdf").getByRole("button", { name: "Save as Markdown" }).click();
+  await expect(savedFlag(page)).toContainText("Saved 1 Markdown report to ~/Shared/Run.");
+  expect((await calls(page, "save_privacy_reports")).map((call) => call.args.request.outputLocation)).toEqual([{ customFolder: "/Users/test/Shared/Run" }]);
+
+  await destination.getByRole("button", { name: "Reset to default" }).click();
+  await expect(page.getByTestId("report-destination")).toHaveText("~/Reports");
+  await report(page, "clean.pdf").getByRole("button", { name: "Save as JSON" }).click();
+  await expect(savedFlag(page)).toContainText("Saved 1 JSON report to ~/Reports.");
+  expect((await calls(page, "save_privacy_reports")).map((call) => call.args.request.outputLocation)).toEqual([
+    { customFolder: "/Users/test/Shared/Run" }, { customFolder: "/Users/test/Reports" },
+  ]);
+  expect((await page.evaluate(() => (window as unknown as HarnessWindow).calls)).filter(({ command }) => command.startsWith("plugin:store"))).toEqual([]);
+  expect(await calls(page, "inspect_pdf_privacy")).toHaveLength(1);
+});
+
+test("A missing destination folder asks first, and saving next to the originals sends that for this run only", async ({ page }) => {
+  await checkAll(page);
+  await setHarness(page, { folderCheck: "missing" });
+  await report(page, "nda.pdf").getByRole("button", { name: "Save as JSON" }).click();
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByRole("heading")).toHaveText("The folder Reports is missing");
+  expect(await calls(page, "save_privacy_reports")).toEqual([]);
+  await dialog.getByRole("button", { name: "Save next to originals" }).click();
+
+  await expect(savedFlag(page)).toContainText("Saved 1 JSON report next to each original.");
+  expect((await calls(page, "save_privacy_reports")).map((call) => call.args)).toEqual([
+    { request: { reports: [{ inputPath: ndaPath, report: ndaReport }], format: "json", outputLocation: "alongsideInput" } },
+  ]);
+  await expect(savedRows(page).locator(".result-row-name")).toHaveText(["nda-details.json"]);
+  await expect(page.getByRole("region", { name: "Destination" }).getByText("This run only")).toBeVisible();
+  await expect(page.getByTestId("report-destination")).toHaveText("Next to each original");
 });

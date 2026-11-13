@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use lopdf::{Document, Object, Permissions};
@@ -9,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use super::document_info::{self, PdfProperties, PropertyConflict, XmpSummary};
 use super::hidden_content::{self, HiddenContent};
-use crate::kit::contracts::{JobOutcome, ToolError};
+use crate::kit::common::batch_runner::READ_ONLY_OUTPUT_MESSAGE;
+use crate::kit::common::OutputNaming;
+use crate::kit::contracts::{JobOutcome, OutcomePointer, OutputLocation, ToolError};
 
 /// The open password for the batch plus per-file overrides, as in the shared password request.
 /// An empty password counts as none, so files that open without one are read directly.
@@ -43,7 +46,7 @@ impl fmt::Debug for PrivacyRequest {
 }
 
 /// One PDF's report. Every category is present; an empty one means none found.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyReport {
     pub page_count: usize,
@@ -56,14 +59,14 @@ pub struct PrivacyReport {
     pub unsupported: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XmpReport {
     pub summary: Option<XmpSummary>,
     pub conflicts: Vec<PropertyConflict>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Permission {
     Print,
@@ -89,7 +92,7 @@ impl Permission {
     ];
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EncryptionReport {
     /// False when anyone can open the file without a password.
@@ -102,14 +105,14 @@ pub struct EncryptionReport {
     pub denied: Vec<Permission>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentifierReport {
     pub document_id: Option<DocumentId>,
     pub producer: Option<ProducerSoftware>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentId {
     /// Hex of the ID set at the first save.
@@ -120,7 +123,7 @@ pub struct DocumentId {
     pub unchanged: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerSoftware {
     pub name: String,
@@ -171,6 +174,75 @@ pub fn inspect_job(request: &PrivacyRequest, input: PathBuf) -> JobOutcome {
             Err(error) => JobOutcome::failure(input, ToolError::processing(format!("Could not build the report: {error}"))),
         },
         Err(error) => JobOutcome::failure(input, error),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReportFormat {
+    Json,
+    Markdown,
+}
+
+impl ReportFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Markdown => "md",
+        }
+    }
+}
+
+/// One PDF's report to save. The Markdown is the text the view copies, so a saved .md matches the clipboard.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportToSave {
+    pub input_path: PathBuf,
+    pub report: PrivacyReport,
+    #[serde(default)]
+    pub markdown: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveReportsRequest {
+    pub reports: Vec<ReportToSave>,
+    pub format: ReportFormat,
+    pub output_location: OutputLocation,
+}
+
+/// Writes one "{stem}-details" file per report. It never opens or writes the PDF it describes.
+pub fn save_reports(request: &SaveReportsRequest) -> Vec<JobOutcome> {
+    request.reports.iter().map(|entry| save_report(entry, request.format, &request.output_location)).collect()
+}
+
+fn save_report(entry: &ReportToSave, format: ReportFormat, location: &OutputLocation) -> JobOutcome {
+    let input = entry.input_path.clone();
+    if !input.is_absolute() || input.file_stem().is_none() {
+        return JobOutcome::failure(input, ToolError::invalid_input("The report does not name a PDF."));
+    }
+    let content = match format {
+        ReportFormat::Json => match serde_json::to_string_pretty(&entry.report) {
+            Ok(json) => json,
+            Err(error) => return JobOutcome::failure(input, ToolError::processing(format!("Could not build the report: {error}"))),
+        },
+        ReportFormat::Markdown => match entry.markdown.as_deref().filter(|markdown| !markdown.trim().is_empty()) {
+            Some(markdown) => markdown.to_owned(),
+            None => return JobOutcome::failure(input, ToolError::invalid_input("The Markdown report is missing.")),
+        },
+    };
+    let saved = OutputNaming::create_destination(&input, location, "-details", format.extension()).and_then(|(reservation, mut file)| {
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        reservation.publish()
+    });
+    match saved {
+        Ok(path) => JobOutcome::succeeded(input, vec![path], String::new()),
+        Err(error) if matches!(error.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem) => {
+            JobOutcome::failure(input, ToolError::processing(READ_ONLY_OUTPUT_MESSAGE).with_pointer(OutcomePointer::OutputFolder))
+        }
+        Err(error) => JobOutcome::failure(input, ToolError::processing(format!("Could not save the report: {error}"))),
     }
 }
 
@@ -800,5 +872,117 @@ mod tests {
             assert_eq!(outcomes[1].error().map(|error| &error.kind), Some(&ErrorKind::WrongPassword), "{password:?}");
             assert_eq!(opened(&outcomes[2])["pageCount"], 1);
         }
+    }
+
+    /// Builds the save request the view sends, from each file's inspected report as JSON.
+    fn save_request(outcomes: &[JobOutcome], format: &str, output_location: serde_json::Value) -> SaveReportsRequest {
+        let reports = outcomes
+            .iter()
+            .map(|outcome| {
+                let markdown = format!("# {}\n\n## Author\n\nFound\n", outcome.input_path.file_name().unwrap().to_string_lossy());
+                serde_json::json!({ "inputPath": outcome.input_path, "report": opened(outcome), "markdown": (format == "markdown").then_some(markdown) })
+            })
+            .collect::<Vec<_>>();
+        serde_json::from_value(serde_json::json!({ "reports": reports, "format": format, "outputLocation": output_location })).expect("the view's save request")
+    }
+
+    fn saved(outcomes: &[JobOutcome]) -> Vec<PathBuf> {
+        outcomes
+            .iter()
+            .map(|outcome| {
+                assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{outcome:?}");
+                assert_eq!(outcome.output_paths().len(), 1, "one report file per PDF");
+                outcome.output_paths()[0].clone()
+            })
+            .collect()
+    }
+
+    fn file_names(paths: &[PathBuf]) -> Vec<String> {
+        paths.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn saved_reports_are_one_details_file_per_pdf_parse_back_unchanged_never_overwrite_and_leave_the_pdfs_alone() {
+        let sandbox = Sandbox::new("save");
+        let fixtures = [
+            ("information.pdf", pdf(information())),
+            ("xmp.pdf", pdf(conflicting_xmp())),
+            ("hidden.pdf", with_incremental_updates(pdf(hidden_content()), 1)),
+            ("locked.pdf", locked_with(crate::kit::TEST_PASSWORD)),
+        ];
+        let paths = fixtures.iter().map(|(name, bytes)| sandbox.file(name, bytes)).collect::<Vec<_>>();
+        let outcomes = run(&privacy_request(&paths, None, &[(&paths[3], crate::kit::TEST_PASSWORD)]));
+        let folder = sandbox.0.join("reports");
+        std::fs::create_dir(&folder).unwrap();
+        let custom = serde_json::json!({ "customFolder": folder });
+
+        let json = saved(&save_reports(&save_request(&outcomes, "json", custom.clone())));
+        assert_eq!(file_names(&json), ["information-details.json", "xmp-details.json", "hidden-details.json", "locked-details.json"]);
+        assert!(json.iter().all(|path| path.parent() == Some(folder.as_path())));
+        for (path, outcome) in json.iter().zip(&outcomes) {
+            let original: PrivacyReport = serde_json::from_str(&outcome.detail).unwrap();
+            let parsed: PrivacyReport = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).expect("saved JSON is the report structure");
+            assert_eq!(parsed, original, "{}", path.display());
+        }
+        let information: PrivacyReport = serde_json::from_str(&outcomes[0].detail).unwrap();
+        assert_eq!(information.document_information.creation_date.map(|date| date.to_string()).as_deref(), Some("2024-01-02T03:04:05Z"));
+
+        let again = saved(&save_reports(&save_request(&outcomes, "json", custom)));
+        assert_eq!(file_names(&again), ["information-details-1.json", "xmp-details-1.json", "hidden-details-1.json", "locked-details-1.json"]);
+        assert_eq!(std::fs::read(&again[0]).unwrap(), std::fs::read(&json[0]).unwrap(), "a numbered copy holds the same report");
+
+        let markdown = saved(&save_reports(&save_request(&outcomes, "markdown", serde_json::json!("alongsideInput"))));
+        assert_eq!(markdown, ["information", "xmp", "hidden", "locked"].map(|stem| sandbox.0.join(format!("{stem}-details.md"))));
+        assert_eq!(std::fs::read_to_string(&markdown[1]).unwrap(), "# xmp.pdf\n\n## Author\n\nFound\n");
+
+        for ((_, bytes), path) in fixtures.iter().zip(&paths) {
+            assert_eq!(&std::fs::read(path).unwrap(), bytes, "{} must stay byte-identical", path.display());
+        }
+        for path in json.iter().chain(&again).chain(&markdown) {
+            assert!(!std::fs::read_to_string(path).unwrap().contains(crate::kit::TEST_PASSWORD), "{} must not hold a password", path.display());
+        }
+        let mut leftovers = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        leftovers.sort();
+        assert_eq!(leftovers, file_names(&json).into_iter().chain(file_names(&again)).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>(), "no claim or temporary files remain");
+    }
+
+    #[test]
+    fn saving_never_reads_the_pdf_and_a_report_that_cannot_be_saved_fails_alone() {
+        let sandbox = Sandbox::new("save-isolation");
+        let paths = [sandbox.file("first.pdf", &pdf(CLEAN)), sandbox.file("second.pdf", &pdf(information()))];
+        let mut request = save_request(&run(&privacy_request(&paths, None, &[])), "markdown", serde_json::json!("alongsideInput"));
+        for path in &paths {
+            std::fs::remove_file(path).unwrap();
+        }
+        request.reports[0].markdown = None;
+        request.reports.push(ReportToSave { input_path: PathBuf::from("relative.pdf"), ..request.reports[1].clone() });
+
+        let outcomes = save_reports(&request);
+
+        assert_eq!(outcomes.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), [paths[0].clone(), paths[1].clone(), PathBuf::from("relative.pdf")]);
+        assert_eq!(outcomes[0].error().map(|error| &error.kind), Some(&ErrorKind::InvalidInput));
+        assert_eq!(saved(&outcomes[1..2]), [sandbox.0.join("second-details.md")], "a deleted PDF still gets its report");
+        assert_eq!(outcomes[2].error().map(|error| &error.kind), Some(&ErrorKind::InvalidInput));
+        assert_eq!(sandbox.names(), ["second-details.md"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_folder_fails_each_report_and_points_at_the_output_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = Sandbox::new("save-read-only");
+        let paths = [sandbox.file("first.pdf", &pdf(CLEAN))];
+        let folder = sandbox.0.join("locked");
+        std::fs::create_dir(&folder).unwrap();
+        let request = save_request(&run(&privacy_request(&paths, None, &[])), "json", serde_json::json!({ "customFolder": folder }));
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let outcomes = save_reports(&request);
+
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = outcomes[0].error().expect("a read-only folder fails the save");
+        assert_eq!(error.message, READ_ONLY_OUTPUT_MESSAGE);
+        assert_eq!(error.pointer, Some(OutcomePointer::OutputFolder));
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
     }
 }

@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use lopdf::{Dictionary, Document, Object, ObjectId};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::document_info::{decode_text, parse_pdf_date, PdfDate};
 use super::{inherited, resolve};
@@ -12,7 +12,7 @@ const MAX_DEPTH: usize = 32;
 const MAX_ENTRIES: usize = 100_000;
 const MAX_SAVES: usize = 10_000;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HiddenContent {
     /// Saves appended after the first one. None when the save history couldn't be read.
@@ -27,7 +27,7 @@ pub struct HiddenContent {
     pub leftovers: Leftovers,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddedFile {
     pub name: String,
@@ -37,7 +37,7 @@ pub struct EmbeddedFile {
     pub page: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ActionTrigger {
     DocumentScript,
@@ -52,7 +52,7 @@ pub enum ActionTrigger {
     Annotation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutomaticAction {
     pub trigger: ActionTrigger,
@@ -63,7 +63,7 @@ pub struct AutomaticAction {
     pub kinds: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnotationGroup {
     pub subtype: String,
@@ -71,28 +71,28 @@ pub struct AnnotationGroup {
     pub authors: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptionalContent {
     pub layers: Vec<Layer>,
     pub hidden: Vec<HiddenItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Layer {
     pub name: String,
     pub visible: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum HiddenReason {
     Hidden,
     OffPage,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HiddenItem {
     pub page: u32,
@@ -100,14 +100,14 @@ pub struct HiddenItem {
     pub reason: HiddenReason,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkHost {
     pub host: String,
     pub count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Signature {
     pub field: String,
@@ -115,14 +115,14 @@ pub struct Signature {
     pub signed_at: Option<PdfDate>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Leftovers {
     pub thumbnail_pages: Vec<u32>,
     pub page_pieces: Vec<PagePiece>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PagePiece {
     pub page: u32,

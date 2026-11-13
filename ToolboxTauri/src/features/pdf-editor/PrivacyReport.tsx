@@ -1,12 +1,17 @@
 import { useId, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Check, Copy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import type { JobOutcome } from "../../contracts";
+import type { JobOutcome, OutputLocation } from "../../contracts";
 import type { ExistingPdfUtilityId } from "../../views/PDFEditorWorkspaceView";
 import { shortenHomePath, useHomeDir } from "../../homePath";
+import { failedOutcome, parseToolResult } from "../../jobOutcome";
 import { parentFolder } from "../../components/intake";
 import { fileName, rowView } from "../../components/resultRow";
+import { ResultList, revealButtonLabels } from "../../components/ResultList";
+import { describeLocation } from "../../components/RunDestination";
 import { passwordsFor, PasswordRetryForm } from "../../components/PasswordFields";
 import type { PdfEditorBatchTool, ReportActions } from "./batchTools";
 
@@ -220,29 +225,110 @@ const parseReport = (outcome: JobOutcome): PrivacyReportData | null => {
   }
 };
 
-const FileReport = ({ outcome, home, actions }: { outcome: JobOutcome; home: string | null; actions: ReportActions }) => {
-  const headingId = useId();
-  const report = parseReport(outcome);
-  const folder = shortenHomePath(parentFolder(outcome.inputPath), home);
-  const failure = report ? null : outcome.state === "succeeded" ? "The report couldn't be read." : rowView(outcome, "Checked").detailLines[0] ?? "This file couldn't be checked.";
-  const categories = report ? categoriesOf(report) : [];
+const summaryOf = (report: PrivacyReportData) => {
+  const categories = categoriesOf(report);
   const found = categories.filter((category) => category.found !== null && category.found !== "unchecked");
   const none = categories.filter((category) => category.found === null).length;
   const tally = (["high", "medium", "low"] as const).map((severity) => [severity, found.filter((category) => category.severity === severity).length] as const);
+  const unchecked = report.unsupported.length === 0 ? "Everything was checked." : report.unsupported.length === 1 ? "1 item wasn't checked." : `${report.unsupported.length} items weren't checked.`;
+  return { categories, tally, none: `${plural(none, "category", "categories")} with none found. ${unchecked}` };
+};
+
+const folderLine = (inputPath: string, report: PrivacyReportData | null, home: string | null) =>
+  `${shortenHomePath(parentFolder(inputPath), home)} · ${report ? plural(report.pageCount, "page", "pages") : "Not read"}`;
+
+/** The report as Markdown, the same text Copy places on the clipboard and Save as Markdown writes. */
+export const reportMarkdown = (inputPath: string, report: PrivacyReportData, home: string | null) => {
+  const { categories, tally, none } = summaryOf(report);
+  const lines = [
+    `# ${fileName(inputPath)}`,
+    "",
+    folderLine(inputPath, report, home),
+    "",
+    `${tally.map(([severity, count]) => `${count} ${severity}`).join(", ")}. ${none}`,
+  ];
+  for (const category of categories) {
+    lines.push("", `## ${category.name}`, "");
+    if (category.found === null) lines.push("None found");
+    else if (category.found === "unchecked") lines.push("Couldn't be read. See Unsupported items.");
+    else {
+      lines.push(`${severityLabel[category.severity]} · ${category.found.count}`, "", `Why it matters: ${category.why}`, "");
+      lines.push(...category.found.items.map((item) => `- ${item.key}: ${item.value}`));
+    }
+  }
+  return `${lines.join("\n")}\n`;
+};
+
+type Readable = { inputPath: string; report: PrivacyReportData };
+type ReportFormat = "json" | "markdown";
+const formatLabel: Record<ReportFormat, string> = { json: "JSON", markdown: "Markdown" };
+const formatExtension: Record<ReportFormat, string> = { json: "json", markdown: "md" };
+const detailsName = (inputPath: string, format: ReportFormat) => `${fileName(inputPath).replace(/\.[^.]+$/, "")}-details.${formatExtension[format]}`;
+
+const CopyButton = ({ label, text }: { label: string; text: () => string }) => {
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text());
+      setState("copied");
+    } catch {
+      setState("failed");
+    }
+  };
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={() => void copy()}>
+        {state === "copied" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        {state === "copied" ? "Copied" : label}
+      </Button>
+      {state === "failed" && <span role="alert" className="privacy-report-error">Couldn't copy to the clipboard.</span>}
+    </>
+  );
+};
+
+const ExportButtons = ({ copyLabel, saveLabel, readable, home, busy, onSave }: {
+  copyLabel: string;
+  saveLabel: string;
+  readable: Readable[];
+  home: string | null;
+  busy: boolean;
+  onSave: (entries: Readable[], format: ReportFormat) => void;
+}) => (
+  <>
+    <CopyButton label={copyLabel} text={() => readable.map(({ inputPath, report }) => reportMarkdown(inputPath, report, home)).join("\n")} />
+    {(["json", "markdown"] as const).map((format) => (
+      <Button key={format} variant="outline" size="sm" disabled={busy} onClick={() => onSave(readable, format)}>{saveLabel} {formatLabel[format]}</Button>
+    ))}
+  </>
+);
+
+const FileReport = ({ outcome, home, actions, saving, onSave }: { outcome: JobOutcome; home: string | null; actions: ReportActions; saving: boolean; onSave: (entries: Readable[], format: ReportFormat) => void }) => {
+  const headingId = useId();
+  const report = parseReport(outcome);
+  const failure = report ? null : outcome.state === "succeeded" ? "The report couldn't be read." : rowView(outcome, "Checked").detailLines[0] ?? "This file couldn't be checked.";
+  const summary = report ? summaryOf(report) : null;
+  const categories = summary?.categories ?? [];
   return (
     <Card role="region" aria-labelledby={headingId} className="privacy-report py-0" data-state={report ? "report" : "failed"}>
       <CardContent className="privacy-report-content p-4">
-        <div className="privacy-report-heading">
-          <h3 id={headingId}>{fileName(outcome.inputPath)}</h3>
-          <span>{report ? `${folder} · ${plural(report.pageCount, "page", "pages")}` : `${folder} · Not read`}</span>
+        <div className="privacy-report-header">
+          <div className="privacy-report-heading">
+            <h3 id={headingId}>{fileName(outcome.inputPath)}</h3>
+            <span>{folderLine(outcome.inputPath, report, home)}</span>
+          </div>
+          {report && (
+            <div role="group" aria-label="This report" className="privacy-report-export">
+              <ExportButtons copyLabel="Copy" saveLabel="Save as" readable={[{ inputPath: outcome.inputPath, report }]} home={home} busy={saving} onSave={onSave} />
+            </div>
+          )}
         </div>
         {failure !== null && <p role="alert" className="privacy-report-error">{outcome.state === "skipped" ? "Skipped" : "Failed"}: {failure}</p>}
         {actions.retryWithPassword && outcome.failure?.kind === "wrongPassword" && <PasswordRetry name={fileName(outcome.inputPath)} retry={(password) => actions.retryWithPassword!(outcome.inputPath, password)} />}
-        {report && (
+        {summary && (
           <>
             <p className="privacy-report-tally">
-              {tally.map(([severity, count]) => <Badge key={severity} variant={severityVariant[severity]}>{count} {severity}</Badge>)}
-              <span>{plural(none, "category", "categories")} with none found. {report.unsupported.length === 0 ? "Everything was checked." : report.unsupported.length === 1 ? "1 item wasn't checked." : `${report.unsupported.length} items weren't checked.`}</span>
+              {summary.tally.map(([severity, count]) => <Badge key={severity} variant={severityVariant[severity]}>{count} {severity}</Badge>)}
+              <span>{summary.none}</span>
             </p>
             <ul aria-label="Report categories" className="privacy-report-categories">
               {categories.map((category) => (
@@ -312,16 +398,114 @@ const PasswordRetry = ({ name, retry }: { name: string; retry: (password: string
   );
 };
 
+type Saved = { format: ReportFormat; location: OutputLocation; outcomes: JobOutcome[] };
+
+const savedMessage = ({ format, location, outcomes }: Saved, home: string | null) => {
+  const saved = outcomes.filter((outcome) => outcome.state === "succeeded");
+  const failed = outcomes.length - saved.length;
+  const where = location === "alongsideInput" ? "next to each original" : `to ${describeLocation(location, home)}`;
+  const renamed = saved.flatMap((outcome) => {
+    const name = fileName(outcome.outputPaths[0] ?? "");
+    return name === detailsName(outcome.inputPath, format) ? [] : [name];
+  });
+  const kind = `${formatLabel[format]} report`;
+  const parts = [
+    saved.length === 0 ? `No ${kind}s were saved.` : `Saved ${failed ? `${saved.length} of ${outcomes.length} ${kind}s` : plural(saved.length, kind, `${kind}s`)} ${where}.`,
+    renamed.length === 1 ? `One name was taken, so it was saved as ${renamed[0]}.` : renamed.length > 1 ? `${renamed.length} names were taken, so they were saved with -1, -2 and so on.` : null,
+    failed ? `${failed} couldn't be saved.` : null,
+  ];
+  return parts.filter(Boolean).join(" ");
+};
+
+const SavedReports = ({ saved, home }: { saved: Saved; home: string | null }) => {
+  const first = saved.outcomes.find((outcome) => outcome.state === "succeeded")?.outputPaths[0];
+  const [revealError, setRevealError] = useState<string | null>(null);
+  const reveal = async (path: string) => {
+    try {
+      setRevealError(null);
+      await invoke("reveal_output_path", { path });
+    } catch (error) {
+      setRevealError(error instanceof Error ? error.message : String(error));
+    }
+  };
+  return (
+    <ResultList
+      results={saved.outcomes}
+      progress={{ completed: saved.outcomes.length, total: saved.outcomes.length }}
+      loading={false}
+      resultVerb="Saved"
+      runningVerb="Saving"
+      live={null}
+      namedByOutput
+      summary={
+        <div role="status" className="privacy-report-saved" data-state={first ? "saved" : "failed"}>
+          {first && <Check aria-hidden="true" />}
+          <span>{savedMessage(saved, home)}</span>
+          {first && <Button variant="outline" size="sm" onClick={() => void reveal(first)}>{revealButtonLabels().full}</Button>}
+          {revealError && <span role="alert" className="privacy-report-error">{revealError}</span>}
+        </div>
+      }
+    />
+  );
+};
+
 export const PrivacyReports = ({ results, actions }: { results: JobOutcome[]; actions: ReportActions }) => {
   const home = useHomeDir();
-  const failed = results.filter((outcome) => parseReport(outcome) === null).length;
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<Saved | null>(null);
+  const readable = results.flatMap((outcome) => {
+    const report = parseReport(outcome);
+    return report ? [{ inputPath: outcome.inputPath, report }] : [];
+  });
+  const failed = results.length - readable.length;
+  const save = async (entries: Readable[], format: ReportFormat) => {
+    setSaving(true);
+    try {
+      await actions.saveTo(async (outputLocation) => {
+        let outcomes: JobOutcome[];
+        try {
+          outcomes = parseToolResult(await invoke("save_privacy_reports", {
+            request: {
+              reports: entries.map(({ inputPath, report }) => ({ inputPath, report, ...(format === "markdown" ? { markdown: reportMarkdown(inputPath, report, home) } : {}) })),
+              format,
+              outputLocation,
+            },
+          }));
+        } catch (error) {
+          outcomes = entries.map(({ inputPath }) => failedOutcome(inputPath, "processing", String(error)));
+        }
+        setSaved({ format, location: outputLocation, outcomes });
+      });
+    } catch (error) {
+      setSaved({ format, location: actions.destination.location, outcomes: entries.map(({ inputPath }) => failedOutcome(inputPath, "processing", String(error))) });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const onSave = (entries: Readable[], format: ReportFormat) => void save(entries, format);
   return (
     <section className="privacy-reports" aria-label="Privacy reports">
-      <p role="status" className="result-summary">
-        <strong>Done. {plural(results.length - failed, "report", "reports")}{failed ? `, ${failed} failed` : ""}</strong>
-        <span className="result-summary-hint">Nothing was changed in any PDF.</span>
-      </p>
-      {results.map((outcome) => <FileReport key={outcome.inputPath} outcome={outcome} home={home} actions={actions} />)}
+      <div className="privacy-reports-header">
+        <p role="status" className="result-summary">
+          <strong>Done. {plural(readable.length, "report", "reports")}{failed ? `, ${failed} failed` : ""}</strong>
+          <span className="result-summary-hint">Nothing was changed in any PDF.</span>
+        </p>
+        {results.length > 1 && readable.length > 0 && (
+          <div role="group" aria-label={`All ${plural(readable.length, "report", "reports")}`} className="privacy-report-export">
+            <span className="result-summary-hint">All {plural(readable.length, "report", "reports")}:</span>
+            <ExportButtons copyLabel="Copy all" saveLabel="Save all as" readable={readable} home={home} busy={saving} onSave={onSave} />
+          </div>
+        )}
+      </div>
+      {saved && <SavedReports saved={saved} home={home} />}
+      {results.map((outcome) => <FileReport key={outcome.inputPath} outcome={outcome} home={home} actions={actions} saving={saving} onSave={onSave} />)}
+      {readable.length > 0 && (
+        <div className="privacy-reports-footer">
+          <span className="result-summary-hint">Reports save to</span>
+          <span data-testid="report-destination">{describeLocation(actions.destination.location, home)}</span>
+          <Button variant="link" size="sm" onClick={actions.destination.change}>Change for this run</Button>
+        </div>
+      )}
     </section>
   );
 };
@@ -333,6 +517,10 @@ export const privacyCheckTool: PdfEditorBatchTool = {
   report: {
     runLabel: (count) => count ? `Check ${plural(count, "PDF", "PDFs")}` : "Check PDFs",
     note: "Reads each PDF and makes a report. No file is changed or saved.",
+    destination: (files) => ({
+      label: "Save reports to",
+      note: `Reports are only saved when you choose Save. Names: ${files[0] ? `${detailsName(files[0], "json")} or .md` : "name-details.json or .md"}. An existing name gets -1, -2 and so on.`,
+    }),
     render: (results, actions) => <PrivacyReports results={results} actions={actions} />,
   },
 };

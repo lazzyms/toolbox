@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Check, ChevronDown, ChevronRight, CircleMinus, CircleX, Clock, FileText, KeyRound, Layers, LoaderCircle, RotateCcw, TriangleAlert } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { JobOutcome, OutcomePointer, Progress } from "../contracts";
@@ -36,7 +36,7 @@ const segmentTone = (file: LiveFile): SegmentTone => {
     return file.outcome.state === "skipped" ? "skip" : "fail";
 };
 
-const revealButtonLabels = () => {
+export const revealButtonLabels = () => {
     const platform = navigator.platform.toLowerCase();
     if (platform.includes("mac")) return { full: "Show in Finder", short: "Show in Finder" };
     if (platform.includes("win")) return { full: "Show in File Explorer", short: "Show in Explorer" };
@@ -70,10 +70,14 @@ interface ResultListProps {
     outputGroup?: OutputGrouping;
     /** A line after the finished headline, such as a total across files. */
     resultsHint?: (results: JobOutcome[]) => string | null;
+    /** Names each row by its output file, as a combined result's row is. */
+    namedByOutput?: boolean;
+    /** Replaces the finished summary line. */
+    summary?: ReactNode;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint }: ResultListProps) => {
-    const namedByOutput = combinedInputs !== null;
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint, namedByOutput: namedByOutputProp = false, summary: customSummary }: ResultListProps) => {
+    const namedByOutput = namedByOutputProp || combinedInputs !== null;
     const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
     const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
@@ -428,18 +432,20 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
     const extraHint = resultsHint?.(results) ?? null;
     return (
         <div className="result-list">
-            <div className="result-summary" role="status" aria-live="polite">
-                <strong>{summary.headline}</strong>
-                {extraHint && <span className="result-summary-hint">{extraHint}</span>}
-                {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
-                {total && (
-                    <span className="result-summary-total">
-                        <span className="result-summary-saved">{total.savedLine}</span>
-                        <span className="result-summary-hint">{total.totalLine}</span>
-                        <span className="result-summary-hint">{total.note}</span>
-                    </span>
-                )}
-            </div>
+            {customSummary ?? (
+                <div className="result-summary" role="status" aria-live="polite">
+                    <strong>{summary.headline}</strong>
+                    {extraHint && <span className="result-summary-hint">{extraHint}</span>}
+                    {summary.hints.map((hint) => <span key={hint} className="result-summary-hint">{hint}</span>)}
+                    {total && (
+                        <span className="result-summary-total">
+                            <span className="result-summary-saved">{total.savedLine}</span>
+                            <span className="result-summary-hint">{total.totalLine}</span>
+                            <span className="result-summary-hint">{total.note}</span>
+                        </span>
+                    )}
+                </div>
+            )}
             <Card className="result-card gap-0 py-0">
                 <CardContent className="p-0">
                     <ul className="result-rows" aria-label="Results" data-grouped={outputGroup ? "true" : undefined}>

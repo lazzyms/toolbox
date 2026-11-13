@@ -20,7 +20,7 @@ export const PdfEditorBatchSurface = ({ utility, tool, initialPaths, onFilesChan
 }) => {
   const availability = useToolAvailability();
   const passwords = usePasswordSet();
-  const actions: ReportActions = {
+  const navigation: Pick<ReportActions, "canOpen" | "open"> = {
     canOpen: (target) => Boolean(onNavigate) && availability.allows(target),
     open: (target, path) => onNavigate?.({ utilityId: target, initialPaths: [path] }),
   };
@@ -43,7 +43,8 @@ export const PdfEditorBatchSurface = ({ utility, tool, initialPaths, onFilesChan
       renderFileExtra={tool.openPassword ? (path, selected, locked) => (
         <FilePasswordCell mode="open" path={path} passwords={passwords} selected={selected} disabled={locked} />
       ) : undefined}
-      renderReport={report && ((results, retry) => report.render(results, { ...actions, retryWithPassword: retry.withPassword }))}
+      renderReport={report && ((results, { withPassword, ...run }) => report.render(results, { ...navigation, ...run, retryWithPassword: withPassword }))}
+      destinationCopy={report?.destination}
     >
       {({ files, run, loading, destination, runLabel }) => (
         <Card className="workspace-control-panel py-0">
@@ -54,7 +55,8 @@ export const PdfEditorBatchSurface = ({ utility, tool, initialPaths, onFilesChan
               <p className="workspace-panel-copy">{tool.description}</p>
             </div>
             {tool.openPassword && <BatchPasswordFields mode="open" passwords={passwords} files={files} />}
-            {tool.report ? <p className="workspace-note">{tool.report.note}</p> : destination}
+            {destination}
+            {tool.report && <p className="workspace-note">{tool.report.note}</p>}
             <Button
               variant="default"
               disabled={loading || files.length === 0 || utility.capability.nativeAvailability !== "available"}
