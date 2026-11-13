@@ -122,17 +122,9 @@ pub struct RotatePdfRequest {
     pub output_location: OutputLocation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct QpdfDeadline { pub per_file: Duration, pub per_page: Duration }
+pub(crate) type QpdfDeadline = limits::HelperDeadline;
 
 pub(crate) const QPDF_DEADLINE: QpdfDeadline = QpdfDeadline { per_file: Duration::from_secs(15), per_page: Duration::from_millis(50) };
-
-impl QpdfDeadline {
-    pub(crate) fn limit(self, files: usize, pages: usize) -> Duration {
-        let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
-        self.per_file * count(files) + self.per_page * count(pages)
-    }
-}
 
 fn run_qpdf(command: Command, deadline: Instant, limit: Duration, action: &str) -> Result<std::process::Output, ToolError> {
     let timed_out = format!("{action} took longer than {} and was stopped. Nothing was saved.", limits::duration_label(limit));
