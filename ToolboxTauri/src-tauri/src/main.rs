@@ -362,7 +362,7 @@ async fn convert_pasted_html(app: tauri::AppHandle, request: convert::PastedHtml
 
 async fn run_convert_pasted_html(request: convert::PastedHtmlRequest, packs: RunPacks) -> Vec<JobOutcome> {
     let output_path = request.output_path.clone();
-    let limits = crate::kit::common::limits::recorded(convert::COMMAND).expect("convert_to_pdf records its limits");
+    let limits = convert::pasted_html_limits();
     // The markup is in memory, so there is no input file to check; the run still gets the time limit.
     let mut outcome = limits.run_all(&[], move || convert::pasted_html(request, &packs));
     outcome.input_path = output_path;
@@ -4157,6 +4157,58 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Converts one document of every family with a Release artifact's own bundled fonts and no packs, and saves each
+    /// output's extracted text and page geometry for the cross-target comparison. Installed system fonts are left out,
+    /// because they are the stated platform difference. Runs only when TOOLBOX_CONVERT_RELEASE_ROOT names the artifact's
+    /// resource folder (a Windows install folder or Toolbox.app/Contents/Resources) and TOOLBOX_CONVERT_RELEASE_OUT the
+    /// folder to save into.
+    #[test]
+    fn release_artifact_converts_every_family_with_its_own_fonts() {
+        use crate::kit::pdf::font_resolver::{BundledFonts, FontResolver, SystemFace, SystemFontLookup};
+        struct NoSystemFonts;
+        impl SystemFontLookup for NoSystemFonts {
+            fn faces(&self, _family: &str) -> Vec<SystemFace> { Vec::new() }
+        }
+        let (Some(artifact), Some(out)) = (std::env::var_os("TOOLBOX_CONVERT_RELEASE_ROOT").map(PathBuf::from), std::env::var_os("TOOLBOX_CONVERT_RELEASE_OUT").map(PathBuf::from)) else {
+            eprintln!("skipping: TOOLBOX_CONVERT_RELEASE_ROOT and TOOLBOX_CONVERT_RELEASE_OUT are not set");
+            return;
+        };
+        let _guard = crate::kit::lock_process_env();
+        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(artifact.clone()))]);
+        let bundled = BundledFonts::discover_installed().unwrap_or_else(|error| panic!("the artifact at {} has no usable fallback fonts: {error:?}", artifact.display()));
+
+        let root = sandbox("convert-release");
+        let files = convert::fixtures::family_documents("Toolbox converts Café Привет κόσμε № 5 – Ωmega");
+        let inputs: Vec<PathBuf> = files.iter().map(|(name, bytes)| {
+            let family = name.trim_start_matches("note.");
+            let path = root.join(format!("note-{family}.{family}"));
+            std::fs::write(&path, bytes).unwrap();
+            path
+        }).collect();
+        let request = serde_json::json!({ "paths": inputs, "outputLocation": { "customFolder": root.join("out") } });
+        std::fs::create_dir(root.join("out")).unwrap();
+        let outcomes = convert::run_with(&RunEvents::silent(), request, move || Ok(FontResolver::new(bundled, NoSystemFonts)), no_packs(), crate::kit::common::limits::convert_to_pdf);
+
+        let mut families = serde_json::Map::new();
+        for ((name, _), outcome) in files.iter().zip(&outcomes) {
+            let family = name.trim_start_matches("note.");
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{family}: {outcome:?}");
+            let document = lopdf::Document::load(&outcome.output_paths()[0]).unwrap();
+            let mut pages = Vec::new();
+            for (number, id) in document.get_pages() {
+                let media_box = document.get_object(id).and_then(|page| page.as_dict()).and_then(|page| page.get(b"MediaBox")).and_then(|media_box| media_box.as_array()).unwrap();
+                let size: Vec<f32> = media_box.iter().map(|value| value.as_float().unwrap()).collect();
+                let text = document.extract_text(&[number]).unwrap_or_default();
+                pages.push(serde_json::json!({ "width": (size[2] - size[0]).round(), "height": (size[3] - size[1]).round(), "text": text.split_whitespace().collect::<Vec<_>>().join(" ") }));
+            }
+            families.insert(family.into(), serde_json::json!({ "pages": pages }));
+        }
+        std::fs::create_dir_all(&out).unwrap();
+        let summary = serde_json::json!({ "os": std::env::consts::OS, "architecture": std::env::consts::ARCH, "families": families });
+        std::fs::write(out.join("snapshots.json"), format!("{}\n", serde_json::to_string_pretty(&summary).unwrap())).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn named(naming: &mut Vec<(&'static str, PathBuf, Vec<PathBuf>)>, command: &'static str, input: PathBuf, outputs: Vec<PathBuf>) -> Vec<PathBuf> {
         naming.push((command, input, outputs.clone()));
         outputs
@@ -6512,6 +6564,62 @@ mod command_tests {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    const NO_HELPERS_CHILD: &str = "TOOLBOX_TEST_NO_HELPERS_CHILD";
+
+    // Convert to PDF renders in the app, so every family converts with no Bundled helper anywhere: not beside the app,
+    // not in its resources and not on PATH, and with no packs. Other tests resolve helpers without the env lock, so the helpers are hidden
+    // only in a child test process.
+    #[test]
+    fn convert_to_pdf_converts_every_family_with_every_helper_hidden() {
+        if std::env::var_os(NO_HELPERS_CHILD).is_none() {
+            let _guard = crate::kit::lock_process_env();
+            let root = sandbox("convert-no-helpers");
+            let resources = root.join("resources");
+            let fonts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("fonts");
+            std::fs::create_dir_all(resources.join("fonts")).unwrap();
+            for entry in std::fs::read_dir(&fonts).unwrap() {
+                let entry = entry.unwrap();
+                std::fs::copy(entry.path(), resources.join("fonts").join(entry.file_name())).unwrap();
+            }
+            let missing = root.join("not-installed");
+            // PATH keeps every folder the test binary may load libraries from, without the ones that hold a helper.
+            let helper_free = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).filter(|folder| {
+                ["qpdf", "pdftoppm", "pdftotext", "tesseract"].iter().all(|name| !folder.join(name).is_file() && !folder.join(format!("{name}.exe")).is_file())
+            }).collect::<Vec<_>>()).unwrap_or_default();
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["command_tests::convert_to_pdf_converts_every_family_with_every_helper_hidden", "--exact", "--nocapture", "--test-threads=1"])
+                .env(NO_HELPERS_CHILD, &root)
+                .env("TOOLBOX_RESOURCE_ROOT", &resources)
+                .env("PATH", std::env::join_paths(helper_free).unwrap())
+                .env("TOOLBOX_QPDF_PATH", &missing)
+                .env("TOOLBOX_PDFTOPPM_PATH", &missing)
+                .env("TOOLBOX_PDFTOTEXT_PATH", &missing)
+                .env("TOOLBOX_TESSERACT_PATH", &missing)
+                .output()
+                .unwrap();
+            let report = format!("{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            let _ = std::fs::remove_dir_all(&root);
+            assert!(child.status.success() && report.contains("1 passed"), "{report}");
+            return;
+        }
+        use crate::kit::resources::{resolve_helper, PDF_RENDERER, PDF_TEXT_EXTRACTOR, QPDF};
+        for helper in [&PDF_RENDERER, &PDF_TEXT_EXTRACTOR, &QPDF] { assert!(resolve_helper(helper).is_err(), "a Bundled helper is still reachable"); }
+        let root = PathBuf::from(std::env::var_os(NO_HELPERS_CHILD).unwrap());
+        let files = convert::fixtures::family_documents("Toolbox converts Café Привет κόσμε");
+        let inputs: Vec<PathBuf> = files.iter().map(|(name, bytes)| {
+            let family = name.trim_start_matches("note.");
+            let path = root.join(format!("note-{family}.{family}"));
+            std::fs::write(&path, bytes).unwrap();
+            path
+        }).collect();
+        let request = serde_json::json!({ "paths": inputs, "outputLocation": { "customFolder": root.join("out") } });
+        std::fs::create_dir(root.join("out")).unwrap();
+        let outcomes = convert::run(&RunEvents::silent(), request, no_packs());
+        for ((name, _), outcome) in files.iter().zip(&outcomes) {
+            assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{name}: {outcome:?}");
+        }
     }
 
     #[test]

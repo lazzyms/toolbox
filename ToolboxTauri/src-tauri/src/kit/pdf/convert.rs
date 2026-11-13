@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::kit::common::batch_runner::{BatchRunner, RunEvents};
 use crate::kit::common::{note_renamed, JobOutcome, OutputLocation, OutputNaming};
-use crate::kit::common::limits;
+use crate::kit::common::limits::{self, ToolLimits};
 use crate::kit::contracts::{native_capabilities, LimitKind, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::office;
 use crate::kit::pdf::font_resolver::{FontReport, FontResolver, FontSource, FontStyle, SystemFontLookup};
@@ -19,8 +19,6 @@ use crate::kit::pdf::{delimited, docx, epub, html, markdown, odp, ods, odt, pptx
 use crate::packs::uninstall::RunPacks;
 
 pub const COMMAND: &str = "convert_to_pdf";
-/// Pasted markup is held in memory, so it stays well under the file limit.
-const MAX_PASTED_HTML_BYTES: usize = 50_000_000;
 const ALREADY_PDF: &str = "Already a PDF. Nothing was made.";
 const FONT_SIZE: f32 = 10.;
 const LEADING: f32 = 13.;
@@ -242,13 +240,15 @@ pub struct ConvertJob<S: SystemFontLookup> {
     fonts: FontResolver<S>,
     /// The script pack, for text in scripts other than Latin, Cyrillic and Greek.
     packs: RunPacks,
+    /// The recorded limits for each input's family; tests pass tighter ones.
+    limits: fn(&Path) -> ToolLimits,
 }
 
 pub fn run(events: &RunEvents, request: serde_json::Value, packs: RunPacks) -> Vec<JobOutcome> {
-    run_with(events, request, FontResolver::installed, packs)
+    run_with(events, request, FontResolver::installed, packs, limits::convert_to_pdf)
 }
 
-pub fn run_with<S, F>(events: &RunEvents, request: serde_json::Value, fonts: F, packs: RunPacks) -> Vec<JobOutcome>
+pub fn run_with<S, F>(events: &RunEvents, request: serde_json::Value, fonts: F, packs: RunPacks, limits: fn(&Path) -> ToolLimits) -> Vec<JobOutcome>
 where
     S: SystemFontLookup + Send + Sync + 'static,
     F: FnOnce() -> Result<FontResolver<S>, ToolError>,
@@ -257,9 +257,9 @@ where
     let fail_all = |error: ToolError| paths.iter().cloned().map(|path| JobOutcome::failure(path, error.clone())).collect();
     let request = match parse_request(request) { Ok(request) => request, Err(error) => return fail_all(error) };
     let fonts = match fonts() { Ok(fonts) => fonts, Err(error) => return fail_all(error) };
-    let job = Arc::new(ConvertJob { request, fonts, packs });
+    let job = Arc::new(ConvertJob { request, fonts, packs, limits });
     let location = job.request.output_location.clone();
-    BatchRunner::run(events, COMMAND, job.request.paths.clone(), &location, &job, convert)
+    BatchRunner::run_limited(events, COMMAND, job.request.paths.clone(), &location, |input| Some(limits(input)), &job, convert)
 }
 
 fn request_paths(request: &serde_json::Value) -> Vec<PathBuf> {
@@ -319,6 +319,12 @@ fn save(job_location: &OutputLocation, input: &Path, mut document: Document) -> 
     output.publish().map_err(|error| ToolError::processing(format!("Could not save the PDF: {error}")))
 }
 
+/// Lays the pages out as a PDF once they are known to be within the input's page limit.
+fn assemble_within<S: SystemFontLookup>(limits: ToolLimits, book: &FontBook<'_, S>, assembly: Assembly<'_>) -> Result<Document, ToolError> {
+    limits.check_made_pages(assembly.pages.len())?;
+    assemble(book, assembly)
+}
+
 fn plain_text<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PlainTextOptions, input: &Path) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let (text, encoding) = decode(&bytes, options.encoding)?;
@@ -355,7 +361,7 @@ fn plain_text<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PlainTextOptio
         out.push(page);
     }
     let count = out.len();
-    let document = assemble(&book, Assembly { size, pages: out, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None, author: None })?;
+    let document = assemble_within((job.limits)(input), &book, Assembly { size, pages: out, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None, author: None })?;
     let path = save(&job.request.output_location, input, document)?;
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], format!("{}. Read as {encoding}.", page_count(count))).with_fonts(book.reports()))
 }
@@ -389,7 +395,7 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
     let mut pages = contents;
     pages.append(&mut laid.pages);
     let count = pages.len();
-    let document = assemble(&book, Assembly { size, pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: None })?;
+    let document = assemble_within((job.limits)(input), &book, Assembly { size, pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: None })?;
     let path = save(&job.request.output_location, input, document)?;
 
     let mut detail = format!("{}.", page_count(count));
@@ -409,9 +415,13 @@ fn markdown_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &MarkdownOpt
 fn html_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &WebPageOptions, input: &Path) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let (markup, _) = decode(&bytes, TextEncoding::Detect)?;
-    let page = web_page(&job.fonts, &job.packs, &job.request.page_defaults, options, &markup, Some(input.parent().unwrap_or(Path::new("."))))?;
+    let page = web_page(&job.fonts, &job.packs, (job.limits)(input), &job.request.page_defaults, options, &markup, Some(input.parent().unwrap_or(Path::new("."))))?;
     let path = save(&job.request.output_location, input, page.document)?;
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], page.detail).with_fonts(page.fonts))
+}
+
+pub fn pasted_html_limits() -> ToolLimits {
+    limits::convert_to_pdf(Path::new("pasted.html"))
 }
 
 pub fn pasted_html(request: PastedHtmlRequest, packs: &RunPacks) -> JobOutcome {
@@ -426,10 +436,15 @@ pub fn pasted_html(request: PastedHtmlRequest, packs: &RunPacks) -> JobOutcome {
 fn pasted_html_with<S: SystemFontLookup>(request: &PastedHtmlRequest, fonts: &FontResolver<S>, packs: &RunPacks) -> JobOutcome {
     let result = (|| {
         if request.markup.trim().is_empty() { return Err(ToolError::invalid_input("There's no HTML to convert. Paste some markup and try again.")); }
-        if request.markup.len() > MAX_PASTED_HTML_BYTES {
-            return Err(ToolError::limit_exceeded(LimitKind::FileSize, "The pasted HTML is larger than the 50 MB limit. Save it as a file and convert that instead."));
+        // Pasted markup is held in memory like an HTML file, so it gets the same limits.
+        let limits = pasted_html_limits();
+        if request.markup.len() as u64 > limits.max_bytes {
+            return Err(ToolError::limit_exceeded(
+                LimitKind::FileSize,
+                format!("The pasted HTML is larger than the {} limit. Save it as a file and convert that instead.", limits::bytes_label(limits.max_bytes)),
+            ));
         }
-        let page = web_page(fonts, packs, &request.page_defaults, &request.web_pages.unwrap_or_default(), &request.markup, None)?;
+        let page = web_page(fonts, packs, limits, &request.page_defaults, &request.web_pages.unwrap_or_default(), &request.markup, None)?;
         let mut document = page.document;
         let output = OutputNaming::reserve_single_output(Some(&request.output_path), &request.output_path, &OutputLocation::AlongsideInput, "", "pdf")
             .map_err(|error| ToolError::invalid_input(format!("Could not save the PDF there: {error}")))?;
@@ -443,7 +458,7 @@ fn pasted_html_with<S: SystemFontLookup>(request: &PastedHtmlRequest, fonts: &Fo
 struct WebPage { document: Document, detail: String, fonts: Vec<FontReport> }
 
 /// Lays out a page of HTML; `base` is the folder its local stylesheets and images sit in, or `None` for pasted markup.
-fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, packs: &RunPacks, defaults: &PageDefaults, options: &WebPageOptions, markup: &str, base: Option<&Path>) -> Result<WebPage, ToolError> {
+fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, packs: &RunPacks, limits: ToolLimits, defaults: &PageDefaults, options: &WebPageOptions, markup: &str, base: Option<&Path>) -> Result<WebPage, ToolError> {
     let parsed = html::parse(markup, base);
     let size = options.page_size.unwrap_or(defaults.page_size).points();
     let geometry = Geometry::uniform(size.0, size.1, options.margins.unwrap_or(defaults.margins).points());
@@ -462,7 +477,7 @@ fn web_page<S: SystemFontLookup>(fonts: &FontResolver<S>, packs: &RunPacks, defa
         }
     }
     let count = laid.pages.len();
-    let document = assemble(&book, Assembly { size, pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: None })?;
+    let document = assemble_within(limits, &book, Assembly { size, pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: None })?;
 
     let detail = format!("{}.{}", page_count(count), left_out(&parsed.remote, parsed.unreadable_images, parsed.unreadable_stylesheets));
     Ok(WebPage { document, detail, fonts: book.reports() })
@@ -500,7 +515,7 @@ fn ebook_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &EbookOptions, 
         return Err(ToolError::invalid_input(format!("Text size must be between {}% and {}%.", EBOOK_SCALES.start(), EBOOK_SCALES.end())));
     }
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
-    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let limits = (job.limits)(input);
     let scale = f32::from(options.font_scale) / 100.;
     let parsed = epub::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), scale)?;
     let size = options.page_size.unwrap_or(job.request.page_defaults.page_size).points();
@@ -527,7 +542,7 @@ fn ebook_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &EbookOptions, 
     }
     let count = laid.pages.len();
     let assembly = Assembly { size, pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: parsed.author.as_deref() };
-    let document = assemble(&book, assembly)?;
+    let document = assemble_within(limits, &book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
     let detail = format!("{}.{}", page_count(count), left_out(&parsed.remote, parsed.unreadable_images, parsed.unreadable_stylesheets));
     Ok(JobOutcome::succeeded(input.to_path_buf(), vec![path], detail).with_fonts(book.reports()))
@@ -563,7 +578,7 @@ fn rich_text<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path) -> Result<J
     let laid = flow.finish();
     let count = laid.pages.len();
     let assembly = Assembly { size: (geometry.width, geometry.height), pages: laid.pages, pictures: &parsed.pictures, bookmarks: &[], anchors: &BTreeMap::new(), title: parsed.title.as_deref(), author: parsed.author.as_deref() };
-    let document = assemble(&book, assembly)?;
+    let document = assemble_within((job.limits)(input), &book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
 
     let outcome = JobOutcome::succeeded(input.to_path_buf(), vec![path], format!("{}.", page_count(count))).with_fonts(book.reports());
@@ -643,7 +658,7 @@ fn approximate_placement(floats: &[usize], (one, many): (&str, &str), (unit, uni
 fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
-    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let limits = (job.limits)(input);
     let parsed = if extension == "odt" {
         odt::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?
     } else {
@@ -667,7 +682,7 @@ fn word_file<S: SystemFontLookup>(job: &ConvertJob<S>, input: &Path, extension: 
     let count = laid.pages.len();
     let layout = approximate_layout(&laid.floats);
     let assembly = Assembly { size: (geometry.width, geometry.height), pages: laid.pages, pictures: &parsed.pictures, bookmarks: &laid.bookmarks, anchors: &laid.anchors, title: parsed.title.as_deref(), author: parsed.author.as_deref() };
-    let document = assemble(&book, assembly)?;
+    let document = assemble_within(limits, &book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
 
     let reports = book.reports();
@@ -711,7 +726,7 @@ fn table_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &TableOptions, 
     flow.blocks(std::slice::from_ref(&block))?;
     let laid = flow.finish();
     let count = laid.pages.len();
-    let document = assemble(&book, Assembly { size: (width, height), pages: laid.pages, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None, author: None })?;
+    let document = assemble_within((job.limits)(input), &book, Assembly { size: (width, height), pages: laid.pages, pictures: &[], bookmarks: &[], anchors: &BTreeMap::new(), title: None, author: None })?;
     let path = save(&job.request.output_location, input, document)?;
     let rows = if rows == 1 { "1 row".to_string() } else { format!("{} rows", grouped(rows)) };
     let detail = format!("{}. {rows}, {delimiter_name}. Read as {encoding}.", page_count(count));
@@ -721,7 +736,7 @@ fn table_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &TableOptions, 
 fn spreadsheet_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &SpreadsheetOptions, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
-    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let limits = (job.limits)(input);
     let workbook = if extension == "ods" {
         ods::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked)?
     } else {
@@ -774,7 +789,7 @@ fn spreadsheet_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Spreadsh
     let count = pages.len();
     let first = pages[0].size.unwrap_or_default();
     let assembly = Assembly { size: first, pages, pictures: &[], bookmarks: &bookmarks, anchors: &BTreeMap::new(), title: workbook.title.as_deref(), author: workbook.author.as_deref() };
-    let document = assemble(&book, assembly)?;
+    let document = assemble_within(limits, &book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
 
     let mut detail = format!("{}. {}.", page_count(count), if printed == 1 { "1 sheet".to_string() } else { format!("{printed} sheets") });
@@ -790,7 +805,7 @@ fn spreadsheet_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Spreadsh
 fn presentation_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &PresentationOptions, input: &Path, extension: &str) -> Result<JobOutcome, ToolError> {
     let bytes = fs::read(input).map_err(|error| ToolError::processing(format!("Could not read the file: {error}")))?;
     let locked = ToolError::invalid_input(LOCKED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() });
-    let limits = limits::recorded(COMMAND).ok_or_else(|| ToolError::processing("No size limits are recorded for converting to PDF."))?;
+    let limits = (job.limits)(input);
     let include = Include { hidden: options.hidden_slides, notes: options.speaker_notes };
     let deck = if extension == "odp" {
         odp::parse(&bytes, limits.max_expanded_bytes, limits.expansion_error(input), locked, include)?
@@ -836,7 +851,7 @@ fn presentation_file<S: SystemFontLookup>(job: &ConvertJob<S>, options: &Present
     let count = pages.len();
     let first = pages[0].size.unwrap_or_default();
     let assembly = Assembly { size: first, pages, pictures: &deck.pictures, bookmarks: &bookmarks, anchors: &BTreeMap::new(), title: deck.title.as_deref(), author: deck.author.as_deref() };
-    let document = assemble(&book, assembly)?;
+    let document = assemble_within(limits, &book, assembly)?;
     let path = save(&job.request.output_location, input, document)?;
 
     let printed = deck.slides.len();
@@ -929,9 +944,59 @@ impl<S: SystemFontLookup> Measure<'_, '_, S> {
     }
 }
 
+/// One small document for each family that converts, shared by the conversion, determinism and release snapshot tests.
+#[cfg(test)]
+pub mod fixtures {
+    use crate::kit::pdf::{docx, odp, ods, odt, pptx, xlsx};
+
+    pub fn epub_package(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive.start_file("mimetype", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
+        std::io::Write::write_all(&mut archive, b"application/epub+zip").unwrap();
+        archive.start_file("META-INF/container.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut archive, br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        for (name, data) in files {
+            archive.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut archive, data).unwrap();
+        }
+        archive.finish().unwrap().into_inner()
+    }
+
+    pub fn rtf(text: &str) -> String {
+        let escaped: String = text.chars().map(|character| if character.is_ascii() { character.to_string() } else { format!("\\u{}?", character as u32 as i16) }).collect();
+        format!(r"{{\rtf1\ansi\uc1 {{\fonttbl{{\f0 Helvetica;}}}}\f0 {escaped}\par}}")
+    }
+
+    /// `line` written once or more in every family, named `note.<extension>`.
+    pub fn family_documents(line: &str) -> Vec<(&'static str, Vec<u8>)> {
+        let odp_styles = concat!(
+            r#"<office:automatic-styles><style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="960pt" fo:page-height="540pt"/></style:page-layout></office:automatic-styles>"#,
+            r#"<office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles>"#,
+        );
+        let chapter = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head><body><p>{line}</p></body></html>"#);
+        let opf = r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:2</dc:identifier><dc:title>Base</dc:title><dc:language>ru</dc:language></metadata><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>"#;
+        vec![
+            ("note.txt", line.into()),
+            ("note.md", format!("# {line}\n\n*{line}* and **{line}**").into()),
+            ("note.rtf", rtf(line).into()),
+            ("note.csv", format!("Name,Note\n{line},Ωmega").into()),
+            ("note.tsv", format!("Name\tNote\n{line}\tΩmega").into()),
+            ("note.docx", docx::fixtures::docx(&format!("<w:p><w:r><w:t>{line}</w:t></w:r></w:p>"), &[], &[])),
+            ("note.odt", odt::fixtures::odt("", &format!("<text:p>{line}</text:p>"), &[], &[])),
+            ("note.xlsx", xlsx::fixtures::xlsx(&[("Sheet", "visible", &xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#, ""))], "", "", &[line])),
+            ("note.ods", ods::fixtures::ods("", "", &format!(r#"<table:table table:name="Sheet"><table:table-row><table:table-cell office:value-type="string"><text:p>{line}</text:p></table:table-cell></table:table-row></table:table>"#))),
+            ("note.pptx", pptx::fixtures::pptx((960, 540), &[pptx::fixtures::FixtureSlide { shapes: &pptx::fixtures::text_shape(Some("title"), (36, 24, 800, 60), line, ""), ..Default::default() }], &[])),
+            ("note.odp", odp::fixtures::odp(odp_styles, "", &format!(r#"<draw:page draw:name="One" draw:master-page-name="Default"><draw:frame svg:x="36pt" svg:y="24pt" svg:width="800pt" svg:height="60pt"><draw:text-box><text:p>{line}</text:p></draw:text-box></draw:frame></draw:page>"#), &[])),
+            ("note.html", format!("<h1>{line}</h1><p><b>{line}</b> <i>{line}</i></p>").into()),
+            ("note.epub", epub_package(&[("OEBPS/content.opf", opf.as_bytes()), ("OEBPS/one.xhtml", chapter.as_bytes())])),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::fixtures::{epub_package, family_documents};
     use crate::kit::contracts::{ErrorKind, OutcomeState};
 
     fn succeeded(outcome: &JobOutcome) -> bool { matches!(outcome.state, OutcomeState::Succeeded { .. }) }
@@ -961,7 +1026,7 @@ mod tests {
     fn convert_paths(paths: &[&Path], options: serde_json::Value) -> Vec<JobOutcome> {
         let mut request = json!({ "paths": paths, "outputLocation": "alongsideInput" });
         request.as_object_mut().unwrap().extend(options.as_object().unwrap().clone());
-        run_with(&RunEvents::silent(), request, fonts, no_packs())
+        run_with(&RunEvents::silent(), request, fonts, no_packs(), limits::convert_to_pdf)
     }
 
     fn names(folder: &Path) -> Vec<String> {
@@ -1080,6 +1145,120 @@ mod tests {
         assert_eq!(fs::read(root.join("notes-2.pdf")).unwrap(), first);
     }
 
+    fn limit_kind(outcome: &JobOutcome) -> Option<crate::kit::contracts::LimitKind> {
+        match outcome.error()?.kind { ErrorKind::LimitExceeded { limit } => Some(limit), _ => None }
+    }
+
+    #[test]
+    fn oversized_and_bomb_inputs_fail_alone_at_the_recorded_family_limits() {
+        let root = sandbox("family_limits");
+        let text = root.join("big.txt");
+        fs::File::create(&text).unwrap().set_len(50_000_001).unwrap();
+        let packaged = root.join("big.docx");
+        fs::File::create(&packaged).unwrap().set_len(250_000_001).unwrap();
+        let fits = root.join("fits.docx");
+        // Larger than any text limit, within the packaged one: the family decides, not one number for the command.
+        fs::File::create(&fits).unwrap().set_len(50_000_001).unwrap();
+        let bomb = root.join("bomb.docx");
+        let inflated = crate::kit::common::limits::fixtures::zlib_of_zeros(500_000_001);
+        fs::write(&bomb, crate::kit::common::limits::fixtures::zip_with_deflated("word/document.xml", &inflated, 500_000_001)).unwrap();
+        let fine = root.join("fine.txt");
+        fs::write(&fine, "Still converted\n").unwrap();
+        let before = [&text, &packaged, &bomb, &fine].map(|path| (fs::metadata(path).unwrap().len(), fs::metadata(path).unwrap().modified().unwrap()));
+
+        let outcomes = convert_paths(&[&text, &packaged, &fits, &bomb, &fine], plain(true));
+        assert_eq!(limit_kind(&outcomes[0]), Some(crate::kit::contracts::LimitKind::FileSize));
+        assert_eq!(outcomes[0].error().unwrap().message, "Larger than the 50 MB limit for one document. Reduce its size and try again.");
+        assert_eq!(limit_kind(&outcomes[1]), Some(crate::kit::contracts::LimitKind::FileSize));
+        assert_eq!(outcomes[1].error().unwrap().message, "Larger than the 250 MB limit for one document. Reduce its size and try again.");
+        assert_ne!(limit_kind(&outcomes[2]), Some(crate::kit::contracts::LimitKind::FileSize), "{:?}", outcomes[2]);
+        assert_eq!(limit_kind(&outcomes[3]), Some(crate::kit::contracts::LimitKind::Decompression));
+        assert_eq!(outcomes[3].error().unwrap().message, "Part of this document expands to more than 500 MB when opened, which is over the limit. It may be damaged or unsafe to open.");
+        assert!(succeeded(&outcomes[4]), "{:?}", outcomes[4]);
+        assert_eq!(names(&root), ["big.docx", "big.txt", "bomb.docx", "fine.pdf", "fine.txt", "fits.docx"]);
+        let after = [&text, &packaged, &bomb, &fine].map(|path| (fs::metadata(path).unwrap().len(), fs::metadata(path).unwrap().modified().unwrap()));
+        assert_eq!(before, after);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Tight stand-ins for the recorded limits, so a page count and a timeout can be reached quickly.
+    fn tight_limits(input: &Path) -> limits::ToolLimits {
+        let recorded = limits::convert_to_pdf(input);
+        let slow = input.file_stem().is_some_and(|stem| stem == "slow");
+        limits::ToolLimits { max_pages: Some(2), max_duration: if slow { std::time::Duration::from_millis(1) } else { recorded.max_duration }, ..recorded }
+    }
+
+    #[test]
+    fn too_many_pages_and_timed_out_files_fail_alone_and_save_nothing() {
+        let root = sandbox("tight_limits");
+        let long = root.join("long.txt");
+        fs::write(&long, "one\u{c}two\u{c}three").unwrap();
+        let long_html = root.join("long.html");
+        fs::write(&long_html, (0..400).map(|index| format!("<p>Paragraph {index}</p>")).collect::<String>()).unwrap();
+        let slow = root.join("slow.txt");
+        fs::write(&slow, (0..20_000).map(|index| format!("Line {index} of a long log\n")).collect::<String>()).unwrap();
+        let fine = root.join("fine.md");
+        fs::write(&fine, "# Two pages at most\n").unwrap();
+        let request = json!({ "paths": [&long, &long_html, &slow, &fine], "outputLocation": "alongsideInput" });
+        let outcomes = run_with(&RunEvents::silent(), request, fonts, no_packs(), tight_limits);
+
+        for outcome in &outcomes[..2] {
+            assert_eq!(limit_kind(outcome), Some(crate::kit::contracts::LimitKind::PageCount), "{outcome:?}");
+            assert_eq!(outcome.error().unwrap().message, "Would make more than 2 pages, over the limit for one PDF. Split it into smaller files and try again.");
+        }
+        assert_eq!(limit_kind(&outcomes[2]), Some(crate::kit::contracts::LimitKind::Time), "{:?}", outcomes[2]);
+        assert_eq!(outcomes[2].error().unwrap().message, "Took longer than 1 millisecond and was stopped. Nothing was saved.");
+        assert!(succeeded(&outcomes[3]), "{:?}", outcomes[3]);
+        assert!(!root.join("long.pdf").exists() && !root.join("long-1.pdf").exists() && !root.join("slow.pdf").exists());
+        assert!(root.join("fine.pdf").exists());
+        assert_eq!(fs::read_to_string(&long).unwrap(), "one\u{c}two\u{c}three");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn every_family_converts_byte_identically_into_each_runs_folder_without_packs() {
+        let root = sandbox("family_determinism");
+        let files = family_documents("Same text every time");
+        // One stem per family, so each output name is known and no two outputs compete for a name.
+        let stem = |name: &str| name.replace("note.", "") + "-note";
+        let inputs: Vec<PathBuf> = files.iter().map(|(name, bytes)| {
+            let path = root.join(format!("{}.{}", stem(name), name.trim_start_matches("note.")));
+            fs::write(&path, bytes).unwrap();
+            path
+        }).collect();
+        let runs = ["first", "second"].map(|run| {
+            let folder = root.join(run);
+            fs::create_dir(&folder).unwrap();
+            // `no_packs` has no app data and no catalog, so a family that reached for a pack would fail here.
+            let request = json!({ "paths": inputs, "outputLocation": { "customFolder": folder } });
+            let outcomes = run_with(&RunEvents::silent(), request, fonts, no_packs(), limits::convert_to_pdf);
+            for (outcome, (name, _)) in outcomes.iter().zip(&files) {
+                assert!(succeeded(outcome), "{name}: {outcome:?}");
+                assert_eq!(outcome.output_paths()[0].parent(), Some(folder.as_path()), "{name}");
+            }
+            folder
+        });
+        let expected: Vec<String> = files.iter().map(|(name, _)| stem(name) + ".pdf").collect();
+        let mut sorted = expected.clone();
+        sorted.sort();
+        assert_eq!(names(&runs[0]), sorted, "every family writes one PDF to the run's folder");
+        for name in &expected {
+            assert_eq!(fs::read(runs[0].join(name)).unwrap(), fs::read(runs[1].join(name)).unwrap(), "{name} differs between runs");
+            // Nothing tied to the run: no file identifier and no dates. Only the source's own title and author are copied.
+            let document = lopdf::Document::load(runs[0].join(name)).unwrap();
+            assert!(document.trailer.get(b"ID").is_err(), "{name} has a file identifier");
+            if let Ok(info) = document.trailer.get(b"Info").and_then(|info| document.dereference(info)).and_then(|(_, info)| info.as_dict()) {
+                let keys: Vec<&[u8]> = info.iter().map(|(key, _)| key.as_slice()).collect();
+                assert!(keys.iter().all(|key| matches!(*key, b"Title" | b"Author")), "{name} records {:?}", keys.iter().map(|key| String::from_utf8_lossy(key)).collect::<Vec<_>>());
+            }
+            assert!(document.catalog().unwrap().get(b"Metadata").is_err(), "{name} has XMP metadata");
+        }
+        for ((name, bytes), input) in files.iter().zip(&inputs) {
+            assert_eq!(&fs::read(input).unwrap(), bytes, "{name} was changed");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn unknown_options_are_invalid_and_unshipped_families_are_unavailable() {
         let root = sandbox("options");
@@ -1123,7 +1302,7 @@ mod tests {
         assert_eq!(names(&root), ["emoji.txt"]);
 
         let request = json!({ "paths": [input], "outputLocation": "alongsideInput" });
-        let outcomes = run_with::<NoSystemFonts, _>(&RunEvents::silent(), request, || Err(ToolError::unavailable("fonts missing")), no_packs());
+        let outcomes = run_with::<NoSystemFonts, _>(&RunEvents::silent(), request, || Err(ToolError::unavailable("fonts missing")), no_packs(), limits::convert_to_pdf);
         assert_eq!(outcomes[0].error().unwrap().kind, ErrorKind::Unavailable);
         assert_eq!(names(&root), ["emoji.txt"]);
     }
@@ -2478,19 +2657,6 @@ mod tests {
 <navPoint id="b"><navLabel><text>NCX ending</text></navLabel><content src="text/closing.xhtml#end"/></navPoint></navPoint>
 </navMap></ncx>"#;
 
-    fn epub_package(files: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        archive.start_file("mimetype", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
-        std::io::Write::write_all(&mut archive, b"application/epub+zip").unwrap();
-        archive.start_file("META-INF/container.xml", zip::write::SimpleFileOptions::default()).unwrap();
-        std::io::Write::write_all(&mut archive, br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
-        for (name, data) in files {
-            archive.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
-            std::io::Write::write_all(&mut archive, data).unwrap();
-        }
-        archive.finish().unwrap().into_inner()
-    }
-
     /// A two-chapter book whose spine order differs from its manifest and file-name order.
     fn epub_book(with_nav: bool, extra: &[(&str, &[u8])]) -> Vec<u8> {
         let nav_item = if with_nav { r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"# } else { "" };
@@ -2677,7 +2843,7 @@ mod tests {
         }
 
         fn convert_with(paths: &[&Path], packs: RunPacks) -> Vec<JobOutcome> {
-            run_with(&RunEvents::silent(), json!({ "paths": paths, "outputLocation": "alongsideInput" }), fonts, packs)
+            run_with(&RunEvents::silent(), json!({ "paths": paths, "outputLocation": "alongsideInput" }), fonts, packs, limits::convert_to_pdf)
         }
 
         fn set_font_dir(value: Option<&Path>) {
@@ -2707,11 +2873,6 @@ mod tests {
             let descriptor = document.get_dictionary(descendant).unwrap().get(b"FontDescriptor").unwrap().as_reference().unwrap();
             let file = document.get_dictionary(descriptor).unwrap().get(b"FontFile2").unwrap().as_reference().unwrap();
             document.get_object(file).unwrap().as_stream().unwrap().decompressed_content().unwrap()
-        }
-
-        fn rtf(text: &str) -> String {
-            let escaped: String = text.chars().map(|character| if character.is_ascii() { character.to_string() } else { format!("\\u{}?", character as u32 as i16) }).collect();
-            format!(r"{{\rtf1\ansi\uc1 {{\fonttbl{{\f0 Helvetica;}}}}\f0 {escaped}\par}}")
         }
 
         #[test]
@@ -2790,27 +2951,7 @@ mod tests {
         #[test]
         fn base_script_documents_never_need_a_pack_in_any_family() {
             let root = sandbox("script_pack_base");
-            let line = BASE_LINE;
-            let odp_styles = concat!(
-                r#"<office:automatic-styles><style:page-layout style:name="PM1"><style:page-layout-properties fo:page-width="960pt" fo:page-height="540pt"/></style:page-layout></office:automatic-styles>"#,
-                r#"<office:master-styles><style:master-page style:name="Default" style:page-layout-name="PM1"/></office:master-styles>"#,
-            );
-            let chapter = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>One</title></head><body><p>{line}</p></body></html>"#);
-            let opf = r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:2</dc:identifier><dc:title>Base</dc:title><dc:language>ru</dc:language></metadata><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>"#;
-            let files: Vec<(&str, Vec<u8>)> = vec![
-                ("note.txt", line.into()),
-                ("note.md", format!("# {line}\n\n*{line}* and **{line}**").into()),
-                ("note.rtf", rtf(line).into()),
-                ("note.csv", format!("Name,Note\n{line},Ωmega").into()),
-                ("note.docx", docx::fixtures::docx(&format!("<w:p><w:r><w:t>{line}</w:t></w:r></w:p>"), &[], &[])),
-                ("note.odt", odt::fixtures::odt("", &format!("<text:p>{line}</text:p>"), &[], &[])),
-                ("note.xlsx", xlsx::fixtures::xlsx(&[("Sheet", "visible", &xlsx::fixtures::sheet("", r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#, ""))], "", "", &[line])),
-                ("note.ods", ods::fixtures::ods("", "", &format!(r#"<table:table table:name="Sheet"><table:table-row><table:table-cell office:value-type="string"><text:p>{line}</text:p></table:table-cell></table:table-row></table:table>"#))),
-                ("note.pptx", pptx::fixtures::pptx((960, 540), &[pptx::fixtures::FixtureSlide { shapes: &pptx::fixtures::text_shape(Some("title"), (36, 24, 800, 60), line, ""), ..Default::default() }], &[])),
-                ("note.odp", odp::fixtures::odp(odp_styles, "", &format!(r#"<draw:page draw:name="One" draw:master-page-name="Default"><draw:frame svg:x="36pt" svg:y="24pt" svg:width="800pt" svg:height="60pt"><draw:text-box><text:p>{line}</text:p></draw:text-box></draw:frame></draw:page>"#), &[])),
-                ("note.html", format!("<h1>{line}</h1><p><b>{line}</b> <i>{line}</i></p>").into()),
-                ("note.epub", epub_package(&[("OEBPS/content.opf", opf.as_bytes()), ("OEBPS/one.xhtml", chapter.as_bytes())])),
-            ];
+            let files = family_documents(BASE_LINE);
             let paths: Vec<PathBuf> = files.iter().map(|(name, bytes)| { let path = root.join(name); fs::write(&path, bytes).unwrap(); path }).collect();
             // No catalog and no app data: nothing may be looked up.
             let outcomes = convert_with(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(), no_packs());

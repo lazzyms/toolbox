@@ -54,6 +54,20 @@ const PAGED_IMAGE: ToolLimits = ToolLimits { max_pages: Some(MAX_IMAGE_PAGES), .
 // The edit stack takes GIFs, so it counts their frames, and it caps each side at the largest size Resize can make.
 const EDIT_IMAGE: ToolLimits = ToolLimits { max_side: Some(16_384), ..PAGED_IMAGE };
 pub const SIGNATURE_IMAGE: ToolLimits = ToolLimits { max_bytes: 20 * MB, max_expanded_bytes: 80 * MB, ..IMAGE };
+// Converted text is read whole and laid out in memory, so text formats stop well below the PDF size. Packaged formats are
+// compressed archives whose parts are held to the expansion limit instead. For both, max_pages caps the pages a file makes.
+const TEXT_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
+const PACKAGED_DOCUMENT: ToolLimits = ToolLimits { max_bytes: 250 * MB, ..TEXT_DOCUMENT };
+
+/// Convert to PDF takes many formats, so its limits follow the input's family rather than the command.
+pub fn convert_to_pdf(input: &Path) -> ToolLimits {
+    let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or_default().to_ascii_lowercase();
+    match extension.as_str() {
+        "pdf" => PDF,
+        "docx" | "odt" | "xlsx" | "ods" | "pptx" | "odp" | "epub" => PACKAGED_DOCUMENT,
+        _ => TEXT_DOCUMENT,
+    }
+}
 
 pub fn recorded(command: &str) -> Option<ToolLimits> {
     Some(match command {
@@ -102,6 +116,17 @@ impl ToolLimits {
                 Format::for_path(path).part(), bytes_label(self.max_expanded_bytes),
             ),
         )
+    }
+
+    /// For a job that makes a PDF, such as a conversion, checked before its pages are written.
+    pub fn check_made_pages(&self, pages: usize) -> Result<(), ToolError> {
+        match self.max_pages {
+            Some(max_pages) if pages as u64 > u64::from(max_pages) => Err(ToolError::limit_exceeded(
+                LimitKind::PageCount,
+                format!("Would make more than {} pages, over the limit for one PDF. Split it into smaller files and try again.", count_label(u64::from(max_pages))),
+            )),
+            _ => Ok(()),
+        }
     }
 
     pub fn check(&self, path: &Path) -> Result<(), ToolError> {
@@ -668,6 +693,29 @@ mod tests {
         assert_eq!(recorded("convert_images").and_then(|limits| limits.max_pages), Some(MAX_IMAGE_PAGES));
         assert_eq!(MAX_IMAGE_PAGES, 1_000);
         assert_eq!(recorded("unknown"), None);
+    }
+
+    #[test]
+    fn convert_to_pdf_records_limits_for_each_family() {
+        let text = ToolLimits { max_bytes: 50 * MB, max_pages: Some(5_000), max_expanded_bytes: 500 * MB, max_duration: FIVE_MINUTES, max_side: None, page_remedy: PageRemedy::UseFewer };
+        let packaged = ToolLimits { max_bytes: 250 * MB, ..text };
+        for name in ["notes.txt", "notes.log", "README.MD", "notes.markdown", "page.html", "page.htm", "letter.rtf", "table.csv", "table.tsv"] {
+            assert_eq!(convert_to_pdf(Path::new(name)), text, "{name}");
+        }
+        for name in ["report.docx", "report.odt", "sheet.xlsx", "sheet.ods", "deck.pptx", "deck.odp", "book.EPUB"] {
+            assert_eq!(convert_to_pdf(Path::new(name)), packaged, "{name}");
+        }
+        assert_eq!(convert_to_pdf(Path::new("already.pdf")), recorded("convert_to_pdf").unwrap());
+    }
+
+    #[test]
+    fn made_pages_are_held_to_the_page_limit() {
+        let limits = convert_to_pdf(Path::new("notes.txt"));
+        assert!(limits.check_made_pages(5_000).is_ok());
+        let error = limits.check_made_pages(5_001);
+        assert_eq!(limit_of(error.clone()), Some(LimitKind::PageCount));
+        assert_eq!(error.unwrap_err().message, "Would make more than 5,000 pages, over the limit for one PDF. Split it into smaller files and try again.");
+        assert!(IMAGE.check_made_pages(1_000_000).is_ok());
     }
 
     #[test]

@@ -120,7 +120,8 @@ impl BatchRunner {
         R: Send + Sync + 'static,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
-        Self::run_batch(events, command, inputs, None, limits::recorded(command), request, job)
+        let limits = limits::recorded(command);
+        Self::run_batch(events, command, inputs, None, move |_| limits, request, job)
     }
 
     pub fn run_with_limits<R, F>(
@@ -136,21 +137,40 @@ impl BatchRunner {
         R: Send + Sync + 'static,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
-        Self::run_batch(events, command, inputs, Some(location), limits, request, job)
+        Self::run_batch(events, command, inputs, Some(location), move |_| limits, request, job)
     }
 
-    /// `location` is where outputs go; `None` means the job writes nothing.
-    fn run_batch<R, F>(
+    /// For a command whose limits depend on the input, such as Convert to PDF, which takes many formats.
+    pub fn run_limited<R, L, F>(
         events: &RunEvents,
         command: &str,
         inputs: Vec<PathBuf>,
-        location: Option<&OutputLocation>,
-        limits: Option<ToolLimits>,
+        location: &OutputLocation,
+        limits_for: L,
         request: &Arc<R>,
         job: F,
     ) -> Vec<JobOutcome>
     where
         R: Send + Sync + 'static,
+        L: Fn(&Path) -> Option<ToolLimits> + Sync,
+        F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
+    {
+        Self::run_batch(events, command, inputs, Some(location), limits_for, request, job)
+    }
+
+    /// `location` is where outputs go; `None` means the job writes nothing.
+    fn run_batch<R, L, F>(
+        events: &RunEvents,
+        command: &str,
+        inputs: Vec<PathBuf>,
+        location: Option<&OutputLocation>,
+        limits_for: L,
+        request: &Arc<R>,
+        job: F,
+    ) -> Vec<JobOutcome>
+    where
+        R: Send + Sync + 'static,
+        L: Fn(&Path) -> Option<ToolLimits> + Sync,
         F: Fn(&R, PathBuf) -> JobOutcome + Send + Sync + 'static,
     {
         // rayon::into_par_iter automatically uses the system core count for the thread pool,
@@ -186,7 +206,7 @@ impl BatchRunner {
                         return (index, outcome);
                     }
                     events.emit(FileEvent::Started { index });
-                    let outcome = match limits {
+                    let outcome = match limits_for(&path) {
                         Some(limits) => {
                             let (job, request, sink) = (Arc::clone(&job), Arc::clone(request), events.sink.clone());
                             limits.run_each(path, events.cancel.flag(), move |path| {
