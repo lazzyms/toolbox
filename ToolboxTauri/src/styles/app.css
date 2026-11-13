@@ -2031,10 +2031,12 @@ body {
 .pdf-studio:has(.pdf-scene-workspace) .workspace-source-bar[data-empty="true"]:not(:has(.intake-not-added)) { display: none; }
 .pdf-scene-workspace { display: flex; flex-direction: column; min-height: 0; color: var(--foreground); }
 .scene-tools { display: flex; align-items: center; gap: 5px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--card); }
-.scene-tools { flex-wrap: wrap; padding: 3px 6px; }
+/* Board PdfText toolbar density: 2px between items and 9px tool padding (px-[9px] on each tool), so the
+   tools, history, destination and both export actions fit in two rows at 1280 px with room to spare. */
+.scene-tools { flex-wrap: wrap; gap: 2px; padding: 3px 6px; }
 .scene-tools button > span { font-size: 15px; line-height: 18px; min-width: 16px; }
 .pdf-studio .scene-tools .scene-export { width: auto; margin: 0; }
-.scene-tools .export-destination { margin-left: auto; max-width: 260px; }
+.scene-tools .export-destination { margin-left: auto; max-width: 160px; }
 .export-destination-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .export-destination-path { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; font-size: 13px; }
 .export-destination-path svg { flex: none; width: 16px; height: 16px; }
