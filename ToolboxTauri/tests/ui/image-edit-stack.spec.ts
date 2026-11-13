@@ -39,7 +39,7 @@ test.beforeEach(async ({ page }) => {
                 if (command.startsWith("plugin:")) return null;
                 const request = (args as { request?: { paths?: string[]; steps?: Record<string, unknown> } }).request;
                 const stepNames = Object.keys(request?.steps ?? {});
-                const suffix = stepNames.length > 1 ? "-edited" : stepNames[0] === "resize" ? "-resized" : "-cropped";
+                const suffix = stepNames.length > 1 ? "-edited" : ({ resize: "-resized", rotate: "-rotated" } as Record<string, string>)[stepNames[0]] ?? "-cropped";
                 return win.__processingResults ?? (request?.paths ?? []).map((inputPath) => ({
                     inputPath,
                     outputPaths: [inputPath.replace(/(\.\w+)$/, `${suffix}$1`)],
@@ -70,6 +70,7 @@ const openTool = async (page: Page, tool: string, paths: string[]) => {
 
 const openCrop = (page: Page, paths: string[]) => openTool(page, "Crop Images", paths);
 const openResize = (page: Page, paths: string[]) => openTool(page, "Resize Images", paths);
+const openRotate = (page: Page, paths: string[]) => openTool(page, "Rotate and Flip Images", paths);
 const addedMessage = (label: string, position: number) =>
     `${label} added as step ${position}. Steps always run Crop, Resize, Rotate and Flip, Colour and Tone, Watermark, then Remove Metadata.`;
 
@@ -318,6 +319,92 @@ for (const theme of ["light", "dark"] as const) {
         expect(colors.heading).not.toBe(colors.surface);
         await page.screenshot({ path: testInfo.outputPath(`resize-step-${theme}.png`), animations: "disabled" });
         await steps(page).getByRole("button", { name: "Add Crop step" }).click();
-        await expect(page.locator(".image-edit-stack-separator")).toHaveAttribute("aria-hidden", "true");
+        const separators = page.locator(".image-edit-stack-separator");
+        await expect(separators).toHaveCount(2);
+        for (const separator of await separators.all()) await expect(separator).toHaveAttribute("aria-hidden", "true");
+    });
+}
+
+const reEncoded = "Re-encoded at quality 90 after rotating.";
+
+test("choosing Rotate and Flip sets the turn and the mirror in one step and the row shows the re-encode", async ({ page }) => {
+    await openRotate(page, ["/photos/a.jpg", "/photos/b.png"]);
+    await expect(steps(page).getByRole("button", { name: "Step 1 of 1, Rotate and Flip, showing its options" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Rotate and Flip", 1) })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "90 degrees" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("radio", { name: "None" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByText("Clockwise, as you see the image in the preview.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Rotated images are always re-encoded at quality 90, even with no other changes.", { exact: true })).toBeVisible();
+
+    await page.getByRole("radio", { name: "270 degrees" }).click();
+    await page.getByRole("radio", { name: "Horizontal" }).click();
+    await expect(page.getByRole("radio", { name: "270 degrees" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-rotated.jpg");
+    const previews = await invocations(page, "inspect_image_edit_preview");
+    expect((previews.at(-1)?.args as { request: { plan: { edits: unknown[] } } }).request.plan.edits).toEqual([{ kind: "rotate", degrees: 270, flip: "horizontal" }]);
+
+    await page.evaluate((detail) => {
+        (window as unknown as StackWindow).__processingResults = [
+            { inputPath: "/photos/a.jpg", outputPaths: ["/photos/a-rotated.jpg"], detail, state: "succeeded", failure: null, reason: null, warnings: [] },
+            { inputPath: "/photos/b.png", outputPaths: ["/photos/b-rotated.png"], detail: "Image saved", state: "succeeded", failure: null, reason: null, warnings: [] },
+        ] as JobOutcome[];
+    }, reEncoded);
+    await page.getByRole("button", { name: "Run on 2 images" }).click();
+    const request = await runRequest(page);
+    expect(request.steps).toEqual({ rotate: { degrees: 270, flip: "horizontal" } });
+    expect(await invocations(page, "rotate_images")).toEqual([]);
+
+    const rows = page.locator(".result-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText(reEncoded);
+    await expect(rows.nth(0)).not.toContainText(/warning/i);
+    await expect(rows.nth(1)).not.toContainText(reEncoded);
+    await expect(page.getByRole("button", { name: "Open a-rotated.jpg" })).toBeVisible();
+});
+
+test("Rotate and Flip always runs after Crop and Resize and the run is named -edited", async ({ page }) => {
+    await openRotate(page, ["/photos/a.jpg"]);
+    await page.getByRole("radio", { name: "180 degrees" }).click();
+    await page.getByRole("radio", { name: "Vertical" }).click();
+    await steps(page).getByRole("button", { name: "Add Crop step" }).click();
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Crop", 1) })).toBeVisible();
+    await steps(page).getByRole("button", { name: "Add Resize step" }).click();
+    await expect(page.getByRole("status").filter({ hasText: addedMessage("Resize", 2) })).toBeVisible();
+
+    const list = steps(page);
+    await list.getByRole("button", { name: "Step 3 of 3, Rotate and Flip" }).click();
+    await expect(page.getByText("Step 3 of 3. Runs after Crop and Resize.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "180 degrees" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("radio", { name: "Vertical" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("run-destination-example")).toHaveText("a-edited.jpg");
+
+    await page.getByRole("button", { name: "Run on 1 image" }).click();
+    const request = await runRequest(page);
+    expect(Object.keys(request.steps)).toEqual(["crop", "resize", "rotate"]);
+    expect(request.steps).toMatchObject({ rotate: { degrees: 180, flip: "vertical" } });
+    await expect(page.getByRole("button", { name: "Open a-edited.jpg" })).toBeVisible();
+});
+
+for (const theme of ["light", "dark"] as const) {
+    test(`the Rotate and Flip step renders readable controls in the ${theme} theme`, async ({ page }, testInfo) => {
+        await page.addInitScript((theme) => { localStorage.setItem("toolbox-theme", theme); }, theme);
+        await openRotate(page, ["/photos/a.jpg"]);
+        await expect(page.locator("body")).toHaveAttribute("data-theme", theme);
+        const options = page.getByRole("region", { name: "Options" });
+        await expect(options.getByRole("radio", { name: "90 degrees" })).toBeVisible();
+        const colors = await options.evaluate((node) => {
+            const legend = node.querySelector("legend");
+            const note = Array.from(node.querySelectorAll("p")).find((p) => p.textContent?.startsWith("Rotated images"));
+            return {
+                surface: getComputedStyle(node).backgroundColor,
+                legend: legend ? getComputedStyle(legend).color : "",
+                note: note ? getComputedStyle(note).color : "",
+            };
+        });
+        expect(colors.legend).not.toBe("");
+        expect(colors.legend).not.toBe(colors.surface);
+        expect(colors.note).not.toBe("");
+        expect(colors.note).not.toBe(colors.surface);
+        await options.screenshot({ path: testInfo.outputPath(`rotate-step-${theme}.png`), animations: "disabled" });
     });
 }
