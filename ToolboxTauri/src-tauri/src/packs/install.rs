@@ -332,6 +332,7 @@ fn install_staged(path: &Path, context: &InstallContext, staging: &Path) -> Resu
         pack_format: pack.pack_format,
         app_versions: pack.app_versions.clone(),
         files,
+        manifest_sha256: Some(digest_hex(&fs::read(content.join(MANIFEST_FILE)).map_err(unavailable)?)),
     })
 }
 
@@ -554,6 +555,8 @@ fn commit(context: &InstallContext, header: &Header, staging: &Path, content: &P
     if let Some(previous) = previous.filter(|previous| previous.version != header.version && is_plain_segment(&previous.version)) {
         let _ = remove_tree(&pack_folder.join(previous.version));
     }
+    // A repaired or updated pack is checked again at its next use.
+    super::health::forget(&pack_folder);
     Ok(())
 }
 
