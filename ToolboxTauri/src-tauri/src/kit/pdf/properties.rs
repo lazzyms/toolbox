@@ -159,19 +159,7 @@ pub fn read_job(request: &ReadPropertiesRequest, input: PathBuf) -> JobOutcome {
         Ok((document, _)) => document,
         Err(error) => return JobOutcome::failure(input, error),
     };
-    let current = document_info::from_document(&document);
-    let xmp = current.xmp.map(|xmp| xmp.values).unwrap_or_default();
-    let info = current.info;
-    let merged = PdfProperties {
-        title: info.title.or(xmp.title),
-        author: info.author.or(xmp.author),
-        subject: info.subject.or(xmp.subject),
-        keywords: info.keywords.or(xmp.keywords),
-        creator: info.creator.or(xmp.creator),
-        producer: info.producer.or(xmp.producer),
-        creation_date: info.creation_date.or(xmp.creation_date),
-        modification_date: info.modification_date.or(xmp.modification_date),
-    };
+    let merged = document_info::from_document(&document).merged();
     let signed = super::has_signed_signature_field(&document);
     match serde_json::to_string(&CurrentProperties { properties: merged, signed }) {
         Ok(detail) => JobOutcome::succeeded(input, Vec::new(), detail),
