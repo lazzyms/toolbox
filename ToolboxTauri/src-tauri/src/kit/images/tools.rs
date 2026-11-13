@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
-use image::{DynamicImage, ImageFormat, ImageEncoder, Rgba};
+use image::{DynamicImage, ImageEncoder, Rgba};
 use image::AnimationDecoder;
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -526,13 +526,6 @@ pub fn inspect_image_pages(request: &ImagePagesRequest) -> Vec<Option<usize>> {
     request.paths.iter().map(|path| crate::kit::images::source::page_count(path).ok()).collect()
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResizeRequest {
-    pub paths: Vec<PathBuf>,
-    #[serde(flatten)] pub resize: ResizeStep,
-    pub output_location: OutputLocation,
-}
 /// How to size each image: a width-and-height box (fitted inside unless the aspect lock is off),
 /// a percentage, or the length of the longer edge.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -544,26 +537,12 @@ pub struct ResizeStep {
     #[serde(default = "default_keep_aspect_ratio")] pub keep_aspect_ratio: bool,
     #[serde(default)] pub percentage: u32, #[serde(default)] pub longest_side: u32,
 }
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RotateRequest {
-    pub paths: Vec<PathBuf>,
-    #[serde(flatten)] pub rotate: RotateStep,
-    pub output_location: OutputLocation,
-}
 /// A clockwise turn of 0, 90, 180 or 270 degrees, then an optional mirror.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RotateStep {
     pub degrees: i32,
     #[serde(default = "default_flip")] pub flip: String,
-}
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CropRequest {
-    pub paths: Vec<PathBuf>,
-    #[serde(flatten)] pub crop: CropStep,
-    pub output_location: OutputLocation,
 }
 /// The crop geometry, measured in source pixels. Aspect-ratio mode keeps the largest area of that
 /// ratio each image has, so one setting fits every size in a batch.
@@ -575,13 +554,6 @@ pub struct CropStep {
     #[serde(default)] pub aspect_width: u32, #[serde(default)] pub aspect_height: u32,
     #[serde(default = "default_crop_anchor")] pub anchor: String,
 }
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToneRequest {
-    pub paths: Vec<PathBuf>,
-    #[serde(flatten)] pub tone: ToneStep,
-    pub output_location: OutputLocation,
-}
 /// Brightness, contrast, saturation and exposure, each from -100 to 100, where 0 leaves it as it is.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -590,13 +562,6 @@ pub struct ToneStep {
     pub contrast: f32,
     #[serde(default)] pub saturation: f32,
     #[serde(default)] pub exposure: f32,
-}
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WatermarkRequest {
-    pub paths: Vec<PathBuf>,
-    #[serde(flatten)] pub options: WatermarkOptions,
-    pub output_location: OutputLocation,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -645,11 +610,7 @@ pub struct TiffPreviewRequest { pub path: PathBuf }
 pub struct ImagePagesRequest { pub paths: Vec<PathBuf> }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MetadataRequest { pub paths: Vec<PathBuf>, pub output_location: OutputLocation }
-
-pub fn resize(request: &ResizeRequest, input: PathBuf) -> JobOutcome {
-    transform(request.paths.as_slice(), input, &request.output_location, "-resized", |image| request.resize.apply(image))
-}
+pub struct MetadataRequest { pub paths: Vec<PathBuf> }
 
 impl ResizeStep {
     fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
@@ -690,10 +651,6 @@ fn resize_dimensions(source_width: u32, source_height: u32, request: &ResizeStep
 
 // Not clamped: a result past 16384 px is refused by resize_dimensions rather than silently distorted.
 fn scale_dimension(value: u32, percentage: u32) -> u32 { ((value as u64 * percentage as u64 + 50) / 100).clamp(1, u32::MAX as u64) as u32 }
-pub fn rotate(request: &RotateRequest, input: PathBuf) -> JobOutcome {
-    transform(request.paths.as_slice(), input, &request.output_location, "-rotated", |image| request.rotate.apply(image))
-}
-
 impl RotateStep {
     fn apply(&self, image: DynamicImage) -> Result<DynamicImage, String> {
         let image = match self.degrees.rem_euclid(360) { 90 => image.rotate90(), 180 => image.rotate180(), 270 => image.rotate270(), 0 => image, _ => return Err("Rotation must be 0, 90, 180, or 270 degrees.".to_string()) };
@@ -704,13 +661,6 @@ impl RotateStep {
 }
 
 fn default_flip() -> String { "none".to_string() }
-pub fn crop(request: &CropRequest, input: PathBuf) -> JobOutcome {
-    transform(request.paths.as_slice(), input, &request.output_location, "-cropped", |image| {
-        let (x, y, width, height) = crop_rect(image.width(), image.height(), &request.crop)?;
-        Ok(image.crop_imm(x, y, width, height))
-    })
-}
-
 fn default_crop_mode() -> String { "rectangle".to_string() }
 fn default_crop_anchor() -> String { "center".to_string() }
 
@@ -738,10 +688,6 @@ fn crop_rect(image_width: u32, image_height: u32, request: &CropStep) -> Result<
         Ok((request.x, request.y, request.width, request.height))
     } else { Err(format!("Unsupported crop mode: {}.", request.mode)) }
 }
-pub fn tone(request: &ToneRequest, input: PathBuf) -> JobOutcome {
-    transform(&request.paths, input, &request.output_location, "-tone", |image| request.tone.apply(image))
-}
-
 impl ToneStep {
     fn is_neutral(&self) -> bool { self.brightness == 0 && self.contrast == 0.0 && self.saturation == 0.0 && self.exposure == 0.0 }
 
@@ -780,12 +726,6 @@ impl ToneStep {
         Ok(DynamicImage::ImageRgba8(contrasted))
     }
 }
-pub fn watermark(request: &WatermarkRequest, input: PathBuf) -> JobOutcome {
-    transform(&request.paths, input, &request.output_location, "-watermarked", |image| {
-        apply_watermark(image, &request.options)
-    })
-}
-
 fn apply_watermark(image: DynamicImage, options: &WatermarkOptions) -> Result<DynamicImage, String> {
     options.validate()?;
     let mut image = image.to_rgba8();
@@ -1368,42 +1308,6 @@ fn write_encoded_page<W: std::io::Write + Seek>(encoder: &mut tiff::encoder::Tif
     }
     .map_err(|error| error.to_string())
 }
-pub fn strip_metadata(request: &MetadataRequest, input: PathBuf) -> JobOutcome {
-    let image = match image::open(&input) { Ok(image) => image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
-    let output = match OutputNaming::reserve_destination(&input, &request.output_location, "-stripped", input.extension().and_then(|extension| extension.to_str()).unwrap_or("png")) {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve metadata-free image output: {error}")),
-    };
-    let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
-    if let Err(error) = image.save_with_format(output.path(), format) { return failure(input, format!("Could not save metadata-free image: {error}")); }
-    match crate::kit::images::metadata::read_file(output.path()) {
-        Ok(report) if !report.exif && !report.xmp && !report.icc => match output.publish() {
-            Ok(path) => JobOutcome::succeeded(input, vec![path], "Metadata removed and verified"),
-            Err(error) => failure(input, format!("Could not publish metadata-free image: {error}")),
-        },
-        Ok(_) => failure(input, "Image encoder retained metadata that could not be removed safely.".to_string()),
-        Err(error) => failure(input, format!("Could not verify metadata removal: {error}")),
-    }
-}
-
-fn transform<F>(_: &[PathBuf], input: PathBuf, location: &OutputLocation, suffix: &str, edit: F) -> JobOutcome where F: FnOnce(DynamicImage) -> Result<DynamicImage, String> {
-    let image = match crate::kit::images::load_upright_image(&input) { Ok(upright) => upright.image, Err(error) => return failure(input, format!("Could not read image: {error}")) };
-    let image = match edit(image) { Ok(image) => image, Err(error) => return failure(input, error) };
-    let extension = input.extension().and_then(|extension| extension.to_str()).unwrap_or("png");
-    let output = match OutputNaming::reserve_destination(&input, location, suffix, extension) {
-        Ok(output) => output,
-        Err(error) => return failure(input, format!("Could not reserve image output: {error}")),
-    };
-    let format = ImageFormat::from_path(output.path()).unwrap_or(ImageFormat::Png);
-    match image.save_with_format(output.path(), format) {
-        Ok(_) => match output.publish() {
-            Ok(path) => JobOutcome::succeeded(input, vec![path], "Image saved"),
-            Err(error) => failure(input, format!("Could not publish image: {error}")),
-        },
-        Err(error) => failure(input, format!("Could not save image: {error}")),
-    }
-}
-
 fn failure(input_path: PathBuf, error: String) -> JobOutcome { JobOutcome::failure(input_path, ToolError::processing(error)) }
 
 #[cfg(test)]
@@ -1414,10 +1318,21 @@ mod tests {
     fn gray(width: u32, height: u32, data: Vec<u8>) -> DynamicImage { DynamicImage::ImageLuma8(image::ImageBuffer::from_raw(width, height, data).unwrap()) }
     fn read_pages(path: &Path) -> Result<Vec<DynamicImage>, String> { crate::kit::images::decode(path).map(|decoded| decoded.pages) }
 
-    fn text_watermark(input: &Path, text: &str, opacity: u8, offset: u32) -> WatermarkRequest {
-        WatermarkRequest {
+    fn text_watermark(input: &Path, text: &str, opacity: u8, offset: u32) -> ImageEditStackRequest {
+        let options = WatermarkOptions { text: Some(text.to_string()), logo_path: None, size: None, opacity, color: None, position: Some(WatermarkPosition::Offset { x: offset, y: offset }), rotation: 0.0 };
+        ImageEditStackRequest {
             paths: vec![input.to_path_buf()],
-            options: WatermarkOptions { text: Some(text.to_string()), logo_path: None, size: None, opacity, color: None, position: Some(WatermarkPosition::Offset { x: offset, y: offset }), rotation: 0.0 },
+            steps: ImageEditSteps { watermark: Some(options), ..ImageEditSteps::default() },
+            format: None,
+            output_location: OutputLocation::AlongsideInput,
+        }
+    }
+
+    fn mirror(input: &Path, flip: &str) -> ImageEditStackRequest {
+        ImageEditStackRequest {
+            paths: vec![input.to_path_buf()],
+            steps: ImageEditSteps { rotate: Some(RotateStep { degrees: 0, flip: flip.to_string() }), ..ImageEditSteps::default() },
+            format: None,
             output_location: OutputLocation::AlongsideInput,
         }
     }
@@ -1594,7 +1509,7 @@ mod tests {
         let input = path("watermark-input.png");
         let image = image::RgbaImage::from_pixel(64, 32, image::Rgba([10, 20, 30, 77]));
         image.save(&input).unwrap();
-        let result = watermark(&text_watermark(&input, "TOOL", 50, 2), input.clone());
+        let result = export_edit_stack(&text_watermark(&input, "TOOL", 50, 2), input.clone());
         let output = result.output_paths().first().unwrap();
         let output_image = image::open(output).unwrap().to_rgba8();
         assert!(output_image.pixels().any(|pixel| pixel.0[0..3] != [10, 20, 30]));
@@ -1628,7 +1543,7 @@ mod tests {
         let existing_bytes = b"existing output must remain intact";
         std::fs::write(&output, existing_bytes).unwrap();
 
-        let result = watermark(&text_watermark(&input, "Café Ж \u{10FFFF}", 80, 4), input.clone());
+        let result = export_edit_stack(&text_watermark(&input, "Café Ж \u{10FFFF}", 80, 4), input.clone());
 
         let error = result.error().expect("unsupported text must fail");
         assert_eq!(error.message, "The watermark font can't draw U+10FFFF.");
@@ -1681,7 +1596,7 @@ mod tests {
         let existing_bytes = b"do not overwrite this output";
         std::fs::write(&existing_output, existing_bytes).unwrap();
 
-        let result = watermark(&text_watermark(&input, "Safe", 50, 4), input.clone());
+        let result = export_edit_stack(&text_watermark(&input, "Safe", 50, 4), input.clone());
 
         assert!(result.error().is_none(), "watermark failed: {:?}", result.error());
         let output = result.output_paths().first().expect("watermark output");
@@ -2083,12 +1998,12 @@ mod tests {
         image.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
         image.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
         image.save(&input).unwrap();
-        let result = rotate(&RotateRequest { paths: vec![input.clone()], rotate: RotateStep { degrees: 0, flip: "horizontal".to_string() }, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let result = export_edit_stack(&mirror(&input, "horizontal"), input.clone());
         let output = result.output_paths().first().unwrap();
         let pixels = image::open(output).unwrap().to_rgba8();
         assert_eq!(pixels.dimensions(), (2, 1));
         assert_eq!(pixels.get_pixel(0, 0).0, [0, 255, 0, 255]);
-        let invalid = rotate(&RotateRequest { paths: vec![input.clone()], rotate: RotateStep { degrees: 0, flip: "diagonal".to_string() }, output_location: OutputLocation::AlongsideInput }, input.clone());
+        let invalid = export_edit_stack(&mirror(&input, "diagonal"), input.clone());
         assert!(invalid.error().is_some());
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);

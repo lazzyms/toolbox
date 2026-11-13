@@ -1032,7 +1032,7 @@ mod tests {
     #[test]
     fn capability_registry_keeps_valid_inputs_when_one_extension_is_rejected() {
         let paths = vec![PathBuf::from("source.png"), PathBuf::from("source.pdf")];
-        let validation = partition_command_inputs("image_metadata", &paths).unwrap();
+        let validation = partition_command_inputs("export_image_edit_stack", &paths).unwrap();
 
         assert_eq!(validation.accepted, vec![(0, paths[0].clone())]);
         assert_eq!(validation.rejected.len(), 1);
@@ -1045,7 +1045,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         let paths = vec![PathBuf::from("first.png"), folder.clone(), PathBuf::from("notes.txt"), PathBuf::from("second.png")];
 
-        let validation = partition_command_inputs("image_metadata", &paths).unwrap();
+        let validation = partition_command_inputs("export_image_edit_stack", &paths).unwrap();
 
         assert_eq!(validation.accepted, vec![(0, paths[0].clone()), (3, paths[3].clone())]);
         assert_eq!(validation.rejected.iter().map(|(index, _)| *index).collect::<Vec<_>>(), vec![1, 2]);
@@ -1138,7 +1138,9 @@ mod tests {
         assert_eq!(images.accepted_extensions, [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif", ".tif", ".tiff"]);
         let stack = native_capability("export_image_edit_stack").unwrap();
         assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-edited", false), "the edit stack runs every image as its own job and names a combined stack -edited");
-        assert_eq!(native_capability("crop_images").unwrap().input_cardinality, InputCardinality::Single);
+        for retired in ["crop_images", "resize_images", "rotate_images", "adjust_image_tone", "watermark_images", "image_metadata"] {
+            assert!(native_capability(retired).is_none(), "{retired} is retired: Edit Image exports through the stack");
+        }
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
         assert_eq!(native_capability("convert_images").unwrap().input_cardinality, InputCardinality::Multiple);
         let rendered = native_capability("pdf_to_images").unwrap();
@@ -1235,7 +1237,7 @@ mod tests {
         let outcomes = partition_capability_inputs(&sample, &[]).err().unwrap();
         assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message.contains("at least one input file")));
 
-        for command in ["split_pdf", "image_metadata", "merge_pdfs"] {
+        for command in ["split_pdf", "export_image_edit_stack", "merge_pdfs"] {
             let outcomes = validate_command_inputs(command, &[]).unwrap_err();
             assert_eq!(outcomes.len(), 1, "{command}");
             assert!(outcomes[0].error().is_some_and(|error| error.message.contains("at least one input file")), "{command}");
