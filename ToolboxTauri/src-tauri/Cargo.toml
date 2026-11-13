@@ -47,6 +47,7 @@ fontdue = "0.9.4"
 rustybuzz = "0.20.1"
 subsetter = { version = "0.2.6", default-features = false }
 lopdf = "0.44"
+hayro-ccitt = "0.5"
 encoding_rs = "0.8"
 rayon = "1"
 heif-rs = "26.7"

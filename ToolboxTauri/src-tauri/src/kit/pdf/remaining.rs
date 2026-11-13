@@ -2618,7 +2618,7 @@ pub(crate) mod tests {
         assert_eq!(warning_kinds(&outcome),vec![
             WarningKind::ImageDamaged { page:1, image:2 },
             WarningKind::ImageUnsupported { page:2, image:1, feature:"JBIG2".into() },
-            WarningKind::ImageUnsupported { page:2, image:2, feature:"CCITT fax".into() },
+            WarningKind::ImageDamaged { page:2, image:2 },
             WarningKind::ImageUnsupported { page:2, image:3, feature:"Lab colour".into() },
             WarningKind::ImageTooLarge { page:2, image:4, width:61000, height:48000 },
             WarningKind::ImageDamaged { page:2, image:5 },
@@ -2626,7 +2626,7 @@ pub(crate) mod tests {
         assert_eq!(outcome.warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>(),vec![
             "Page 1, image 2 — The image data is damaged. Not saved.",
             "Page 2, image 1 — JBIG2 isn't supported in this version. Not saved.",
-            "Page 2, image 2 — CCITT fax isn't supported in this version. Not saved.",
+            "Page 2, image 2 — The image data is damaged. Not saved.",
             "Page 2, image 3 — Lab colour isn't supported in this version. Not saved.",
             "Page 2, image 4 — Would be 61,000 × 48,000 px when decoded, over the size limit. Not saved.",
             "Page 2, image 5 — The image data is damaged. Not saved.",
@@ -2654,6 +2654,168 @@ pub(crate) mod tests {
         assert_eq!(outcome.error().map(|error| error.message.as_str()),Some("The image couldn't be decoded, so nothing was saved."));
         assert_eq!(warning_kinds(&outcome),vec![WarningKind::ImageDamaged { page:1, image:1 }]);
         assert_eq!(sorted_names(&temp),vec!["fax.pdf","single.pdf"],"no images folder is made");
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    /// The fax fixture: 10 × 4, `#` is black. Rows 1 and 2 match, so two-dimensional coding can refer to the row above.
+    const FAX_ROWS: [&str; 4] = ["##....####", "##....####", "..#####...", "#........#"];
+
+    fn fax_luma() -> Vec<u8> {
+        FAX_ROWS.iter().flat_map(|row| row.bytes().map(|pixel| if pixel == b'#' { 0 } else { 255 })).collect()
+    }
+
+    /// Writes CCITT codes given as strings of 0 and 1.
+    #[derive(Default)]
+    struct FaxBits { bytes: Vec<u8>, used: usize }
+
+    impl FaxBits {
+        fn put(&mut self, code: &str) {
+            for bit in code.bytes() {
+                if self.used % 8 == 0 { self.bytes.push(0); }
+                if bit == b'1' { *self.bytes.last_mut().unwrap() |= 0x80 >> (self.used % 8); }
+                self.used += 1;
+            }
+        }
+
+        /// An EOL whose last bit ends a byte, after zero fill bits.
+        fn aligned_eol(&mut self) {
+            while (self.used + 12) % 8 != 0 { self.put("0"); }
+            self.put("000000000001");
+        }
+
+        /// Terminating run codes, enough for the 10-pixel fixture.
+        fn run(&mut self, black: bool, length: usize) {
+            const WHITE: [&str; 11] = ["00110101","000111","0111","1000","1011","1100","1110","1111","10011","10100","00111"];
+            const BLACK: [&str; 11] = ["0000110111","010","11","10","011","0011","0010","00011","000101","000100","0000100"];
+            self.put(if black { BLACK[length] } else { WHITE[length] });
+        }
+
+        /// One row coded one-dimensionally: alternating runs that start white.
+        fn row_1d(&mut self, row: &str) {
+            let (mut black, mut length) = (false, 0);
+            for pixel in row.bytes().map(|pixel| pixel == b'#') {
+                if pixel != black { self.run(black, length); black = pixel; length = 0; }
+                length += 1;
+            }
+            self.run(black, length);
+        }
+
+        /// One row coded two-dimensionally: V0 for every change when it repeats the row above, horizontal mode otherwise.
+        fn row_2d(&mut self, row: &str, above: &str) {
+            let changes = fax_changes(row);
+            if row == above { for _ in 0..=changes.len() { self.put("1"); } return; }
+            let (mut a0, mut index) = (0, 0);
+            while a0 < row.len() {
+                let a1 = changes.get(index).copied().unwrap_or(row.len());
+                let a2 = changes.get(index + 1).copied().unwrap_or(row.len());
+                self.put("001");
+                self.run(false, a1 - a0);
+                self.run(true, a2 - a1);
+                (a0, index) = (a2, index + 2);
+            }
+        }
+    }
+
+    fn fax_changes(row: &str) -> Vec<usize> {
+        let mut previous = false;
+        row.bytes().enumerate().filter_map(|(x, pixel)| { let black = pixel == b'#'; let change = black != previous; previous = black; change.then_some(x) }).collect()
+    }
+
+    fn fax_group_4() -> Vec<u8> {
+        let mut encoder = fax::encoder::Encoder::new(fax::VecWriter::new());
+        for row in FAX_ROWS {
+            encoder.encode_line(row.bytes().map(|pixel| if pixel == b'#' { fax::Color::Black } else { fax::Color::White }), 10).unwrap();
+        }
+        encoder.finish().unwrap().finish()
+    }
+
+    fn fax_image(parms: lopdf::Dictionary, extra: lopdf::Dictionary, data: Vec<u8>) -> Stream {
+        let mut entries = dictionary! { "Width"=>10, "Height"=>4, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>1, "Filter"=>"CCITTFaxDecode" };
+        let mut decode_parms = dictionary! { "Columns"=>10, "Rows"=>4 };
+        for (key, value) in parms { decode_parms.set(key, value); }
+        entries.set("DecodeParms", decode_parms);
+        for (key, value) in extra { entries.set(key, value); }
+        image_stream(entries, data)
+    }
+
+    #[test]
+    fn group_3_and_group_4_fax_images_become_png_with_their_encoding_parameters_honoured() {
+        let temp=split_fixture_root("images-ccitt");
+        let mut plain=FaxBits::default();
+        FAX_ROWS.iter().for_each(|row| plain.row_1d(row));
+        let mut lined=FaxBits::default();
+        for row in FAX_ROWS { lined.aligned_eol(); lined.row_1d(row); }
+        for _ in 0..6 { lined.aligned_eol(); }
+        let mut mixed=FaxBits::default();
+        for (index,row) in FAX_ROWS.iter().enumerate() {
+            mixed.put("000000000001");
+            if index % 2 == 0 { mixed.put("1"); mixed.row_1d(row); } else { mixed.put("0"); mixed.row_2d(row,FAX_ROWS[index-1]); }
+        }
+        for _ in 0..6 { mixed.put("0000000000011"); }
+        let inverted=|| vec![Object::from(1),Object::from(0)];
+        let variants=[
+            ("group-4",fax_image(dictionary! { "K"=>-1 },dictionary! {},fax_group_4())),
+            ("group-3-black-is-1",fax_image(dictionary! { "K"=>0, "BlackIs1"=>true },dictionary! { "Decode"=>inverted() },plain.bytes)),
+            ("group-3-aligned-eol",fax_image(dictionary! { "K"=>0, "EndOfLine"=>true, "EncodedByteAlign"=>true },dictionary! {},lined.bytes)),
+            ("group-3-mixed-2d",fax_image(dictionary! { "K"=>2, "EndOfLine"=>true },dictionary! {},mixed.bytes)),
+        ];
+
+        // Identical pixels would be merged as duplicates, so each variant gets its own PDF.
+        for (name,image) in variants {
+            let input=temp.join(format!("{name}.pdf"));
+            image_pdf(&input,|_| vec![vec![image]]);
+            let original=fs::read(&input).unwrap();
+
+            let outcome=extract_images(&input);
+
+            let folder=temp.join(format!("{name}-images"));
+            assert!(outcome.warnings.is_empty(),"{name}: {:?}",outcome.warnings);
+            assert_eq!(outcome.detail,"Saved 1 image.","{name}");
+            assert_eq!(sorted_names(&folder),vec!["page-1-image-1.png"],"{name}");
+            let image=decoded(folder.join("page-1-image-1.png"));
+            assert_eq!((image.width(),image.height()),(10,4),"{name} keeps its native size");
+            assert_eq!(image.as_luma8().unwrap().as_raw(),&fax_luma(),"{name}");
+            assert_eq!(fs::read(&input).unwrap(),original,"{name} is left as it was");
+        }
+
+        let input=temp.join("stencil.pdf");
+        image_pdf(&input,|_| vec![vec![
+            fax_image(dictionary! { "K"=>-1 },dictionary! { "ImageMask"=>true },fax_group_4()),
+            fax_image(dictionary! { "K"=>-1 },dictionary! { "Width"=>8 },fax_group_4()),
+        ]]);
+        let outcome=extract_images(&input);
+        assert_eq!(outcome.detail,"Saved 2 images.");
+        let narrow=decoded(temp.join("stencil-images").join("page-1-image-2.png"));
+        assert_eq!((narrow.width(),narrow.height()),(8,4));
+        assert_eq!(narrow.as_luma8().unwrap().as_raw(),&fax_luma().chunks(10).flat_map(|row| row[..8].to_vec()).collect::<Vec<_>>(),"rows wider than the image are cut to its width");
+        let mask=decoded(temp.join("stencil-images").join("page-1-image-1.png"));
+        assert_eq!(mask.as_luma_alpha8().unwrap().as_raw(),&fax_luma().iter().flat_map(|luma| [0,255-luma]).collect::<Vec<_>>(),"a fax stencil mask paints its black pixels");
+        fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn a_malformed_fax_image_is_reported_on_its_own_while_the_other_images_are_saved() {
+        let temp=split_fixture_root("images-ccitt-malformed");
+        let input=temp.join("fax-bundle.pdf");
+        let group_4=fax_group_4();
+        image_pdf(&input,|_| vec![
+            vec![fax_image(dictionary! { "K"=>-1 },dictionary! {},vec![0;8]),fax_image(dictionary! { "K"=>-1 },dictionary! {},group_4.clone())],
+            vec![fax_image(dictionary! { "K"=>-1 },dictionary! {},group_4[..1].to_vec())],
+        ]);
+
+        let outcome=extract_images(&input);
+
+        let folder=temp.join("fax-bundle-images");
+        assert!(matches!(outcome.state,crate::kit::contracts::OutcomeState::Succeeded { .. }));
+        assert_eq!(outcome.output_paths(),[folder.clone()]);
+        assert_eq!(sorted_names(&folder),vec!["page-1-image-2.png"]);
+        assert_eq!(decoded(folder.join("page-1-image-2.png")).as_luma8().unwrap().as_raw(),&fax_luma());
+        assert_eq!(outcome.detail,"Saved 1 image · 2 couldn't be saved.");
+        assert_eq!(warning_kinds(&outcome),vec![WarningKind::ImageDamaged { page:1, image:1 },WarningKind::ImageDamaged { page:2, image:1 }]);
+        assert_eq!(outcome.warnings.iter().map(|warning| warning.message.as_str()).collect::<Vec<_>>(),vec![
+            "Page 1, image 1 — The image data is damaged. Not saved.",
+            "Page 2, image 1 — The image data is damaged. Not saved.",
+        ]);
         fs::remove_dir_all(temp).unwrap();
     }
 
