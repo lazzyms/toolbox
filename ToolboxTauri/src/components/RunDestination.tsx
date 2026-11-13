@@ -44,12 +44,13 @@ interface RunDestinationProps {
     toolTitle: string;
     /** One example output name, or several when each input makes more than one kind of file. */
     exampleName: string | readonly string[] | null;
+    exampleHint?: string;
     savesOneFile?: boolean;
     onChange: () => void;
     onReset: () => void;
 }
 
-export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, savesOneFile = false, onChange, onReset }: RunDestinationProps) => {
+export const RunDestination = ({ location, defaultLocation, overridden, toolTitle, exampleName, exampleHint, savesOneFile = false, onChange, onReset }: RunDestinationProps) => {
     const home = useHomeDir();
     return (
     <section aria-label="Destination" className="run-destination">
@@ -85,7 +86,8 @@ export const RunDestination = ({ location, defaultLocation, overridden, toolTitl
                 </span>
             </div>
         )}
-        {exampleName && !overridden && (
+        {exampleName && exampleHint && <p className="run-destination-hint">{exampleHint}</p>}
+        {exampleName && !exampleHint && !overridden && (
             <p className="run-destination-hint">An existing name gets -1, -2 and so on. Nothing is replaced.</p>
         )}
     </section>

@@ -9,10 +9,11 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::kit::common::limits::{self, StoppableHelper};
-use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming, OutputReservation};
+use crate::kit::common::{renamed_warning, JobOutcome, OutputLocation, OutputNaming, OutputReservation};
 use crate::kit::common::watermark::{WatermarkOptions, WatermarkPlacement, WatermarkPosition};
 use crate::kit::contracts::{LimitKind, OutcomePointer, OutcomeWarning, SkipCode, SkipReason, ToolError, WarningKind};
 use crate::kit::images::source::{self, ImageFamily};
+use crate::kit::images::{self, OutputFormat};
 use super::metadata::{page_bounds, page_rotation};
 use super::page_ranges::PageRanges;
 use super::{has_signed_signature_field, mutation_preflight, note_signature_removed, remove_signatures, resolve, PdfMutationIntent};
@@ -556,8 +557,7 @@ pub fn to_images(request: &PdfToImagesRequest, input: PathBuf) -> JobOutcome {
 }
 
 fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn(usize) -> Duration) -> JobOutcome {
-    let format = request.format.to_lowercase();
-    if format != "jpg" && format != "png" { return failure(input, "PDF images must be JPEG or PNG.".to_string()); }
+    let Some(format) = rendered_image_format(&request.format.to_lowercase()) else { return failure(input, "PDF images must be JPEG, PNG or WebP.".to_string()); };
     let ranges = match request.page_range().map(PageRanges::parse).transpose() {
         Ok(ranges) => ranges,
         Err(error) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
@@ -575,16 +575,12 @@ fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn
     }
     let page_count = document.get_pages().len();
     let dpi = request.dpi.clamp(72, 300);
-    let extension = if format == "jpg" { "jpg" } else { "png" };
+    let page_digits = page_count.to_string().len().max(2);
     let workspace = match SplitWorkspace::new() {
         Ok(workspace) => workspace,
         Err(error) => return failure(input, format!("Could not create a private image workspace: {error}")),
     };
-    let prefix = match unique_image_prefix(&input, &request.output_location, extension, &workspace) {
-        Ok(prefix) => prefix,
-        Err(error) => return failure(input, format!("Could not reserve PDF image output: {error}")),
-    };
-    let renderer_format = if format == "jpg" { "jpeg" } else { "png" };
+    let prefix = workspace.path().join("page");
     if let Some(requested_pages) = request.pages.as_ref() {
         let pages = match selected_pdf_pages(&document, Some(requested_pages)) {
             Ok(pages) if !pages.is_empty() => pages,
@@ -592,11 +588,11 @@ fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn
             Err(error) => return failure(input, error),
         };
         let deadline = RenderDeadline::new(time_limit(pages.len()));
-        let generated = match render_selected_pages(&renderer, &input, &prefix, renderer_format, dpi, extension, &pages, &deadline) {
+        let generated = match render_selected_pages(&renderer, &input, &prefix, dpi, &pages, &deadline) {
             Ok(outputs) => outputs,
             Err(error) => return JobOutcome::failure(input, error),
         };
-        return materialize_rendered_images(&input, &request.output_location, &generated);
+        return materialize_rendered_images(&input, &request.output_location, &generated, format, page_digits);
     }
 
     let spans = ranges.map_or_else(|| vec![None], |ranges| ranges.spans().iter().copied().map(Some).collect());
@@ -604,7 +600,7 @@ fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn
     let deadline = RenderDeadline::new(time_limit(rendered_pages));
     for span in spans {
         let mut command = Command::new(&renderer);
-        command.arg(format!("-{renderer_format}")).arg("-r").arg(dpi.to_string());
+        command.arg("-png").arg("-r").arg(dpi.to_string());
         if let Some(span) = span {
             command.arg("-f").arg(span.first.to_string());
             if let Some(last) = span.last { command.arg("-l").arg(last.to_string()); }
@@ -616,10 +612,10 @@ fn to_images_within(request: &PdfToImagesRequest, input: PathBuf, time_limit: fn
             Err(error) => return JobOutcome::failure(input, error),
         }
     }
-    let mut outputs = fs::read_dir(prefix.parent().unwrap_or_else(|| std::path::Path::new("."))).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(prefix.file_name().and_then(|stem| stem.to_str()).unwrap_or("")) && path.extension().is_some_and(|ext| ext == extension))).collect::<Vec<_>>();
-    outputs.sort_by_key(|path| rendered_page_index(path, &prefix));
+    let mut outputs = fs::read_dir(workspace.path()).ok().into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|ext| ext == "png")).filter_map(|path| rendered_page_index(&path, &prefix).map(|page| (page, path))).collect::<Vec<_>>();
+    outputs.sort();
     if outputs.is_empty() { return failure(input, "PDF renderer produced no images.".to_string()); }
-    materialize_rendered_images(&input, &request.output_location, &outputs)
+    materialize_rendered_images(&input, &request.output_location, &outputs, format, page_digits)
 }
 
 /// One deadline shared by every renderer call for a file. Passing it fails the file with a time limit.
@@ -642,50 +638,34 @@ impl RenderDeadline {
     }
 }
 
+fn rendered_image_format(format: &str) -> Option<OutputFormat> {
+    let declared = crate::kit::contracts::native_capability("pdf_to_images")
+        .and_then(|capability| capability.output_formats.as_deref())
+        .is_some_and(|formats| formats.iter().any(|extension| extension.strip_prefix('.') == Some(format)));
+    match format {
+        _ if !declared => None,
+        "jpg" => Some(OutputFormat::Jpeg),
+        "png" => Some(OutputFormat::Png),
+        "webp" => Some(OutputFormat::WebP),
+        _ => None,
+    }
+}
+
 fn rendered_page_index(path: &Path, prefix: &Path) -> Option<u32> {
     let stem = path.file_stem()?.to_str()?;
     let prefix = prefix.file_name()?.to_str()?;
     stem.strip_prefix(&format!("{prefix}-"))?.parse().ok()
 }
 
-fn unique_image_prefix(input: &PathBuf, location: &OutputLocation, extension: &str, workspace: &SplitWorkspace) -> std::io::Result<PathBuf> {
-    let mut counter = 0usize;
-    loop {
-        let suffix = if counter == 0 { "-images".to_string() } else { format!("-images-{counter}") };
-        let destination = OutputNaming::reserve_destination(input, location, &suffix, extension)?;
-        let stem = destination.destination_path().file_stem().and_then(|value| value.to_str()).unwrap_or("output").to_string();
-        let has_existing_family = input.parent().unwrap_or_else(|| Path::new(".")).read_dir().ok().into_iter().flatten().filter_map(Result::ok).any(|entry| {
-            let path = entry.path();
-            path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case(extension))
-                && path.file_stem().and_then(|value| value.to_str()).is_some_and(|value| value.starts_with(&format!("{stem}-")))
-        });
-        if !has_existing_family {
-            drop(destination);
-            return Ok(workspace.path().join(stem));
-        }
-        drop(destination);
-        counter += 1;
-    }
-}
-
-fn render_selected_pages(
-    renderer: &PathBuf,
-    input: &PathBuf,
-    prefix: &PathBuf,
-    renderer_format: &str,
-    dpi: u16,
-    extension: &str,
-    pages: &[u32],
-    deadline: &RenderDeadline,
-) -> Result<Vec<PathBuf>, ToolError> {
+fn render_selected_pages(renderer: &PathBuf, input: &PathBuf, prefix: &Path, dpi: u16, pages: &[u32], deadline: &RenderDeadline) -> Result<Vec<(u32, PathBuf)>, ToolError> {
     let mut outputs = Vec::with_capacity(pages.len());
-    let base = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("output");
+    let base = prefix.file_name().and_then(|value| value.to_str()).unwrap_or("page");
     for page in pages {
-        let page_prefix = prefix.with_file_name(format!("{base}-page-{page}"));
-        let output = page_prefix.with_extension(extension);
+        let page_prefix = prefix.with_file_name(format!("{base}-{page}"));
+        let output = page_prefix.with_extension("png");
         let mut command = Command::new(renderer);
         command
-            .arg(format!("-{renderer_format}"))
+            .arg("-png")
             .arg("-r")
             .arg(dpi.to_string())
             .arg("-f")
@@ -699,34 +679,68 @@ fn render_selected_pages(
         if !(result.status.success() && output.exists()) {
             return Err(ToolError::processing(stderr(result, "pdftoppm failed to render the selected PDF page.")));
         }
-        outputs.push(output);
+        outputs.push((*page, output));
     }
     Ok(outputs)
 }
 
-fn materialize_rendered_images(input: &Path, location: &OutputLocation, generated: &[PathBuf]) -> JobOutcome {
-    let input_stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("output");
+fn materialize_rendered_images(input: &Path, location: &OutputLocation, generated: &[(u32, PathBuf)], format: OutputFormat, page_digits: usize) -> JobOutcome {
     let mut outputs = Vec::with_capacity(generated.len());
-    for source in generated {
-        let extension = source.extension().and_then(|value| value.to_str()).unwrap_or("png");
-        let stem = match source.file_stem().and_then(|value| value.to_str()).and_then(|value| value.strip_prefix(input_stem)) {
-            Some(suffix) if suffix.starts_with('-') => suffix,
-            _ => return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing("PDF renderer produced an unexpected image file name.")),
+    let mut renamed = Vec::new();
+    let stem = input.file_stem().map(|value| value.to_string_lossy().into_owned()).unwrap_or_default();
+    for (page, source) in generated {
+        let bytes = match encode_rendered_page(source, format) {
+            Ok(bytes) => bytes,
+            Err(error) => return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(error)),
         };
-        let reservation = match OutputNaming::reserve_destination(input, location, stem, extension) {
+        let suffix = format!("-page-{page:0page_digits$}");
+        let reservation = match OutputNaming::reserve_destination(input, location, &suffix, format.extension()) {
             Ok(reservation) => reservation,
             Err(error) => return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not reserve PDF image output: {error}"))),
         };
-        if let Err(error) = fs::copy(source, reservation.path()) {
-            return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not copy rendered PDF image: {error}")));
+        if let Err(error) = fs::write(reservation.path(), bytes) {
+            return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not write rendered PDF image: {error}")));
         }
         let destination = match reservation.publish() {
             Ok(path) => path,
             Err(error) => return JobOutcome::failure_with_outputs(input.to_path_buf(), outputs, ToolError::processing(format!("Could not publish rendered PDF image: {error}"))),
         };
+        let chosen_name = format!("{stem}{suffix}.{}", format.extension());
+        let final_name = destination.file_name().map(|value| value.to_string_lossy().into_owned()).unwrap_or_default();
+        if final_name != chosen_name { renamed.push(renamed_warning(chosen_name, final_name)); }
         outputs.push(destination);
     }
-    JobOutcome::succeeded(input.to_path_buf(), outputs, "PDF rendered to images")
+    let pages = generated.iter().map(|(page, _)| *page).collect::<Vec<_>>();
+    let detail = format!("{} {}, {}", outputs.len(), if outputs.len() == 1 { "image" } else { "images" }, describe_pages(&pages));
+    renamed.into_iter().fold(JobOutcome::succeeded(input.to_path_buf(), outputs, detail), JobOutcome::with_warning)
+}
+
+fn describe_pages(pages: &[u32]) -> String {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for &page in pages {
+        match runs.last_mut() {
+            Some((_, last)) if *last + 1 == page => *last = page,
+            _ => runs.push((page, page)),
+        }
+    }
+    let parts = runs.iter().flat_map(|&(first, last)| match last - first {
+        0 => vec![first.to_string()],
+        1 => vec![first.to_string(), last.to_string()],
+        _ => vec![format!("{first}-{last}")],
+    }).collect::<Vec<_>>();
+    let noun = if pages.len() == 1 { "page" } else { "pages" };
+    match parts.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{noun} {} and {last}", rest.join(", ")),
+        _ => format!("{noun} {}", parts.join("")),
+    }
+}
+
+fn encode_rendered_page(source: &Path, format: OutputFormat) -> Result<Vec<u8>, String> {
+    if format == OutputFormat::Png {
+        return fs::read(source).map_err(|error| format!("Could not read rendered PDF image: {error}"));
+    }
+    let page = image::open(source).map_err(|error| format!("Could not read rendered PDF image: {error}"))?;
+    images::encode(&page, format, images::DEFAULT_QUALITY)
 }
 
 pub const NO_SELECTABLE_TEXT: &str = "PDF contains no selectable text; scanned PDFs require OCR.";
@@ -1796,9 +1810,147 @@ pub(crate) mod tests {
         assert!(outcome.error().is_none(), "numeric image export failed: {:?}", outcome.error());
         assert_eq!(outcome.output_paths().len(), 12);
         for (index, output) in outcome.output_paths().iter().enumerate() {
-            assert_eq!(output.file_stem().unwrap().to_str().unwrap(), format!("document-images-{}", index + 1));
+            assert_eq!(output.file_stem().unwrap().to_str().unwrap(), format!("document-page-{:02}", index + 1));
             assert_eq!(fs::read_to_string(output).unwrap(), format!("page-{}", index + 1));
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn render_with_bundled_pdftoppm(input: &Path, folder: &Path, format: &str, dpi: u16, pages: Option<Vec<usize>>, page_range: Option<&str>) -> JobOutcome {
+        to_images(&PdfToImagesRequest {
+            paths: vec![input.to_path_buf()], dpi, format: format.to_string(), page_range: page_range.map(str::to_string), pages,
+            output_location: OutputLocation::CustomFolder(folder.to_path_buf()),
+        }, input.to_path_buf())
+    }
+
+    fn output_names(outcome: &JobOutcome) -> Vec<String> {
+        outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn pdf_to_images_renders_only_selected_pages_at_the_requested_dpi_in_every_format() {
+        let _guard = crate::kit::lock_process_env();
+        if pdftoppm().is_none() { return; }
+        let root = split_fixture_root("formats-images");
+        let input = root.join("document.pdf");
+        split_fixture_pdf(&input, 12);
+        let original = fs::read(&input).unwrap();
+
+        for (format, dpi, width, height) in [("jpg", 72, 612, 792), ("png", 200, 1700, 2200), ("webp", 150, 1275, 1650)] {
+            let folder = root.join(format);
+            fs::create_dir_all(&folder).unwrap();
+            let outcome = render_with_bundled_pdftoppm(&input, &folder, format, dpi, Some(vec![1, 10]), None);
+            assert!(outcome.error().is_none(), "{format} export failed: {:?}", outcome.error());
+            assert_eq!(output_names(&outcome), [format!("document-page-02.{format}"), format!("document-page-11.{format}")]);
+            assert_eq!(fs::read_dir(&folder).unwrap().count(), 2, "only the selected pages are written");
+            for output in outcome.output_paths() {
+                let decoded = image::open(output).unwrap_or_else(|error| panic!("{} does not decode: {error}", output.display()));
+                assert_eq!((decoded.width(), decoded.height()), (width, height), "{format} at {dpi} dpi");
+            }
+        }
+        assert_eq!(fs::read(&input).unwrap(), original, "the original PDF is never modified");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pdf_to_images_encodes_webp_lossy_and_jpeg_at_quality_ninety_from_the_lossless_render() {
+        let _guard = crate::kit::lock_process_env();
+        if pdftoppm().is_none() { return; }
+        let root = split_fixture_root("quality-images");
+        let input = root.join("document.pdf");
+        split_fixture_pdf(&input, 1);
+        let rendered = |format: &str| {
+            let folder = root.join(format);
+            fs::create_dir_all(&folder).unwrap();
+            let outcome = render_with_bundled_pdftoppm(&input, &folder, format, 72, None, None);
+            assert!(outcome.error().is_none(), "{format} export failed: {:?}", outcome.error());
+            fs::read(&outcome.output_paths()[0]).unwrap()
+        };
+        let lossless = image::load_from_memory(&rendered("png")).unwrap();
+        let webp = rendered("webp");
+        assert_eq!(&webp[..4], b"RIFF");
+        assert!(webp.windows(4).any(|chunk| chunk == b"VP8 "), "WebP output must use the lossy VP8 bitstream");
+        assert!(!webp.windows(4).any(|chunk| chunk == b"VP8L"), "WebP output must not be lossless");
+        assert_eq!(webp, images::encode(&lossless, OutputFormat::WebP, 90).unwrap());
+        assert_eq!(rendered("jpg"), images::encode(&lossless, OutputFormat::Jpeg, 90).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pdf_to_images_pads_page_numbers_and_numbers_a_rerun_without_replacing() {
+        let _guard = crate::kit::lock_process_env();
+        if pdftoppm().is_none() { return; }
+        let root = split_fixture_root("padded-images");
+        let input = root.join("document.pdf");
+        let folder = root.join("outputs");
+        fs::create_dir_all(&folder).unwrap();
+        split_fixture_pdf(&input, 12);
+        let original = fs::read(&input).unwrap();
+
+        let first = render_with_bundled_pdftoppm(&input, &folder, "png", 72, None, None);
+        assert!(first.error().is_none(), "{:?}", first.error());
+        let names = output_names(&first);
+        assert_eq!(names, (1..=12).map(|page| format!("document-page-{page:02}.png")).collect::<Vec<_>>());
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, names, "names sort in page order");
+        assert_eq!(first.detail, "12 images, pages 1-12");
+        assert!(first.warnings.is_empty());
+        let earlier = first.output_paths().iter().map(|path| fs::read(path).unwrap()).collect::<Vec<_>>();
+
+        let second = render_with_bundled_pdftoppm(&input, &folder, "png", 72, None, None);
+        assert!(second.error().is_none(), "{:?}", second.error());
+        assert_eq!(output_names(&second), (1..=12).map(|page| format!("document-page-{page:02}-1.png")).collect::<Vec<_>>());
+        assert_eq!(second.warnings.iter().map(|warning| warning.kind.clone()).collect::<Vec<_>>(), (1..=12).map(|page| crate::kit::contracts::WarningKind::RenamedToAvoidReplacing {
+            chosen_name: format!("document-page-{page:02}.png"),
+            final_name: format!("document-page-{page:02}-1.png"),
+        }).collect::<Vec<_>>());
+        for (path, bytes) in first.output_paths().iter().zip(&earlier) {
+            assert_eq!(&fs::read(path).unwrap(), bytes, "a re-run keeps {}", path.display());
+        }
+
+        let long = root.join("long.pdf");
+        split_fixture_pdf(&long, 100);
+        let ranged = render_with_bundled_pdftoppm(&long, &folder, "png", 72, None, Some("8-9"));
+        assert!(ranged.error().is_none(), "{:?}", ranged.error());
+        assert_eq!(output_names(&ranged), ["long-page-008.png", "long-page-009.png"]);
+        assert_eq!(ranged.detail, "2 images, pages 8 and 9");
+
+        let partial = root.join("partial");
+        fs::create_dir_all(&partial).unwrap();
+        for name in ["long-page-003.webp", "long-page-004.webp"] { fs::write(partial.join(name), name).unwrap(); }
+        let renamed = render_with_bundled_pdftoppm(&long, &partial, "webp", 72, Some(vec![2, 3, 4]), None);
+        assert!(renamed.error().is_none(), "{:?}", renamed.error());
+        assert_eq!(output_names(&renamed), ["long-page-003-1.webp", "long-page-004-1.webp", "long-page-005.webp"]);
+        assert_eq!(renamed.detail, "3 images, pages 3-5");
+        assert_eq!(renamed.warnings.iter().map(|warning| warning.kind.clone()).collect::<Vec<_>>(), ["003", "004"].map(|page| crate::kit::contracts::WarningKind::RenamedToAvoidReplacing {
+            chosen_name: format!("long-page-{page}.webp"),
+            final_name: format!("long-page-{page}-1.webp"),
+        }));
+        for name in ["long-page-003.webp", "long-page-004.webp"] { assert_eq!(fs::read(partial.join(name)).unwrap(), name.as_bytes()); }
+        assert_eq!(fs::read(&input).unwrap(), original, "the original PDF is never modified");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rendered_page_lists_join_runs_like_the_results_row() {
+        assert_eq!(describe_pages(&[3]), "page 3");
+        assert_eq!(describe_pages(&[3, 4]), "pages 3 and 4");
+        assert_eq!(describe_pages(&[3, 4, 5, 8, 9]), "pages 3-5, 8 and 9");
+        assert_eq!(describe_pages(&[3, 4, 5, 8, 9, 10, 11, 12, 13, 14]), "pages 3-5 and 8-14");
+        assert_eq!(describe_pages(&[1, 3, 5]), "pages 1, 3 and 5");
+    }
+
+    #[test]
+    fn pdf_to_images_rejects_formats_the_registry_does_not_declare() {
+        let root = split_fixture_root("undeclared-images");
+        let input = root.join("document.pdf");
+        split_fixture_pdf(&input, 1);
+        for format in ["gif", "heic", "tiff"] {
+            let outcome = render_with_bundled_pdftoppm(&input, &root, format, 72, None, None);
+            assert_eq!(outcome.error().map(|error| error.message.as_str()), Some("PDF images must be JPEG, PNG or WebP."));
+        }
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1986,17 +2138,17 @@ pub(crate) mod tests {
         fs::create_dir_all(&generated).unwrap();
         fs::create_dir_all(&output_folder).unwrap();
         fs::write(&input, b"source").unwrap();
-        let first = generated.join("source-page-1.png");
-        let invalid = generated.join("unexpected.png");
-        fs::write(&first, b"rendered image").unwrap();
+        let first = generated.join("page-1.png");
+        let invalid = generated.join("page-2.png");
+        DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([255, 0, 0]))).save(&first).unwrap();
         fs::write(&invalid, b"unexpected image").unwrap();
 
-        let outcome = materialize_rendered_images(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[first, invalid]);
+        let outcome = materialize_rendered_images(&input, &OutputLocation::CustomFolder(output_folder.clone()), &[(1, first), (2, invalid)], OutputFormat::WebP, 2);
 
         assert!(outcome.error().is_some());
         assert_eq!(outcome.output_paths().len(), 1);
-        assert!(outcome.output_paths()[0].is_file());
-        assert_eq!(fs::read(&outcome.output_paths()[0]).unwrap(), b"rendered image");
+        assert_eq!(outcome.output_paths()[0], output_folder.join("source-page-01.webp"));
+        assert_eq!(image::open(&outcome.output_paths()[0]).unwrap().width(), 4);
         assert_eq!(fs::read_dir(&output_folder).unwrap().count(), 1);
         fs::remove_dir_all(temp).unwrap();
     }

@@ -10,6 +10,8 @@ use image::AnimationDecoder;
 use crate::kit::common::{JobOutcome, OutputLocation, OutputNaming};
 use crate::kit::contracts::ToolError;
 
+pub(crate) const DEFAULT_QUALITY: u8 = 90;
+
 pub(crate) mod source;
 pub(crate) use source::decode;
 

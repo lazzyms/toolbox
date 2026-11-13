@@ -1356,14 +1356,14 @@ test("PDF to Images identifies source selection and summarizes its non-previewab
   await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
   await expect(page.getByRole("checkbox", { name: "Page 1" })).toBeChecked();
-  await expect(page.getByLabel("Render DPI")).toBeVisible();
-  await expect(page.getByLabel("Output format")).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Resolution" })).toBeVisible();
+  await expect(page.getByRole("radiogroup", { name: "Format" })).toBeVisible();
   await expect(page.getByText("1 page selected", { exact: true })).toBeVisible();
-  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 150 DPI as JPEG image files.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 150 dpi as PNG image files.", { exact: true })).toBeVisible();
 
-  await page.getByLabel("Render DPI").selectOption("300");
-  await page.getByLabel("Output format").selectOption("png");
-  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 300 DPI as PNG image files.", { exact: true })).toBeVisible();
+  await page.getByRole("radiogroup", { name: "Resolution" }).getByRole("radio", { name: "300 dpi" }).click();
+  await page.getByRole("radiogroup", { name: "Format" }).getByRole("radio", { name: "WebP" }).click();
+  await expect(page.getByText("Output preview unavailable. Export renders page 1 at 300 dpi as WebP image files.", { exact: true })).toBeVisible();
 
   await page.getByRole("checkbox", { name: "Page 1" }).click();
   await expect(page.locator(".workspace-primary-action")).toBeDisabled();
@@ -1506,7 +1506,7 @@ test("non-previewable PDF conversions identify source selection and show determi
     await chooseFixture(page, pdfFixturePath);
     await expect(page.getByRole("region", { name: "Source page selection" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Conversion preview" })).toHaveCount(0);
-    await expect(page.getByText(/^Output preview unavailable\. Export renders pages? [\d,-]+ at 150 DPI as JPEG image files\.$/)).toBeVisible();
+    await expect(page.getByText(/^Output preview unavailable\. Export renders pages? [\d,-]+ at 150 dpi as PNG image files\.$/)).toBeVisible();
     await expect(page.getByRole("img", { name: "Source page preview 1" })).toBeVisible();
 
     const conversionRail = page.getByRole("toolbar", { name: "PDF Conversion tools" });
@@ -2092,13 +2092,13 @@ test("PDF to Images fails a missing renderer, protected and damaged PDFs per fil
     await page.evaluate((outcomes) => {
         (window as TestWindow).__toolboxProcessingResults = outcomes;
     }, [
-        succeeded("/local/brochure.pdf", ["/local/out/brochure-images-1.png"]),
+        succeeded("/local/brochure.pdf", ["/local/out/brochure-page-01.png"], { detail: "1 image, page 1" }),
         failed("/local/catalog.pdf", "unavailable", rendererUnavailable),
         failed("/local/payroll.pdf", "invalidInput", passwordProtected, {
             failure: { kind: "invalidInput", message: passwordProtected, pointer: { kind: "tool", toolId: "lock-unlock" } },
         }),
         failed("/local/truncated.pdf", "processing", "Not a readable PDF. The file may be damaged or incomplete. Nothing was saved."),
-        succeeded("/local/report.pdf", ["/local/out/report-images-1.png"]),
+        succeeded("/local/report.pdf", ["/local/out/report-page-01.png"], { detail: "1 image, page 1" }),
     ]);
     await openFromHome(page, "PDF to Images");
     await chooseFixture(page, pdfFixturePath);
@@ -2107,9 +2107,11 @@ test("PDF to Images fails a missing renderer, protected and damaged PDFs per fil
 
     await expect(rows).toHaveCount(5);
     await expect(rows.nth(0)).toHaveAttribute("data-state", "succeeded");
-    await expect(rows.nth(0)).toContainText("brochure-images-1.png");
+    await expect(rows.nth(0)).toContainText("brochure.pdf");
+    await expect(rows.nth(0)).toContainText("1 image, page 1");
     await expect(rows.nth(4)).toHaveAttribute("data-state", "succeeded");
-    await expect(rows.nth(4)).toContainText("report-images-1.png");
+    await expect(rows.nth(4)).toContainText("report.pdf");
+    await expect(rows.nth(4)).toContainText("1 image, page 1");
 
     await expect(rows.nth(1)).toHaveAttribute("data-tone", "skip");
     await expect(rows.nth(1)).toContainText("Unavailable");
@@ -2719,9 +2721,9 @@ test.describe("per-run destination", () => {
         await expect(example).toHaveText("document-image-1-0.jpg");
 
         await page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }).click();
-        await expect(example).toHaveText("document-images.jpg");
-        await page.getByLabel("Output format").selectOption("png");
-        await expect(example).toHaveText("document-images.png");
+        await expect(example).toHaveText("document-page-01.png");
+        await page.getByRole("radiogroup", { name: "Format" }).getByRole("radio", { name: "JPEG" }).click();
+        await expect(example).toHaveText("document-page-01.jpg");
     });
 
     test("shows the default destination and the name the image editor export writes", async ({ page }) => {

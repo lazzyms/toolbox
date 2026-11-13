@@ -201,6 +201,7 @@ pub struct NativeCapability {
     pub native_available: bool,
     pub output_suffix: String,
     pub many_to_one: bool,
+    pub output_formats: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -216,6 +217,8 @@ struct SharedCapabilityRow {
     native_available: bool,
     output_suffix: String,
     many_to_one: bool,
+    #[serde(default)]
+    output_formats: Option<Vec<String>>,
 }
 
 static CAPABILITY_REGISTRY: OnceLock<Vec<NativeCapability>> = OnceLock::new();
@@ -279,6 +282,7 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
             native_available: row.native_available,
             output_suffix: row.output_suffix,
             many_to_one: row.many_to_one,
+            output_formats: row.output_formats,
         });
     }
     let mut commands = HashSet::new();
@@ -293,17 +297,19 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
         } else if capability.accepted_extensions.is_empty() {
             return Err(format!("{} has no accepted extensions.", capability.command));
         }
-        let mut extensions = HashSet::new();
-        for extension in &capability.accepted_extensions {
-            let valid = extension.strip_prefix('.').is_some_and(|value| {
-                !value.is_empty()
-                    && value.chars().all(|character| {
-                        character.is_ascii_lowercase() || character.is_ascii_digit()
-                    })
-            });
-            if !valid || !extensions.insert(extension.as_str()) {
+        if let Some(extension) = first_invalid_extension(&capability.accepted_extensions) {
+            return Err(format!(
+                "{} has an invalid accepted extension {extension}.",
+                capability.command
+            ));
+        }
+        if let Some(formats) = &capability.output_formats {
+            if formats.is_empty() {
+                return Err(format!("{} lists no output formats.", capability.command));
+            }
+            if let Some(extension) = first_invalid_extension(formats) {
                 return Err(format!(
-                    "{} has an invalid accepted extension {extension}.",
+                    "{} has an invalid output format {extension}.",
                     capability.command
                 ));
             }
@@ -316,6 +322,19 @@ fn parse_capability_registry(raw: &str) -> Result<Vec<NativeCapability>, String>
         }
     }
     Ok(capabilities)
+}
+
+fn first_invalid_extension(extensions: &[String]) -> Option<&str> {
+    let mut seen = HashSet::new();
+    extensions.iter().map(String::as_str).find(|extension| {
+        let valid = extension.strip_prefix('.').is_some_and(|value| {
+            !value.is_empty()
+                && value.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit()
+                })
+        });
+        !valid || !seen.insert(*extension)
+    })
 }
 
 fn is_valid_output_suffix(suffix: &str) -> bool {
@@ -975,6 +994,10 @@ mod tests {
             assert_eq!(capability.output_suffix, row["outputSuffix"].as_str().unwrap());
             assert_eq!(capability.many_to_one, row["manyToOne"].as_bool().unwrap());
             assert_eq!(
+                capability.output_formats,
+                row.get("outputFormats").map(|formats| formats.as_array().unwrap().iter().map(|format| format.as_str().unwrap().to_string()).collect::<Vec<_>>())
+            );
+            assert_eq!(
                 capability.many_to_one,
                 capability.input_cardinality == InputCardinality::Ordered,
                 "{command} many-to-one must match its ordered inputs"
@@ -1006,6 +1029,9 @@ mod tests {
         assert_eq!((stack.input_cardinality, stack.output_suffix.as_str(), stack.many_to_one), (InputCardinality::Multiple, "-cropped", false), "the edit stack runs every image as its own job");
         assert_eq!(native_capability("crop_images").unwrap().input_cardinality, InputCardinality::Single);
         assert!(!native_capability("extract_gif_frames").unwrap().supports_preview);
+        let rendered = native_capability("pdf_to_images").unwrap();
+        assert_eq!(rendered.output_formats.as_deref(), Some([".jpg", ".png", ".webp"].map(String::from).as_slice()));
+        assert_eq!(rendered.output_suffix, "-page");
         assert_eq!(native_capability("extract_gif_frames").unwrap().input_cardinality, InputCardinality::Multiple);
         for command in ["generate_icon_set", "create_gif"] {
             let accepted = &native_capability(command).unwrap().accepted_extensions;
@@ -1155,6 +1181,22 @@ mod tests {
         }
         let flag = format!("[{}]", row.replace("\"manyToOne\":false", "\"manyToOne\":\"yes\""));
         assert!(parse_capability_registry(&flag).is_err());
+    }
+
+    #[test]
+    fn shared_capability_parser_reads_optional_output_formats() {
+        let row = r#"{"command":"test","acceptedExtensions":[".pdf"],"inputCardinality":"multiple","supportsPageSelection":true,"supportsPreview":false,"nativeAvailability":"available","outputSuffix":"-page","manyToOne":false}"#;
+        assert_eq!(parse_capability_registry(&format!("[{row}]")).unwrap()[0].output_formats, None);
+        let with_formats = |formats: &str| format!("[{}]", row.replace('}', &format!(",\"outputFormats\":{formats}}}")));
+        assert_eq!(
+            parse_capability_registry(&with_formats(r#"[".jpg",".png",".webp"]"#)).unwrap()[0].output_formats.as_deref(),
+            Some([".jpg", ".png", ".webp"].map(String::from).as_slice())
+        );
+        assert!(parse_capability_registry(&with_formats("[]")).unwrap_err().contains("lists no output formats"));
+        for invalid in [r#"["webp"]"#, r#"[".WebP"]"#, r#"[".webp",".webp"]"#, r#"[".we.bp"]"#] {
+            assert!(parse_capability_registry(&with_formats(invalid)).unwrap_err().contains("invalid output format"), "{invalid}");
+        }
+        assert!(parse_capability_registry(&with_formats(r#"".webp""#)).is_err());
     }
 
     #[test]

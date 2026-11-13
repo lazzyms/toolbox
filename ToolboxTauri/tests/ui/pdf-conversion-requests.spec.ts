@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { openToolBySearch } from "./open-tool";
 
 type Invocation = { command: string; args: unknown };
-type TestWindow = Window & { __invocations: Invocation[]; __dialogResults: string[][] };
+type TestWindow = Window & { __invocations: Invocation[]; __dialogResults: string[][]; __outcome?: (inputPath: string) => Record<string, unknown> };
 
 const outputLocation = { customFolder: "/fake/shell/output" };
 
@@ -32,7 +32,7 @@ test.beforeEach(async ({ page }) => {
                 }
                 if (command.startsWith("plugin:")) return null;
                 const paths = (args as { request?: { paths?: string[] } }).request?.paths ?? [];
-                return paths.map((inputPath) => ({ inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: [] }));
+                return paths.map((inputPath) => ({ inputPath, outputPaths: [`${inputPath}.out`], detail: "Test output", state: "succeeded", failure: null, reason: null, warnings: [], ...testWindow.__outcome?.(inputPath) }));
             },
             transformCallback: () => 1,
             unregisterCallback: () => undefined,
@@ -65,6 +65,9 @@ const exportAndCapture = async (page: Page, command: string, { save = false } = 
 
 const requestsFor = (page: Page, command: string) => page.evaluate((command) =>
     (window as TestWindow).__invocations.filter((invocation) => invocation.command === command).map((invocation) => invocation.args), command);
+
+const chooseOption = (page: Page, group: string, option: string) =>
+    page.getByRole("radiogroup", { name: group }).getByRole("radio", { name: option, exact: true }).click();
 
 const sent = (request: Record<string, unknown>) => ({ runId: expect.any(String), request });
 
@@ -153,8 +156,8 @@ test.describe("PDF Conversion tools send their exact requests", () => {
     test("PDF to Images from the rail", async ({ page }) => {
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await chooseFiles(page, "/local/report.three.pdf");
-        await page.getByLabel("Render DPI").selectOption("300");
-        await page.getByLabel("Output format").selectOption("png");
+        await chooseOption(page, "Resolution", "300 dpi");
+        await chooseOption(page, "Format", "PNG");
         await page.getByRole("checkbox", { name: "Page 2" }).click();
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
             paths: ["/local/report.three.pdf"], dpi: 300, format: "png", pageRange: "1,3", pages: [0, 2], outputLocation,
@@ -166,17 +169,132 @@ test.describe("PDF Conversion tools send their exact requests", () => {
         }));
     });
 
+    test("PDF to Images sends WebP and a custom resolution, and blocks one outside 72 to 300", async ({ page }) => {
+        await selectFromRail(page, "PDF Conversion", "PDF to Images");
+        await expect(page.getByRole("toolbar", { name: "PDF Conversion tools" }).getByRole("button", { name: "PDF to Images", exact: true }))
+            .toHaveAttribute("title", "Render PDF pages to JPEG, PNG or WebP images at 72 to 300 dpi.");
+        await chooseFiles(page, "/local/report.three.pdf");
+        const format = page.getByRole("radiogroup", { name: "Format" });
+        await expect(format.getByRole("radio")).toHaveText(["JPEG", "PNG", "WebP"]);
+        await expect(format.getByRole("radio", { name: "PNG" })).toBeChecked();
+        await expect(page.getByRole("radiogroup", { name: "Resolution" }).getByRole("radio", { name: "150 dpi" })).toBeChecked();
+        await expect(page.getByText("At 150 dpi a Letter page is 1275 × 1650 px. Use 300 for print.")).toBeVisible();
+        await expect(page.getByTestId("run-destination-example")).toHaveText("report.three-page-01.png");
+        await expect(page.getByRole("region", { name: "Destination" }))
+            .toContainText("Page numbers are padded so names sort in page order. An existing name gets -1, -2 and so on.");
+        await expect(page.getByRole("region", { name: "Destination" })).not.toContainText("Nothing is replaced.");
+
+        await chooseOption(page, "Format", "WebP");
+        await expect(page.getByText("Lossy at quality 90. Small files for the web.")).toBeVisible();
+        await expect(page.getByTestId("run-destination-example")).toHaveText("report.three-page-01.webp");
+        await chooseOption(page, "Resolution", "Custom");
+        const custom = page.getByRole("spinbutton", { name: "Custom resolution in dpi, 72 to 300" });
+        await expect(custom).toHaveValue("200");
+        await expect(page.getByText("Any value from 72 to 300. At 200 dpi a Letter page is 1700 × 2200 px.")).toBeVisible();
+
+        await custom.fill("301");
+        await expect(page.getByRole("alert")).toHaveText("Enter a whole number from 72 to 300.");
+        await expect(page.locator(".workspace-primary-action")).toBeDisabled();
+        await custom.fill("72");
+        await expect(page.getByRole("alert")).toHaveCount(0);
+        await custom.fill("240");
+        expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
+            paths: ["/local/report.three.pdf"], dpi: 240, format: "webp", pageRange: "1-3", pages: [0, 1, 2], outputLocation,
+        }));
+
+        await chooseOption(page, "Format", "JPEG");
+        await chooseOption(page, "Resolution", "72 dpi");
+        expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
+            paths: ["/local/report.three.pdf"], dpi: 72, format: "jpg", pageRange: "1-3", pages: [0, 1, 2], outputLocation,
+        }));
+    });
+
+    test("PDF to Images lists every page image on a row with Open and Reveal", async ({ page }) => {
+        await page.evaluate(() => {
+            (window as TestWindow).__outcome = (inputPath) => ({
+                outputPaths: [1, 2, 3].map((page) => `${inputPath.replace(/\.pdf$/, "")}-page-0${page}.png`),
+                detail: "3 images, pages 1-3",
+            });
+        });
+        await selectFromRail(page, "PDF Conversion", "PDF to Images");
+        await chooseFiles(page, "/local/report.three.pdf");
+        await exportAndCapture(page, "pdf_to_images");
+
+        const row = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ hasText: "report.three.pdf" });
+        await expect(row).toContainText("3 images, pages 1-3");
+        await expect(row).not.toContainText("3 files");
+        const toggle = row.getByRole("button", { name: "Show 3 images" });
+        await expect(toggle).toHaveAttribute("aria-expanded", "false");
+        await expect(row.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+        await toggle.click();
+        await expect(row.getByRole("button", { name: "Hide images" })).toHaveAttribute("aria-expanded", "true");
+
+        const images = row.getByRole("list", { name: "Images from report.three.pdf" });
+        await expect(images.getByRole("listitem")).toHaveText([/report\.three-page-01\.png/, /report\.three-page-02\.png/, /report\.three-page-03\.png/]);
+        for (const image of ["report.three-page-01.png", "report.three-page-02.png", "report.three-page-03.png"]) {
+            const item = images.getByRole("listitem").filter({ hasText: image });
+            await item.getByRole("button", { name: `Open ${image}` }).click();
+            await item.getByRole("button", { name: new RegExp(`^Show in .+: ${image.replace(/\./g, "\\.")}$`) }).click();
+        }
+        const actions = await page.evaluate(() => (window as TestWindow).__invocations
+            .filter(({ command }) => command === "open_output_path" || command === "reveal_output_path")
+            .map(({ command, args }) => [command, (args as { path: string }).path]));
+        expect(actions).toEqual([1, 2, 3].flatMap((index) => [
+            ["open_output_path", `/local/report.three-page-0${index}.png`],
+            ["reveal_output_path", `/local/report.three-page-0${index}.png`],
+        ]));
+
+        await row.getByRole("button", { name: "Hide images" }).click();
+        await expect(images).toHaveCount(0);
+    });
+
+    test("PDF to Images marks a row Renamed when page images got numbered names", async ({ page }) => {
+        await page.addInitScript(() => Object.defineProperty(navigator, "platform", { get: () => "Win32" }));
+        await page.goto("/");
+        await openToolBySearch(page, "PDF to Images");
+        await page.evaluate(() => {
+            const renamed = (page: string) => ({
+                code: "renamedToAvoidReplacing",
+                message: "",
+                details: { chosenName: `survey-page-${page}.webp`, finalName: `survey-page-${page}-1.webp` },
+            });
+            (window as TestWindow).__outcome = (inputPath) => inputPath.endsWith("survey.pdf")
+                ? { outputPaths: ["/local/survey-page-03-1.webp", "/local/survey-page-04-1.webp", "/local/survey-page-05.webp"], detail: "3 images, pages 3-5", warnings: [renamed("03"), renamed("04")] }
+                : { outputPaths: ["/local/memo-page-01.webp", "/local/memo-page-02.webp"], detail: "2 images, pages 1 and 2" };
+        });
+        await selectFromRail(page, "PDF Conversion", "PDF to Images");
+        await chooseFiles(page, "/local/survey.pdf", "/local/memo.pdf");
+        await exportAndCapture(page, "pdf_to_images");
+
+        const results = page.getByRole("list", { name: "Results" });
+        const survey = results.getByRole("listitem").filter({ hasText: "survey.pdf" });
+        await expect(survey).toHaveAttribute("data-tone", "warn");
+        await expect(survey).toContainText("Renamed");
+        await expect(survey).toContainText("3 images. 2 renamed, because survey-page-03.webp and -page-04.webp already existed. They end in -1.");
+        const memo = results.getByRole("listitem").filter({ hasText: "memo.pdf" });
+        await expect(memo).toHaveAttribute("data-tone", "ok");
+        await expect(memo).toContainText("2 images, pages 1 and 2");
+
+        await survey.getByRole("button", { name: "Show 3 images" }).click();
+        const reveal = survey.getByRole("button", { name: "Show in File Explorer: survey-page-03-1.webp" });
+        await expect(reveal).toHaveText("Show in Explorer");
+        await reveal.click();
+        await expect.poll(() => requestsFor(page, "reveal_output_path")).toEqual([{ path: "/local/survey-page-03-1.webp" }]);
+    });
+
     test("options survive a switch to another tool and back", async ({ page }) => {
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await chooseFiles(page, "/local/report.three.pdf");
-        await page.getByLabel("Render DPI").selectOption("72");
+        await chooseOption(page, "Resolution", "72 dpi");
+        await chooseOption(page, "Format", "WebP");
         await selectFromRail(page, "PDF Conversion", "Images to PDF");
         await selectFromRail(page, "PDF Conversion", "PDF to Images");
         await expect(page.getByRole("option", { name: "report.three.pdf" })).toBeVisible();
-        await expect(page.getByLabel("Render DPI")).toHaveValue("72");
+        await expect(page.getByRole("radiogroup", { name: "Resolution" }).getByRole("radio", { name: "72 dpi" })).toBeChecked();
+        await expect(page.getByRole("radiogroup", { name: "Format" }).getByRole("radio", { name: "WebP" })).toBeChecked();
         await expect(page.getByRole("checkbox", { name: "Page 3" })).toBeChecked();
         expect(await exportAndCapture(page, "pdf_to_images")).toEqual(sent({
-            paths: ["/local/report.three.pdf"], dpi: 72, format: "jpg", pageRange: "1-3", pages: [0, 1, 2], outputLocation,
+            paths: ["/local/report.three.pdf"], dpi: 72, format: "webp", pageRange: "1-3", pages: [0, 1, 2], outputLocation,
         }));
     });
 });

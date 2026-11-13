@@ -374,6 +374,24 @@ body {
   gap: 8px;
 }
 .media-toggle-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.workspace-option-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.workspace-option-group legend {
+  margin-bottom: 7px;
+  padding: 0;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 500;
+}
+.workspace-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .workspace-fieldset {
   min-width: 0;
   margin: 0;
@@ -999,6 +1017,28 @@ body {
 .live-run-bar > span[data-tone="skip"] { background: var(--muted-foreground); }
 .live-run-bar > span[data-tone="fail"] { background: var(--destructive); }
 .live-run-bar[data-mode="proportional"] > span[data-tone="wait"] { background: transparent; }
+.result-outputs {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 4px 0 2px 10px;
+  border-left: 2px solid var(--border);
+  list-style: none;
+}
+.result-outputs li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+.result-output-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .result-action-error {
   grid-column: 2 / -1;
   margin: 0;

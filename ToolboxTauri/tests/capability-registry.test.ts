@@ -33,6 +33,7 @@ test("UI capabilities are the shared native contract facts", () => {
       nativeAvailability: shared.nativeAvailability,
       outputSuffix: shared.outputSuffix,
       manyToOne: shared.manyToOne,
+      ...(shared.outputFormats ? { outputFormats: shared.outputFormats } : {}),
     });
     assert.equal(
       utility.status,
@@ -70,6 +71,8 @@ test("UI capabilities are the shared native contract facts", () => {
   assert.equal(capabilitiesByCommand.get("extract_pdf_images"), undefined);
   assert.equal(UtilityRegistry.find(({ id }) => id === "pdf-extract")?.command, "extract_from_pdf");
   assert.equal(capabilitiesByCommand.get("pdf_to_images")?.supportsPreview, false);
+  assert.deepEqual(capabilitiesByCommand.get("pdf_to_images")?.outputFormats, [".jpg", ".png", ".webp"]);
+  assert.equal(UtilityRegistry.find(({ command }) => command === "pdf_to_images")?.blurb, "Render PDF pages to JPEG, PNG or WebP images at 72 to 300 dpi.");
   assert.equal(capabilitiesByCommand.get("extract_pdf_pages")?.supportsPreview, false);
   assert.equal(capabilitiesByCommand.get("create_gif")?.inputCardinality, "ordered");
   assert.equal(capabilitiesByCommand.get("create_gif")?.supportsPreview, true);
@@ -104,7 +107,7 @@ test("every tool declares one output suffix and many-to-one tools take ordered i
   );
   assert.equal(suffixes.get("merge_pdfs"), "-merged");
   assert.equal(suffixes.get("protect_files"), "-protected");
-  assert.equal(suffixes.get("pdf_to_images"), "-images");
+  assert.equal(suffixes.get("pdf_to_images"), "-page");
 });
 
 test("every many-to-one tool opens the save step and sends the chosen path", () => {
@@ -261,6 +264,22 @@ test("shared capability parsing rejects drift-prone shapes", () => {
     () => parseCapabilityRegistry([{ ...valid, manyToOne: "yes" }]),
     /invalid many-to-one flag/,
   );
+});
+
+test("shared capability parsing reads optional output formats, including WebP for PDF to Images", () => {
+  const valid = SharedCapabilityRegistry.find(({ command }) => command === "extract_from_pdf")!;
+  assert.equal(parseCapabilityRegistry([valid])[0].outputFormats, undefined);
+  assert.deepEqual(
+    parseCapabilityRegistry([{ ...valid, outputFormats: [".jpg", ".png", ".webp"] }])[0].outputFormats,
+    [".jpg", ".png", ".webp"],
+  );
+  for (const outputFormats of [[], ["webp"], [".WebP"], [".webp", ".webp"], ".webp", [".we.bp"]]) {
+    assert.throws(
+      () => parseCapabilityRegistry([{ ...valid, outputFormats }]),
+      /invalid output formats/,
+      JSON.stringify(outputFormats),
+    );
+  }
 });
 
 test("shared capability samples parse the same as the native contract parser", () => {

@@ -30,6 +30,7 @@ export interface ConversionTool<Options = unknown> {
   exportNote?(files: string[]): string | null;
   OptionsPanel?(props: OptionsPanelProps<Options>): ReactNode;
   exampleName?(inputPath: string, utility: ToolDefinition, options: Options): string;
+  exampleHint?: string;
   request(paths: string[], outputLocation: OutputLocation, run: RunContext, options: Options, selection: PageSelection): Promise<ToolResult>;
 }
 

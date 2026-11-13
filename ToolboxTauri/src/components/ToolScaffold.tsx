@@ -88,6 +88,7 @@ interface ToolScaffoldProps {
     onFilesChange?: (paths: readonly string[]) => void;
     /** Overrides the example output name when the view's options decide the output's suffix or type. */
     exampleName?: (inputPath: string) => string | readonly string[];
+    exampleHint?: string;
     /** Sorts an ordered list offers. The list keeps the order a sort leaves, so later drags start from it. */
     sortOptions?: readonly EntrySortOption[];
     /** Shows a succeeded file's outputs as one row that expands into its parts. */
@@ -119,7 +120,7 @@ interface ToolScaffoldProps {
     }) => React.ReactNode;
 }
 
-export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, children }: ToolScaffoldProps) => {
+export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standard', sessionKey, onWorkspaceSourceAction, showFileOrdering = true, renderFileExtra, retryWithPassword, intakeCopy, initialPaths = [], fileActivation, onActivationAccepted, onFilesChange, exampleName, exampleHint, sortOptions, outputGroup, resultsHint, entryFacts, listHint: listHintOverride, children }: ToolScaffoldProps) => {
     const nextEntryKey = useRef(0);
     const newEntries = (paths: readonly string[]) => paths.map((path) => ({ key: `entry-${++nextEntryKey.current}`, path }));
     const [entries, setEntries] = useState<IntakeEntry[]>(() => newEntries(initialPaths));
@@ -804,6 +805,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                         overridden={runOverride !== null}
                         toolTitle={utility.title}
                         exampleName={files[0] && !savesOneFile ? (exampleName ?? ((path) => exampleOutputName(path, utility.command, inputPolicy.outputSuffix)))(files[0]) : null}
+                        exampleHint={exampleHint}
                         savesOneFile={saveStep !== null && (files.length === 0 || savesOneFile)}
                         onChange={() => void changeForRun()}
                         onReset={() => setRunOverride(null)}
@@ -836,6 +838,7 @@ export const ToolScaffold = ({ utility, onRun, onRunCombined, variant = 'standar
                 live={live}
                 combinedInputs={combinedInputs}
                 combined={saveStep?.combined}
+                outputNoun={utility.outputNoun}
                 onRetry={perFileRun ? (inputPath) => rerun([inputPath]) : undefined}
                 onRetryWithPassword={perFileRun && retryWithPassword ? (inputPath, password) => rerun([inputPath], retryWithPassword(inputPath, password)) : undefined}
                 outputGroup={outputGroup}

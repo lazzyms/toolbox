@@ -27,7 +27,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
   const describesFiles = activeUtility.id === "pdf-merge";
   const combinesImages = activeUtility.id === "images-to-pdf";
   const [tiffPages, setTiffPages] = useState<ReadonlyMap<string, number | null>>(() => new Map());
-  const { exampleName } = tool;
+  const { exampleName, exampleHint } = tool;
 
   const listChanged = useCallback((paths: readonly string[]) => {
     setListedPaths(paths);
@@ -87,6 +87,7 @@ export const PDFConversionWorkspaceView = ({ utility: activeUtility, initialPath
       } : undefined}
       listHint={describesFiles && listedPaths.length === 1 ? "Add at least one more PDF. You can add the same file again to repeat it." : undefined}
       exampleName={exampleName ? (path) => exampleName(path, activeUtility, options) : undefined}
+      exampleHint={exampleHint}
       onRun={(paths, outputLocation, run) => tool.request(paths, outputLocation, run, options, { document, selectedPages, pageRange })}
     >
       {({ files, selectedFileIndex, run, loading, destination, runLabel }) => (

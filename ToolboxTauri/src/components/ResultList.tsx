@@ -36,11 +36,11 @@ const segmentTone = (file: LiveFile): SegmentTone => {
     return file.outcome.state === "skipped" ? "skip" : "fail";
 };
 
-const revealButtonLabel = () => {
+const revealButtonLabels = () => {
     const platform = navigator.platform.toLowerCase();
-    if (platform.includes("mac")) return "Show in Finder";
-    if (platform.includes("win")) return "Show in File Explorer";
-    return "Show in file manager";
+    if (platform.includes("mac")) return { full: "Show in Finder", short: "Show in Finder" };
+    if (platform.includes("win")) return { full: "Show in File Explorer", short: "Show in Explorer" };
+    return { full: "Show in file manager", short: "Show in file manager" };
 };
 
 const followPointer = (pointer: OutcomePointer) => {
@@ -63,6 +63,7 @@ interface ResultListProps {
     live: LiveRun | null;
     combinedInputs?: string[] | null;
     combined?: CombinedResult;
+    outputNoun?: string;
     onRetry?: (inputPath: string) => Promise<void>;
     onRetryWithPassword?: (inputPath: string, password: string) => Promise<void>;
     /** Shows a succeeded file's outputs as one row that expands into its parts. */
@@ -71,12 +72,13 @@ interface ResultListProps {
     resultsHint?: (results: JobOutcome[]) => string | null;
 }
 
-export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, onRetry, onRetryWithPassword, outputGroup, resultsHint }: ResultListProps) => {
+export const ResultList = ({ results, progress, loading, resultVerb, runningVerb, runningDetail, live, combinedInputs = null, combined, outputNoun, onRetry, onRetryWithPassword, outputGroup, resultsHint }: ResultListProps) => {
     const namedByOutput = combinedInputs !== null;
     const home = useHomeDir();
     const [actionStates, setActionStates] = useState<Record<string, RowActionState>>({});
     const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
     const [passwordRow, setPasswordRow] = useState<number | null>(null);
+    const [expandedRows, setExpandedRows] = useState<ReadonlySet<number>>(new Set());
     const resultSetGeneration = useRef(0);
 
     useEffect(() => {
@@ -85,6 +87,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         setActionStates({});
         setExpanded(new Set());
         setPasswordRow(null);
+        setExpandedRows(new Set());
         return () => {
             if (resultSetGeneration.current === generation) resultSetGeneration.current += 1;
         };
@@ -105,7 +108,13 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         setActionStates((states) => ({ ...states, [row]: { pending: null, error } }));
     };
 
-    const reveal = revealButtonLabel();
+    const { full: reveal, short: revealShort } = revealButtonLabels();
+
+    const toggleOutputs = (row: number) => setExpandedRows((rows) => {
+        const next = new Set(rows);
+        if (!next.delete(row)) next.add(row);
+        return next;
+    });
 
     const toggleGroup = (index: number) => setExpanded((open) => {
         const next = new Set(open);
@@ -144,7 +153,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
 
     const finishedRow = (result: JobOutcome, index: number) => {
         const group = result.state === "succeeded" ? outputGroup?.(result) ?? null : null;
-        const baseView = rowView(result, resultVerb, namedByOutput);
+        const baseView = rowView(result, resultVerb, namedByOutput, outputNoun);
         const view = group
             ? { ...baseView, detailLines: [group.hint, ...result.warnings.map(warningText)], openOutput: { path: group.primary, label: "Open" as const }, revealOutput: group.primary }
             : baseView;
@@ -153,6 +162,9 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
         const busy = state.pending !== null;
         const name = view.name;
         const Icon = toneIcons[view.tone];
+        const listedOutputs = outputNoun && result.state === "succeeded" && result.outputPaths.length > 1 ? result.outputPaths : null;
+        const outputsListed = listedOutputs !== null && expandedRows.has(index);
+        const outputListId = `result-outputs-${index}`;
         return (
             <Fragment key={`${index}:${result.inputPath}`}>
             <li className="result-row" data-tone={view.tone} data-state={result.state}>
@@ -173,7 +185,12 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                     <span className="sr-only">{view.spokenState}</span>
                 </span>
                 <span className="result-row-actions">
-                    {view.openOutput && (
+                    {listedOutputs && (
+                        <Button variant="outline" size="xs" aria-expanded={outputsListed} aria-controls={outputListId} onClick={() => toggleOutputs(index)}>
+                            {outputsListed ? `Hide ${outputNoun}` : `Show ${listedOutputs.length} ${outputNoun}`}
+                        </Button>
+                    )}
+                    {!listedOutputs && view.openOutput && (
                         <Button
                             variant="ghost"
                             size="xs"
@@ -184,7 +201,7 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                             {state.pending === "open" ? "Opening..." : view.openOutput.label}
                         </Button>
                     )}
-                    {view.revealOutput && (
+                    {!listedOutputs && view.revealOutput && (
                         <Button
                             variant="ghost"
                             size="xs"
@@ -226,6 +243,24 @@ export const ResultList = ({ results, progress, loading, resultVerb, runningVerb
                         onRetry={(password) => void runAction(index, "retry", () => onRetryWithPassword(result.inputPath, password))}
                         onCancel={() => setPasswordRow(null)}
                     />
+                )}
+                {listedOutputs && outputsListed && (
+                    <ul id={outputListId} className="result-outputs" aria-label={`${outputNoun?.replace(/^./, (letter) => letter.toUpperCase())} from ${name}`}>
+                        {listedOutputs.map((path) => {
+                            const output = fileName(path);
+                            return (
+                                <li key={path}>
+                                    <span className="result-output-name" title={path}>{output}</span>
+                                    <Button variant="ghost" size="xs" aria-label={`Open ${output}`} disabled={busy} onClick={() => void runAction(index, "open", () => invoke("open_output_path", { path }))}>
+                                        Open
+                                    </Button>
+                                    <Button variant="ghost" size="xs" aria-label={`${reveal}: ${output}`} disabled={busy} onClick={() => void runAction(index, "reveal", () => invoke("reveal_output_path", { path }))}>
+                                        {revealShort}
+                                    </Button>
+                                </li>
+                            );
+                        })}
+                    </ul>
                 )}
                 {state.error && <p className="result-action-error" role="alert">{state.error}</p>}
             </li>

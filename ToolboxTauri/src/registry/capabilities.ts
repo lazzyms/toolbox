@@ -17,6 +17,14 @@ const requiredCapabilityKeys = [
 const capabilityKeys = new Set([...requiredCapabilityKeys, "acceptedExtensions", "formatFamilies"]);
 const familyKeys = new Set(["id", "extensions", "nativeAvailability", "basicFidelity"]);
 
+const optionalCapabilityKeys = new Set(["outputFormats"]);
+
+const isExtensionList = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every((extension) => typeof extension === "string" && /^\.[a-z0-9]+$/.test(extension)) &&
+  new Set(value).size === value.length;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -56,7 +64,7 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (!isRecord(value)) throw new Error("Each shared capability must be an object.");
   if (
     requiredCapabilityKeys.some((key) => !(key in value)) ||
-    Object.keys(value).some((key) => !capabilityKeys.has(key))
+    Object.keys(value).some((key) => !capabilityKeys.has(key) && !optionalCapabilityKeys.has(key))
   ) {
     throw new Error("Each shared capability must contain only the contract fields.");
   }
@@ -68,6 +76,7 @@ const parseCapability = (value: unknown): SharedCapability => {
     nativeAvailability,
     outputSuffix,
     manyToOne,
+    outputFormats,
   } = value;
   if (typeof command !== "string" || command.length === 0) {
     throw new Error("Each shared capability needs a command.");
@@ -109,6 +118,9 @@ const parseCapability = (value: unknown): SharedCapability => {
   if (typeof manyToOne !== "boolean") {
     throw new Error(`${command} has an invalid many-to-one flag.`);
   }
+  if (outputFormats !== undefined && !isExtensionList(outputFormats)) {
+    throw new Error(`${command} has invalid output formats.`);
+  }
   return {
     command,
     acceptedExtensions,
@@ -119,6 +131,7 @@ const parseCapability = (value: unknown): SharedCapability => {
     nativeAvailability,
     outputSuffix,
     manyToOne,
+    ...(outputFormats ? { outputFormats } : {}),
   };
 };
 
@@ -150,6 +163,7 @@ for (const capability of SharedCapabilityRegistry) {
     nativeAvailability: capability.nativeAvailability,
     outputSuffix: capability.outputSuffix,
     manyToOne: capability.manyToOne,
+    ...(capability.outputFormats ? { outputFormats: capability.outputFormats } : {}),
   });
 }
 

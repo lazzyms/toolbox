@@ -97,7 +97,21 @@ const outputSummary = (paths: string[]) =>
 
 const nonEmpty = (lines: string[]) => lines.filter((line) => line.trim().length > 0);
 
-export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false): RowView => {
+const andList = (items: string[]) => items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}` : items.join("");
+
+const withoutExtension = (name: string) => name.replace(/\.[^.]+$/, "");
+
+type RenamedWarning = Extract<OutcomeWarning, { code: "renamedToAvoidReplacing" }>;
+
+const renamedOutputsDetail = (inputPath: string, outputCount: number, outputNoun: string, renamed: RenamedWarning[]) => {
+    const stem = withoutExtension(fileName(inputPath));
+    const chosen = renamed.map(({ details }, index) => index > 0 && details.chosenName.startsWith(stem) ? details.chosenName.slice(stem.length) : details.chosenName);
+    const endings = [...new Set(renamed.map(({ details }) => withoutExtension(details.finalName).slice(withoutExtension(details.chosenName).length)))];
+    const ending = `${renamed.length === 1 ? "It ends" : "They end"} in ${endings.join(" or ")}.`;
+    return `${outputCount} ${outputNoun}. ${renamed.length} renamed, because ${andList(chosen)} already existed. ${ending}`;
+};
+
+export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput = false, outputNoun?: string): RowView => {
     const warnings = outcome.warnings.map(warningText);
     const input = { name: fileName(outcome.inputPath), fullPath: outcome.inputPath };
     switch (outcome.state) {
@@ -105,12 +119,27 @@ export const rowView = (outcome: JobOutcome, resultVerb: string, namedByOutput =
             const first = outcome.outputPaths[0] ?? null;
             const warned = warnings.length > 0;
             const byOutput = namedByOutput && first !== null;
+            const renamed = outcome.warnings.filter((warning): warning is RenamedWarning => warning.code === "renamedToAvoidReplacing");
+            if (outputNoun && renamed.length > 0 && renamed.length === outcome.warnings.length) {
+                return {
+                    ...input,
+                    tone: "warn",
+                    stateLabel: "Renamed",
+                    spokenState: `${resultVerb}, ${renamed.length} renamed to avoid replacing existing files`,
+                    detailLines: [renamedOutputsDetail(outcome.inputPath, outcome.outputPaths.length, outputNoun, renamed)],
+                    openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
+                    revealOutput: first,
+                    pointer: null,
+                    canRetry: false,
+                    canRetryWithPassword: false,
+                };
+            }
             return {
                 ...(byOutput ? { name: fileName(first), fullPath: first } : input),
                 tone: warned ? "warn" : "ok",
                 stateLabel: resultVerb,
                 spokenState: warned ? `${resultVerb} with ${warnings.length === 1 ? "a warning" : "warnings"}` : resultVerb,
-                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
+                detailLines: nonEmpty(warned ? [...warnings, outcome.detail] : [first && !byOutput && !outputNoun ? outputSummary(outcome.outputPaths) : "", outcome.detail]),
                 openOutput: first ? { path: first, label: outcome.outputPaths.length > 1 ? "Open first" : "Open" } : null,
                 revealOutput: first,
                 pointer: null,
