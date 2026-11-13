@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { headerFooterOverlaps, headerFooterParts, headerFooterVariant, isRangedKind, legacyWatermarkPatterns, movePagesBefore, objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, removePages, resolvePageTokens, rotatePages, sceneFromDocument, swapPage, tokenDate, watermarkMarks, type HeaderFooterOptions, type HeaderFooterText, type PageNumberFormat, type PdfScene, type SceneObject, interleaveDuplexScan, movePagesBy, movePagesTo, movePagesToGap, reversePages, resetPageRotation, composeOrientation, mirrorPages } from "../src/features/pdf-editor/scene";
+import { headerFooterOverlaps, headerFooterParts, headerFooterVariant, isRangedKind, legacyWatermarkPatterns, movePagesBefore, objectsOnPage, pageNumberRect, pageNumberText, pagesInRange, removePages, resolvePageTokens, restorePages, rotatePages, sceneFromDocument, swapPage, tokenDate, watermarkMarks, type HeaderFooterOptions, type HeaderFooterText, type PageNumberFormat, type PdfScene, type SceneObject, interleaveDuplexScan, movePagesBy, movePagesTo, movePagesToGap, reversePages, resetPageRotation, composeOrientation, mirrorPages } from "../src/features/pdf-editor/scene";
 import { parsePageRange } from "../src/shared/workspaceValidation";
 
 test("scene import carries source rotation and page-box baseline", () => {
@@ -194,6 +194,25 @@ test("removing pages keeps the rest in order and refuses to remove every page", 
   const scene = sixPages();
   assert.deepEqual(pageIds(removePages(scene, ["source-1", "source-4"])!), ["source-0", "source-2", "source-3", "source-5"]);
   assert.equal(removePages(scene, pageIds(scene)), null);
+});
+
+test("restoring removed pages puts them back where they were, as opened, even after other pages moved", () => {
+  const opened = sixPages();
+  const edited = { pages: opened.pages.map((page) => page.id === "source-3" ? { ...page, rotation: 90 } : page) };
+  const removed = removePages(edited, ["source-1", "source-3", "source-4"])!;
+  const moved = movePagesTo(removed, ["source-5"], 0);
+  const restored = restorePages(moved, opened, [4, 3]);
+  assert.deepEqual(pageIds(restored), ["source-5", "source-0", "source-2", "source-3", "source-4"]);
+  assert.equal(restored.pages.find((page) => page.id === "source-3")!.rotation, 0);
+  assert.deepEqual(pageIds(restorePages(removed, opened, [5, 0, 1])), ["source-0", "source-1", "source-2", "source-5"]);
+  assert.equal(restorePages(removed, opened, [0, 2]), removed);
+});
+
+test("restoring pages keeps the scene's text edits", () => {
+  const edit = { pageIndex: 0, run: 0, original: "Rent £1,450", replacement: "Rent £1,475" };
+  const opened = sixPages();
+  const removed = removePages({ ...opened, textEdits: [edit] }, ["source-3"])!;
+  assert.deepEqual(restorePages(removed, opened, [3]).textEdits, [edit]);
 });
 
 test("page edits keep the text edits of the pages that stay and drop the rest", () => {
