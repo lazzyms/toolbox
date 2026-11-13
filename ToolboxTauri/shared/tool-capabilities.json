@@ -31,7 +31,7 @@
     {"id": "word", "extensions": [".docx", ".odt"], "nativeAvailability": "available"},
     {"id": "rich-text", "extensions": [".rtf"], "nativeAvailability": "available"},
     {"id": "spreadsheets", "extensions": [".xlsx", ".ods"], "nativeAvailability": "available"},
-    {"id": "presentations", "extensions": [".pptx", ".odp"], "nativeAvailability": "unavailable"},
+    {"id": "presentations", "extensions": [".pptx", ".odp"], "nativeAvailability": "available"},
     {"id": "markdown", "extensions": [".md", ".markdown"], "nativeAvailability": "available"},
     {"id": "web-pages", "extensions": [".html", ".htm"], "nativeAvailability": "unavailable"},
     {"id": "tables", "extensions": [".csv", ".tsv"], "nativeAvailability": "available"},

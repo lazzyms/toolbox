@@ -90,14 +90,14 @@ test("Convert to PDF sits in the PDF Conversion rail and shows text options only
 
 test("unsupported drops are refused with a reason, and later formats and PDFs are flagged on their own rows", async ({ page }) => {
     await openConvert(page);
-    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/deck.pptx", "/local/signed.pdf"]);
+    await drop(page, ["/local/notes.txt", "/local/archive.zip", "/local/photo.png", "/local/novel.epub", "/local/signed.pdf"]);
 
     await expect(page.getByText(/archive\.zip/).first()).toBeVisible();
     await expect(fileRow(page, "archive.zip")).toHaveCount(0);
     await expect(fileRow(page, "photo.png")).toContainText("This file type can't become a PDF here.");
     await expect(fileRow(page, "photo.png")).toContainText("Won't run");
-    await expect(fileRow(page, "deck.pptx")).toContainText("Not available yet");
-    await expect(fileRow(page, "deck.pptx")).toContainText("PPTX comes in a later update");
+    await expect(fileRow(page, "novel.epub")).toContainText("Not available yet");
+    await expect(fileRow(page, "novel.epub")).toContainText("EPUB comes in a later update");
     await expect(fileRow(page, "signed.pdf")).toContainText("Will be skipped");
     await expect(fileRow(page, "signed.pdf")).toContainText("Already a PDF");
     await expect(fileRow(page, "notes.txt")).not.toContainText("Will be skipped");
@@ -495,4 +495,62 @@ test("a spreadsheet run with default options sends all sheets, print areas and f
         plainText: { pageSize: "a4", margins: "normal", font: "monospace", encoding: "detect", wrapLines: true },
         spreadsheets: { sheets: "all", printAreas: true, fitToWidth: true },
     });
+});
+
+test("the Presentations section appears only while a PPTX or ODP is listed, with both options off", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/notes.txt"]);
+    await expect(page.getByRole("region", { name: "Presentations options" })).toHaveCount(0);
+    await drop(page, ["/local/launch-deck.pptx"]);
+    await expect(fileRow(page, "launch-deck.pptx")).not.toContainText("Not available yet");
+    const decks = page.getByRole("region", { name: "Presentations options" });
+    await expect(decks).toBeVisible();
+    await expect(decks).toContainText("Applies to launch-deck.pptx");
+    await expect(decks.getByRole("checkbox", { name: "Include speaker notes" })).not.toBeChecked();
+    await expect(decks.getByRole("checkbox", { name: "Include hidden slides" })).not.toBeChecked();
+
+    await drop(page, ["/local/review.ODP"]);
+    await expect(decks).toContainText("Applies to 2 presentations");
+    await fileRow(page, "launch-deck.pptx").getByRole("button", { name: /Remove/ }).click();
+    await expect(decks).toContainText("Applies to review.ODP");
+    await fileRow(page, "review.ODP").getByRole("button", { name: /Remove/ }).click();
+    await expect(page.getByRole("region", { name: "Presentations options" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Plain text options" })).toBeVisible();
+});
+
+test("a presentation run sends both options off by default", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/launch-deck.pptx", "/local/budget.xlsx"]);
+    await page.locator(".workspace-primary-action").click();
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/launch-deck.pptx", "/local/budget.xlsx"],
+        outputLocation: "alongsideInput",
+        spreadsheets: { sheets: "all", printAreas: true, fitToWidth: true },
+        presentations: { speakerNotes: false, hiddenSlides: false },
+    });
+});
+
+test("a presentation run carries the notes and hidden slide choices, and its row shows the slide note", async ({ page }) => {
+    await openConvert(page);
+    await drop(page, ["/local/launch-deck.pptx", "/local/review.odp"]);
+    const decks = page.getByRole("region", { name: "Presentations options" });
+    await decks.getByRole("checkbox", { name: "Include speaker notes" }).click();
+    await decks.getByRole("checkbox", { name: "Include hidden slides" }).click();
+    await expect(decks.getByRole("checkbox", { name: "Include speaker notes" })).toBeChecked();
+    await page.locator(".workspace-primary-action").click();
+
+    await expect.poll(() => convertRequest(page)).toEqual({
+        paths: ["/local/launch-deck.pptx", "/local/review.odp"],
+        outputLocation: "alongsideInput",
+        presentations: { speakerNotes: true, hiddenSlides: true },
+    });
+
+    const note = "5 pages. 3 slides.";
+    await page.evaluate((note) => (window as unknown as ConvertWindow).__finish([
+        { inputPath: "/local/launch-deck.pptx", outputPaths: ["/local/launch-deck.pdf"], detail: note, state: "succeeded", failure: null, reason: null, warnings: [], fonts: [] },
+        { inputPath: "/local/review.odp", outputPaths: [], detail: "", state: "failed", failure: { kind: "invalidInput", message: "It's password-protected. Unlock it in Lock & Unlock, then convert the unlocked copy.", pointer: { kind: "tool", toolId: "lock-unlock" } }, reason: null, warnings: [] },
+    ]), note);
+    const rows = page.getByRole("list", { name: "Results" }).getByRole("listitem").filter({ has: page.locator(".result-row-name") });
+    await expect(rows.filter({ hasText: "launch-deck.pptx" })).toContainText(note);
+    await expect(rows.filter({ hasText: "review.odp" })).toContainText("It's password-protected.");
 });

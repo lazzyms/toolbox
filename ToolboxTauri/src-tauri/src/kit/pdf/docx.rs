@@ -713,7 +713,7 @@ impl Converter<'_> {
             "diagram" => self.omitted.diagrams += 1,
             "wordprocessingShape" => {
                 let Some(shape) = data.child("wsp") else { return Ok(None) };
-                let (fill, line) = shape_paint(shape);
+                let (fill, line) = shape_paint(shape, rgb_colour);
                 let blocks = match shape.find("txbxContent") { Some(content) => self.text_box(content, part)?, None => Vec::new() };
                 return Ok(Some(Graphic { picture: None, fill, line, blocks }));
             }
@@ -819,20 +819,20 @@ fn anchor_position(node: Option<&Node>) -> Position {
     Position { frame, place: place.unwrap_or(Place::Offset(0.)) }
 }
 
+/// The colour a fill or style reference states directly, ignoring theme colours.
+fn rgb_colour(holder: &Node) -> Option<[u8; 3]> { holder.child("srgbClr").and_then(|colour| colour.attr("val")).and_then(hex_color) }
+
 /// Explicit colours from the shape properties, else a neutral stand-in when the shape style asks for a fill or outline.
-fn shape_paint(shape: &Node) -> (Option<[u8; 3]>, Option<[u8; 3]>) {
+/// `colour` reads the colour held by a `solidFill`, `fillRef` or `lnRef` element.
+pub(super) fn shape_paint(shape: &Node, colour: impl Fn(&Node) -> Option<[u8; 3]>) -> (Option<[u8; 3]>, Option<[u8; 3]>) {
     let properties = shape.child("spPr");
     let style = shape.child("style");
     let paint = |explicit: Option<&Node>, reference: Option<&Node>, stand_in: [u8; 3]| -> Option<[u8; 3]> {
         if let Some(explicit) = explicit {
             if explicit.child("noFill").is_some() { return None; }
-            if let Some(fill) = explicit.child("solidFill") {
-                return Some(fill.child("srgbClr").and_then(|colour| colour.attr("val")).and_then(hex_color).unwrap_or(stand_in));
-            }
+            if let Some(fill) = explicit.child("solidFill") { return Some(colour(fill).unwrap_or(stand_in)); }
         }
-        reference.filter(|reference| reference.attr("idx").is_some_and(|index| index != "0")).map(|reference| {
-            reference.child("srgbClr").and_then(|colour| colour.attr("val")).and_then(hex_color).unwrap_or(stand_in)
-        })
+        reference.filter(|reference| reference.attr("idx").is_some_and(|index| index != "0")).map(|reference| colour(reference).unwrap_or(stand_in))
     };
     let fill = paint(properties, style.and_then(|style| style.child("fillRef")), SHAPE_FILL);
     let line = paint(properties.and_then(|properties| properties.child("ln")), style.and_then(|style| style.child("lnRef")), SHAPE_LINE);
