@@ -6,7 +6,9 @@
 //! larger or bolder than the body becomes headings, which split the book into chapter documents.
 //! The table of contents follows the PDF's bookmarks, or the headings when it has none. Links to
 //! pages become links into the book and web links are kept as written. Title and author come from
-//! the PDF unless the request replaces them, and the first page can be rendered as the cover. Images
+//! the PDF unless the request replaces them, and the first page can be rendered as the cover. A page range,
+//! clamped to each PDF, limits the book to those pages; pages outside it add no text, images, links or
+//! bookmarks, and the first page in the range is the cover. Images
 //! drawn on the pages are kept as Extract from PDF saves them, each placed where it is drawn among the
 //! text and stored once however often it is drawn. The package is built in memory with fixed timestamps and an identifier derived from the PDF's bytes,
 //! so the same PDF always makes the same EPUB, then reopened and checked before it is published.
@@ -26,7 +28,8 @@ use crate::kit::contracts::{OutcomeDetail, OutcomePointer, OutcomeWarning, SkipC
 use super::document_info;
 use super::embedded_image::{self, Extracted, NotSaved};
 use super::page_text::{read_document_text, PageImageSource, PageText, PageTextRun};
-use super::remaining::{not_saved_warning, pages_without_text, PDF_DAMAGED};
+use super::page_ranges::{pages_label, PageRanges};
+use super::remaining::{not_saved_warning, page_runs, pages_without_text, PDF_DAMAGED};
 use super::resolve;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -46,6 +49,9 @@ pub struct PdfToEpubRequest {
     /// Replaces the PDF's author in the book when it isn't blank.
     #[serde(default)]
     pub author: Option<String>,
+    /// The pages to convert, in the shared range syntax, clamped to each PDF. Every page when blank or absent.
+    #[serde(default)]
+    pub page_range: Option<String>,
 }
 
 fn on() -> bool { true }
@@ -107,19 +113,32 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         Err(error) => return JobOutcome::failure(input, ToolError::processing(error)),
     };
     let page_ids = document.get_pages().into_values().collect::<Vec<_>>();
+    let selected = match selected_pages(&input, request.page_range.as_deref(), page_ids.len()) {
+        Ok(selected) => selected,
+        Err(outcome) => return outcome,
+    };
     let page_numbers = page_ids.iter().enumerate().map(|(index, id)| (*id, index)).collect::<HashMap<_, _>>();
-    let mut lines = pages.iter().zip(&page_ids).map(|(page, id)| page_lines(page, &page_links(&document, *id, &page_numbers))).collect::<Vec<_>>();
-    let blank = lines.iter().enumerate().filter(|(_, lines)| lines.is_empty()).map(|(index, _)| index as u32 + 1).collect::<Vec<_>>();
-    if blank.len() == lines.len() {
+    // Pages outside the range contribute nothing: no text, no images, and nothing in the book links to them.
+    let in_book = |page: usize| selected.get(page).copied().unwrap_or(false);
+    let mut lines = pages.iter().zip(&page_ids).enumerate().map(|(index, (page, id))| {
+        if !in_book(index) { return Vec::new(); }
+        let mut links = page_links(&document, *id, &page_numbers);
+        links.retain(|link| !matches!(link.target, Target::Page(target) if !in_book(target)));
+        page_lines(page, &links)
+    }).collect::<Vec<_>>();
+    let blank = (0..lines.len()).filter(|&index| in_book(index) && lines[index].is_empty()).map(|index| index as u32 + 1).collect::<Vec<_>>();
+    let converted = (0..lines.len()).filter(|&index| in_book(index) && !lines[index].is_empty()).map(|index| index as u32 + 1).collect::<Vec<_>>();
+    if converted.is_empty() {
         return JobOutcome::skipped(input, SkipReason::new(SkipCode::NeedsOcr, NO_SELECTABLE_TEXT).with_pointer(OutcomePointer::Tool { tool_id: "pdf-ocr".into() }));
     }
     if request.remove_headers_and_footers { remove_running_text(&mut lines); }
     let stem = input.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
     let details = BookDetails::new(document_info::from_document(&document).merged(), request, &stem);
-    let images = book_images(&document, &pages);
+    let images = book_images(&document, &pages, &selected);
     let chapters = chapters(blocks(&lines, &images.placed));
     let homes = page_homes(&chapters, pages.len());
-    let bookmarks = bookmarks(&document, &page_numbers);
+    let mut bookmarks = bookmarks(&document, &page_numbers);
+    bookmarks.retain(|bookmark| in_book(bookmark.page));
     let (source, contents) = if bookmarks.is_empty() {
         let headings = heading_contents(&chapters);
         (if headings.is_empty() { Source::Title } else { Source::Headings }, headings)
@@ -131,7 +150,8 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         Target::Page(page) => Some(page),
         Target::Uri(_) => None,
     }));
-    let cover = (request.cover == EpubCover::FirstPage).then(|| cover_image(&input));
+    let cover_page = selected.iter().position(|&kept| kept).map_or(1, |index| index + 1);
+    let cover = (request.cover == EpubCover::FirstPage).then(|| cover_image(&input, cover_page));
     let book = Book {
         title: details.title.clone(),
         author: details.author.clone(),
@@ -153,7 +173,7 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
     };
     let chosen = path.with_file_name(format!("{stem}.epub"));
     let entries = book.contents.len();
-    let page_count = count(pages.len(), "page", "pages");
+    let page_count = count(converted.len(), "page", "pages");
     let (kept, found) = (book.images.len(), book.images.len() + images.warnings.len());
     let detail = match (kept, images.warnings.len()) {
         (0, 0) => format!("{page_count}. {}", source.sentence(entries)),
@@ -161,19 +181,39 @@ pub fn convert(request: &PdfToEpubRequest, input: PathBuf) -> JobOutcome {
         (_, unreadable) => format!("{page_count}, {kept} of {}. {} couldn't be read.", count(found, "image", "images"), count(unreadable, "image", "images")),
     };
     let cover_detail = match &cover {
-        Some(Some(_)) => "Page 1",
-        Some(None) => "None; the first page couldn't be rendered",
-        None => "None",
+        Some(Some(_)) => format!("Page {cover_page}"),
+        Some(None) => format!("None; page {cover_page} couldn't be rendered"),
+        None => "None".into(),
     };
     let images_kept = (found > 0).then(|| OutcomeDetail { label: "Images kept".into(), value: format!("{kept} of {found}") });
-    let outcome = note_renamed(JobOutcome::succeeded(input, vec![path], detail), Some(&chosen)).with_page_details(images_kept.into_iter().chain([
+    let pages_converted = OutcomeDetail { label: "Pages converted".into(), value: page_spans(&converted) };
+    let outcome = note_renamed(JobOutcome::succeeded(input, vec![path], detail), Some(&chosen)).with_page_details([pages_converted].into_iter().chain(images_kept).chain([
         OutcomeDetail { label: "Contents".into(), value: source.detail(entries) },
-        OutcomeDetail { label: "Cover".into(), value: cover_detail.into() },
+        OutcomeDetail { label: "Cover".into(), value: cover_detail },
         OutcomeDetail { label: "Title and author".into(), value: details.describe() },
     ]).collect());
     let outcome = if matches!(cover, Some(None)) { outcome.with_warning(OutcomeWarning { kind: WarningKind::OmittedContent, message: COVER_NOT_RENDERED.into() }) } else { outcome };
     let outcome = images.warnings.into_iter().fold(outcome, JobOutcome::with_warning);
     if blank.is_empty() { outcome } else { outcome.with_warning(pages_without_text(blank)) }
+}
+
+/// Which pages, by index, the book is made from: every page without a range, else the range clamped to
+/// this PDF. One range applies to a whole batch, so a PDF it leaves no pages in is skipped, not failed.
+fn selected_pages(input: &Path, range: Option<&str>, page_count: usize) -> Result<Vec<bool>, JobOutcome> {
+    let Some(raw) = range.filter(|raw| !raw.trim().is_empty()) else { return Ok(vec![true; page_count]) };
+    let ranges = PageRanges::parse(raw).map_err(|error| JobOutcome::failure(input.to_path_buf(), ToolError::invalid_input(error)))?;
+    let clamped = ranges.clamp_or_skip(page_count).map_err(|skip| JobOutcome::skipped(input.to_path_buf(), SkipReason::new(
+        skip.code,
+        format!("No pages in range {ranges}. This PDF has {}. No EPUB was made.", pages_label(page_count)),
+    )))?;
+    let mut selected = vec![false; page_count];
+    for index in clamped.page_indices() { selected[index] = true; }
+    Ok(selected)
+}
+
+/// Page numbers as runs, like "3-6, 8-11, 13".
+fn page_spans(pages: &[u32]) -> String {
+    page_runs(pages).into_iter().map(|(first, last)| if first == last { first.to_string() } else { format!("{first}-{last}") }).collect::<Vec<_>>().join(", ")
 }
 
 fn password_protected(input: PathBuf) -> JobOutcome {
@@ -193,12 +233,16 @@ struct BookImages { files: Vec<BookImage>, placed: Vec<Vec<(f32, usize)>>, warni
 /// object drawn again, or an image whose saved bytes match one already kept, is stored once. Images are
 /// numbered on each page in the order the page draws them; an unreadable one is reported once, where it is
 /// first drawn, and left out.
-fn book_images(document: &Document, pages: &[PageText]) -> BookImages {
+fn book_images(document: &Document, pages: &[PageText], selected: &[bool]) -> BookImages {
     let mut images = BookImages { files: Vec::new(), placed: Vec::new(), warnings: Vec::new() };
     let mut by_object: HashMap<ObjectId, Option<usize>> = HashMap::new();
     let mut by_content: HashMap<Vec<u8>, usize> = HashMap::new();
     for (page, text) in pages.iter().enumerate() {
         let mut placed = Vec::new();
+        if !selected.get(page).copied().unwrap_or(false) {
+            images.placed.push(placed);
+            continue;
+        }
         for (number, drawn) in text.images.iter().enumerate() {
             let object = match &drawn.source { PageImageSource::Object(id) => Some(*id), PageImageSource::Inline(_) => None };
             let file = match object.and_then(|id| by_object.get(&id)) {
@@ -284,9 +328,9 @@ fn count(number: usize, one: &str, many: &str) -> String {
     if number == 1 { format!("1 {one}") } else { format!("{number} {many}") }
 }
 
-/// Renders the first page and encodes it as a JPEG, or `None` when it can't be rendered.
-fn cover_image(input: &Path) -> Option<Vec<u8>> {
-    let png = super::metadata::render_page_png(input, 1)?;
+/// Renders the page, counted from 1, and encodes it as a JPEG, or `None` when it can't be rendered.
+fn cover_image(input: &Path, page: usize) -> Option<Vec<u8>> {
+    let png = super::metadata::render_page_png(input, page)?;
     let page = image::load_from_memory_with_format(&png, image::ImageFormat::Png).ok()?.to_rgb8();
     let mut jpeg = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, COVER_QUALITY).encode_image(&page).ok()?;
@@ -1118,7 +1162,8 @@ mod tests {
         pdf_with_pages(&input, &["BT /F1 12 Tf 72 720 Td (First page) Tj ET", "", "BT /F1 12 Tf 72 720 Td (Third page) Tj ET"]);
         let outcome = convert(&request(&input, true), input);
         let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
-        assert_eq!(outcome.detail, "3 pages. No bookmarks or headings, so the contents list the title only.");
+        assert_eq!(outcome.detail, "2 pages. No bookmarks or headings, so the contents list the title only.", "the page without text isn't counted as converted");
+        assert_eq!(outcome.page_details[0], OutcomeDetail { label: "Pages converted".into(), value: "1, 3".into() });
         assert!(matches!(&outcome.warnings[0].kind, WarningKind::PagesWithoutText { pages } if pages == &[2]));
         let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
         assert!(chapter.contains("<p>First page</p>\n<p>Third page</p>"), "{chapter}");
@@ -1199,7 +1244,7 @@ mod tests {
         let outcome = convert(&request(&input, true), input);
         let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
         assert_eq!(outcome.detail, "2 pages. Contents from headings in the text, 6 entries.");
-        assert_eq!(outcome.page_details[0], OutcomeDetail { label: "Contents".into(), value: "From headings in the text, 6 entries".into() });
+        assert_eq!(outcome.page_details[1], OutcomeDetail { label: "Contents".into(), value: "From headings in the text, 6 entries".into() });
         let first = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
         assert!(first.contains(
             "<section id=\"chapter-1\">\n<h1 id=\"heading-1\">The Field Guide</h1>\n<h2 id=\"heading-2\">Getting started</h2>\n<p>Bring water and patience.</p>\n<h3 id=\"heading-3\">Gear</h3>\n"
@@ -1231,7 +1276,7 @@ mod tests {
             let outputs = (0..2).map(|index| {
                 let destination = root.join(format!("{name}-{index}"));
                 fs::create_dir_all(&destination).unwrap();
-                let outcome = convert(&PdfToEpubRequest { paths: vec![input.clone()], output_location: OutputLocation::CustomFolder(destination), remove_headers_and_footers: true, cover: EpubCover::NoCover, title: None, author: None }, input.clone());
+                let outcome = convert(&PdfToEpubRequest { paths: vec![input.clone()], output_location: OutputLocation::CustomFolder(destination), remove_headers_and_footers: true, cover: EpubCover::NoCover, title: None, author: None, page_range: None }, input.clone());
                 let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
                 fs::read(&output_paths[0]).unwrap()
             }).collect::<Vec<_>>();
@@ -1263,10 +1308,10 @@ mod tests {
             document.objects.insert(outlines, dictionary! { "Type" => "Outlines", "First" => first, "Last" => second, "Count" => 3 }.into());
             catalog.set("Outlines", outlines);
         });
-        let outcome = convert(&request(&input, true), input);
+        let outcome = convert(&request(&input, true), input.clone());
         let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
         assert_eq!(outcome.detail, "3 pages. Contents from the bookmarks, 3 entries.");
-        assert_eq!(outcome.page_details[0], OutcomeDetail { label: "Contents".into(), value: "From the PDF's bookmarks, 3 entries".into() });
+        assert_eq!(outcome.page_details[1], OutcomeDetail { label: "Contents".into(), value: "From the PDF's bookmarks, 3 entries".into() });
         assert_eq!(navigation(&output_paths[0]), [
             (1, "Getting out".into(), "OEBPS/chapter-1.xhtml#page-1".into()),
             (2, "At the water".into(), "OEBPS/chapter-1.xhtml#page-2".into()),
@@ -1276,6 +1321,19 @@ mod tests {
         assert!(chapter.contains("<p><span id=\"page-1\"></span>Good birding takes patience"), "{chapter}");
         assert!(chapter.contains("We wait until the <span id=\"page-2\"></span>light fades over the water.</p>"), "{chapter}");
         assert!(chapter.contains("<p><span id=\"page-3\"></span>The last page closes the book.</p>"), "{chapter}");
+
+        // A bookmark to a page outside the range is left out, so the contents never open text the book doesn't have.
+        fs::create_dir_all(root.join("ranged")).unwrap();
+        let ranged = convert(&PdfToEpubRequest { page_range: Some("2-".into()), output_location: OutputLocation::CustomFolder(root.join("ranged")), ..request(&input, true) }, input.clone());
+        let OutcomeState::Succeeded { output_paths } = &ranged.state else { panic!("{ranged:?}") };
+        assert_eq!(ranged.detail, "2 pages. Contents from the bookmarks, 2 entries.");
+        let entries = navigation(&output_paths[0]);
+        assert_eq!(entries.iter().map(|(_, title, target)| (title.as_str(), target.as_str())).collect::<Vec<_>>(), [
+            ("At the water", "OEBPS/chapter-1.xhtml#page-2"),
+            ("Page 3", "OEBPS/chapter-1.xhtml#page-3"),
+        ]);
+        let chapter = entry(&output_paths[0], "OEBPS/chapter-1.xhtml");
+        assert!(!chapter.contains("Good birding takes patience"), "page 1 is outside the range: {chapter}");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1321,7 +1379,7 @@ mod tests {
         assert_eq!(output_paths[0].file_name().unwrap(), "handbook.epub", "the file is still named after the PDF");
         let package = entry(&output_paths[0], PACKAGE_PATH);
         assert!(package.contains("<dc:title>The Long Road Home</dc:title>\n<dc:creator>Mira Okafor</dc:creator>\n"), "{package}");
-        assert_eq!(from_pdf.page_details[2], OutcomeDetail { label: "Title and author".into(), value: "The Long Road Home, Mira Okafor".into() });
+        assert_eq!(from_pdf.page_details[3], OutcomeDetail { label: "Title and author".into(), value: "The Long Road Home, Mira Okafor".into() });
 
         let destination = root.join("changed");
         fs::create_dir_all(&destination).unwrap();
@@ -1331,7 +1389,7 @@ mod tests {
         let package = entry(&output_paths[0], PACKAGE_PATH);
         assert!(package.contains("<dc:title>Road Home</dc:title>\n<dc:creator>Mira Okafor</dc:creator>\n"), "a blank author keeps the PDF's: {package}");
         assert!(entry(&output_paths[0], NAV_PATH).contains("<title>Road Home</title>"));
-        assert_eq!(overridden.page_details[2], OutcomeDetail { label: "Title and author".into(), value: "Road Home, Mira Okafor (changed for this book)".into() });
+        assert_eq!(overridden.page_details[3], OutcomeDetail { label: "Title and author".into(), value: "Road Home, Mira Okafor (changed for this book)".into() });
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1344,7 +1402,7 @@ mod tests {
         let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
         let package = entry(&output_paths[0], PACKAGE_PATH);
         assert!(package.contains("<dc:title>guide</dc:title>\n<dc:language>") && !package.contains("dc:creator"), "{package}");
-        assert_eq!(outcome.page_details[2].value, "guide");
+        assert_eq!(outcome.page_details[3].value, "guide");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1360,7 +1418,7 @@ mod tests {
             let outcome = convert(&PdfToEpubRequest { output_location: OutputLocation::CustomFolder(destination), cover: EpubCover::FirstPage, ..request(&input, true) }, input.clone());
             let OutcomeState::Succeeded { output_paths } = &outcome.state else { panic!("{outcome:?}") };
             assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
-            assert_eq!(outcome.page_details[1], OutcomeDetail { label: "Cover".into(), value: "Page 1".into() });
+            assert_eq!(outcome.page_details[2], OutcomeDetail { label: "Cover".into(), value: "Page 1".into() });
             output_paths[0].clone()
         }).collect::<Vec<_>>();
         let package = entry(&covered[0], PACKAGE_PATH);
@@ -1373,11 +1431,21 @@ mod tests {
         assert!(decoded.height() > decoded.width(), "a portrait page makes a portrait cover");
         assert!(fs::read(&covered[0]).unwrap() == fs::read(&covered[1]).unwrap(), "the cover is deterministic");
 
+        // With a range, the first page in it is the cover.
+        let destination = root.join("cover-ranged");
+        fs::create_dir_all(&destination).unwrap();
+        let ranged = convert(&PdfToEpubRequest { output_location: OutputLocation::CustomFolder(destination), cover: EpubCover::FirstPage, page_range: Some("2-".into()), ..request(&input, true) }, input.clone());
+        let OutcomeState::Succeeded { output_paths } = &ranged.state else { panic!("{ranged:?}") };
+        assert_eq!(ranged.page_details[2], OutcomeDetail { label: "Cover".into(), value: "Page 2".into() });
+        let mut ranged_cover = Vec::new();
+        ZipArchive::new(fs::File::open(&output_paths[0]).unwrap()).unwrap().by_name("OEBPS/cover.jpg").unwrap().read_to_end(&mut ranged_cover).unwrap();
+        assert!(ranged_cover != image, "page 2, not page 1, is rendered as the cover");
+
         let plain = convert(&request(&input, true), input);
         let OutcomeState::Succeeded { output_paths } = &plain.state else { panic!("{plain:?}") };
         assert!(!names(&output_paths[0]).iter().any(|name| name.contains("cover")));
         assert!(!entry(&output_paths[0], PACKAGE_PATH).contains("cover"));
-        assert_eq!(plain.page_details[1], OutcomeDetail { label: "Cover".into(), value: "None".into() });
+        assert_eq!(plain.page_details[2], OutcomeDetail { label: "Cover".into(), value: "None".into() });
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1451,7 +1519,7 @@ mod tests {
         assert!(package.contains("<item id=\"image-1\" href=\"images/image-1.jpg\" media-type=\"image/jpeg\"/>"), "{package}");
         assert_eq!(outcome.detail, "1 page, 1 image. No bookmarks or headings, so the contents list the title only.");
         assert_eq!(page_detail(&outcome, "Images kept").as_deref(), Some("1 of 1"));
-        assert_eq!(outcome.page_details[0].label, "Images kept");
+        assert_eq!(outcome.page_details[1].label, "Images kept");
         assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
         let _ = fs::remove_dir_all(root);
     }
@@ -1516,7 +1584,7 @@ mod tests {
     }
 
     fn request(input: &Path, remove_headers_and_footers: bool) -> PdfToEpubRequest {
-        PdfToEpubRequest { paths: vec![input.to_path_buf()], output_location: OutputLocation::AlongsideInput, remove_headers_and_footers, cover: EpubCover::NoCover, title: None, author: None }
+        PdfToEpubRequest { paths: vec![input.to_path_buf()], output_location: OutputLocation::AlongsideInput, remove_headers_and_footers, cover: EpubCover::NoCover, title: None, author: None, page_range: None }
     }
 
     fn folder(name: &str) -> PathBuf {
