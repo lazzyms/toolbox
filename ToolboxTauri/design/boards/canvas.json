@@ -239,7 +239,7 @@
 "y": 8440,
 "w": 1280,
 "h": 800,
-"title": "Image Editor: resize, crop, rotate",
+"title": "Edit Image: six tools, one edit stack",
 "expand": "fill"
 },
 "ImageConvert.dc.html": {
@@ -264,6 +264,22 @@
 "w": 1280,
 "h": 800,
 "title": "Compress Files results: compressed, skipped, failed",
+"expand": "fill"
+},
+"ImageEditResults.dc.html": {
+"x": 5440,
+"y": 8440,
+"w": 1280,
+"h": 800,
+"title": "Edit Image results: progress, Skipped, failures",
+"expand": "fill"
+},
+"ImageEditNarrow.dc.html": {
+"x": 6800,
+"y": 8440,
+"w": 900,
+"h": 800,
+"title": "Edit Image below 1000 px: tools strip and More",
 "expand": "fill"
 },
 "AppIcons.dc.html": {
@@ -412,20 +428,22 @@
 "ImageConvert.dc.html",
 "Compress.dc.html",
 "CompressResults.dc.html",
+"ImageEditResults.dc.html",
+"ImageEditNarrow.dc.html",
 "AppIcons.dc.html",
 "CreateGif.dc.html",
 "ExtractGif.dc.html",
 "TiffPages.dc.html",
 "Settings.dc.html",
 "Packs.dc.html",
-"PackResults.dc.html",
 "Shortcuts.dc.html",
 "Logo.dc.html",
 "SecEmpty.dc.html",
 "SecFiles.dc.html",
 "SecOptions.dc.html",
 "SecRunning.dc.html",
-"SecResults.dc.html"
+"SecResults.dc.html",
+"PackResults.dc.html"
 ],
 "notes": {
 "row3": {
@@ -509,7 +527,7 @@
 "y": 8180,
 "text": "Images",
 "kind": "title1",
-"maxW": 17400
+"maxW": "17400"
 },
 "row9": {
 "x": 0,
@@ -641,6 +659,126 @@
 "maxH": 520,
 "fill": "green",
 "text": "Screen-reader announcements\n\nOne polite live region sits on the batch strip:\n- On start: 'Protecting 24 files.'\n- During the run: progress every 5 files or 10 seconds, whichever is later, such as 'Protecting, 10 of 24 done.'\n- On finish: 'Done. 21 protected, 2 skipped, 1 failed.' Focus stays where it was.\n\nEach row is a list item whose accessible name reads as one sentence: file, state, reason, warnings, then output name. Row actions are real buttons, such as 'Open annual-report-protected.pdf'.\n\nThe cancel dialog traps focus and returns it to Cancel batch."
+},
+"ie1": {
+"x": 7780,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE1. Batch vs. preview\n\nThe stack always applies to every image in the list. The preview shows one image at a time: the selected row, marked with an eye, is the one previewed, and ↑ ↓ or the arrows above the preview change it (Focused file changed).\n\nThe list shows each image's own result size, in → out, so mixed sizes are checked without previewing each one. Without a geometry step the row shows the size and file size instead.\n\nThe preview is scaled to fit and is never the saved file. Show original compares against the untouched image."
+},
+"ie2": {
+"x": 8180,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE2. Crop in mixed sizes, and the default\n\nThe default is Aspect ratio 4:5, keep Centre. Each image keeps the largest 4:5 area it has, so every size in the batch works and nothing can fail on size. Swap for portrait images flips the ratio for tall photos.\n\nPixel rectangle (Crop, pixel rectangle) uses one fixed rectangle in source pixels. Images too small for it are marked in the list before running, 'Smaller than the rectangle. Will fail.', and fail on their own in results with 'The crop falls outside this 1200 × 900 image. No copy was made.'\n\nDragging the area (drag Moving / Resizing) shows the size and position chip and snaps to the centre guides. Arrow keys move it 1 px, Shift+arrow 10 px."
+},
+"ie3": {
+"x": 8580,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE3. How the stack is shown\n\nThe six image tools in the rail are the stack. A tool in the stack shows its step number in the rail. The toolbar above the work area shows all six in their fixed run order: Crop, Resize, Rotate and Flip, Colour and Tone, Watermark, Remove Metadata. Steps in the stack are solid chips with a number and ×; the rest are dashed '+ Name' chips that add the step.\n\nThe order is fixed, so there is no drag to reorder. Selecting a rail tool or a chip opens its options on the right, headed 'Step N of M' and what it runs after (Step added).\n\nOne step is a single-tool edit with that tool's suffix (-cropped, -resized). Two or more save with -edited."
+},
+"ie4": {
+"x": 8980,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE4. Undo, redo and reset vs. Run\n\nUndo and Redo change the stack and step options only, never files. Removing a step or Reset stack shows a status line with Undo (Step removed, Stack reset). Reset stack keeps the image list.\n\nRun is never undone: it writes new files next to the originals and never changes them. After a run the list and the stack stay, so the user can change one step and run again (results, Edit the stack / Run again).\n\nRun is disabled with a reason in the footer when the stack is empty, there are no images, or a value is invalid (Empty, Stack reset, Resize out of range, Watermark unsupported character)."
+},
+"ie5": {
+"x": 9380,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE5. Destination\n\nSave to uses the Settings default, 'Next to each original'. 'Change for this run' picks a folder for this run only (Destination this run): the folder is shown with a This run only tag, Reset to default, and a line saying the Settings default stays as it is.\n\nNames are the original name plus the suffix. If the name is taken, -1, -2 and so on is added and the row warns about it in results. Files are never overwritten."
+},
+"ie6": {
+"x": 9780,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE6. Metadata report\n\nBefore running: the Metadata tab beside Preview shows what the previewed image contains and what will happen to each kind: Removed, Kept or None found. Orientation and colour profile are always kept.\n\nAfter running: each cleaned row has 'What was removed', which expands to Removed / Kept / Not found for that file (Metadata removed). A note at the top says profiles and orientation were kept in every copy.\n\nJPEG and PNG are cleaned without re-encoding. HEIC, WebP and TIFF are re-encoded at quality 90, and the row says so. Each copy is re-read after saving; if anything removed is still there, the file fails and no copy is kept."
+},
+"ie7": {
+"x": 10180,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE7. Watermark and PDF parity\n\nThe Watermark step uses the same options and words as the PDF watermark: Text or Picture, size as % of width, opacity, colour, angle, and Position (3 × 3 grid) or Tile. The PDF board stays the reference; only the preview differs.\n\nOn images the text can be dragged, resized from a corner and turned with the top handle, and it lands in the same relative place on every size (Watermark text, logo tiled).\n\nA character the watermark font can't draw is an error on the field before running (Watermark unsupported character). If it gets through, every file fails in one group in results (Watermark failed)."
+},
+"ie8": {
+"x": 10580,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE8. Where notices appear\n\nOne rule: a notice sits next to what it is about.\n\nField errors sit under the field and the Run footer names the fix. Step-level notes (neutral tone, re-encoding) sit at the bottom of that step's options. Format notes (quality 90, transparency flattened) sit under Format (Output format JPEG). Per-file predictions (will fail, will be skipped) sit in that file's row. Files not added sit in a dismissible 'Not added' region above the list (Files added). Stack changes use one status line under the stack.\n\nNo toasts. After a run, everything is in the results list, filterable by Needs attention, Warnings and Notes."
+},
+"ie9": {
+"x": 10980,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE9. Skipped vs. success and error\n\nDone: a new file was saved. Done with a warning: saved, but something the user should know (renamed -1, 8-bit, flattened). Skipped: nothing to do, so no copy was made; this is not an error. Failed: the file could not be edited and no copy was made; other files are unaffected.\n\nThe two Skipped wordings:\n• 'No changes. Already 2048 px on its longest side and already JPEG, so no copy was made.' when the stack would not change the file (also 'No changes. Will be skipped.' before running, Colour and Tone neutral).\n• 'No metadata to remove. No copy was made.' when Remove Metadata finds nothing.\n\nSkipped is grey, counts in Needs attention, and never turns the run red."
+},
+"ie10": {
+"x": 11380,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "blue",
+"text": "IE10. Shortcuts, clashes, macOS and Windows\n\n⌘O / Ctrl+O add files. ⌘↵ / Ctrl+Enter run. ⌘Z / Ctrl+Z undo a stack change; ⇧⌘Z / Ctrl+Y redo (Ctrl+Shift+Z also works on Windows). Inside a text field these keys keep the field's own undo. Delete on a focused chip removes that step; Delete in the list removes that file. ↑ ↓ in the list change the previewed image. Esc cancels a running batch.\n\nNo new global keys, so nothing clashes with ⌘K, ⌘, (Settings) or the other views' ⌘E, ⌘D, ⌘/ and F6.\n\nLabels: Show in Finder / Show in File Explorer, Show all in Finder / File Explorer, key hints as above (platform=Windows on every board). Paths use / on macOS and \\ on Windows."
+},
+"ie11": {
+"x": 11780,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "green",
+"text": "IE11. Progress in large batches\n\n'Editing 9 of 24' with time left, and one segment per file coloured by outcome (Running). Over 60 files the segments become one bar with the same colours in proportion.\n\nThe running row says which step it is on ('Step 2 of 3, Resize'). The list shows the latest rows and finished rows stay put, so the list doesn't jump. Each finished file is saved as soon as it is done.\n\nThe stack and options are locked during a run with a reason; Cancel batch (Esc) stops after the current file and keeps what is saved."
+},
+"ie12": {
+"x": 12180,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "blue",
+"text": "IE12. Focus order\n\nEditor: rail → stack toolbar (one tab stop; ← → move between chips, Delete removes, Enter selects) → Undo, Redo, Reset stack → status Undo when shown → Add files, Clear list → Not added region → file list (one tab stop, ↑ ↓) → Preview / Metadata tabs → Show original → preview crop or watermark handle (arrow keys) → step options → Format → Save to → Run.\n\nAfter removing a step, focus goes to the next chip, or the add chip in its place. After Reset stack, focus goes to the status Undo.\n\nResults: Ran strip → filter chips → Show all → rows (one tab stop, ↑ ↓; Tab reaches Open, Show in Finder and What was removed) → right panel. On finish, focus moves to the headline."
+},
+"ie13": {
+"x": 12580,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "blue",
+"text": "IE13. Screen reader\n\nThe stack is a toolbar with a list 'Steps, in the order they run'. Each chip reads 'Step 1 of 3, Crop' and its × reads 'Remove Crop step'. Rail tools read 'Crop, step 1 of 3' or 'not in the stack'.\n\nEach list row reads name, size in → out, and any warning. The preview has a text alternative describing the crop. Undo and Redo labels include the key.\n\nStack changes, the run headline and progress are polite live regions; progress announces every 10% and the finish, not every file. Errors are linked to their fields. The Metadata report is a description list."
+},
+"ie14": {
+"x": 12980,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "purple",
+"text": "IE14. Intake, GIFs and output format\n\nDrop or Open files accepts JPEG, PNG, WebP, HEIC, TIFF and BMP. Others are listed under 'Not added' with a reason: not an image, already in the list, or an animated GIF, which points to Extract GIF Frames.\n\nFormat defaults to Keep original format. Choosing JPEG says which images lose transparency and that it saves at quality 90. HEIC and over-8-bit images save as 8-bit sRGB, noted per file.\n\nImages over 16384 px on a side fail on their own with the limit named (Crop and rotate)."
+},
+"ie15": {
+"x": 13380,
+"y": 8440,
+"w": 360,
+"maxH": 900,
+"fill": "purple",
+"text": "IE15. Narrow window and themes\n\nBelow 1000 px the rail becomes a tools strip: the first four tools, then More with Watermark, Remove Image Metadata and the other Images tools (ImageEditNarrow). Step numbers stay on every tool. The stack shows only the steps in it plus '+ Add step'. The file list becomes a Previewing menu.\n\nEvery board renders in dark and light (theme=light) and macOS and Windows (platform=Windows) from the same tokens."
 },
 "cf6": {
 "x": 13780,
