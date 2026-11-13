@@ -111,6 +111,7 @@ export type ToolCommand =
   | "resize_images"
   | "rotate_images"
   | "crop_images"
+  | "export_image_edit_stack"
   | "adjust_image_tone"
   | "watermark_images"
   | "generate_icon_set"

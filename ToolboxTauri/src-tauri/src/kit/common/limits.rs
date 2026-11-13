@@ -45,7 +45,7 @@ pub fn recorded(command: &str) -> Option<ToolLimits> {
         | "add_page_numbers" | "watermark_pdf" | "compress_pdf"
         | "extract_pdf_pages" | "merge_pdfs" | "split_pdf" | "pdf_to_images" | "pdf_to_text" | "extract_pdf_images"
         | "ocr_pdf" | "rotate_pdf" | "repair_pdf" | "redact_pdf" | "compare_pdfs" => PDF,
-        "compress_images" | "convert_images" | "export_image_edit_plan" | "images_to_pdf" | "blur_faces"
+        "compress_images" | "convert_images" | "export_image_edit_plan" | "export_image_edit_stack" | "images_to_pdf" | "blur_faces"
         | "remove_image_background" | "resize_images" | "rotate_images" | "crop_images" | "adjust_image_tone"
         | "watermark_images" | "generate_icon_set" | "create_gif" => IMAGE,
         "extract_gif_frames" | "process_tiff_pages" | "image_metadata" => PAGED_IMAGE,

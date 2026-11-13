@@ -1179,11 +1179,11 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("free");
-    await page.getByLabel("Crop width").fill("160");
-    await page.getByLabel("Crop height").fill("120");
-    await page.getByLabel("Crop left").fill("80");
-    await page.getByLabel("Crop top").fill("60");
+    await page.getByRole("radio", { name: "Pixel rectangle" }).click();
+    await page.getByLabel("Width, pixels").fill("160");
+    await page.getByLabel("Height, pixels").fill("120");
+    await page.getByLabel("Left edge, pixels").fill("80");
+    await page.getByLabel("Top edge, pixels").fill("60");
 
     await expect(page.getByRole("img", { name: `Original image preview of ${fixtureName}` })).toBeVisible();
     await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
@@ -1196,8 +1196,8 @@ test("Image crop keeps the source interaction surface and shows a separate resul
     await page.mouse.down();
     await page.mouse.move(stage.x + stage.width * .5, stage.y + stage.height * .5, { steps: 4 });
     await page.mouse.up();
-    await expect(page.getByLabel("Crop left")).toHaveValue("240");
-    await expect(page.getByLabel("Crop top")).toHaveValue("180");
+    await expect(page.getByLabel("Left edge, pixels")).toHaveValue("240");
+    await expect(page.getByLabel("Top edge, pixels")).toHaveValue("180");
     await expect(overlay).toHaveAttribute("style", /left: 37\.5%/);
     await expect(overlay).toHaveAttribute("style", /top: 37\.5%/);
 });
@@ -1207,7 +1207,7 @@ test("Image crop offers aspect presets with a rule-of-thirds grid", async ({ pag
     await openFromHome(page, "Resize Images");
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByRole("radio", { name: "1:1" }).click();
 
     const overlay = page.getByLabel("Crop selection");
     await expect(overlay).toHaveAttribute("style", /left: 12\.5%/);
@@ -1217,7 +1217,6 @@ test("Image crop offers aspect presets with a rule-of-thirds grid", async ({ pag
     await expect(page.getByRole("region", { name: "Crop result preview" })).toContainText("480 × 480px");
     await page.screenshot({ path: testInfo.outputPath("image-crop-presets.png") });
 
-    await page.getByRole("button", { name: "Add edit to plan" }).click();
     const previewInvocation = await page.evaluate(() =>
         [...(window as TestWindow).__toolboxInvocations ?? []]
             .reverse()
@@ -1233,15 +1232,15 @@ test("Image crop cancels a global pointer interruption before a later move", asy
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("free");
-    await page.getByLabel("Crop width").fill("160");
-    await page.getByLabel("Crop height").fill("120");
-    await page.getByLabel("Crop left").fill("80");
-    await page.getByLabel("Crop top").fill("60");
+    await page.getByRole("radio", { name: "Pixel rectangle" }).click();
+    await page.getByLabel("Width, pixels").fill("160");
+    await page.getByLabel("Height, pixels").fill("120");
+    await page.getByLabel("Left edge, pixels").fill("80");
+    await page.getByLabel("Top edge, pixels").fill("60");
     await expect(page.getByLabel("Crop selection")).toBeVisible();
 
     const stage = (await page.locator(".image-editor-preview-stage").boundingBox())!;
-    const before = { left: await page.getByLabel("Crop left").inputValue(), top: await page.getByLabel("Crop top").inputValue() };
+    const before = { left: await page.getByLabel("Left edge, pixels").inputValue(), top: await page.getByLabel("Top edge, pixels").inputValue() };
     await page.locator(".image-editor-preview-stage").dispatchEvent("pointerdown", {
         pointerId: 77, button: 0, clientX: stage.x + stage.width * .25, clientY: stage.y + stage.height * .25,
     });
@@ -1249,8 +1248,8 @@ test("Image crop cancels a global pointer interruption before a later move", asy
     await page.locator(".image-editor-preview-stage").dispatchEvent("pointermove", {
         pointerId: 77, clientX: stage.x + stage.width * .75, clientY: stage.y + stage.height * .75,
     });
-    await expect(page.getByLabel("Crop left")).toHaveValue(before.left);
-    await expect(page.getByLabel("Crop top")).toHaveValue(before.top);
+    await expect(page.getByLabel("Left edge, pixels")).toHaveValue(before.left);
+    await expect(page.getByLabel("Top edge, pixels")).toHaveValue(before.top);
 });
 
 test("Image aspect crop uses the anchored maximum-fit geometry for overlay and result", async ({ page }) => {
@@ -1258,8 +1257,8 @@ test("Image aspect crop uses the anchored maximum-fit geometry for overlay and r
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
-    await page.getByLabel("Crop anchor").selectOption("right");
+    await page.getByRole("radio", { name: "1:1" }).click();
+    await page.getByLabel("Keep", { exact: true }).selectOption("end");
 
     const overlay = page.getByLabel("Crop selection");
     await expect(overlay).toHaveAttribute("style", /left: 25%/);
@@ -1274,7 +1273,7 @@ test("Image aspect crop can move while keeping its preset ratio", async ({ page 
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
+    await page.getByRole("radio", { name: "1:1" }).click();
     await expect(page.getByLabel("Crop selection")).toHaveAttribute("style", /width: 75%/);
 
     await page.locator(".image-editor-preview-stage").scrollIntoViewIfNeeded();
@@ -1285,8 +1284,8 @@ test("Image aspect crop can move while keeping its preset ratio", async ({ page 
     await page.mouse.up();
 
     const overlay = page.getByLabel("Crop selection");
-    await expect(page.getByLabel("Aspect ratio")).toHaveValue("1:1");
-    await expect(page.getByLabel("Crop anchor")).toHaveValue("custom");
+    await expect(page.getByRole("radio", { name: "1:1" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByLabel("Keep", { exact: true })).toHaveValue("custom");
     await expect(overlay).toHaveAttribute("style", /left: 22\.5%/);
     await expect(overlay).toHaveAttribute("style", /width: 75%/);
     await expect.poll(async () => page.evaluate(() =>
@@ -1298,23 +1297,21 @@ test("Image aspect crop can move while keeping its preset ratio", async ({ page 
     });
 });
 
-test("Image crop clears an old result and disables export after invalid preview validation", async ({ page }) => {
+test("Image crop clears an old result and disables Run for an empty rectangle", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "Open Image Editor", exact: true }).click();
     await page.getByRole("button", { name: "Choose files to process" }).click();
     await page.getByRole("tablist", { name: "Edit Image" }).getByRole("tab", { name: "Crop", exact: true }).click();
-    await page.getByLabel("Aspect ratio").selectOption("free");
-    await page.getByLabel("Crop width").fill("160");
-    await page.getByLabel("Crop height").fill("120");
+    await page.getByRole("radio", { name: "Pixel rectangle" }).click();
+    await page.getByLabel("Width, pixels").fill("160");
+    await page.getByLabel("Height, pixels").fill("120");
     await expect(page.getByRole("region", { name: "Crop result preview" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeEnabled();
 
-    await page.getByLabel("Aspect ratio").selectOption("1:1");
-    await page.getByLabel("Aspect width").fill("0");
+    await page.getByLabel("Width, pixels").fill("0");
 
-    await expect(page.getByText("Aspect ratio dimensions must be positive.", { exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "Crop result preview" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Export edited images" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Run on 1 image" })).toBeDisabled();
 });
 
 test("Image editor history can undo, redo, and reset the composed plan", async ({ page }) => {
@@ -2170,7 +2167,8 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
     await page.goto("/");
     await openFromHome(page, utility.title);
     // Image Metadata lives in the Image Editor but runs on its own screen, without an edit plan.
-    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && utility.id !== "image-metadata";
+    // Crop runs through the shared edit stack, which Crop fills with its default step.
+    const usesImageEditPlan = workspaceForTool(utility.id)?.id === "image-editor" && utility.id !== "image-metadata" && utility.id !== "crop";
 
     const accepts = (extension: string) => utility.capability.acceptedExtensions.some((accepted) => accepted.toLowerCase() === extension);
     const selectedFixturePath = accepts(".pdf")
@@ -2197,10 +2195,6 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         if (utility.id === "heic-convert") await page.getByLabel("Target format").selectOption("jpg");
         if (utility.id === "resize") await page.getByLabel("Width").fill("640");
         if (utility.id === "rotate") await page.getByLabel("Rotation").selectOption("90");
-        if (utility.id === "crop") {
-            await page.getByLabel("Aspect ratio").selectOption("free");
-            await page.getByLabel("Crop width").fill("320");
-        }
         if (utility.id === "image-watermark") await page.getByLabel("Watermark text").fill("Test watermark");
         if (utility.id === "image-tone") await page.getByRole("slider", { name: "Brightness" }).press("End");
     }

@@ -1527,3 +1527,39 @@ kbd.shortcut-hint {
   gap: 7px;
   overflow-x: auto;
 }
+.image-edit-stack,
+.image-edit-stack-preview {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.image-edit-stack-toolbar,
+.image-edit-stack-steps,
+.image-edit-stack-step,
+.image-edit-stack-message,
+.image-edit-stack-preview-header,
+.image-edit-stack-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.image-edit-stack-steps { flex: 1; }
+.image-edit-stack-step { gap: 0; }
+.image-edit-stack-message,
+.image-edit-stack-footer { gap: 10px; }
+.image-edit-stack-message > span,
+.image-edit-stack-footer > span { flex: 1; }
+.image-edit-stack-preview-header > span:first-child {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-edit-stack-focus {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 8px;
+}
+.image-edit-stack-focus > p { grid-column: 1 / -1; margin: 0; }
