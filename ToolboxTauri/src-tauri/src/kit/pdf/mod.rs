@@ -10,8 +10,6 @@ pub mod remaining;
 pub mod page_text;
 #[cfg(test)]
 pub(crate) mod jbig2_fixtures;
-#[cfg(test)]
-mod jbig2_spike;
 pub(crate) mod qpdf;
 pub mod unicode_font;
 pub mod font_resolver;

@@ -148,3 +148,17 @@ The fixtures do not cover:
   against the existing image limits before `decode`.
 - **Replace the spike test.** `jbig2_spike.rs` is throwaway; replace it with
   coverage through `extract_images`.
+
+## Outcome in #630
+
+- `hayro-jbig2` is a normal dependency. `embedded_image.rs` decodes
+  `JBIG2Decode` (with `/JBIG2Globals`, whose own filters are undone first) into
+  1-bit rows with 0 for black, so the existing colour space, `/Decode` and
+  `/ImageMask` handling applies.
+- Decoding is **strict**. Lenient mode skips a region it cannot decode and
+  returns the rest of the page, which would save a blank or partial PNG with no
+  report. A strict failure is reported as damaged for that image alone;
+  `DecodeError::Unsupported` (colour extension, required extensions) is
+  reported as "JBIG2 isn't supported in this version".
+- `jbig2_spike.rs` was removed. `remaining.rs` covers the fixtures through
+  `extract_images`.

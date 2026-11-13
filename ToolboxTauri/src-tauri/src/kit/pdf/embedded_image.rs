@@ -102,7 +102,7 @@ fn undo_filters(document: &Document, image: &Stream, (width, height): (u64, u64)
             b"ASCII85Decode" | b"A85" => lopdf_filter(b"ASCII85Decode", parms, data, (width, height))?,
             b"ASCIIHexDecode" | b"AHx" => ascii_hex(&data)?,
             b"RunLengthDecode" | b"RL" => run_length(&data, (width, height))?,
-            b"JBIG2Decode" => return Err(NotSaved::Unsupported("JBIG2".into())),
+            b"JBIG2Decode" => jbig2(document, parms.as_ref(), &data, (width, height))?,
             b"CCITTFaxDecode" | b"CCF" => ccitt_fax(parms.as_ref(), &data, (width, height))?,
             other => return Err(NotSaved::Unsupported(String::from_utf8_lossy(other).into_owned())),
         };
@@ -211,6 +211,80 @@ impl hayro_ccitt::Decoder for FaxRows {
                 if self.black_is_one { row[x / 8] |= 0x80 >> (x % 8) } else { row[x / 8] &= !(0x80 >> (x % 8)) }
             }
         }
+    }
+}
+
+/// Decodes a JBIG2 page in the embedded organisation, with the segments of its `JBIG2Globals` stream if it has one, into
+/// 1-bit rows that each start on a byte boundary. Black is written as 0, as the PDF `JBIG2Decode` filter defines it, so
+/// the image's own colour space, `Decode` array or `ImageMask` then applies as usual.
+///
+/// Decoding is strict: hayro-jbig2's lenient mode skips a region it cannot decode and returns the rest of the page, which
+/// would save a blank or partial image without a word. So, as with fax data that ends early, any decoding error counts
+/// as damaged, except JBIG2 features the decoder does not handle (colour extension regions, required extension
+/// segments), which are reported as unsupported. Rows are cut or padded with white to the image's width; a page shorter
+/// than the image counts as damaged.
+fn jbig2(document: &Document, parms: Option<&Dictionary>, data: &[u8], (width, height): (u64, u64)) -> Result<Vec<u8>, NotSaved> {
+    use hayro_jbig2::{DecodeError, DecodeSettings, Globals, Page};
+    let row_bytes = width.div_ceil(8);
+    if row_bytes.saturating_mul(height) > MAX_DECODED_BYTES { return Err(NotSaved::TooLarge { width, height }); }
+    let failed = |error: DecodeError| match error {
+        DecodeError::Unsupported => NotSaved::Unsupported("JBIG2".into()),
+        _ => NotSaved::Damaged,
+    };
+    let settings = DecodeSettings { strict: true };
+    let globals = match parms.and_then(|parms| parms.get(b"JBIG2Globals").ok()) {
+        None => None,
+        Some(object) => {
+            let stream = document.dereference(object).ok().and_then(|(_, object)| object.as_stream().ok()).ok_or(NotSaved::Damaged)?;
+            // A globals stream is plain segments; a JBIG2 filter on it could refer back to itself.
+            if names(document, stream.dict.get(b"Filter").ok())?.contains(&&b"JBIG2Decode"[..]) { return Err(NotSaved::Damaged); }
+            let (segments, encoded) = undo_filters(document, stream, (width, height))?;
+            if encoded.is_some() { return Err(NotSaved::Damaged); }
+            Some(Globals::new(&segments, &settings).map_err(failed)?)
+        }
+    };
+    let page = Page::new_embedded(data, globals.as_ref(), &settings).map_err(failed)?;
+    let (page_width, page_height) = (u64::from(page.width()), u64::from(page.height()));
+    if page_width.div_ceil(8).saturating_mul(page_height) > MAX_DECODED_BYTES { return Err(NotSaved::TooLarge { width: page_width, height: page_height }); }
+    if page_height < height { return Err(NotSaved::Damaged); }
+    let mut rows = Jbig2Rows { width: width as usize, row_bytes: row_bytes as usize, height: height as usize, x: 0, y: 0, data: vec![0xFF; (row_bytes * height) as usize] };
+    page.decode(&mut rows).map_err(failed)?;
+    Ok(rows.data)
+}
+
+/// Packs the pixels hayro-jbig2 reports into 1-bit rows of the image's size, with 0 for black.
+struct Jbig2Rows {
+    width: usize,
+    row_bytes: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    data: Vec<u8>,
+}
+
+impl Jbig2Rows {
+    fn black(&mut self, from: usize, count: usize) {
+        if self.y >= self.height { return; }
+        let row = &mut self.data[self.y * self.row_bytes..(self.y + 1) * self.row_bytes];
+        for x in from..(from + count).min(self.width) { row[x / 8] &= !(0x80 >> (x % 8)); }
+    }
+}
+
+impl hayro_jbig2::Decoder for Jbig2Rows {
+    fn push_pixel(&mut self, black: bool) {
+        if black { self.black(self.x, 1); }
+        self.x += 1;
+    }
+
+    fn push_pixel_chunk(&mut self, black: bool, chunk_count: u32) {
+        let count = chunk_count as usize * 8;
+        if black { self.black(self.x, count); }
+        self.x += count;
+    }
+
+    fn next_line(&mut self) {
+        self.x = 0;
+        self.y += 1;
     }
 }
 
