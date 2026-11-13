@@ -127,6 +127,13 @@ pub struct SourceThumbnailsRequest { pub path: PathBuf, pub page_indices: Vec<us
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
 pub struct SourceThumbnail { pub page_index: usize, pub thumbnail: Option<ScenePreview>, pub error: Option<String> }
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct BlankPagesRequest { pub path: PathBuf, pub page_indices: Vec<usize> }
+/// One requested source page: blank or not. A page that couldn't be checked is not blank and carries a note.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all="camelCase")]
+pub struct BlankPageClassification { pub page_index: usize, pub blank: bool, pub note: Option<String> }
 
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 fn bounds(doc: &Document, v: &Object) -> Result<[f32;4], String> {
@@ -1980,6 +1987,10 @@ fn render(path:&Path,index:usize,renderer:&Path,temp:&TempDir)->Result<ScenePrev
     render_at(path,index,renderer,temp,super::PDF_PREVIEW_MAX_DIMENSION,Instant::now() + super::PDF_PREVIEW_TIMEOUT)
 }
 fn render_at(path:&Path,index:usize,renderer:&Path,temp:&TempDir,max_dimension:u32,deadline:Instant)->Result<ScenePreview,String> {
+    let (bytes,width,height)=render_png(path,index,renderer,temp,max_dimension,deadline)?;
+    Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width,height})
+}
+fn render_png(path:&Path,index:usize,renderer:&Path,temp:&TempDir,max_dimension:u32,deadline:Instant)->Result<(Vec<u8>,u32,u32),String> {
     // A per-page name, so a page whose helper writes nothing can never pick up an earlier page's image.
     let prefix=temp.0.join(format!("render-{index}"));
     let output=super::run_bounded_helper({
@@ -1988,8 +1999,7 @@ fn render_at(path:&Path,index:usize,renderer:&Path,temp:&TempDir,max_dimension:u
         command
     }, deadline, 64 * 1024, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF preview renderer timed out.").map_err(err)?;
     if !output.status.success() { return Err("pdftoppm could not render this PDF".into()); }
-    let (bytes,width,height)=super::read_preview_png(&prefix.with_extension("png")).map_err(err)?;
-    Ok(ScenePreview{data_url:format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)),width,height})
+    super::read_preview_png(&prefix.with_extension("png")).map_err(err)
 }
 pub fn preview(request:&PreviewRequest)->Result<ScenePreview,String> {
     if request.page_index>=request.scene.pages.len() { return Err("Preview page outside scene".into()); }
@@ -2043,6 +2053,52 @@ pub fn source_thumbnails(request:&SourceThumbnailsRequest)->Result<Vec<SourceThu
             Ok(thumbnail)=>SourceThumbnail{page_index,thumbnail:Some(thumbnail),error:None},
             Err(error)=>SourceThumbnail{page_index,thumbnail:None,error:Some(error)},
         }
+    }).collect())
+}
+fn validate_blank_page_indices(page_indices:&[usize], page_count:usize)->Result<(),String> {
+    if !(1..=super::PDF_BLANK_MAX_BATCH).contains(&page_indices.len()) { return Err(format!("Blank-page requests must include 1–{} page indices", super::PDF_BLANK_MAX_BATCH)); }
+    let mut seen=HashSet::with_capacity(page_indices.len());
+    for &index in page_indices {
+        if index>=page_count { return Err("Blank-page check outside document".into()); }
+        if !seen.insert(index) { return Err("Blank-page indices must be unique".into()); }
+    }
+    Ok(())
+}
+/// Whether pdftotext finds any text on one source page (1-based). A failed or timed-out run is an error, never "no text".
+fn page_has_text(path:&Path,page_number:usize,extractor:&Path,deadline:Instant)->Result<bool,String> {
+    let output=super::run_bounded_helper({
+        let mut command = Command::new(extractor);
+        command.args(["-enc","UTF-8","-f"]).arg(page_number.to_string()).arg("-l").arg(page_number.to_string()).arg(path).arg("-");
+        command
+    }, deadline, super::PDF_TEXT_MAX_OUTPUT_BYTES, super::PDF_TEXT_MAX_ERROR_BYTES, "PDF text extraction timed out.")?;
+    if !output.status.success() { return Err("pdftotext could not read this page".into()); }
+    Ok(String::from_utf8_lossy(&output.stdout).chars().any(|character| !character.is_whitespace() && !character.is_control()))
+}
+/// Ink pixels and all pixels of a rendered page. A pixel is ink when its luma is below the recorded threshold.
+fn ink_pixels(png:&[u8])->Result<(u64,u64),String> {
+    let luma=image::load_from_memory_with_format(png,image::ImageFormat::Png).map_err(err)?.to_luma8();
+    let ink=luma.pixels().filter(|pixel| pixel.0[0] < super::PDF_BLANK_INK_LUMA_THRESHOLD).count() as u64;
+    Ok((ink,u64::from(luma.width())*u64::from(luma.height())))
+}
+/// Below the coverage threshold, in integer basis points so every target gets the same answer.
+fn ink_coverage_is_blank(ink:u64,total:u64)->bool { total>0 && ink*10_000 < total*super::PDF_BLANK_MAX_INK_BASIS_POINTS }
+fn classify_blank_page(path:&Path,index:usize,extractor:&Path,renderer:&Path,temp:&TempDir)->Result<bool,String> {
+    if page_has_text(path,index+1,extractor,thumbnail_deadline(Instant::now(),1))? { return Ok(false); }
+    let (png,_,_)=render_png(path,index,renderer,temp,super::PDF_BLANK_RENDER_DIMENSION,thumbnail_deadline(Instant::now(),1))?;
+    let (ink,total)=ink_pixels(&png)?;
+    Ok(ink_coverage_is_blank(ink,total))
+}
+/// Classifies source pages for "Select blank pages". Read-only: the original is never written. Each page is checked on
+/// its own, so a page that can't be checked comes back not blank with a note while the others are still classified.
+pub fn blank_pages(request:&BlankPagesRequest)->Result<Vec<BlankPageClassification>,ToolError> {
+    let page_count=Document::load_metadata(&request.path).map_err(|_| ToolError::invalid_input(UNREADABLE_PDF_MESSAGE))?.page_count as usize;
+    validate_blank_page_indices(&request.page_indices,page_count).map_err(ToolError::invalid_input)?;
+    let extractor=crate::kit::resources::resolve_helper(&crate::kit::resources::PDF_TEXT_EXTRACTOR).map_err(ToolError::unavailable)?;
+    let renderer=renderer().map_err(ToolError::unavailable)?;
+    let temp=TempDir::new().map_err(ToolError::processing)?;
+    Ok(request.page_indices.iter().copied().map(|page_index| match classify_blank_page(&request.path,page_index,&extractor,&renderer,&temp) {
+        Ok(blank)=>BlankPageClassification{page_index,blank,note:None},
+        Err(error)=>BlankPageClassification{page_index,blank:false,note:Some(format!("Couldn't check this page, so it isn't counted as blank. {error}"))},
     }).collect())
 }
 pub const UNREADABLE_PDF_MESSAGE:&str="Toolbox can't read this file. It may be damaged, or it isn't a PDF that Toolbox supports. Nothing was changed.";
@@ -4846,6 +4902,127 @@ mod tests {
         }).collect::<Vec<_>>();
         assert!(sizes[0].1 > sizes[0].0, "the portrait source page stays portrait");
         assert!(sizes[1].0 > sizes[1].1, "the source /Rotate 90 page renders landscape");
+    }
+
+    /// Pages, in order: truly empty; near-invisible scanner noise (a light full-page tone plus a few specks);
+    /// a faint stamp above the ink threshold; a page number only ("p. 3"); a full-page white image.
+    fn blank_pages_fixture(path: &Path) {
+        let mut d = Document::with_version("1.7");
+        let root = d.new_object_id();
+        let font = d.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type1", "BaseFont"=>"Helvetica"});
+        let fonts = d.add_object(dictionary! {"F1"=>font});
+        let white = d.add_object(Stream::new(dictionary! {"Type"=>"XObject", "Subtype"=>"Image", "Width"=>8, "Height"=>8, "ColorSpace"=>"DeviceGray", "BitsPerComponent"=>8}, vec![0xFF; 64]));
+        let images = d.add_object(dictionary! {"Im0"=>white});
+        let resources = d.add_object(dictionary! {"Font"=>fonts, "XObject"=>images});
+        let specks = (0..12).map(|i| format!("{} {} 1 1 re ", 50 + i * 41, 80 + (i * 53) % 640)).collect::<String>();
+        let contents = [
+            String::new(),
+            format!("q 0.94 g 0 0 612 792 re f 0 g {specks}f Q"),
+            "q 0.55 g 246 366 120 60 re f Q".to_string(),
+            "BT /F1 9 Tf 296 30 Td (p. 3) Tj ET".to_string(),
+            "q 612 0 0 792 0 0 cm /Im0 Do Q".to_string(),
+        ];
+        let kids = contents.iter().map(|content| {
+            let content = d.add_object(Stream::new(dictionary!{}, content.as_bytes().to_vec()));
+            Object::Reference(d.add_object(dictionary! {"Type"=>"Page", "Parent"=>root, "MediaBox"=>array(&[0.,0.,612.,792.]), "Resources"=>resources, "Contents"=>content}))
+        }).collect::<Vec<_>>();
+        d.objects.insert(root, Object::Dictionary(dictionary! {"Type"=>"Pages", "Kids"=>kids, "Count"=>contents.len() as i64}));
+        let catalog = d.add_object(dictionary! {"Type"=>"Catalog","Pages"=>root});
+        d.trailer.set("Root",catalog);
+        d.save(path).unwrap();
+    }
+
+    #[test]
+    fn blank_page_thresholds_and_deadlines_are_recorded() {
+        assert_eq!(super::super::PDF_BLANK_MAX_BATCH, 12);
+        assert_eq!(super::super::PDF_BLANK_RENDER_DIMENSION, 320);
+        assert_eq!(super::super::PDF_BLANK_INK_LUMA_THRESHOLD, 192);
+        assert_eq!(super::super::PDF_BLANK_MAX_INK_BASIS_POINTS, 20);
+        // Each helper run gets the same bounded deadline as one thumbnail page.
+        let start = Instant::now();
+        assert_eq!(thumbnail_deadline(start, 1) - start, std::time::Duration::from_secs(8));
+        // 0.2% coverage: 1 ink pixel in 1,000 is blank, 2 in 1,000 is not.
+        assert!(ink_coverage_is_blank(0, 79_040));
+        assert!(ink_coverage_is_blank(1, 1_000));
+        assert!(!ink_coverage_is_blank(2, 1_000));
+        assert!(!ink_coverage_is_blank(0, 0), "an empty render is never evidence of a blank page");
+        let mut png = Vec::new();
+        let mut page = image::GrayImage::from_pixel(10, 10, image::Luma([255]));
+        page.put_pixel(0, 0, image::Luma([191]));
+        page.put_pixel(1, 0, image::Luma([192]));
+        image::DynamicImage::ImageLuma8(page).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        assert_eq!(ink_pixels(&png).unwrap(), (1, 100), "luma 191 is ink, luma 192 is paper");
+    }
+
+    #[test]
+    fn blank_pages_reject_empty_duplicate_out_of_range_and_oversized_sets() {
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        many_page_fixture(&input, 20);
+        let cases = [
+            (vec![], "Blank-page requests must include 1–12 page indices"),
+            (vec![3, 3], "Blank-page indices must be unique"),
+            (vec![20], "Blank-page check outside document"),
+            ((0..13).collect(), "Blank-page requests must include 1–12 page indices"),
+        ];
+        for (page_indices, message) in cases {
+            let error = blank_pages(&BlankPagesRequest { path: input.clone(), page_indices }).err().expect("request should be rejected");
+            assert!(matches!(error.kind, crate::kit::contracts::ErrorKind::InvalidInput), "kind: {:?}", error.kind);
+            assert_eq!(error.message, message);
+        }
+        let missing = blank_pages(&BlankPagesRequest { path: temp.0.join("missing.pdf"), page_indices: vec![0] }).err().unwrap();
+        assert_eq!(missing.message, UNREADABLE_PDF_MESSAGE);
+    }
+
+    #[test]
+    fn blank_pages_find_empty_and_noise_pages_but_not_stamps_or_text_with_the_bundled_helpers() {
+        let _guard = crate::kit::lock_process_env();
+        if let Err(e) = renderer() { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("{e}") }; eprintln!("Renderer unavailable: {e}"); return; }
+        if text_extractor().is_none() { if std::env::var_os("TOOLBOX_REQUIRE_PDF_RENDERER").is_some() { panic!("pdftotext unavailable") }; eprintln!("pdftotext unavailable"); return; }
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("near-blank.pdf");
+        blank_pages_fixture(&input);
+        let before = fs::read(&input).unwrap();
+        let request = BlankPagesRequest { path: input.clone(), page_indices: vec![0, 1, 2, 3, 4] };
+        let first = blank_pages(&request).unwrap();
+        for result in &first { assert!(result.note.is_none(), "page {} could not be checked: {:?}", result.page_index, result.note); }
+        assert_eq!(first.iter().map(|result| (result.page_index, result.blank)).collect::<Vec<_>>(),
+            vec![(0, true), (1, true), (2, false), (3, false), (4, true)],
+            "empty, scanner noise and a white image are blank; a faint stamp and a page number are not");
+        assert_eq!(blank_pages(&request).unwrap(), first, "two runs give identical results");
+        assert_eq!(fs::read(&input).unwrap(), before, "classification never writes the original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blank_pages_report_a_page_that_cannot_be_checked_as_not_blank_and_classify_the_rest() {
+        use std::os::unix::fs::PermissionsExt;
+        let _guard = crate::kit::lock_process_env();
+        let temp = TempDir::new().unwrap();
+        let input = temp.0.join("source.pdf");
+        many_page_fixture(&input, 5);
+        let white = temp.0.join("white.png");
+        image::RgbImage::from_pixel(247, 320, image::Rgb([255, 255, 255])).save(&white).unwrap();
+        // pdftotext -enc UTF-8 -f P -l P input -: page 2 fails, page 5 has text, the rest are empty.
+        let extractor = temp.0.join("pdftotext");
+        fs::write(&extractor, "#!/bin/sh\ncase \"$4\" in 2) echo broken >&2; exit 1;; 5) echo 'Page five';; esac\nexit 0\n").unwrap();
+        // pdftoppm -png -singlefile -scale-to N -f P -l P input prefix: page 3 fails, page 4 writes nothing.
+        let renderer = temp.0.join("pdftoppm");
+        fs::write(&renderer, format!("#!/bin/sh\ncase \"$6\" in 3) echo broken >&2; exit 1;; 4) exit 0;; esac\nexec cp '{}' \"${{10}}.png\"\n", white.display())).unwrap();
+        for helper in [&extractor, &renderer] { fs::set_permissions(helper, fs::Permissions::from_mode(0o755)).unwrap(); }
+        let before = fs::read(&input).unwrap();
+        let previous = std::env::var_os("TOOLBOX_PDFTOTEXT_PATH");
+        std::env::set_var("TOOLBOX_PDFTOTEXT_PATH", &extractor);
+        let results = with_renderer_override(&renderer, || blank_pages(&BlankPagesRequest { path: input.clone(), page_indices: vec![0, 1, 2, 3, 4] }));
+        match previous { Some(value) => std::env::set_var("TOOLBOX_PDFTOTEXT_PATH", value), None => std::env::remove_var("TOOLBOX_PDFTOTEXT_PATH") }
+        let results = results.unwrap();
+        assert_eq!(results.iter().map(|result| (result.page_index, result.blank)).collect::<Vec<_>>(), vec![(0, true), (1, false), (2, false), (3, false), (4, false)]);
+        for index in [1, 2, 3] {
+            let note = results[index].note.as_deref().unwrap_or_else(|| panic!("page {} should carry a note", index + 1));
+            assert!(note.starts_with("Couldn't check this page, so it isn't counted as blank."), "{note}");
+        }
+        assert!(results[0].note.is_none() && results[4].note.is_none());
+        assert_eq!(fs::read(&input).unwrap(), before);
     }
 
     #[test]

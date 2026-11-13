@@ -48,6 +48,8 @@ import { clearPageSelection, clickPage, deletePagesLabel, extendPageSelection, l
 import type { PageSelection, RemovalRefusal } from '../features/pdf-editor/pageSelection';
 import { createSourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
 import type { SourceThumbnail, SourceThumbnailQueue } from '../features/pdf-editor/sourceThumbnails';
+import { blankPagesAnnouncement, blankPagesFailedAnnouncement, blankPagesFoundLabel, blankPagesRunningAnnouncement, blankScenePageIds, createBlankPageFinder } from '../features/pdf-editor/blankPages';
+import type { BlankPageClassification, BlankPageFinder } from '../features/pdf-editor/blankPages';
 
 export { createPreviewCache, previewCacheKey, requestWithGeneration } from './pdfPreviewHelpers';
 
@@ -360,6 +362,21 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
     setSourceThumbnails(queue);
     return () => queue.dispose();
   }, [path]);
+  // "Blank pages" asks the native helpers which source pages are blank. Disposing the finder cancels a check in flight.
+  const [blankFinder, setBlankFinder] = useState<BlankPageFinder | null>(null);
+  const [blankSources, setBlankSources] = useState<number[] | null>(null);
+  const [findingBlankPages, setFindingBlankPages] = useState(false);
+  const latestBlankFinder = useRef<BlankPageFinder | null>(null);
+  latestBlankFinder.current = blankFinder;
+  useEffect(() => {
+    setBlankSources(null); setFindingBlankPages(false);
+    if (!path) { setBlankFinder(null); return; }
+    const finder = createBlankPageFinder({
+      fetch: (pageIndices) => invoke<BlankPageClassification[]>('classify_pdf_blank_pages', { request: { path, pageIndices } }),
+    });
+    setBlankFinder(finder);
+    return () => finder.dispose();
+  }, [path]);
   useEffect(() => setTool(initialTool), [initialTool]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   // Page selection is view state, not an edit, so it never adds an undo step.
@@ -484,7 +501,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
       setDocument(value);
       const initial = sceneFromDocument(value);
       setHistory({ past: [], present: initial, future: [] });
-      setCurrentId(initial.pages[0].id); setPageSelection(clearPageSelection()); setPageRange(''); setPageRangeError(null); setAnnouncement(null);
+      setCurrentId(initial.pages[0].id); setPageSelection(clearPageSelection()); setPageRange(''); setPageRangeError(null); setAnnouncement(null); setBlankSources(null);
     }).catch((reason) => {
       if (!active) return;
       const failure = openFailureFor(reason, path);
@@ -771,6 +788,35 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
   };
   const formUnavailable = Boolean(form && (form.unsupported || !form.fields.length));
   const pageTargets = pageOrder.filter((id) => pageSelection.ids.includes(id));
+  // Selecting blank pages replaces the selection and removes nothing, so it adds no undo step. Delete then removes them as one.
+  const latestScene = useRef(scene);
+  latestScene.current = scene;
+  const blankIds = blankSources ? blankScenePageIds(scene.pages, blankSources) : [];
+  const blankSelected = blankIds.length > 0 && blankIds.length === pageTargets.length && blankIds.every((id) => pageTargets.includes(id));
+  const selectBlankPages = async () => {
+    if (!blankFinder || findingBlankPages) return;
+    const sources = [...new Set(scene.pages.flatMap((item) => item.sourceIndex === null ? [] : [item.sourceIndex]))];
+    setFindingBlankPages(true); setAnnouncement(blankPagesRunningAnnouncement);
+    try {
+      const report = await blankFinder.find(sources);
+      if (!report) return;
+      const pages = latestScene.current.pages;
+      const ids = blankScenePageIds(pages, report.blank);
+      const unchecked = new Set(report.unchecked);
+      const positionsFor = (keep: (item: ScenePage) => boolean) => pages.flatMap((item, index) => keep(item) ? [index + 1] : []);
+      setBlankSources(report.blank);
+      replacePageSelection({ ids, anchor: null });
+      setAnnouncement(blankPagesAnnouncement(positionsFor((item) => ids.includes(item.id)), positionsFor((item) => item.sourceIndex !== null && unchecked.has(item.sourceIndex))));
+      if (ids.length) {
+        setCurrentId(ids[0]); setSelectedId(null);
+        requestAnimationFrame(() => organizeGrid.current?.querySelector<HTMLElement>(`[data-page-id="${ids[0]}"]`)?.focus());
+      }
+    } catch {
+      if (blankFinder === latestBlankFinder.current) setAnnouncement(blankPagesFailedAnnouncement);
+    } finally {
+      if (blankFinder === latestBlankFinder.current) setFindingBlankPages(false);
+    }
+  };
   const targets = pageTargets.length ? pageTargets : page ? [page.id] : [];
   const deletePages = () => {
     if (!availability.allows('pdf-remove-pages')) return;
@@ -1319,6 +1365,10 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
           <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(selectAllPages(pageOrder))}>All<ShortcutHint id="selectAll" /></Button>
           <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(selectPagesByParity(pageOrder, 'odd'))}>Odd</Button>
           <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(selectPagesByParity(pageOrder, 'even'))}>Even</Button>
+          <Button variant={blankSelected ? 'secondary' : 'ghost'} size="sm" disabled={selectionLocked || findingBlankPages || !blankFinder}
+            aria-busy={findingBlankPages || undefined} onClick={() => void selectBlankPages()}>
+            Blank pages{blankPagesFoundLabel(blankIds.length) && <Badge variant="outline">{blankPagesFoundLabel(blankIds.length)}</Badge>}
+          </Button>
           <Button variant="ghost" size="sm" disabled={selectionLocked} onClick={() => replacePageSelection(clearPageSelection())}>None<ShortcutHint id="cancel" /></Button>
         </div>
         <span className="scene-toolbar-divider" aria-hidden="true" />
@@ -1355,11 +1405,12 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
             const thumb = source?.status === 'ready' ? source.value.dataUrl : null;
             const focused = item.id === page.id;
             const isSelected = pageTargets.includes(item.id);
+            const isBlank = blankIds.includes(item.id);
             const insertion = dragPreview === index ? 'before' : dragPreview === scene.pages.length && index === scene.pages.length - 1 ? 'after' : undefined;
             return <Button key={item.id} role="option" aria-selected={isSelected} tabIndex={focused ? 0 : -1} data-page-index={index} data-page-id={item.id}
               data-moving={pageDrag?.ids.includes(item.id) || undefined}
               variant={isSelected ? 'secondary' : 'ghost'} className="scene-organize-page relative h-auto flex-col gap-2 p-2"
-              aria-label={pageOptionName(position, item, isSelected, source && source.status !== 'ready' ? source.status : undefined)}
+              aria-label={pageOptionName(position, item, isSelected, source && source.status !== 'ready' ? source.status : undefined, isBlank)}
               onPointerDown={(event) => startPageDrag(event, item)} onDragStart={(event) => event.preventDefault()}
               onClick={(event) => { if (suppressPageClick.current) return; selectPage(item.id, primaryModifierPressed(event), event.shiftKey); }}>
               {insertion && <span className="scene-organize-insertion" data-side={insertion} aria-hidden="true" />}
@@ -1368,7 +1419,7 @@ function PDFSceneSession({ path, initialTool, exporting, exportStep, destination
                 {isSelected && <span className="scene-organize-check" aria-hidden="true">✓</span>}
                 {orientationBadge(item) && <Badge variant="outline" className="scene-organize-orientation-badge" aria-hidden="true">{orientationBadge(item)}</Badge>}
               </span>
-              <span className="scene-organize-label"><strong>{position}</strong>{original !== null && original !== position && <span> · was page {original}</span>}</span>
+              <span className="scene-organize-label"><strong>{position}</strong>{original !== null && original !== position && <span> · was page {original}</span>}{isBlank && <span> · blank</span>}</span>
             </Button>;
           })}
         </div>
