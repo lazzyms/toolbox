@@ -2595,7 +2595,7 @@ const exerciseFeature = async (page: Page, utility: (typeof UtilityRegistry)[num
         await fillPasswords(page, "test-password");
     }
     if (isPdfSceneTool(utility.id)) {
-        if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Page numbers", exact: true }).click();
+        if (utility.id === "pdf-page-numbers") await page.getByRole("button", { name: "Add page numbers", exact: true }).click();
         else if (utility.id === "pdf-organize") {
             await page.getByRole("button", { name: "Open in page view", exact: true }).click();
             await page.getByRole("button", { name: "Rotate selected pages", exact: true }).click();

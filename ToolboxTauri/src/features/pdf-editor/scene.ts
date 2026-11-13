@@ -4,16 +4,19 @@ import type { PdfDocument, PdfEditRun, PdfEditRunReason, PdfFormEntry, PdfFormFi
 // All geometry is in points, from the top-left of the unrotated visible source page.
 export interface SceneRect { x: number; y: number; width: number; height: number }
 export interface ScenePoint { x: number; y: number }
-export type SceneTool = 'select' | 'edit-text' | 'text' | 'highlight' | 'shape' | 'signature' | 'form' | 'watermark' | 'crop' | 'redact';
+export type SceneTool = 'select' | 'edit-text' | 'text' | 'highlight' | 'shape' | 'signature' | 'form' | 'watermark' | 'pageNumbers' | 'crop' | 'redact';
 export type SceneShape = 'square' | 'round' | 'triangle' | 'line' | 'dotted-line' | 'arrow-left' | 'arrow-right' | 'arrow-up' | 'arrow-down';
 export type SignatureMode = 'image' | 'text';
 export type WatermarkLayer = 'front' | 'behind';
 export type HighlightMode = 'area' | 'text-selection';
 export type TextFontFamily = 'Noto Sans' | 'Noto Serif' | 'Noto Sans Mono';
 export type TextAlign = 'left' | 'center' | 'right';
+export type PageNumberFormat = 'number' | 'page' | 'page-of-total' | 'number-of-total' | 'dashes';
+export type PageNumberPosition = `${'top' | 'middle' | 'bottom'}-${'left' | 'center' | 'right'}`;
+export interface PageNumberOptions { format: PageNumberFormat; start: number; position: PageNumberPosition; margin: number }
 export interface SceneObject {
   id: string;
-  kind: 'text' | 'highlight' | 'shape' | 'signature' | 'watermark';
+  kind: 'text' | 'highlight' | 'shape' | 'signature' | 'watermark' | 'pageNumbers';
   rect: SceneRect;
   text: string;
   fontSize: number;
@@ -30,7 +33,7 @@ export interface SceneObject {
   bold?: boolean;
   italic?: boolean;
   align?: TextAlign;
-  // Text boxes, signatures and watermarks: a page list like "1-3, 7, 10-" or "all", "odd", "even".
+  // Text boxes, signatures, watermarks and page numbers: a page list like "1-3, 7, 10-" or "all", "odd", "even".
   // The object is stored once on its page and drawn on every page in the list; null keeps it on its own page.
   pageRange?: string | null;
   watermark?: WatermarkOptions;
@@ -38,6 +41,7 @@ export interface SceneObject {
   // Picture watermarks: a local preview URL and the picture's pixel size, for the page preview only.
   watermarkPreview?: string | null;
   watermarkImageSize?: { width: number; height: number } | null;
+  pageNumbers?: PageNumberOptions;
 }
 // Defaults for the next text box; each new text box copies them.
 export interface TextStyle { fontFamily: TextFontFamily; bold: boolean; italic: boolean; align: TextAlign }
@@ -83,9 +87,9 @@ export interface SceneCanvasProps {
   selectedRun: number | null;
   onSelectRun: (run: number | null) => void;
   onEditRun: (run: PdfEditRun, replacement: string) => void;
-  // Watermarks drawn on this page, wherever they are stored; null removes one.
-  watermarks?: SceneObject[];
-  onWatermarkChange?: (id: string, patch: Partial<SceneObject> | null) => void;
+  // Range-applied objects drawn on this page, wherever they are stored; null removes one.
+  rangedObjects?: SceneObject[];
+  onRangedChange?: (id: string, patch: Partial<SceneObject> | null) => void;
 }
 export const sceneFromDocument = (document: PdfDocument): PdfScene => ({
   pages: document.pages.map((page) => ({ id: `source-${page.index}`, sourceIndex: page.index,
@@ -197,6 +201,34 @@ export function watermarkBounds(area: SceneRect, object: SceneObject): SceneRect
   const centre = object.watermark?.position === 'tile' ? { x: area.x + area.width / 2, y: area.y + area.height / 2 } : centers[0] ?? { x: area.x + area.width / 2, y: area.y + area.height / 2 };
   return { x: centre.x - boxW / 2, y: centre.y - boxH / 2, width: boxW, height: boxH };
 }
+
+export const pageNumberTemplates: Record<PageNumberFormat, string> = {
+  number: '{page}', page: 'Page {page}', 'page-of-total': 'Page {page} of {pages}',
+  'number-of-total': '{page} / {pages}', dashes: '- {page} -',
+};
+
+export interface PageTokens { page: number; pages: number }
+// Mirrors page_tokens in the native exporter.
+export const resolvePageTokens = (template: string, tokens: PageTokens) =>
+  template.replace(/\{(page|pages)\}/g, (_, name: keyof PageTokens) => String(tokens[name]));
+
+// Numbers follow the final page order: the page at pageIndex shows start + pageIndex.
+export function pageNumberText(object: SceneObject, pageIndex: number, pageCount: number): string {
+  const options = object.pageNumbers;
+  if (!options) return '';
+  return resolvePageTokens(pageNumberTemplates[options.format], { page: options.start + pageIndex, pages: options.start + pageCount - 1 });
+}
+
+// Mirrors the page-number placement in the native exporter. Draft text width is estimated.
+export function pageNumberRect(area: SceneRect, object: SceneObject, text: string): SceneRect {
+  const width = Math.max(1, text.length * object.fontSize * 0.55), height = object.fontSize * 1.2;
+  const [vertical, horizontal] = (object.pageNumbers?.position ?? 'bottom-center').split('-');
+  const margin = object.pageNumbers?.margin ?? 0;
+  const place = (start: number, size: number, length: number, side: string) =>
+    side === 'left' || side === 'top' ? start + margin : side === 'right' || side === 'bottom' ? start + size - margin - length : start + (size - length) / 2;
+  return { x: place(area.x, area.width, width, horizontal), y: place(area.y, area.height, height, vertical), width, height };
+}
+
 // Words of the replacement that end past the original run's width, assuming the
 // original font's average character width.
 export const textOverflowWords = (original: string, replacement: string): number => {
@@ -222,13 +254,13 @@ export const overflowMessage = (words: number) =>
 // Page-sequence edits. Each takes a scene and page ids and returns the next scene.
 // Returns null when the selection covers every page, because a PDF keeps at least one.
 // Text edits belong to source pages, so the edits on removed pages go with them.
-// A range-applied watermark outlives the page that stores it, so it moves to the first remaining page.
+// A range-applied watermark or page-number style outlives the page that stores it, so it moves to the first remaining page.
 export const removePages = (scene: PdfScene, ids: string[]): PdfScene | null => {
   const { textEdits, ...rest } = scene;
   const pages = scene.pages.filter((page) => !ids.includes(page.id));
   if (!pages.length) return null;
-  const watermarks = scene.pages.filter((page) => ids.includes(page.id)).flatMap((page) => page.objects.filter((object) => object.kind === 'watermark' && object.pageRange != null));
-  if (watermarks.length) pages[0] = { ...pages[0], objects: [...pages[0].objects, ...watermarks] };
+  const ranged = scene.pages.filter((page) => ids.includes(page.id)).flatMap((page) => page.objects.filter((object) => (object.kind === 'watermark' || object.kind === 'pageNumbers') && object.pageRange != null));
+  if (ranged.length) pages[0] = { ...pages[0], objects: [...pages[0].objects, ...ranged] };
   const kept = textEdits?.filter((edit) => pages.some((page) => page.sourceIndex === edit.pageIndex));
   return { ...rest, pages, ...(kept?.length ? { textEdits: kept } : {}) };
 };

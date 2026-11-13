@@ -33,6 +33,7 @@ export const subTools: readonly SubTool[] = [
   overlay('shape', 'Shape'),
   overlay('signature', 'Signature'),
   overlay('watermark', 'Watermark'),
+  overlay('pageNumbers', 'Page numbers'),
   { id: 'crop', label: 'Crop', group: 'document', suffix: '-edited',
     contributes: (scene) => scene.pages.some((page) => page.crop !== null) },
   { id: 'organize', label: 'Organize pages', group: 'document', suffix: '-edited',

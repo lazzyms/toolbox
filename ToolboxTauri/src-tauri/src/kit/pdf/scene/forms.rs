@@ -500,7 +500,7 @@ fn text_object(field: &FormField, text: &str, size: (f32, f32), multiline: bool)
     SceneObject {
         kind: Kind::Text, rect, text: text.into(), font_size, color: "#000000".into(), opacity: 1.,
         shape: None, highlight_mode: None, signature_mode: None, signature_path: None, font_family: None, watermark: None, layer: Layer::Front,
-        bold: false, italic: false, align: field.align, page_range: None,
+        bold: false, italic: false, align: field.align, page_range: None, page_numbers: None,
     }
 }
 
@@ -600,7 +600,8 @@ fn text_appearance(doc: &mut Document, plan: &FormPlan, fonts: &HashMap<&'static
     let (width, height) = widget_size(doc, id)?;
     let layout = &plan.layouts[&key];
     let (font_id, remapper) = &fonts[layout.font.name];
-    let content = format!("/Tx BMC\nq\n1 0 0 -1 0 {height} cm\n{under}{color}\n{}Q\nEMC\n", text_content(&plan.objects[&key], layout, FONT_RESOURCE, remapper));
+    let o = &plan.objects[&key];
+    let content = format!("/Tx BMC\nq\n1 0 0 -1 0 {height} cm\n{under}{color}\n{}Q\nEMC\n", text_content(&o.rect, o.align, o.font_size, layout, FONT_RESOURCE, remapper));
     let resources = dictionary! { "Font" => dictionary! { FONT_RESOURCE => *font_id } };
     let appearance = form_xobject(doc, width, height, resources, &content)?;
     doc.get_dictionary_mut(id).map_err(err)?.set("AP", dictionary! { "N" => appearance });
