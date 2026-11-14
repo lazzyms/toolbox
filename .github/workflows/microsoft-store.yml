@@ -150,17 +150,17 @@ jobs:
           Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           & src-tauri\resources\qpdf.exe --version
 
-      - name: Stage offline vision adapter
-        run: npm run stage:vision
-        working-directory: ToolboxTauri
-
       - name: Stage offline OCR resources
         run: npm run stage:ocr
         working-directory: ToolboxTauri
 
-      # After staging, as the Tauri Release build does: OCR tests use the staged bundle, not PATH tools.
+      # In the Tauri Release order: after OCR staging, so OCR tests use the staged bundle, and before vision staging.
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+        working-directory: ToolboxTauri
+
+      - name: Stage offline vision adapter
+        run: npm run stage:vision
         working-directory: ToolboxTauri
 
       - name: Verify third-party notices cover shipped binaries
