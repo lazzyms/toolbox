@@ -3,7 +3,7 @@
 // Bundled helper or an optional pack: the conversion sources never resolve or start a
 // helper, and the release snapshot test converts every family with no packs.
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFallbackFonts, readFontManifest } from "./fallback-fonts.mjs";
 import { nativeProblem } from "./ocr-release.mjs";
@@ -32,9 +32,9 @@ function importedPaths(text) {
 
 function moduleFile(root, segments) {
   for (let length = segments.length; length > 0; length -= 1) {
-    const base = join(...segments.slice(0, length));
+    const base = posix.join(...segments.slice(0, length));
     if (existsSync(join(root, `${base}.rs`))) return `${base}.rs`;
-    if (existsSync(join(root, base, "mod.rs"))) return join(base, "mod.rs");
+    if (existsSync(join(root, base, "mod.rs"))) return posix.join(base, "mod.rs");
   }
   return null;
 }
@@ -52,7 +52,7 @@ export function conversionSources(root = RUST_SOURCES) {
     found.add(file);
     for (const segments of importedPaths(readFileSync(join(root, file), "utf8"))) {
       const next = moduleFile(root, segments);
-      if (next && next.startsWith(join("kit", "pdf")) && !next.endsWith("mod.rs")) queue.push(next);
+      if (next && next.startsWith("kit/pdf/") && !next.endsWith("mod.rs")) queue.push(next);
     }
   }
   return [...found].sort();
