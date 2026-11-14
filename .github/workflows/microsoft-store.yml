@@ -138,6 +138,8 @@ jobs:
           if (-not $pdftoppm) { throw 'Could not locate pdftoppm.exe in the Poppler archive' }
           $pdftotext = Get-ChildItem $popplerExtract -Recurse -Filter pdftotext.exe | Select-Object -First 1
           if (-not $pdftotext) { throw 'Could not locate pdftotext.exe in the Poppler archive' }
+          # Native tests extract text with the pinned pdftotext from PATH, as the Tauri Release build does.
+          $pdftoppm.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           New-Item -ItemType Directory -Force -Path src-tauri\resources | Out-Null
           $qpdf = Get-ChildItem "$env:ChocolateyInstall\lib\qpdf" -Recurse -Filter qpdf.exe | Select-Object -First 1
           if (-not $qpdf) { throw 'Could not locate qpdf.exe in the Chocolatey package' }
@@ -148,16 +150,17 @@ jobs:
           Copy-Item $pdftotext.FullName src-tauri\resources\pdftotext.exe -Force
           & src-tauri\resources\qpdf.exe --version
 
+      - name: Stage offline OCR resources
+        run: npm run stage:ocr
+        working-directory: ToolboxTauri
+
+      # In the Tauri Release order: after OCR staging, so OCR tests use the staged bundle, and before vision staging.
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
         working-directory: ToolboxTauri
 
       - name: Stage offline vision adapter
         run: npm run stage:vision
-        working-directory: ToolboxTauri
-
-      - name: Stage offline OCR resources
-        run: npm run stage:ocr
         working-directory: ToolboxTauri
 
       - name: Verify third-party notices cover shipped binaries
