@@ -3,6 +3,16 @@ name: Tauri Release
 on:
   push:
     branches: [main]
+    # A push that changes nothing outside these paths ships no app change, so
+    # it publishes no release; the next app push releases it. Keep in step
+    # with Tauri Build's list.
+    paths-ignore:
+      - 'docs/**'
+      - '.agents/**'
+      - '.claude/skills/**'
+      - 'skills/**'
+      - 'scripts/product-demo/**'
+      - '*.md'
   workflow_dispatch:
     inputs:
       version:
