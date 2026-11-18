@@ -148,8 +148,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # Keyed by target, apart from Tauri Build's host builds. Microsoft Store
+      # builds the same x86_64 target and restores this entry.
       - uses: swatinem/rust-cache@v2
-        with: {workspaces: ToolboxTauri/src-tauri}
+        with: {workspaces: ToolboxTauri/src-tauri, shared-key: "release-${{ matrix.target }}"}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
