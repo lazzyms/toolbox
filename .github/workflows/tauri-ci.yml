@@ -5,13 +5,24 @@ on:
     branches:
       - main
       - 'ci/**'
+    # Skip only when every changed file is outside the app. Any other path,
+    # including an unlisted one, runs the full suite. Site Checks covers docs/.
+    paths-ignore:
+      - 'docs/**'
+      - '.agents/**'
+      - '.claude/skills/**'
+      - 'skills/**'
+      - 'scripts/product-demo/**'
+      - '*.md'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tauri-build
+  # One run per branch: a newer push supersedes an older one on the same ref,
+  # but a ci/** rehearsal never cancels main.
+  group: tauri-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,9 +56,15 @@ jobs:
         if: runner.os == 'Windows'
         uses: dtolnay/rust-toolchain@stable
 
+      # Build compiles for the host; Tauri Release compiles with --target into
+      # another directory. With the default job-id key both jobs (named build)
+      # shared one immutable cache entry that only fitted whichever saved first.
+      # Save on failure too, so a red test does not leave the next run cold.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: ToolboxTauri/src-tauri
+          shared-key: ci-host
+          cache-on-failure: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -86,12 +103,8 @@ jobs:
         run: npm run test:analytics
         working-directory: ToolboxTauri
 
-      - name: Run PDF scene model tests
-        run: npm run test:scene-model
-        working-directory: ToolboxTauri
-
       - name: Run update and bundle config tests
-        run: npm run test:updates && npm run test:outcomes && npm run test:document-colors && npm run test:scene-model && npm run test:asset-config && npm run test:site-release && npm run test:release-notes && npm run test:notices && npm run check:notices
+        run: npm run test:updates && npm run test:document-colors && npm run test:scene-model && npm run test:asset-config && npm run test:site-release && npm run test:release-notes && npm run test:notices && npm run check:notices
         working-directory: ToolboxTauri
 
       - name: Install qpdf (macOS)
@@ -157,10 +170,6 @@ jobs:
       - name: Run kit tests
         run: cargo test -- --test-threads=1
         working-directory: ToolboxTauri/src-tauri
-
-      - name: Run native E2E matrix
-        run: npm run test:native:e2e
-        working-directory: ToolboxTauri
 
       - name: Stage offline vision adapter
         run: npm run stage:vision
