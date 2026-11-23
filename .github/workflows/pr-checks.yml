@@ -1,0 +1,22 @@
+name: PR Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  models:
+    name: Formal models
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the output reservation model
+        run: cargo test --locked --manifest-path ToolboxTauri/models/output-reservation/Cargo.toml
