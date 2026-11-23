@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ALL_TARGETS, SUPPORTED_TARGETS } from "./pack-release.mjs";
+import { declaredToolIds, duplicates, loadRegistry } from "./registry-data.mjs";
 
 const projectFile = (path) => new URL(`../${path}`, import.meta.url);
 const readJson = (path) => JSON.parse(readFileSync(projectFile(path), "utf8"));
@@ -44,28 +45,35 @@ export function packMatrixFailures(catalog, { registryIds, required = requiredPa
   return failures;
 }
 
-function registry() {
-  const source = readFileSync(projectFile("src/registry/index.ts"), "utf8");
-  const atomic = source.split("export const ToolWorkspaceRegistry")[0];
-  const ids = [...atomic.matchAll(/(?:id: "([^"]+)"|(?:pdf|image)\("([^"]+)")/g)].map((match) => match[1] ?? match[2]);
-  return { source, atomic, ids, factoryEntries: (atomic.match(/(?:pdf|image)\("/g) ?? []).length };
+/** What is wrong with the registry's tools, each failure naming the ids and the file to edit. */
+export function registryFailures(tools, declaredIds) {
+  const failures = [];
+  const ids = tools.map(({ id }) => id);
+  const dupes = duplicates(ids);
+  if (dupes.length) failures.push(`src/registry/index.ts lists these ids more than once: ${dupes.join(", ")}`);
+  for (const field of ["command", "verification", "view"]) {
+    const bare = tools.filter((tool) => !tool[field]).map(({ id }) => id);
+    if (bare.length) failures.push(`src/registry/index.ts: ${bare.join(", ")} lack ${field}`);
+  }
+  const missing = declaredIds.filter((id) => !ids.includes(id));
+  const extra = ids.filter((id) => !declaredIds.includes(id));
+  if (missing.length) failures.push(`AtomicToolId in src/contracts.ts declares ${missing.join(", ")}, but src/registry/index.ts does not register them. Add them to the registry, or remove them from AtomicToolId if retired.`);
+  if (extra.length) failures.push(`src/registry/index.ts registers ${extra.join(", ")}, but AtomicToolId in src/contracts.ts does not declare them. Add them to AtomicToolId.`);
+  return failures;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { source, atomic, ids: registryIds, factoryEntries } = registry();
-  const requiredFields = ["command", "verification", "view"];
-  const expectedToolCount = 39;
-
-  if (registryIds.length !== expectedToolCount) throw new Error(`Tauri registry has ${registryIds.length} tools, expected ${expectedToolCount}`);
-  if (new Set(registryIds).size !== registryIds.length) throw new Error("Tauri registry contains duplicate IDs");
-  for (const field of requiredFields) {
-    const count = (source.match(new RegExp(`${field}:`, "g")) ?? []).length + factoryEntries;
-    if (count < expectedToolCount) throw new Error(`Registry is missing ${expectedToolCount - count} ${field} entries`);
-  }
+  const { tools } = await loadRegistry();
+  const registryIds = tools.map(({ id }) => id);
+  const failures = registryFailures(tools, declaredToolIds());
   const unregistered = requiredPacks().filter(({ toolId }) => !registryIds.includes(toolId));
-  if (unregistered.length) throw new Error(`Packs name unregistered tools: ${unregistered.map(({ id, toolId }) => `${id} (${toolId})`).join(", ")}`);
+  if (unregistered.length) failures.push(`Packs name unregistered tools: ${unregistered.map(({ id, toolId }) => `${id} (${toolId})`).join(", ")}`);
+  if (failures.length) {
+    for (const failure of failures) console.error(`Tool matrix failed: ${failure}`);
+    process.exit(1);
+  }
 
-  console.log(`Tool matrix passed: ${registryIds.length} tools, ${registryIds.filter((id) => atomic.includes(`id: \"${id}\"`)).length} explicit entries`);
+  console.log(`Tool matrix passed: ${registryIds.length} tools match AtomicToolId`);
 
   // `--catalog <file>`: the catalog a release builds must have every pack a tool uses for every
   // Supported target.
