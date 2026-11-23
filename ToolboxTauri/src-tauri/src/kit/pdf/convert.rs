@@ -320,7 +320,6 @@ fn save(job_location: &OutputLocation, input: &Path, mut document: Document) -> 
     output.publish().map_err(|error| ToolError::processing(format!("Could not save the PDF: {error}")))
 }
 
-/// Lays the pages out as a PDF once they are known to be within the input's page limit.
 fn assemble_within<S: SystemFontLookup>(limits: ToolLimits, book: &FontBook<'_, S>, assembly: Assembly<'_>) -> Result<Document, ToolError> {
     limits.check_made_pages(assembly.pages.len())?;
     assemble(book, assembly)
@@ -2989,7 +2988,6 @@ mod tests {
             output.status.success().then(|| String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"))
         }
 
-        /// The Type 0 fonts the first page writes with.
         fn unicode_fonts(document: &Document) -> Vec<lopdf::Dictionary> {
             let page = document.get_pages().values().next().copied().unwrap();
             let dictionary = |object: &Object| match object { Object::Reference(id) => document.get_dictionary(*id).unwrap().clone(), object => object.as_dict().unwrap().clone() };
@@ -3032,7 +3030,6 @@ mod tests {
                 assert!(outcome.output_paths().is_empty());
             }
             assert!(succeeded(&outcomes[1]), "the rest of the batch converts: {:?}", outcomes[1]);
-            // A script no pack in the catalog writes fails without a pointer.
             let error = outcomes[4].error().unwrap();
             assert_eq!((error.kind.clone(), error.pointer.clone(), error.message.as_str()), (ErrorKind::Unavailable, None, "Toolbox can't write Thai text yet. Nothing was saved."));
             assert_eq!(names(&root), ["arabic.txt", "circular-hindi.docx", "latin.pdf", "latin.txt", "notice.html", "thai.md"], "nothing else was saved and no pack folder was created");
@@ -3084,7 +3081,6 @@ mod tests {
             let root = sandbox("script_pack_base");
             let files = family_documents(BASE_LINE);
             let paths: Vec<PathBuf> = files.iter().map(|(name, bytes)| { let path = root.join(name); fs::write(&path, bytes).unwrap(); path }).collect();
-            // No catalog and no app data: nothing may be looked up.
             let outcomes = convert_with(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(), no_packs());
             for (outcome, (name, _)) in outcomes.iter().zip(&files) {
                 assert!(succeeded(outcome), "{name}: {outcome:?}");

@@ -1313,7 +1313,6 @@ pub(super) fn scene_resources(document: &Document, page_id: ObjectId, xobjects: 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage { FillForms, EditText, Overlays, Flatten, Redact }
 pub const STAGES: [Stage; 5] = [Stage::FillForms, Stage::EditText, Stage::Overlays, Stage::Flatten, Stage::Redact];
-/// Suffix for an export that more than one stage changed.
 pub const COMBINED_SUFFIX: &str = "-edited";
 
 impl Stage {
@@ -1342,7 +1341,6 @@ pub fn stage_summary(contributors: &[Stage]) -> Option<String> {
     (contributors.len() > 1).then(|| format!("Changes applied in this fixed order: {}.", contributors.iter().map(|stage| stage.label()).collect::<Vec<_>>().join("; ")))
 }
 
-/// The output suffix for the stages that changed the document, or None when nothing did.
 pub fn export_suffix(contributors: &[Stage]) -> Option<&'static str> {
     match contributors {
         [] => None,
@@ -1647,7 +1645,6 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
     let text = text_plan(scene, script_fonts).map_err(|error| error.message)?;
     let text_fonts = embed_text_fonts(doc, &text.layouts)?;
     let mut used_glyphs = UsedGlyphs::default();
-    // Each watermark picture is embedded once and shared by every page in its range.
     let mut pictures = HashMap::new();
     for (origin, page) in scene.pages.iter().enumerate() {
         for (index, o) in page.objects.iter().enumerate() {
@@ -1706,7 +1703,6 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
             font_resources.set(name.as_str(), Object::Reference(text_fonts[layout.font.name].0));
             text_resources.insert(layout.font.name, name);
         } }
-        // Script fonts get a name on every page that writes with them; only the fonts the page uses are added.
         let mut script_names = Vec::new();
         if placed.iter().any(|key| text.scripts.contains_key(key)) {
             for font in 0..script_fonts.len() {
@@ -1836,7 +1832,6 @@ fn apply_overlays(doc:&mut Document, scene:&PdfScene, OverlayPlan { preflight, i
             let (xobjects, font_resources, states) = resources_set;
             let resources = scene_resources(&doc, id, xobjects, font_resources, states)?;
             if preserve_source_page {
-                // The untouched source content stays in place, between the behind and front layers.
                 let behind = (!behind.is_empty()).then(|| Object::Reference(doc.add_object(Stream::new(dictionary!{},format!("{header}{behind}Q\n").into_bytes()))));
                 let front = (!front.is_empty()).then(|| Object::Reference(doc.add_object(Stream::new(dictionary!{},format!("{header}{front}Q\n").into_bytes()))));
                 let page_dict = doc.get_dictionary_mut(id).map_err(err)?;
@@ -2140,7 +2135,6 @@ pub fn preview_pages(request:&PreviewPagesRequest, packs:&RunPacks)->Result<Vec<
         render(&path,page_index,&renderer,&temp).map(|preview| IndexedScenePreview{page_index,preview})
     }).collect()
 }
-/// The latest a helper run may finish when it renders `pages` pages of one file: the per-file budget plus the per-page budget for each page.
 fn thumbnail_deadline(start:Instant,pages:u32)->Instant {
     start + super::PDF_THUMBNAIL_FILE_TIMEOUT + super::PDF_THUMBNAIL_PAGE_TIMEOUT * pages
 }
@@ -2209,7 +2203,6 @@ pub fn blank_pages(request:&BlankPagesRequest)->Result<Vec<BlankPageClassificati
     let renderer=renderer().map_err(ToolError::unavailable)?;
     classify_blank_pages(request,&extractor,&renderer)
 }
-/// [`blank_pages`] with the helpers already resolved.
 fn classify_blank_pages(request:&BlankPagesRequest,extractor:&Path,renderer:&Path)->Result<Vec<BlankPageClassification>,ToolError> {
     let temp=TempDir::new().map_err(ToolError::processing)?;
     Ok(request.page_indices.iter().copied().map(|page_index| match classify_blank_page(&request.path,page_index,extractor,renderer,&temp) {
@@ -2436,8 +2429,6 @@ pub fn export(run:&SceneRun,input:PathBuf)->JobOutcome {
     })();
     match result {
         Ok((path,summary,contributors,signed,warnings))=>{
-            // The page summary every export reports, then the chained stages in the order they ran,
-            // then what redaction rasterised and stripped.
             let redacted=match &request.sections.redactions {
                 Some(marks) if !marks.is_empty()=>{
                     let pages:Vec<usize>=marks.iter().map(|mark|mark.page_index).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
@@ -3623,7 +3614,6 @@ mod tests {
             match (a, e) { (Some(a), Some(e)) => assert!((a - e).abs() < 0.01, "{what}: {actual:?} vs {expected:?}"), (a, e) => assert_eq!(a, e, "{what}") }
         }
     }
-    /// A destination array's view name and its coordinates.
     fn destination_of(document: &Document, value: &Object) -> (Vec<u8>, Vec<Option<f32>>) {
         let items = resolve(document, value).unwrap().as_array().unwrap();
         let coordinates = Object::Array(items[2..].to_vec());
@@ -4515,7 +4505,6 @@ mod tests {
         let [(x, y)] = at(WatermarkPlacement::TopLeft, 90.)[..] else { panic!() };
         assert!((x - 44.).abs() < 0.001 && (y - 94.).abs() < 0.001, "a quarter turn swaps the corner box: {x} {y}");
         assert_eq!(watermark_centers(&area, (100., 20.), Some(WatermarkPosition::Offset { x: 5, y: 7 }), 0.).unwrap(), vec![(65., 37.)]);
-        // Anchors 0 and 1 land on the corner placements, and 0.5 on the centre.
         let anchor = |anchor_x, anchor_y| watermark_centers(&area, (100., 20.), Some(WatermarkPosition::Anchor { anchor_x, anchor_y }), 0.).unwrap();
         assert_eq!(anchor(0., 0.), at(WatermarkPlacement::TopLeft, 0.));
         assert_eq!(anchor(1., 1.), at(WatermarkPlacement::BottomRight, 0.));
@@ -5391,7 +5380,6 @@ mod tests {
         d.get_dictionary_mut(page).unwrap().set("Annots", vec![Object::Reference(widget)]);
         widget
     }
-    /// Bookmarks with the given titles and target pages, in order, under the catalog's /Outlines.
     fn add_bookmarks(d: &mut Document, items: &[(&str, ObjectId)]) {
         let outlines = d.new_object_id();
         let ids: Vec<ObjectId> = items.iter().map(|_| d.new_object_id()).collect();
@@ -5491,7 +5479,6 @@ mod tests {
         let mut deleted = mirrored.clone();
         deleted.pages.pop();
 
-        // Undo the delete, then redo it.
         let after_undo = export_bytes(scene_at(3));
         let after_redo = export_bytes(scene_at(4));
         assert_eq!(after_undo, export_bytes(mirrored), "an export after undo differs from the same scene exported directly");
@@ -5619,7 +5606,6 @@ mod tests {
             super::super::export(&SceneRun { request, packs }, input.to_path_buf())
         }
 
-        /// The fonts the output's first page writes with, by resource name.
         fn page_fonts(document: &Document) -> Vec<(String, lopdf::Dictionary)> {
             let page = document.get_pages().values().next().copied().unwrap();
             let resources = document.get_dictionary(page).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
@@ -5630,7 +5616,6 @@ mod tests {
             }).collect()
         }
 
-        /// The embedded font file of a Type 0 font, decompressed.
         fn embedded_font(document: &Document, font: &lopdf::Dictionary) -> Vec<u8> {
             let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0].as_reference().unwrap();
             let descriptor = document.get_dictionary(descendant).unwrap().get(b"FontDescriptor").unwrap().as_reference().unwrap();
@@ -5673,7 +5658,6 @@ mod tests {
                 assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled }), "{script}");
                 assert_eq!(error.message, format!("{script} text needs the {PACK_NAME} pack, which isn't installed. Nothing was saved."));
                 assert!(outcome.output_paths().is_empty());
-                // The preview says the same before it renders anything.
                 let preview = super::super::preview(&PreviewRequest { path: input.clone(), scene: text_scene(text), page_index: 0, sections: Default::default() }, &packs(&root.join("app-data")));
                 assert_eq!(preview.err(), Some(error.message.clone()));
             }

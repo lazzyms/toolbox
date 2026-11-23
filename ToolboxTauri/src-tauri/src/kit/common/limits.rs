@@ -162,6 +162,13 @@ impl ToolLimits {
         })
     }
 
+    pub fn run_in_memory<F>(self, job: F) -> JobOutcome
+    where
+        F: FnOnce() -> JobOutcome + Send + 'static,
+    {
+        self.run_all(&[], job)
+    }
+
     pub fn run_all<F>(self, inputs: &[PathBuf], job: F) -> JobOutcome
     where
         F: FnOnce() -> JobOutcome + Send + 'static,

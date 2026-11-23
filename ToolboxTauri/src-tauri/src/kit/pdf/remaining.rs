@@ -37,7 +37,6 @@ pub struct SplitPdfRequest {
     pub output_location: OutputLocation,
 }
 
-/// How a split divides the document. Each kind carries only its own fields.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum SplitMode {
@@ -461,7 +460,6 @@ impl SplitPlan {
                 }
                 fitted
             }
-            // Consecutive parts of `size` pages; the last part keeps whatever is left.
             Self::EveryN(size) => FittedSplit {
                 spans: (1..=page_count).step_by(*size).map(|first| SplitSpan::pages(first, (first + size - 1).min(page_count))).collect(),
                 notes: Vec::new(),
@@ -470,7 +468,6 @@ impl SplitPlan {
     }
 }
 
-/// The parts one document is split into, and what fitting the ranges to it changed.
 struct FittedSplit { spans: Vec<SplitSpan>, notes: Vec<String> }
 
 fn page_span(first: usize, last: usize) -> String {
@@ -824,7 +821,6 @@ impl TextHelper {
     }
 }
 
-/// Saves the text, the images, or both from one PDF and reports them as one outcome.
 pub fn extract(request: &ExtractFromPdfRequest, input: PathBuf) -> JobOutcome {
     extract_with(request, input, &TextHelper::bundled())
 }
@@ -839,8 +835,8 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
     let pages = match pages_in_range(&document, request.page_range.as_deref()) {
         Ok(pages) if !pages.is_empty() => pages,
         Ok(_) => return JobOutcome::failure(input, ToolError::invalid_input("Select at least one PDF page.")),
-        Err(PageSelection::Empty(reason)) => return JobOutcome::skipped(input, reason),
-        Err(PageSelection::Invalid(error)) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
+        Err(PageRangeError::Empty(reason)) => return JobOutcome::skipped(input, reason),
+        Err(PageRangeError::Invalid(error)) => return JobOutcome::failure(input, ToolError::invalid_input(error)),
     };
     let text = if request.mode.wants_text() {
         match write_text(&input, &pages, helper, request.preserve_layout, &request.output_location) {
@@ -880,10 +876,8 @@ fn extract_with(request: &ExtractFromPdfRequest, input: PathBuf, helper: &TextHe
 
 fn ocr_pointer() -> OutcomePointer { OutcomePointer::Tool { tool_id: "pdf-ocr".into() } }
 
-/// Why a PDF's pages could not be taken from the shared range.
 #[derive(Debug, PartialEq)]
-enum PageSelection {
-    /// The range itself is malformed.
+enum PageRangeError {
     Invalid(String),
     /// One range applies to a whole batch, so a PDF too short for every page in it is skipped, not failed.
     Empty(SkipReason),
@@ -897,12 +891,12 @@ pub(crate) fn pages_without_text(pages: Vec<u32>) -> OutcomeWarning {
 
 /// Resolves the shared range syntax against one PDF into 1-based page numbers in document order.
 /// The range is clamped to this PDF's length: entries past its last page are dropped and open or long runs end there.
-fn pages_in_range(document: &Document, range: Option<&str>) -> Result<Vec<u32>, PageSelection> {
+fn pages_in_range(document: &Document, range: Option<&str>) -> Result<Vec<u32>, PageRangeError> {
     let count = document.get_pages().len();
     let Some(raw) = range.filter(|value| !value.trim().is_empty()) else { return Ok((1..=count as u32).collect()); };
-    let clamped = match PageRanges::parse(raw).map_err(PageSelection::Invalid)?.clamp_or_skip(count) {
+    let clamped = match PageRanges::parse(raw).map_err(PageRangeError::Invalid)?.clamp_or_skip(count) {
         Ok(clamped) => clamped,
-        Err(reason) => return Err(PageSelection::Empty(reason)),
+        Err(reason) => return Err(PageRangeError::Empty(reason)),
     };
     Ok(clamped.page_indices().into_iter().map(|index| index as u32 + 1).collect())
 }
@@ -911,7 +905,6 @@ fn password_protected(input: PathBuf) -> JobOutcome {
     JobOutcome::failure(input, ToolError::invalid_input(EXTRACT_PASSWORD_PROTECTED).with_pointer(OutcomePointer::Tool { tool_id: "lock-unlock".into() }))
 }
 
-/// A written text file, and the selected pages that had no selectable text in it.
 struct TextFile {
     path: PathBuf,
     blank_pages: Vec<u32>,
@@ -987,12 +980,10 @@ enum ImageSource {
     Inline(Stream),
 }
 
-/// One image found in the selected pages, in discovery order.
 #[derive(Debug)]
 struct ImageCandidate {
     /// One-based page number.
     page: u32,
-    /// Position among the page's images.
     index: usize,
     source: ImageSource,
     /// Zero when the image doesn't state its size.
@@ -1000,7 +991,6 @@ struct ImageCandidate {
     height: i64,
 }
 
-/// Form XObjects nested deeper than this are not searched.
 const MAX_FORM_DEPTH: usize = 16;
 
 /// Lists the images of the selected one-based pages in page order. Within a page, the image XObjects in its
@@ -1051,7 +1041,6 @@ fn collect_images(document: &Document, own: &[&lopdf::Dictionary], scope: &[&lop
     }
 }
 
-/// One PDF's images folder and how many images were published into it.
 #[derive(Debug, PartialEq)]
 struct SavedImages {
     folder: PathBuf,
@@ -1259,7 +1248,6 @@ pub fn images_to_pdf(request: &ImagesToPdfRequest) -> Merged {
     let pages_id = document.new_object_id();
     let mut kids = Vec::new();
     let mut reduced = Vec::new();
-    // Each input's page span once added, or why it was left out.
     let mut added: Vec<Result<(usize, usize), String>> = Vec::with_capacity(request.paths.len());
     for path in &request.paths {
         let images = match embed_images(&mut document, path) {
@@ -1481,7 +1469,6 @@ fn compressed_detail(recompressed: usize) -> String {
     }
 }
 
-/// A scratch file removed when it goes out of scope.
 struct StagedFile(PathBuf);
 
 impl Drop for StagedFile {
@@ -2124,7 +2111,6 @@ pub(crate) mod tests {
         packed
     }
 
-    /// Saves a PDF whose pages each hold the images `build` adds, in the order given.
     pub(super) fn image_pdf(path: &Path, build: impl FnOnce(&mut Document) -> Vec<Vec<Stream>>) {
         let mut document=Document::with_version("1.7");
         let pages_id=document.new_object_id();
@@ -4062,9 +4048,9 @@ pub(crate) mod text_extraction_tests {
         assert_eq!(pages_in_range(&five.1, Some("2-4, 9, 4-")), Ok(vec![2, 3, 4, 5]));
         assert_eq!(pages_in_range(&two.1, Some("2-4, 9, 4-")), Ok(vec![2]));
         let empty = SkipReason::new(SkipCode::RangeEmptyAfterClamping, "No pages in 3-5, 8- are in this PDF, which has 2 pages.");
-        assert_eq!(pages_in_range(&two.1, Some("3-5, 8-")), Err(PageSelection::Empty(empty.clone())));
-        assert_eq!(pages_in_range(&two.1, Some("4-3")), Err(PageSelection::Invalid("\"4-3\" runs backwards. Put the lower page first, for example 3-4.".to_string())));
-        assert_eq!(pages_in_range(&two.1, Some("0")), Err(PageSelection::Invalid("\"0\" uses page 0. Page numbers start at 1.".to_string())));
+        assert_eq!(pages_in_range(&two.1, Some("3-5, 8-")), Err(PageRangeError::Empty(empty.clone())));
+        assert_eq!(pages_in_range(&two.1, Some("4-3")), Err(PageRangeError::Invalid("\"4-3\" runs backwards. Put the lower page first, for example 3-4.".to_string())));
+        assert_eq!(pages_in_range(&two.1, Some("0")), Err(PageRangeError::Invalid("\"0\" uses page 0. Page numbers start at 1.".to_string())));
         for mode in [ExtractMode::Text, ExtractMode::Images, ExtractMode::Both] {
             let outcome = extract_with(&request(&two.0, mode, Some(" 3-5, 8- "), false), two.0.clone(), &helper);
             assert_eq!(outcome.state, OutcomeState::Skipped { reason: empty.clone() });

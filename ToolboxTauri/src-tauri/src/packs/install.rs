@@ -360,7 +360,6 @@ fn open_envelope(path: &Path) -> Result<zip::ZipArchive<fs::File>> {
     zip::ZipArchive::new(file).map_err(|error| not_a_pack(&error))
 }
 
-/// Reads a whole entry that must not exceed `limit` bytes.
 fn read_entry<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, name: &str, limit: u64) -> std::result::Result<Vec<u8>, String> {
     let entry = archive.by_name(name).map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
@@ -658,9 +657,21 @@ pub(crate) mod tests {
         pack_format: u32,
         app_versions: serde_json::Value,
         pub(crate) files: Vec<(String, Vec<u8>)>,
-        /// Manifest entries per file: (path, sha256, maxBytes). Defaults to the real files.
-        specs: Option<Vec<(String, String, u64)>>,
+        manifest_entries: Option<Vec<ManifestEntry>>,
         extra_entries: Vec<(String, Vec<u8>)>,
+    }
+
+    #[derive(Clone)]
+    struct ManifestEntry {
+        path: String,
+        sha256: String,
+        max_bytes: u64,
+    }
+
+    impl ManifestEntry {
+        fn of(path: &str, bytes: &[u8]) -> Self {
+            Self { path: path.to_string(), sha256: digest_hex(bytes), max_bytes: bytes.len() as u64 }
+        }
     }
 
     impl Fixture {
@@ -672,7 +683,7 @@ pub(crate) mod tests {
                 pack_format: 1,
                 app_versions: serde_json::json!({ "from": "1.0.0" }),
                 files: vec![("tessdata/hin.traineddata".into(), b"hindi model".repeat(100)), ("LICENSE.txt".into(), b"Apache-2.0".to_vec())],
-                specs: None,
+                manifest_entries: None,
                 extra_entries: Vec::new(),
             }
         }
@@ -682,8 +693,8 @@ pub(crate) mod tests {
         }
 
         fn manifest(&self) -> Vec<u8> {
-            let specs = self.specs.clone().unwrap_or_else(|| self.files.iter().map(|(path, bytes)| (path.clone(), digest_hex(bytes), bytes.len() as u64)).collect());
-            let resources: serde_json::Map<String, serde_json::Value> = specs.into_iter().map(|(path, sha256, max_bytes)| (path.clone(), serde_json::json!({
+            let entries = self.manifest_entries.clone().unwrap_or_else(|| self.files.iter().map(|(path, bytes)| ManifestEntry::of(path, bytes)).collect());
+            let resources: serde_json::Map<String, serde_json::Value> = entries.into_iter().map(|ManifestEntry { path, sha256, max_bytes }| (path.clone(), serde_json::json!({
                 "path": path, "version": self.version, "sha256": sha256, "license": "Apache-2.0", "maxBytes": max_bytes
             }))).collect();
             serde_json::to_vec(&serde_json::json!({
@@ -703,7 +714,6 @@ pub(crate) mod tests {
             serde_json::to_vec(&serde_json::json!({ "formatVersion": 1, "id": self.id, "version": self.version, "target": self.target })).unwrap()
         }
 
-        /// The pack file, its payload signed by `key`.
         pub(crate) fn file(&self, key: &TestKey) -> Vec<u8> {
             let payload = self.payload();
             Self::envelope(&self.header(), &payload, Some(key.sign(&payload).as_bytes()))
@@ -829,7 +839,6 @@ pub(crate) mod tests {
 
         let model = setup.app_data.join("packs/ocr-hindi/2.0/tessdata/hin.traineddata");
         assert_eq!(resolve_pack_backed("tessdata/hin.traineddata", &setup.locations(&sandbox("valid-bundled"))), Ok(ResolvedResource { path: model, source: ResourceSource::InstalledPack }));
-        // The chosen file is never changed.
         assert_eq!(fs::read(&setup.file).unwrap(), original);
     }
 
@@ -855,7 +864,7 @@ pub(crate) mod tests {
         let path = |text: &str| text.to_string();
         let good = Fixture::new();
         let model_sha = digest_hex(&good.files[0].1);
-        let license_spec = (path("LICENSE.txt"), digest_hex(&good.files[1].1), good.files[1].1.len() as u64);
+        let license_entry = ManifestEntry::of(&path("LICENSE.txt"), &good.files[1].1);
 
         type Case = (&'static str, Box<dyn Fn(&mut Setup)>, Kind);
         let rewrite = |build: Box<dyn Fn(&Fixture, &TestKey, &TestKey) -> (Vec<u8>, Option<Catalog>)>| -> Box<dyn Fn(&mut Setup)> {
@@ -882,15 +891,14 @@ pub(crate) mod tests {
             ("wrong key", rewrite(Box::new(|good, _, other_key| (good.file(other_key), None))), Kind::WrongKey),
             ("archive checksum mismatch", rewrite(Box::new(|good, key, _| (good.file(key), Some(good.catalog_with_checksum("0".repeat(64)))))), Kind::ChecksumMismatch),
             ("manifest file checksum mismatch", with(Box::new(move |fixture| {
-                fixture.specs = Some(vec![(path("tessdata/hin.traineddata"), digest_hex(b"other"), 1100), license_spec.clone()]);
+                fixture.manifest_entries = Some(vec![ManifestEntry { path: path("tessdata/hin.traineddata"), sha256: digest_hex(b"other"), max_bytes: 1100 }, license_entry.clone()]);
             })), Kind::FileChecksumMismatch { path: path("tessdata/hin.traineddata") }),
             ("manifest file size mismatch", with(Box::new({
                 let model_sha = model_sha.clone();
-                move |fixture| fixture.specs = Some(vec![(path("tessdata/hin.traineddata"), model_sha.clone(), 1099), (path("LICENSE.txt"), digest_hex(b"Apache-2.0"), 10)])
+                move |fixture| fixture.manifest_entries = Some(vec![ManifestEntry { path: path("tessdata/hin.traineddata"), sha256: model_sha.clone(), max_bytes: 1099 }, ManifestEntry::of(&path("LICENSE.txt"), b"Apache-2.0")])
             })), Kind::FileSizeMismatch { path: path("tessdata/hin.traineddata") }),
             ("listed file missing", with(Box::new(|fixture| {
-                let specs = fixture.files.iter().map(|(path, bytes)| (path.clone(), digest_hex(bytes), bytes.len() as u64)).collect();
-                fixture.specs = Some(specs);
+                fixture.manifest_entries = Some(fixture.files.iter().map(|(path, bytes)| ManifestEntry::of(path, bytes)).collect());
                 fixture.files.remove(1);
             })), Kind::FileMissing { path: path("LICENSE.txt") }),
             ("unlisted file", with(Box::new(|fixture| fixture.extra_entries.push(("extra.bin".into(), b"x".to_vec())))), Kind::UnlistedFile { path: path("extra.bin") }),
@@ -952,7 +960,6 @@ pub(crate) mod tests {
         setup.install().unwrap();
         let old_record = fs::read(setup.app_data.join("packs/ocr-hindi/installed.json")).unwrap();
 
-        // A tampered 2.0 is rejected and 1.0 stays exactly as it was.
         let new = Fixture::new();
         let mut tampered = new.file(&key);
         let at = tampered.len() / 2;
@@ -966,14 +973,12 @@ pub(crate) mod tests {
         assert!(setup.app_data.join("packs/ocr-hindi/1.0/tessdata/hin.traineddata").is_file());
         assert!(!setup.app_data.join(STAGING_DIR).exists());
 
-        // The genuine 2.0 replaces it, and the 1.0 folder is removed.
         fs::write(&setup.file, new.file(&key)).unwrap();
         install(&setup.file, &context).unwrap();
         let list = list_packs_in(&catalog, &setup.app_data, &target, APP);
         assert_eq!((list.packs[0].status, list.packs[0].installed_version.as_deref()), (PackStatus::Installed, Some("2.0")));
         assert!(!setup.app_data.join("packs/ocr-hindi/1.0").exists());
 
-        // A damaged install of the same version is repaired by installing the file again.
         fs::remove_file(setup.app_data.join("packs/ocr-hindi/2.0/LICENSE.txt")).unwrap();
         assert_eq!(list_packs_in(&catalog, &setup.app_data, &target, APP).packs[0].status, PackStatus::Damaged);
         install(&setup.file, &context).unwrap();
@@ -1059,7 +1064,6 @@ pub(crate) mod tests {
     fn the_updater_key_built_into_the_app_is_the_trust_root() {
         let _env = crate::kit::EnvOverride::new().remove(PUBLIC_KEY_OVERRIDE_ENV);
         let built_in = trusted_public_key().unwrap();
-        // A payload signed by any other key is refused as the wrong key.
         let key = TestKey::new(9);
         let payload = b"payload";
         assert_eq!(verify_signature(payload, key.sign(payload).as_bytes(), &built_in).unwrap_err().kind, PackInstallErrorKind::WrongKey);

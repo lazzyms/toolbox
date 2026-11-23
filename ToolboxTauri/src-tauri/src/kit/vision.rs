@@ -34,7 +34,6 @@ const OCR_LANGUAGE_DIR_ENV: &str = "TOOLBOX_OCR_LANGUAGE_DIR";
 const OCR_TEXT_SUFFIX: &str = "-ocr";
 const OCR_PAGE_SEGMENTATION: &str = "3";
 const OCR_NO_TEXT: &str = "OCR completed but found no readable text.";
-/// The resource name the invisible text layer's font is registered under on each page.
 const OCR_LAYER_FONT: &str = "ToolboxOcr";
 const OCR_PASSWORD_PROTECTED: &str = "It's password-protected. Remove its password in File Security, then run OCR again.";
 
@@ -114,7 +113,6 @@ pub struct OcrRun {
     pub packs: RunPacks,
 }
 
-/// One language's recognition data and the name the result names it by.
 #[derive(Debug)]
 struct OcrLanguage {
     data: PathBuf,
@@ -149,9 +147,7 @@ fn ocr_language(packs: &RunPacks, code: &str) -> Result<OcrLanguage, ToolError> 
     Ok(OcrLanguage { data: resolved.path, name: language.name.clone() })
 }
 
-/// The languages one file is read in.
 struct OcrLanguages {
-    /// The folder the engine reads every language's data from.
     tessdata_dir: PathBuf,
     /// The languages' names, in the order they go to the engine.
     names: Vec<String>,
@@ -338,13 +334,11 @@ fn image_within(run: &OcrRun, input: PathBuf, mode: OcrMode, deadline: HelperDea
     }
 }
 
-/// The pages of an image input: one for a photo or scan, every frame of a TIFF.
 enum ImagePages {
     Single(PathBuf),
     Tiff(images::TiffPages),
 }
 
-/// One page of an image input, ready to recognise and place.
 struct ImagePage {
     image: DynamicImage,
     orientation: Option<Orientation>,
@@ -475,7 +469,6 @@ fn recognize_image(engine: &OcrEngine, tessdata_dir: &Path, page: &ImagePage, la
     engine.recognize(&path, tessdata_dir, languages, settings, stop_at, timed_out)
 }
 
-/// A new PDF built one image page at a time.
 struct ImagePdf {
     document: Document,
     pages_id: ObjectId,
@@ -548,7 +541,6 @@ impl ImagePdf {
         Ok((page_id, (shown_width, shown_height)))
     }
 
-    /// Closes the page tree in the order the pages were added.
     fn finish(self) -> Document {
         let Self { mut document, pages_id, kids } = self;
         let count = kids.len() as i64;
@@ -657,7 +649,6 @@ fn recognized_detail(pages: usize, languages: &[String]) -> String {
 
 fn count(number: usize, one: &str, many: &str) -> String { format!("{number} {}", if number == 1 { one } else { many }) }
 
-/// Why a file has no pages to work on: it can't be read, or the range leaves none of its pages.
 #[derive(Debug)]
 enum NoPlan { Failed(String), Skipped(SkipReason) }
 
@@ -892,12 +883,10 @@ impl Drop for OcrWorkspace {
     fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
 }
 
-/// The recognition engine, which every input needs. Language data comes per file.
 struct OcrEngine {
     engine: PathBuf,
 }
 
-/// The engine plus the renderer that turns PDF pages into images for it.
 struct OcrResources {
     engine: OcrEngine,
     renderer: PathBuf,
@@ -1593,7 +1582,6 @@ mod tests {
             assert_eq!(text, "eng: english data\n");
         }
 
-        /// The Hindi file failed with the pointer and saved nothing.
         fn assert_needs_pack(&self, outcome: &crate::kit::common::JobOutcome, reason: PackNeed, message: &str) {
             let error = outcome.error().unwrap_or_else(|| panic!("{outcome:?}"));
             assert_eq!(error.kind, ErrorKind::Unavailable);
@@ -1606,7 +1594,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    /// Installs the fixture Hindi pack into a fresh app-data folder.
     fn install_hindi(root: &Path) -> PathBuf {
         use crate::packs::install::{install, tests::{Fixture, TestKey}, InstallContext, PackLimits};
         let (fixture, key) = (Fixture::new(), TestKey::new(1));

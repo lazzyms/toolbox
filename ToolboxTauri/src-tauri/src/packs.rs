@@ -22,7 +22,6 @@ use std::path::{Component, Path, PathBuf};
 
 /// The newest pack format this build can read.
 pub const PACK_FORMAT: u32 = 1;
-/// The catalog format this build can read.
 const CATALOG_FORMAT: u32 = 1;
 /// Payloads for this target serve every Supported target. Data-only packs use it.
 const ALL_TARGETS: &str = "all";
@@ -171,7 +170,6 @@ impl InstalledRecord {
     }
 }
 
-/// The installed record in the pack folder `folder`, when it can be read.
 fn read_record(folder: &Path) -> Option<InstalledRecord> {
     serde_json::from_str(&std::fs::read_to_string(folder.join(INSTALLED_FILE)).ok()?).ok()
 }
@@ -1009,7 +1007,6 @@ mod tests {
         for needle in ["std::net", "TcpStream", "UdpSocket", "ToSocketAddrs", "reqwest", "ureq", "hyper", "tauri_plugin_http", "Command::new"] {
             assert!(!runtime.contains(needle), "packs.rs must not use {needle}");
         }
-        // Listing a fixture works from the filesystem alone.
         let app_data = sandbox("offline");
         install(&app_data, "unicode-scripts", "1.0", record("1.0"));
         assert_eq!(list_packs_in(&fixture(), &app_data, MAC, APP).installed_count, 1);
