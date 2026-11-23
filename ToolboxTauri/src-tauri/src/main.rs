@@ -150,7 +150,6 @@ async fn inspect_signature_image(request: InspectPdfRequest) -> Result<scene::Si
     tauri::async_runtime::spawn_blocking(move || scene::inspect_signature_image(&request.path)).await.map_err(|error| error.to_string())?
 }
 
-/// The packs a run may read fonts and data from.
 fn run_packs(app: &tauri::AppHandle) -> RunPacks {
     RunPacks::new(packs::app_data(app), app.package_info().version.to_string(), packs::load_catalog())
 }
@@ -329,8 +328,8 @@ where
         combined
     });
     let reported = reported.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-    // Entries count only when the job's own outcome is the run's, not a limit that stopped it.
-    let Some(remaining::Merged { mut entries, .. }) = reported.filter(|merged| merged.combined == aggregate && merged.entries.len() == paths.len()) else {
+    let speaks_for_run = |merged: &remaining::Merged| merged.combined == aggregate && merged.entries.len() == paths.len();
+    let Some(remaining::Merged { mut entries, .. }) = reported.filter(speaks_for_run) else {
         return combine_aggregate(paths, note_renamed(aggregate, chosen.as_deref()));
     };
     if let Some(first_added) = entries.iter_mut().find(|entry| matches!(entry.state, OutcomeState::Succeeded { .. })) {
@@ -373,8 +372,7 @@ async fn convert_pasted_html(app: tauri::AppHandle, request: convert::PastedHtml
 async fn run_convert_pasted_html(request: convert::PastedHtmlRequest, packs: RunPacks) -> Vec<JobOutcome> {
     let output_path = request.output_path.clone();
     let limits = convert::pasted_html_limits();
-    // The markup is in memory, so there is no input file to check; the run still gets the time limit.
-    let mut outcome = limits.run_all(&[], move || convert::pasted_html(request, &packs));
+    let mut outcome = limits.run_in_memory(move || convert::pasted_html(request, &packs));
     outcome.input_path = output_path;
     vec![outcome]
 }
@@ -388,8 +386,7 @@ async fn create_formatted_pdf(app: tauri::AppHandle, request: formatted::Formatt
 async fn run_create_formatted_pdf(request: formatted::FormattedPdfRequest, packs: RunPacks) -> Vec<JobOutcome> {
     if let Err(outcomes) = validate_command_inputs(formatted::COMMAND, &[]) { return outcomes; }
     let output_path = request.output_path.clone();
-    // The document is in memory, so there is no input file to check; the run still gets the time limit.
-    let mut outcome = formatted::limits().run_all(&[], move || formatted::create(&request, &packs));
+    let mut outcome = formatted::limits().run_in_memory(move || formatted::create(&request, &packs));
     outcome.input_path = output_path;
     vec![outcome]
 }
@@ -768,10 +765,6 @@ fn main() {
 
 #[cfg(test)]
 mod command_tests {
-    // Drives the same command functions the frontend `invoke`s, with the same
-    // argument shapes (Vec<String> paths, format strings), so the whole
-    // IPC-facing layer is exercised without needing a live WebView.
-
     use super::*;
     use crate::kit::common::OutputLocation;
     use crate::kit::common::watermark::{WatermarkOptions, WatermarkPosition};
@@ -1484,9 +1477,6 @@ mod command_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    // What one Images to PDF page shows: its media box, the clip rectangle a
-    // fill draws through (if any), the `cm` matrix and the rectangle it draws
-    // the image into, and the embedded image stream as stored.
     #[derive(Debug)]
     struct LaidOutPage { media: Vec<f32>, clip: Option<[f32; 4]>, matrix: [f32; 6], drawn: [f32; 4], image_dict: lopdf::Dictionary, image_bytes: Vec<u8> }
 
@@ -1520,8 +1510,6 @@ mod command_tests {
         }
     }
 
-    // A wide JPEG (40 × 20), a tall PNG (20 × 30) and a square PNG (24 × 24),
-    // generated here so every orientation rule has a page to act on.
     fn layout_fixtures(root: &PathBuf) -> (Vec<PathBuf>, Vec<u8>) {
         use image::{Rgb, RgbImage};
         let wide = root.join("wide.jpg");
@@ -2157,7 +2145,6 @@ mod command_tests {
     fn cropped_pages(path: &std::path::Path) -> Vec<usize> {
         let document = lopdf::Document::load(path).unwrap();
         document.get_pages().into_iter().filter(|(_, page)| {
-            // Crop sets only the CropBox; an uncropped page keeps its MediaBox alone.
             let crop_box = document.get_dictionary(*page).unwrap().get(b"CropBox").ok().and_then(|value| value.as_array().ok()).cloned().unwrap_or_default();
             crop_box.iter().map(|value| value.as_float().unwrap()).collect::<Vec<_>>() == vec![100.0, 100.0, 300.0, 400.0]
         }).map(|(number, _)| number as usize).collect()
@@ -2328,7 +2315,6 @@ mod command_tests {
             assert_eq!(std::fs::read(input).unwrap(), original, "original was modified: {}", input.display());
         }
 
-        // A malformed range is rejected for every file before anything is read or written.
         let outcomes = tauri::async_runtime::block_on(resize_pdf(RunEvents::silent(), ResizePdfRequest {
             paths: vec![lease.clone(), nda.clone()], size: TargetSize::Preset("letter".into()), orientation: ResizeOrientation::Match,
             placement: ResizePlacement::Fit, scope: RangedPageScope::Range { ranges: "4-2".into() }, output_location: location(&root, "bad-range"),
@@ -2458,7 +2444,6 @@ mod command_tests {
         }
         assert!(outcomes[1].error().is_some() && outcomes[1].output_paths().is_empty(), "the broken file fails on its own");
 
-        // Out of bounds fails every file with InvalidInput and writes nothing.
         let outcomes = tauri::async_runtime::block_on(resize_pdf(RunEvents::silent(), payload(71.0, 708.6614, "too-small")));
         assert!(outcomes[0].error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput) && error.message == "Width must be at least 25.4 mm (72 pt)."), "{:?}", outcomes[0]);
         assert!(outcomes.iter().all(|outcome| outcome.error().is_some() && outcome.output_paths().is_empty()));
@@ -2841,7 +2826,6 @@ mod command_tests {
         let book = crate::kit::pdf::epub::parse(&std::fs::read(&epub).unwrap(), u64::MAX, ToolError::processing("too big"), 1.).unwrap_or_else(|error| panic!("{error:?}"));
         assert_eq!((book.chapters.len(), book.navigation.len(), book.title.as_deref()), (1, 1, Some("field notes")), "a book without headings is one chapter listed by its title");
 
-        // A repeat run never replaces the first book, and the same PDF makes the same bytes.
         let again = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "books"))));
         let third = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], location(&root, "books"))));
         assert_eq!(again[0].output_paths(), [root.join("books").join("field notes-1.epub")]);
@@ -2851,7 +2835,6 @@ mod command_tests {
         assert_eq!(std::fs::read(&again[0].output_paths()[0]).unwrap(), first_bytes, "repeat runs are byte-identical");
         assert_eq!(std::fs::read(&third[0].output_paths()[0]).unwrap(), first_bytes, "repeat runs are byte-identical");
 
-        // Saved beside the original, the book takes the PDF's name too.
         let beside = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(vec![pdf.clone()], OutputLocation::AlongsideInput)));
         assert_eq!(beside[0].output_paths(), [root.join("field notes.epub")]);
         assert_eq!(std::fs::read(&beside[0].output_paths()[0]).unwrap(), first_bytes);
@@ -3071,7 +3054,6 @@ mod command_tests {
         let outcomes = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), epub_request(paths.clone(), location(&root, "books"))));
         let chapter = outcomes[1].output_paths().first().map(epub_chapter).unwrap_or_default();
         let written = std::fs::read_dir(root.join("books")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
-        // A range that keeps only a page without text leaves nothing to convert, so that PDF needs OCR too.
         let only_blank = tauri::async_runtime::block_on(pdf_to_epub(RunEvents::silent(), ranged_epub_request(vec![mixed.clone()], location(&root, "blank"), "2, 4")));
         let blank_written = root.join("blank").read_dir().map(|entries| entries.count()).unwrap_or(0);
         let _ = std::fs::remove_dir_all(&root);
@@ -3994,7 +3976,6 @@ mod command_tests {
     /// fractions of the displayed page. Returns the crop's displayed top left in points.
     fn turn_and_crop_scan(path: &PathBuf, rotation: i64, [left, top, width, height]: [f32; 4]) -> (f32, f32) {
         let mut document = lopdf::Document::load(path).unwrap();
-        // The media box, and the matrix that draws the scan upright once the page is turned.
         let (media, placement) = match rotation {
             0 => ([0., 0., 612., 792.], "612 0 0 792 0 0"),
             90 => ([0., 0., 792., 612.], "0 612 -792 0 792 0"),
@@ -4444,7 +4425,6 @@ mod command_tests {
         let names = images.iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
         assert_eq!(names, ["document-page-01.png", "document-page-02.png", "document-page-03.png", "document-page-05.png", "document-page-08.png", "document-page-09.png"]);
 
-        // Split fits its ranges to each PDF, so a range past the end is shortened and the change is noted.
         let outcomes = tauri::async_runtime::block_on(split_pdf(RunEvents::silent(), split_ranges_request(vec![input.clone()], "1, 8-12", location(&root, "split-past-end"))));
         assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0].error());
         assert_eq!(outcomes[0].output_paths().len(), 2);
@@ -5571,7 +5551,6 @@ mod command_tests {
         let out_of_range = tauri::async_runtime::block_on(render_pdf_source_thumbnails(scene::SourceThumbnailsRequest { path: pdf.clone(), page_indices: vec![2] })).err().expect("an out-of-range page must be rejected");
         assert!(matches!(out_of_range.kind, ErrorKind::InvalidInput), "kind: {:?}", out_of_range.kind);
         assert_eq!(std::fs::read(&pdf).unwrap(), plain_pdf_bytes, "thumbnails must not change the source PDF");
-        // Both fixture pages carry text, so neither is blank. Two runs agree, and the source is never written.
         if pdftotext_available() {
             let classify = || tauri::async_runtime::block_on(classify_pdf_blank_pages(scene::BlankPagesRequest { path: pdf.clone(), page_indices: vec![1, 0] })).unwrap();
             let blank_wire = serde_json::to_value(classify()).unwrap();
@@ -5596,7 +5575,6 @@ mod command_tests {
         let selected_image_outputs = assert_success("pdf selected pages to images", pdf_to_images(RunEvents::silent(), PdfToImagesRequest { paths: vec![pdf.clone()], dpi: 72, format: "png".into(), page_range: None, pages: Some(vec![1]), picks: Vec::new(), output_location: location(&root, "pdf selected pages to images") }));
         assert_eq!(selected_image_outputs.len(), 1, "selected PDF page rendering must produce only the selected page");
         outputs.extend(named(&mut naming, "pdf_to_images", pdf.clone(), selected_image_outputs));
-        // Extract from PDF is one tool with three modes, so the sweep runs Text, Images and Both, each in its own folder.
         let mixed_pdf = root.join("mixed.pdf"); make_extract_pdf(&mixed_pdf, &[(true, true)]);
         let mixed_pdf_bytes = std::fs::read(&mixed_pdf).unwrap();
         if pdftotext_available() {
@@ -5762,7 +5740,6 @@ mod command_tests {
         assert_eq!(std::fs::read_dir(&icon_outputs[0]).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>(), ["web"]);
         assert_eq!(std::fs::read_dir(icon_outputs[0].join("web")).unwrap().count(), 7, "the Website preset saves its six sizes and favicon.ico");
         outputs.extend(icon_outputs);
-        // Several masters run as one batch: each gets its own folder, and a damaged one fails alone.
         let damaged_master = root.join("damaged-master.png"); std::fs::write(&damaged_master, b"\x89PNG\r\n\x1a\nnot an image").unwrap();
         let icon_batch = tauri::async_runtime::block_on(generate_icon_set(RunEvents::silent(), IconSetRequest { paths: vec![image.clone(), damaged_master.clone(), image_two.clone()], platforms: vec![IconPlatform { preset: "macos".into(), sizes: vec![16, 32, 64, 128, 256, 512, 1024], containers: None }], square_rule: SquareRule::Crop, output_location: location(&root, "icon batch") }));
         let icon_batch_folder = root.join("icon batch");
@@ -5778,7 +5755,6 @@ mod command_tests {
         let upscaled = [(crate::kit::contracts::WarningKind::Upscaled { from: 256, to: 1024 }, "Upscaled to 1024 from 256 pixels.".to_string())];
         for index in [0, 2] { assert_eq!(icon_batch[index].warnings.iter().map(|warning| (warning.kind.clone(), warning.message.clone())).collect::<Vec<_>>(), upscaled); }
         assert_eq!(std::fs::read(&damaged_master).unwrap(), b"\x89PNG\r\n\x1a\nnot an image");
-        // A wide master is never stretched: centre-crop keeps its centred square, pixel for pixel.
         let wide_master = root.join("wide-master.png");
         let wide = image::RgbaImage::from_fn(96, 48, |x, y| Rgba([(x * 2) as u8, (y * 4) as u8, 90, 255]));
         wide.save(&wide_master).unwrap();
@@ -6138,7 +6114,6 @@ mod command_tests {
         }
         assert_eq!(std::fs::read_dir(root.join("invalid")).unwrap().count(), 0, "an invalid size never writes");
 
-        // A size that is only too large for one image fails that file and leaves the rest of the batch alone.
         let strip = root.join("strip.png");
         pattern(2000, 10, 3).save(&strip).unwrap();
         let mixed = run(r#"{"resize":{"mode":"percentage","percentage":1000}}"#, vec![png.clone(), strip.clone()], "mixed");
@@ -6187,7 +6162,6 @@ mod command_tests {
             let folder = format!("{degrees}-{flip}");
             let outcome = &run(&format!(r#"{{"rotate":{{"degrees":{degrees},"flip":"{flip}"}}}}"#), vec![grid.clone()], &folder)[0];
             if degrees == 0 && flip == "none" {
-                // No turn and no mirror changes nothing, so the file is Skipped and nothing is written.
                 assert!(matches!(outcome.state, crate::kit::contracts::OutcomeState::Skipped { .. }), "{folder}: {:?}", outcome.state);
                 assert_eq!(std::fs::read_dir(root.join(&folder)).unwrap().count(), 0, "{folder}");
                 continue;
@@ -6200,7 +6174,6 @@ mod command_tests {
             assert_eq!(outcome.detail, REENCODED_AFTER_ROTATING, "{folder}: a step that changes the pixels reports a re-encode");
         }
 
-        // Crop and resize run first whatever order the steps arrive in, and the run is still one encode.
         let crop = r#"{"mode":"rectangle","x":10,"y":10,"width":80,"height":40,"aspectWidth":0,"aspectHeight":0,"anchor":"custom"}"#;
         let resize = r#"{"mode":"longestSide","longestSide":40,"resampling":"lanczos","keepAspectRatio":true}"#;
         let rotate = r#"{"degrees":270,"flip":"vertical"}"#;
@@ -6271,7 +6244,6 @@ mod command_tests {
     fn edit_stack_tone_is_deterministic_keeps_alpha_and_rejects_out_of_range_values() {
         let root = sandbox("edit_stack_tone");
         let png = root.join("logo.png");
-        // A gradient with a different alpha in every column, from fully clear to opaque.
         let source = image::RgbaImage::from_fn(64, 32, |x, y| Rgba([(x * 4) as u8, (y * 8) as u8, 120, (x * 4) as u8]));
         source.save(&png).unwrap();
         let original = (Original::of(&png), std::fs::read(&png).unwrap());
@@ -6294,8 +6266,6 @@ mod command_tests {
         assert!(output.pixels().zip(source.pixels()).all(|(out, src)| out.0[3] == src.0[3]), "tone leaves PNG alpha unchanged");
         assert!(output.pixels().zip(source.pixels()).any(|(out, src)| out.0[..3] != src.0[..3]), "tone changes the colour");
 
-        // All four at zero leaves the colour as it is: next to a step that changes the image, the
-        // result matches that step alone. On its own it changes nothing, so the file is Skipped.
         let flip = r#""rotate":{"degrees":180,"flip":"vertical"}"#;
         let zero_tone = r#""tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":0}"#;
         let with_zero_tone = run(&format!("{{{flip},{zero_tone}}}"), "zero-tone");
@@ -6304,7 +6274,6 @@ mod command_tests {
         let neutral = run(&format!("{{{zero_tone}}}"), "neutral");
         assert!(matches!(neutral[0].state, crate::kit::contracts::OutcomeState::Skipped { .. }), "{:?}", neutral[0].state);
 
-        // Tone runs after rotate, whatever order the steps arrive in.
         let rotate = r#"{"degrees":90,"flip":"none"}"#;
         let tone_step = r#"{"brightness":10,"contrast":15,"saturation":-20,"exposure":25}"#;
         let tone_first = run(&format!(r#"{{"tone":{tone_step},"rotate":{rotate}}}"#), "tone-first");
@@ -6389,7 +6358,6 @@ mod command_tests {
         let (wide_left, _, wide_right, _) = changed_box(&output(&first[1]), &grey(480, 240)).unwrap();
         assert!(((wide_right - wide_left) as i32 - 2 * width as i32).abs() <= 4, "the size is relative, so it lands the same on every size");
 
-        // Each option changes the result, and no two give the same pixels.
         let variants = [
             ("{}", "base"),
             (r#"{"size":0.5}"#, "size"),
@@ -6423,13 +6391,11 @@ mod command_tests {
         assert_eq!(picture_right - picture_left, 72, "a picture is scaled to 30% of the width");
         assert!(picture.pixels().any(|pixel| pixel.0[2] > pixel.0[0] + 40), "a picture keeps its own colours");
 
-        // The watermark runs after resize, so it is sized against the resized image.
         let resized = run(&[&small], &format!(r#"{{"resize":{{"width":0,"height":0,"mode":"percentage","resampling":"lanczos","keepAspectRatio":true,"percentage":200,"longestSide":0}},"watermark":{}}}"#, step("{}")), "resized");
         assert_eq!(resized[0].output_paths(), [root.join("resized").join("photo-edited.png")]);
         let (resized_left, _, resized_right, _) = changed_box(&output(&resized[0]), &grey(480, 240)).unwrap();
         assert!(((resized_right - resized_left) as i32 - 2 * width as i32).abs() <= 4, "the mark is not scaled with the photo");
 
-        // Characters the font cannot draw fail as a request problem before anything is written.
         std::fs::create_dir_all(root.join("unsupported")).unwrap();
         std::fs::write(root.join("unsupported").join("photo-watermarked.png"), b"existing").unwrap();
         let outcome = &run(&[&small], &mark(r#"{"text":"Home 🏡"}"#), "unsupported")[0];
@@ -6556,7 +6522,6 @@ mod command_tests {
         let damaged = root.join("damaged.jpg");
         oriented_jpeg(&sideways, 6);
         oriented_jpeg(&neutral, 1);
-        // A decodable JPEG whose EXIF segment is cut short keeps its pixels as decoded.
         let plain = crate::kit::images::encode(&image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(96, 64, |x, y| quadrant_colour(x < 48, y < 32))), crate::kit::images::OutputFormat::Jpeg, 95).unwrap();
         let mut broken = plain[..2].to_vec();
         broken.extend([0xFF, 0xE1, 0x00, 0x0A]);
@@ -6612,7 +6577,6 @@ mod command_tests {
         use crate::kit::images::tools::{REDUCED_TO_8_BIT, TRANSPARENCY_FLATTENED};
         use crate::kit::images::{encode, has_transparency, OutputFormat};
         let root = sandbox("edit_stack_output_format");
-        // Left half fully clear red, right half opaque blue, and alpha rising down the rows on the left.
         let transparent = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(64, 32, |x, y| if x < 32 { Rgba([255, 0, 0, (y * 4) as u8]) } else { Rgba([0, 0, 255, 255]) }));
         let opaque = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(64, 32, |x, y| Rgba([(x * 4) as u8, (y * 8) as u8, 90, 255])));
         let badge = root.join("badge.png");
@@ -6646,7 +6610,6 @@ mod command_tests {
             }
         };
 
-        // No choice keeps every input's format; each choice converts every input to it.
         for (format, extension, expected) in [(None, None, None), (Some("jpg"), Some("jpg"), Some("Jpeg")), (Some("png"), Some("png"), Some("Png")), (Some("webp"), Some("webp"), Some("WebP")), (Some("heic"), Some("heic"), Some("Heic"))] {
             let folder = format!("as-{}", format.unwrap_or("original"));
             let outcomes = run(&inputs, crop, format, &folder);
@@ -6658,13 +6621,11 @@ mod command_tests {
                 let expected = expected.unwrap_or(match keep { "jpg" => "Jpeg", "webp" => "WebP", "heic" => "Heic", _ => "Png" });
                 assert_eq!(decoded_format(&outcome.output_paths()[0]), expected, "{} as {folder}", input.display());
             }
-            // Only JPEG flattens, and only the transparent badge; only the 16-bit source loses depth, unless it stays PNG.
             assert_eq!(warnings(&outcomes[0]), if format == Some("jpg") { vec![flattened.clone()] } else { vec![] }, "badge as {folder}");
             for index in 1..4 { assert!(outcomes[index].warnings.is_empty(), "{} as {folder}", inputs[index].display()); }
             assert_eq!(warnings(&outcomes[4]), if matches!(format, None | Some("png")) { vec![] } else { vec![reduced.clone()] }, "deep as {folder}");
         }
 
-        // JPEG composites the transparent half onto white, in proportion to its alpha.
         let flat = image::open(root.join("as-jpg").join("badge-cropped.jpg")).unwrap().to_rgb8();
         let clear = flat.get_pixel(8, 0).0;
         assert!(clear.iter().all(|channel| *channel > 245), "fully clear pixels become white, not their hidden colour: {clear:?}");
@@ -6673,7 +6634,6 @@ mod command_tests {
         let blue = flat.get_pixel(56, 16).0;
         assert!(blue[2] > 200 && blue[0] < 40, "opaque pixels keep their colour: {blue:?}");
 
-        // PNG, WebP and HEIC keep alpha through every step.
         let every_step = r#"{"crop":{"x":0,"y":0,"width":0,"height":0,"mode":"aspectRatio","aspectWidth":1,"aspectHeight":1,"anchor":"start"},"resize":{"width":0,"height":0,"mode":"percentage","percentage":50,"longestSide":0,"resampling":"lanczos","keepAspectRatio":true},"rotate":{"degrees":90,"flip":"horizontal"},"tone":{"brightness":10,"contrast":15,"saturation":-20,"exposure":0}}"#;
         for format in ["png", "webp", "heic"] {
             let outcome = run(std::slice::from_ref(&badge), every_step, Some(format), &format!("alpha-{format}")).remove(0);
@@ -6689,11 +6649,9 @@ mod command_tests {
             }
         }
 
-        // An opaque image that gained an alpha channel from the tone step is not reported as flattened.
         let toned = run(std::slice::from_ref(&jpeg), r#"{"tone":{"brightness":10,"contrast":0,"saturation":0,"exposure":0}}"#, Some("jpg"), "toned").remove(0);
         assert!(toned.error().is_none() && toned.warnings.is_empty(), "{:?}", toned.warnings);
 
-        // A 16-bit PNG keeps its depth as PNG, until a step works in 8 bits.
         let deep_png = image::open(&run(std::slice::from_ref(&deep), crop, Some("png"), "deep-png")[0].output_paths()[0]).unwrap();
         assert_eq!(deep_png.color(), image::ColorType::Rgb16);
         let deep_toned = run(std::slice::from_ref(&deep), r#"{"tone":{"brightness":10,"contrast":0,"saturation":0,"exposure":0}}"#, None, "deep-toned").remove(0);
@@ -6702,7 +6660,6 @@ mod command_tests {
         let deep_heic = heif::decode(&std::fs::read(root.join("as-heic").join("deep-cropped.heic")).unwrap()).unwrap();
         assert!(!crate::kit::images::has_high_bit_depth(deep_heic.color()), "HEIC output is 8 bits per channel: {:?}", deep_heic.color());
 
-        // An unknown format fails each file as invalid input and writes nothing.
         let unknown = run(std::slice::from_ref(&badge), crop, Some("tiff"), "unknown").remove(0);
         assert!(unknown.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)));
         assert_eq!(std::fs::read_dir(root.join("unknown")).unwrap().count(), 0);
@@ -6761,7 +6718,6 @@ mod command_tests {
         let tone_zero = r#""tone":{"brightness":0,"contrast":0,"saturation":0,"exposure":0}"#;
         let every = format!("{crop_ratio},{resize_longest},{rotate_none},{tone_zero}");
 
-        // Each neutral step kind, alone and all together, skips every 64 x 32 input in its own format.
         let same_size = [&wide, &photo, &still, &phone];
         for (label, steps) in [("crop-all", crop_all), ("crop-ratio", crop_ratio), ("resize-exact", resize_exact), ("resize-box", resize_box), ("resize-percent", resize_percent), ("resize-longest", resize_longest), ("rotate-none", rotate_none), ("rotate-full", rotate_full), ("tone-zero", tone_zero), ("every", every.as_str())] {
             for format in [None, Some("same")] {
@@ -6777,25 +6733,21 @@ mod command_tests {
             }
         }
 
-        // A step that changes the image is never neutral, even next to neutral ones.
         for (label, steps) in [
             ("crop-smaller", r#""crop":{"x":0,"y":0,"width":63,"height":32,"mode":"rectangle","aspectWidth":0,"aspectHeight":0,"anchor":"custom"}"#.to_string()),
             ("resize-up", r#""resize":{"width":0,"height":0,"mode":"percentage","percentage":101,"longestSide":0,"resampling":"lanczos","keepAspectRatio":true}"#.to_string()),
             ("rotate-turn", r#""rotate":{"degrees":180,"flip":"none"}"#.to_string()),
             ("rotate-mirror", r#""rotate":{"degrees":0,"flip":"horizontal"}"#.to_string()),
             ("tone-exposure", format!(r#"{crop_all},"tone":{{"brightness":0,"contrast":0,"saturation":0,"exposure":1}}"#)),
-            // A watermark always marks the image, even beside neutral steps.
             ("watermark-text", format!(r#"{every},"watermark":{{"text":"T","size":0.3,"opacity":70,"rotation":0,"position":{{"anchorX":1,"anchorY":1}}}}"#)),
         ] {
             let outcome = run(&[&wide], &format!("{{{steps}}}"), None, label).remove(0);
             assert!(matches!(outcome.state, OutcomeState::Succeeded { .. }), "{label}: {:?}", outcome.state);
             assert_eq!(written(label).len(), 1, "{label}");
         }
-        // A step that cannot apply still fails, rather than being Skipped.
         let outside = run(&[&small], &format!("{{{crop_all}}}"), None, "outside").remove(0);
         assert!(outside.error().is_some_and(|error| matches!(error.kind, ErrorKind::InvalidInput)), "{:?}", outside.state);
 
-        // One resize target skips the file already that size and resizes the others in the same batch.
         let mixed = run(&[&large, &wide, &small], &format!("{{{resize_longest}}}"), None, "mixed");
         assert_eq!(mixed.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![large.clone(), wide.clone(), small.clone()]);
         assert_skipped(&mixed[1], "mixed");
@@ -6808,7 +6760,6 @@ mod command_tests {
         names.sort();
         assert_eq!(names, ["large-resized.png", "small-resized.png"], "the skipped file has no output");
 
-        // The same neutral stack with another format is encoded once in that format and succeeds.
         let decoded_format = |path: &PathBuf| {
             let bytes = std::fs::read(path).unwrap();
             match image::guess_format(&bytes) {
@@ -6873,7 +6824,6 @@ mod command_tests {
 
         let outcomes = run(&paths, r#"{"metadata":{}}"#, None, "strip");
         assert_eq!(outcomes.iter().map(|outcome| &outcome.input_path).collect::<Vec<_>>(), paths.iter().collect::<Vec<_>>(), "in input order");
-        // JPEG and PNG lose their metadata without a new encode, and keep orientation and profile.
         for (outcome, name) in [(&outcomes[0], "tagged-stripped.jpg"), (&outcomes[1], "tagged-stripped.png")] {
             assert_eq!(outcome.output_paths(), [root.join("strip").join(name)], "{:?}", outcome.state);
             assert_eq!(outcome.detail, format!("{CLEANED_LOSSLESSLY} Removed: Camera details, GPS location, XMP, IPTC, comments. Kept: Orientation, colour profile."));
@@ -6899,22 +6849,18 @@ mod command_tests {
         written.sort();
         assert_eq!(written, ["tagged-stripped.heic", "tagged-stripped.jpg", "tagged-stripped.png", "tagged-stripped.webp"]);
 
-        // Beside a pixel step, the one encode drops the metadata, bakes the orientation and keeps the profile.
         let resize = r#""resize":{"width":0,"height":0,"mode":"longestSide","percentage":100,"longestSide":8,"resampling":"lanczos","keepAspectRatio":true}"#;
         let combined = run(&paths[..1], &format!(r#"{{{resize},"metadata":{{}}}}"#), None, "combined").remove(0);
         assert_eq!(combined.output_paths(), [root.join("combined").join("tagged-edited.jpg")], "{:?}", combined.state);
         assert!(combined.detail.ends_with("Removed: Camera details, GPS location, XMP, IPTC, comments. Kept: Orientation, colour profile."), "{}", combined.detail);
         let saved = clean(&combined.output_paths()[0]);
         assert_eq!((saved.orientation, saved.icc), (None, true));
-        // Choosing another format re-encodes into it, still with the profile.
         let converted = run(&paths[1..2], r#"{"metadata":{}}"#, Some("jpg"), "converted").remove(0);
         assert_eq!(converted.output_paths(), [root.join("converted").join("tagged-stripped.jpg")], "{:?}", converted.state);
         assert!(clean(&converted.output_paths()[0]).icc);
-        // Even a file with nothing to remove is saved when the format changes.
         let profile_only = run(&paths[4..5], r#"{"metadata":{}}"#, Some("webp"), "profile-only").remove(0);
         assert_eq!(profile_only.output_paths(), [root.join("profile-only").join("profile-only-stripped.webp")], "{:?}", profile_only.state);
 
-        // A file whose metadata can't be read fails with no copy, rather than being saved unchecked.
         let broken = root.join("broken.png");
         let mut bytes = files[1].1.clone();
         // The XMP text chunk no longer matches its checksum, though the pixels still decode.
@@ -7231,7 +7177,6 @@ mod command_tests {
         assert_eq!(std::fs::read_dir(root.join("protected")).unwrap().count(), 2);
     }
 
-    // Runs a command with a sink that records every per-file event it emits.
     fn recorded<F>(command: impl FnOnce(RunEvents) -> F) -> (Vec<JobOutcome>, Vec<FileEvent>)
     where F: Future<Output = Vec<JobOutcome>> {
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -7241,7 +7186,6 @@ mod command_tests {
         (outcomes, events)
     }
 
-    // Each file starts once, then finishes once with the same outcome the ordered response returns.
     fn assert_every_file_streams(events: &[FileEvent], outcomes: &[JobOutcome]) {
         assert_eq!(events.len(), outcomes.len() * 2, "two events per file and nothing else");
         for index in 0..outcomes.len() {
@@ -9814,7 +9758,6 @@ mod command_tests {
         };
         let read = |path: &PathBuf| std::fs::read_to_string(path).unwrap();
 
-        // Text: one text file per PDF in reading order; a PDF without a text layer is skipped alone and pointed at OCR.
         let text = run(vec![mixed.clone(), plain.clone(), scanned.clone()], ExtractMode::Text, None, "text");
         assert_eq!(text.iter().map(|outcome| outcome.input_path.clone()).collect::<Vec<_>>(), vec![mixed.clone(), plain.clone(), scanned.clone()]);
         for outcome in &text[..2] {
@@ -9829,7 +9772,6 @@ mod command_tests {
         assert!(text[2].output_paths().is_empty());
         assert_eq!(files_in(&root.join("text")), vec!["mixed-text.txt", "plain-text.txt"]);
 
-        // Images: the embedded JPEGs are copied byte for byte; a PDF without images is skipped alone.
         let images = run(vec![mixed.clone(), scanned.clone(), plain.clone()], ExtractMode::Images, None, "images");
         assert_eq!(images.len(), 3);
         assert_eq!(images[0].output_paths(), [root.join("images").join("mixed-images")]);
@@ -9840,7 +9782,6 @@ mod command_tests {
         assert_eq!(files_in(&root.join("images")), vec!["mixed-images", "scanned-images"]);
         assert_eq!(files_in(&root.join("images").join("mixed-images")), vec!["page-1-image-1.jpg"]);
 
-        // Both: one outcome per PDF holds the text file first, then the images, with a note when a part is missing.
         let both = run(vec![mixed.clone(), scanned.clone(), plain.clone(), blank.clone()], ExtractMode::Both, None, "both");
         assert_eq!(both.len(), 4);
         let folder = root.join("both");
@@ -9859,7 +9800,6 @@ mod command_tests {
         }
         assert_eq!(files_in(&folder), vec!["mixed-images", "mixed-text.txt", "plain-text.txt", "scanned-images"]);
 
-        // A second run never replaces the first run's outputs.
         let again = run(vec![mixed.clone()], ExtractMode::Both, None, "both");
         assert_eq!(again[0].output_paths(), [folder.join("mixed-text-1.txt"), folder.join("mixed-images-1")]);
         assert_eq!(files_in(&folder.join("mixed-images")), vec!["page-1-image-1.jpg"]);
@@ -9877,7 +9817,6 @@ mod command_tests {
         assert_eq!(backwards[0].error().map(|error| error.message.as_str()), Some("\"2-1\" runs backwards. Put the lower page first, for example 1-2."));
         assert!(files_in(&root.join("backwards")).is_empty());
 
-        // Skip small images leaves out images under the given size.
         let mut small = extract_request(vec![mixed.clone()], ExtractMode::Both, None, location(&root, "small"));
         small.min_image_size = Some(5);
         let small = tauri::async_runtime::block_on(extract_from_pdf(RunEvents::silent(), small));
@@ -9920,17 +9859,14 @@ mod command_tests {
         }).collect::<Vec<_>>();
         let in_folder = |folder: &PathBuf, per_pdf: [&[&str]; 2]| per_pdf.map(|names| names.iter().map(|name| folder.join(name)).collect::<Vec<_>>()).to_vec();
 
-        // The default saves next to each original.
         assert_eq!(outputs(run(ExtractMode::Both, OutputLocation::AlongsideInput)), in_folder(&originals_folder, [&["signed-text.txt", "signed-images"], &["certified-text.txt", "certified-images"]]));
         assert_eq!(files_in(&originals_folder), ["certified-images", "certified-text.txt", "certified.pdf", "signed-images", "signed-text.txt", "signed.pdf"]);
 
-        // A chosen folder takes the text files and the image folders in every mode, and nothing more lands next to the originals.
         let chosen_location = || OutputLocation::CustomFolder(chosen.clone());
         assert_eq!(outputs(run(ExtractMode::Text, chosen_location())), in_folder(&chosen, [&["signed-text.txt"], &["certified-text.txt"]]));
         assert_eq!(outputs(run(ExtractMode::Images, chosen_location())), in_folder(&chosen, [&["signed-images"], &["certified-images"]]));
         assert_eq!(files_in(&chosen.join("signed-images")), ["page-1-image-1.jpg"]);
 
-        // Names already taken there, by an earlier run or by an unrelated file, get the next free number; nothing is replaced or reused.
         assert_eq!(outputs(run(ExtractMode::Both, chosen_location())), in_folder(&chosen, [&["signed-text-1.txt", "signed-images-1"], &["certified-text-1.txt", "certified-images-1"]]));
         std::fs::write(chosen.join("signed-text-2.txt"), "keep").unwrap();
         std::fs::write(chosen.join("signed-images-2"), "keep").unwrap();
@@ -9978,7 +9914,6 @@ mod command_tests {
             state => panic!("{} should be skipped, got {state:?}", outcome.input_path.display()),
         };
 
-        // One range is clamped to each PDF in the batch; a PDF with no page in it is skipped and nothing is written for it.
         let ranged = run(vec![short.clone(), middle.clone(), long.clone()], ExtractMode::Text, Some("2-4, 6-"), "ranged");
         let reason = skip_of(&ranged[0]);
         assert_eq!((reason.code, reason.message.as_str(), &reason.pointer), (SkipCode::RangeEmptyAfterClamping, "No pages in 2-4, 6- are in this PDF, which has 1 page.", &None));
@@ -9991,7 +9926,6 @@ mod command_tests {
         assert_eq!(skip_of(&past_the_end[0]).message, "No pages in 7-9 are in this PDF, which has 3 pages.");
         assert!(files_in(&root.join("past-the-end")).is_empty());
 
-        // Each mode skips a PDF that has nothing for it, says why, and leaves no file or folder behind.
         let images = run(vec![middle.clone()], ExtractMode::Images, None, "no-images");
         assert_eq!(skip_of(&images[0]).message, NO_EMBEDDED_IMAGES);
         let text = run(vec![scanned.clone()], ExtractMode::Text, None, "scanned");
@@ -10002,7 +9936,6 @@ mod command_tests {
         assert_eq!(skip_of(&neither[0]).message, NOTHING_TO_EXTRACT);
         for folder in ["no-images", "scanned", "neither"] { assert!(files_in(&root.join(folder)).is_empty(), "{folder} should stay empty"); }
 
-        // Pages without text are listed with an OCR suggestion while the text file is still written.
         for mode in [ExtractMode::Text, ExtractMode::Both] {
             let folder = if mode == ExtractMode::Text { "partial-text" } else { "partial-both" };
             let outcome = &run(vec![partial.clone()], mode, None, folder)[0];
@@ -11041,27 +10974,27 @@ mod command_tests {
             let folder = root.join("folder.jpg");
             std::fs::create_dir_all(&folder).unwrap();
             let truncated = fixtures::jpeg(all);
-            // (path, original bytes when the file exists, expected readable)
-            let mut entries: Vec<(PathBuf, Option<Vec<u8>>, bool)> = vec![
-                (root.join("missing.png"), None, false),
-                (folder.clone(), None, false),
+            struct Entry { path: PathBuf, bytes: Option<Vec<u8>>, readable: bool }
+            let mut entries = vec![
+                Entry { path: root.join("missing.png"), bytes: None, readable: false },
+                Entry { path: folder.clone(), bytes: None, readable: false },
             ];
             for (format, extension) in FORMATS {
-                entries.push((root.join(format!("camera.{extension}")), Some(fixture(format, all)), true));
-                entries.push((root.join(format!("plain.{extension}")), Some(fixture(format, Wanted::default())), true));
+                entries.push(Entry { path: root.join(format!("camera.{extension}")), bytes: Some(fixture(format, all)), readable: true });
+                entries.push(Entry { path: root.join(format!("plain.{extension}")), bytes: Some(fixture(format, Wanted::default())), readable: true });
             }
-            entries.insert(3, (root.join("notes.txt"), Some(b"not an image".to_vec()), false));
-            entries.insert(6, (root.join("cut.jpg"), Some(truncated[..truncated.len() / 2].to_vec()), false));
-            for (path, bytes, _) in &entries { if let Some(bytes) = bytes { std::fs::write(path, bytes).unwrap(); } }
+            entries.insert(3, Entry { path: root.join("notes.txt"), bytes: Some(b"not an image".to_vec()), readable: false });
+            entries.insert(6, Entry { path: root.join("cut.jpg"), bytes: Some(truncated[..truncated.len() / 2].to_vec()), readable: false });
+            for Entry { path, bytes, .. } in &entries { if let Some(bytes) = bytes { std::fs::write(path, bytes).unwrap(); } }
 
-            let paths = entries.iter().map(|(path, _, _)| path.clone()).collect::<Vec<_>>();
+            let paths = entries.iter().map(|entry| entry.path.clone()).collect::<Vec<_>>();
             let results = inspect_image_metadata(MetadataRequest { paths: paths.clone() });
 
             assert_eq!(results.len(), entries.len(), "exactly one result per requested file");
-            let readable = entries.iter().filter(|(_, _, readable)| *readable).count();
+            let readable = entries.iter().filter(|entry| entry.readable).count();
             assert_eq!(results.iter().filter(|result| matches!(result, MetadataInspection::Report(_))).count(), readable, "one report per readable file");
             assert_eq!(results.iter().filter(|result| matches!(result, MetadataInspection::Error(_))).count(), entries.len() - readable, "one error per unreadable file");
-            for (result, (path, bytes, readable)) in results.iter().zip(&entries) {
+            for (result, Entry { path, bytes, readable }) in results.iter().zip(&entries) {
                 match result {
                     MetadataInspection::Report(report) => {
                         assert!(*readable, "{} should have failed", path.display());
@@ -11083,7 +11016,7 @@ mod command_tests {
 
             let wire = serde_json::to_value(&results).unwrap();
             let statuses = wire.as_array().unwrap().iter().map(|item| item["status"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-            let expected = entries.iter().map(|(_, _, readable)| if *readable { "report" } else { "error" }.to_string()).collect::<Vec<_>>();
+            let expected = entries.iter().map(|entry| if entry.readable { "report" } else { "error" }.to_string()).collect::<Vec<_>>();
             assert_eq!(statuses, expected, "every wire item is tagged report or error for the UI");
             let _ = std::fs::remove_dir_all(root);
         }

@@ -79,7 +79,6 @@ impl DocumentBlock {
         }
     }
 
-    /// The text the block draws, in order.
     fn texts(&self) -> Vec<&str> {
         match self {
             Self::Heading1 { text } | Self::Heading2 { text } | Self::Heading3 { text } => vec![text],
@@ -114,7 +113,6 @@ impl DocumentBlock {
     }
 }
 
-/// The name an image is shown by in messages: its file name.
 fn image_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
@@ -189,7 +187,6 @@ impl PageSettings {
     }
 }
 
-/// One line of a header or footer, or nothing for blank text.
 fn band_line(text: &str, align: Align) -> Option<Block> {
     let text = text.trim();
     if text.is_empty() { return None; }
@@ -264,7 +261,6 @@ pub fn limits() -> ToolLimits { limits::CREATED_DOCUMENT }
 
 /// Saves the document at the chosen path, or a numbered name beside it when that name is taken.
 pub fn create(request: &FormattedPdfRequest, packs: &RunPacks) -> JobOutcome {
-    // The shared rule: an installed font, then a bundled metric-compatible fallback, then the bundled default.
     let outcome = match FontResolver::shared() {
         Ok(fonts) => create_with(request, &fonts, packs),
         Err(error) => JobOutcome::failure(request.output_path.clone(), error),
@@ -483,7 +479,6 @@ fn render_command(renderer: &Path, pages: usize) -> Command {
     command
 }
 
-/// The hatched box drawn where an image that can't be read would go.
 fn placeholder() -> Picture {
     let (width, height) = PLACEHOLDER_SIZE;
     let image = image::RgbImage::from_fn(width, height, |x, y| {
@@ -560,7 +555,6 @@ fn spans(runs: &[Run]) -> Option<Vec<Span>> {
     if spans.is_empty() { None } else { Some(spans) }
 }
 
-/// A table cell's text as one plain span, or no spans when it is blank.
 fn cell_spans(text: &str) -> Vec<Span> {
     let text = text.trim();
     if text.is_empty() { Vec::new() } else { vec![Span { text: text.to_string(), style: Style::default(), link: None }] }
@@ -656,7 +650,6 @@ mod tests {
     /// Extracted text with the line ends lopdf adds after every text object removed.
     fn flat(text: &str) -> String { text.replace('\n', "") }
 
-    /// The fonts that draw text containing `needle` on a page.
     fn fonts_drawing(document: &Document, page: u32, needle: &str) -> Vec<String> {
         drawn(document, page).into_iter().filter(|(_, text)| text.contains(needle)).map(|(font, _)| font).collect()
     }
@@ -839,7 +832,6 @@ mod tests {
         assert!(outcome.fonts.iter().all(|font| font.font_used == "Pacifico" && font.source == FontSource::System), "{:?}", outcome.fonts);
         assert_eq!(fonts_drawing(&Document::load(&path).unwrap(), 1, "Return the keys"), ["Pacifico-Regular"]);
 
-        // The picker lists the bundled families, the same on every computer, then the installed ones.
         let choices = font_choices_from(&bundled, &system);
         assert_eq!(choices, FontChoices {
             bundled: ["Liberation Sans", "Liberation Serif", "Liberation Mono", "Carlito", "Caladea", "DejaVu Sans"].map(String::from).to_vec(),
@@ -1119,7 +1111,6 @@ mod tests {
             assert!(header[0] > top + 11. && footer[0] < bottom - 11. && numbers[0] < footer[0], "page {number}: header {header:?}, text {top}..{bottom}, footer {footer:?}, numbers {numbers:?}");
             assert!(header[0] > 842. - 72. && footer[0] < 72., "the header and footer sit in the margins on page {number}");
         }
-        // The same document saves byte-identical.
         let again = root.join("again.pdf");
         assert!(run(&with_page(long_blocks(40), &again, page)).error().is_none());
         assert_eq!(fs::read(&path).unwrap(), fs::read(&again).unwrap());
@@ -1321,7 +1312,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    /// Writes a solid PNG of the given pixel size.
     fn png(path: &Path, width: u32, height: u32) {
         image::RgbImage::from_pixel(width, height, image::Rgb([30, 90, 160])).save(path).unwrap();
     }
@@ -1447,7 +1437,6 @@ mod tests {
         preview_with(&FormattedPreviewRequest { document: request.document.clone() }, &fonts(), &no_packs(), &renderer()).unwrap()
     }
 
-    /// Every file under `root`, with its bytes.
     fn files(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         let mut found = Vec::new();
         let mut folders = vec![root.to_path_buf()];

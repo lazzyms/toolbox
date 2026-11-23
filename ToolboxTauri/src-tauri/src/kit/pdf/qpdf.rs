@@ -13,7 +13,6 @@ use std::time::Instant;
 /// The argument that makes qpdf read the password options from standard input.
 pub(crate) const PASSWORDS_FROM_STDIN: &str = "@-";
 
-/// Shown in place of a password in anything qpdf printed.
 pub(crate) const MASKED_PASSWORD: &str = "[password hidden]";
 
 pub(crate) const PASSWORD_LINE_BREAK: &str = "Passwords can't contain line breaks.";

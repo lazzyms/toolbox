@@ -1832,7 +1832,6 @@ test("OCR Pages: one range for the batch in page order, thumbnails for a single 
     for (const number of [1, 2, 3]) await expect(page.getByRole("checkbox", { name: `Page ${number}` })).not.toBeChecked();
     await expect(status).toHaveText("No pages picked, so all 3 pages run. Pick pages to limit them.");
 
-    // Picking a thumbnail writes the range field, and typing a range updates the picks.
     await page.getByRole("img", { name: "Source page preview 3" }).click();
     await page.getByRole("img", { name: "Source page preview 1" }).click();
     await expect(pages.getByRole("radio", { name: "Range", exact: true })).toBeChecked();
@@ -1859,7 +1858,6 @@ test("OCR Pages: one range for the batch in page order, thumbnails for a single 
     await expect(page.getByRole("alert").filter({ hasText: "runs backwards" })).toHaveText('"3-1" runs backwards. Put the lower page first, for example 1-3.');
     await expect(exportButton).toBeDisabled();
 
-    // With two files there are no thumbnails, and the one range is sent for both in page order.
     await range.fill("9-, 2");
     await page.evaluate((fixtures) => { (window as TestWindow).__toolboxDialogResults = [fixtures]; }, [second]);
     await page.getByRole("button", { name: "Choose files to process" }).click();
@@ -1871,7 +1869,6 @@ test("OCR Pages: one range for the batch in page order, thumbnails for a single 
     await exportButton.click();
     expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { paths: ["/local/document.scoped.pdf", second], pageRange: "2, 9-" } });
 
-    // Emptying the field, or choosing All pages, sends no range.
     await range.fill("");
     await exportButton.click();
     expect((await lastInvocation(page, "ocr_pdf"))?.args).toMatchObject({ request: { pageRange: null } });
@@ -3476,7 +3473,6 @@ test("PDF page ranges follow the native grammar and messages", async ({ page }) 
     await expect(page.getByText("Entry 2 of the page range is empty. Remove the extra comma.", { exact: true })).toBeVisible();
     await expect(exportButton).toBeDisabled();
 
-    // One range applies to every PDF, so pages past a PDF's last page are left out instead of rejected.
     await range.fill("4");
     await expect(page.getByText("Range 4 applied to each PDF. 1 will be skipped.", { exact: true })).toBeVisible();
 

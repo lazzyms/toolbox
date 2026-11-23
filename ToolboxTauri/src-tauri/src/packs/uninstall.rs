@@ -28,7 +28,6 @@ const REMOVING_DIR: &str = "pack-removing";
 
 #[derive(Default)]
 struct Holds {
-    /// How many runs hold each pack, by pack folder.
     runs: HashMap<PathBuf, usize>,
     /// Pack folders with an old version left for the runs holding them, removed when they finish.
     retiring: HashSet<PathBuf>,
@@ -132,7 +131,6 @@ fn remove_old_versions(folder: &Path) {
     }
 }
 
-/// How many runs hold the pack now.
 #[cfg(test)]
 fn holders(app_data: &Path, pack_id: &str) -> usize {
     holds().runs.get(&pack_folder(app_data, pack_id)).copied().unwrap_or(0)
@@ -218,7 +216,6 @@ impl RunPacks {
         Self { source, holds: Mutex::default() }
     }
 
-    /// The catalog this run reads packs from, or why there is none.
     pub fn catalog(&self) -> Result<&Catalog, ToolError> {
         self.source.as_ref().map(|source| &source.catalog).map_err(|error| ToolError::unavailable(error.clone()))
     }
@@ -268,7 +265,6 @@ pub fn uninstall(app_data: &Path, pack_id: &str) -> Result<(), PackInstallError>
         holds.retiring.remove(&folder);
         health::forget(&folder);
     }
-    // The pack is no longer under packs/: discovery and listing no longer see it.
     install::remove_tree(&removing).map_err(unavailable)
 }
 
@@ -329,7 +325,6 @@ mod tests {
     #[test]
     fn uninstall_removes_the_pack_folder_lists_it_as_not_installed_and_frees_its_space() {
         let setup = Setup::new("removes");
-        // A leftover folder no catalog entry names keeps the total above zero.
         let leftover = setup.app_data.join(PACKS_DIR).join("retired-pack");
         std::fs::create_dir_all(&leftover).unwrap();
         std::fs::write(leftover.join("file"), vec![0u8; 321]).unwrap();
@@ -348,7 +343,6 @@ mod tests {
         assert_eq!((after.installed_count, after.total_bytes), (0, before.total_bytes - pack_bytes));
         assert!(leftover.join("file").exists(), "other packs are left alone");
 
-        // Removing it again changes nothing.
         setup.uninstall().unwrap();
         assert_eq!(setup.list().total_bytes, 321);
     }
@@ -358,7 +352,6 @@ mod tests {
         let setup = Setup::new("in-use");
         let mut run = PackHolds::default();
         assert_eq!(setup.resolve(&mut run).unwrap().source, ResourceSource::InstalledPack);
-        // Resolving again in the same run does not hold it twice.
         setup.resolve(&mut run).unwrap();
         assert_eq!(holders(&setup.app_data, &setup.fixture.id), 1);
 
@@ -405,7 +398,6 @@ mod tests {
         let not_installed = ToolError::unavailable("Needs the Hindi pack, which isn't installed. Nothing was saved.")
             .with_pointer(OutcomePointer::Pack { pack_id: setup.fixture.id.clone(), name: "Hindi".into(), reason: PackNeed::NotInstalled });
         assert_eq!(setup.resolve(&mut later), Err(not_installed));
-        // A run that did not resolve anything from the pack does not keep it held.
         assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0);
     }
 
@@ -463,7 +455,6 @@ mod tests {
             original
         }
 
-        /// The pack file the setup installed.
         fn pack_file(&self) -> Vec<u8> {
             std::fs::read(self.app_data.parent().unwrap().join("pack.toolboxpack")).unwrap()
         }
@@ -557,7 +548,6 @@ mod tests {
             search.extend(std::env::var_os("PATH").iter().flat_map(std::env::split_paths));
             let _env = env.set("PATH", std::env::join_paths(search).unwrap());
             let mut run = PackHolds::default();
-            // Each input the run would process with the resource fails on its own.
             let outcomes = ["first.pdf", "second.pdf"].into_iter().map(|input| {
                 match resolve_pack_resource(MODEL, &setup.app_data, hindi(&setup.fixture.id), APP, None, Some(development_override.clone()), &mut run) {
                     Ok(resource) => panic!("{input} resolved {resource:?}"),
@@ -582,7 +572,6 @@ mod tests {
         setup.change(MODEL);
         assert!(setup.resolve(&mut PackHolds::default()).is_err());
 
-        // A pack file that fails verification changes nothing.
         let mut corrupt = setup.pack_file();
         let middle = corrupt.len() / 2;
         corrupt[middle] ^= 0xff;
@@ -624,7 +613,6 @@ mod tests {
         std::fs::copy(installed.join(MODEL), bundled.join(MODEL)).unwrap();
         std::fs::copy(installed.join("manifest.json"), bundled.join("manifest.json")).unwrap();
 
-        // An app older than the pack's range, and a pack format newer than this build reads.
         for (case, app_version, record) in [("app range", "0.9.0", compatible.clone()), ("pack format", APP, newer_format.to_string())] {
             std::fs::write(&record_path, record).unwrap();
             let list = list_packs_in(&setup.catalog, &setup.app_data, &current_target(), app_version);
@@ -637,12 +625,10 @@ mod tests {
             assert_eq!(error.pointer, Some(OutcomePointer::Pack { pack_id: setup.fixture.id.clone(), name: "Hindi".into(), reason: PackNeed::Incompatible }), "{case}");
             assert_eq!(error.message, "Needs a newer Hindi pack. The installed one doesn't work with this version of Toolbox. Nothing was saved.", "{case}");
             assert_eq!(holders(&setup.app_data, &setup.fixture.id), 0, "{case}: nothing was loaded from it");
-            // A bundled copy, which is not the pack, may still be used.
             let resolved = resolve_pack_resource(MODEL, &setup.app_data, hindi(&setup.fixture.id), app_version, Some(bundled.clone()), None, &mut run).unwrap();
             assert_eq!(resolved.source, ResourceSource::Bundled, "{case}");
         }
 
-        // Back in range, the same files resolve from the pack again.
         std::fs::write(&record_path, &compatible).unwrap();
         assert_eq!(setup.resolve(&mut PackHolds::default()).unwrap().source, ResourceSource::InstalledPack);
     }

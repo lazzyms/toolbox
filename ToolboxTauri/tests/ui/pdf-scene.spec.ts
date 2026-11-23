@@ -781,7 +781,6 @@ test('text in Latin, Cyrillic and Greek needs no script pack', async ({ page }) 
   await editor.press('ControlOrMeta+Enter');
   await expect(editor).toHaveCount(0);
   await expect(scriptPrompt(page)).toHaveCount(0);
-  // Script text whose pack is installed needs nothing either.
   await page.evaluate((states) => { (window as any).scriptPacks = states; }, scriptPacks('installed'));
   await emit(page, 'pack-changed', { packId: 'unicode-scripts' });
   await page.getByRole('button', { name: 'text object 1', exact: true }).dblclick();
