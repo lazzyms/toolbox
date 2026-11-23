@@ -812,10 +812,8 @@ pub(crate) mod tests {
         let fixture = Fixture::new();
         let mut setup = Setup::new("valid", &fixture, &key);
         {
-            let _guard = crate::kit::lock_process_env();
-            std::env::set_var(PUBLIC_KEY_OVERRIDE_ENV, key.encoded_public_key());
+            let _env = crate::kit::EnvOverride::new().set(PUBLIC_KEY_OVERRIDE_ENV, key.encoded_public_key());
             let overridden = trusted_public_key();
-            std::env::remove_var(PUBLIC_KEY_OVERRIDE_ENV);
             setup.key = overridden.unwrap();
         }
         let original = fs::read(&setup.file).unwrap();
@@ -1059,8 +1057,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_updater_key_built_into_the_app_is_the_trust_root() {
-        let _guard = crate::kit::lock_process_env();
-        std::env::remove_var(PUBLIC_KEY_OVERRIDE_ENV);
+        let _env = crate::kit::EnvOverride::new().remove(PUBLIC_KEY_OVERRIDE_ENV);
         let built_in = trusted_public_key().unwrap();
         // A payload signed by any other key is refused as the wrong key.
         let key = TestKey::new(9);

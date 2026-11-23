@@ -2663,7 +2663,6 @@ mod tests {
     fn renderer_uses_bundled_pdftoppm_when_path_and_override_are_unavailable() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = crate::kit::lock_process_env();
         let temp = TempDir::new().unwrap();
         let pdf_bin = temp.0.join("pdf-bin");
         fs::create_dir(&pdf_bin).unwrap();
@@ -2673,25 +2672,12 @@ mod tests {
         permissions.set_mode(0o755);
         fs::set_permissions(&bundled, permissions).unwrap();
 
-        let previous_root = std::env::var_os("TOOLBOX_RESOURCE_ROOT");
-        let previous_override = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
-        let previous_path = std::env::var_os("PATH");
-        std::env::set_var("TOOLBOX_RESOURCE_ROOT", &temp.0);
-        std::env::remove_var("TOOLBOX_PDFTOPPM_PATH");
-        std::env::set_var("PATH", temp.0.join("missing-path"));
+        let env = crate::kit::EnvOverride::new()
+            .set("TOOLBOX_RESOURCE_ROOT", &temp.0)
+            .remove("TOOLBOX_PDFTOPPM_PATH")
+            .set("PATH", temp.0.join("missing-path"));
         let result = renderer();
-        match previous_root {
-            Some(value) => std::env::set_var("TOOLBOX_RESOURCE_ROOT", value),
-            None => std::env::remove_var("TOOLBOX_RESOURCE_ROOT"),
-        }
-        match previous_override {
-            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
-            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
-        }
-        match previous_path {
-            Some(value) => std::env::set_var("PATH", value),
-            None => std::env::remove_var("PATH"),
-        }
+        drop(env);
 
         assert_eq!(result.unwrap(), bundled);
     }
@@ -2719,17 +2705,12 @@ mod tests {
 
     #[test]
     fn inspect_returns_page_metadata_without_invoking_pdftoppm() {
-        let _guard = crate::kit::lock_process_env();
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("source.pdf");
         fixture(&input);
-        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
-        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", temp.0.join("pdftoppm-not-invoked"));
+        let env = crate::kit::EnvOverride::new().set("TOOLBOX_PDFTOPPM_PATH", temp.0.join("pdftoppm-not-invoked"));
         let result = inspect(&input);
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
-            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
-        }
+        drop(env);
         let metadata = result.unwrap();
         assert_eq!(metadata.pages.len(), 2);
         assert_eq!((metadata.pages[0].width, metadata.pages[0].height), (300., 200.));
@@ -5158,13 +5139,9 @@ mod tests {
     }
 
     fn with_renderer_override<T>(renderer: &Path, run: impl FnOnce() -> T) -> T {
-        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
-        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", renderer);
+        let env = crate::kit::EnvOverride::new().set("TOOLBOX_PDFTOPPM_PATH", renderer);
         let result = run();
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
-            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
-        }
+        drop(env);
         result
     }
 
@@ -5203,7 +5180,6 @@ mod tests {
     #[test]
     fn source_thumbnails_isolate_a_failing_page_and_never_reuse_another_pages_image() {
         use std::os::unix::fs::PermissionsExt;
-        let _guard = crate::kit::lock_process_env();
         let temp = TempDir::new().unwrap();
         let input = temp.0.join("source.pdf");
         many_page_fixture(&input, 5);
@@ -5643,10 +5619,6 @@ mod tests {
             super::super::export(&SceneRun { request, packs }, input.to_path_buf())
         }
 
-        fn set_font_dir(value: Option<&Path>) {
-            match value { Some(value) => std::env::set_var(SCRIPT_FONT_DIR_ENV, value), None => std::env::remove_var(SCRIPT_FONT_DIR_ENV) }
-        }
-
         /// The fonts the output's first page writes with, by resource name.
         fn page_fonts(document: &Document) -> Vec<(String, lopdf::Dictionary)> {
             let page = document.get_pages().values().next().copied().unwrap();
@@ -5689,8 +5661,7 @@ mod tests {
 
         #[test]
         fn script_text_without_its_pack_points_at_the_pack_and_saves_nothing() {
-            let _guard = crate::kit::lock_process_env();
-            set_font_dir(None);
+            let _env = crate::kit::EnvOverride::new().remove(SCRIPT_FONT_DIR_ENV);
             let root = sandbox("scene-script-missing");
             let input = root.join("source.pdf");
             fixture(&input);
@@ -5718,8 +5689,7 @@ mod tests {
 
         #[test]
         fn latin_cyrillic_and_greek_need_no_pack() {
-            let _guard = crate::kit::lock_process_env();
-            set_font_dir(None);
+            let _env = crate::kit::EnvOverride::new().remove(SCRIPT_FONT_DIR_ENV);
             let root = sandbox("scene-script-base");
             let input = root.join("source.pdf");
             fixture(&input);
@@ -5742,19 +5712,18 @@ mod tests {
 
         #[test]
         fn with_the_development_font_script_text_is_shaped_embedded_and_extracts_in_reading_order() {
-            let _guard = crate::kit::lock_process_env();
             let root = sandbox("scene-script-override");
             let fonts = root.join("dev-fonts");
             fs::create_dir_all(fonts.join("fonts")).unwrap();
             fs::write(fonts.join("fonts/Arabic.ttf"), crate::kit::images::tools::INCLUDED_WATERMARK_FONT).unwrap();
-            set_font_dir(Some(&fonts));
+            let env = crate::kit::EnvOverride::new().set(SCRIPT_FONT_DIR_ENV, &fonts);
             let input = root.join("source.pdf");
             fixture(&input);
             let original = fs::read(&input).unwrap();
             let text = format!("{ARABIC_LINE}\nПривет κόσμε");
             let first = run(&input, &text, packs(&root.join("app-data")));
             let second = run(&input, &text, packs(&root.join("app-data")));
-            set_font_dir(None);
+            drop(env);
             assert!(first.error().is_none(), "{first:?}");
             assert!(second.error().is_none(), "{second:?}");
             let output = first.output_paths()[0].clone();
@@ -5791,8 +5760,7 @@ mod tests {
         #[cfg(unix)]
         #[test]
         fn output_written_with_an_installed_pack_still_renders_after_the_pack_is_uninstalled() {
-            let _guard = crate::kit::lock_process_env();
-            set_font_dir(None);
+            let _env = crate::kit::EnvOverride::new().remove(SCRIPT_FONT_DIR_ENV);
             let root = sandbox("scene-script-installed");
             let (fixture_pack, key) = (script_fixture(), TestKey::new(1));
             let file = root.join("unicode-scripts.toolboxpack");

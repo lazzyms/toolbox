@@ -354,14 +354,10 @@ mod tests {
         let on_path = root.join("system");
         fs::create_dir_all(&on_path).unwrap();
         fs::write(on_path.join(name), b"system").unwrap();
-        struct RestorePath(Option<std::ffi::OsString>);
-        impl Drop for RestorePath {
-            fn drop(&mut self) { match self.0.take() { Some(value) => std::env::set_var("PATH", value), None => std::env::remove_var("PATH") } }
-        }
-        let original_path = RestorePath(std::env::var_os("PATH"));
+        let env = crate::kit::EnvOverride::new();
         let mut search = vec![on_path.clone()];
-        search.extend(original_path.0.iter().flat_map(std::env::split_paths));
-        std::env::set_var("PATH", std::env::join_paths(search).unwrap());
+        search.extend(std::env::var_os("PATH").iter().flat_map(std::env::split_paths));
+        let env = env.set("PATH", std::env::join_paths(search).unwrap());
         assert_eq!(find_on_path(name), Some(on_path.join(name)));
 
         let mut locations = PackBackedLocations { bundled_root: Some(root.join("bundled")), installed_pack_root: Some(root.join("pack")), development_override: Some(development_override.clone()) };
@@ -372,7 +368,7 @@ mod tests {
         assert_eq!(resolve_pack_backed(name, &locations), Ok(ResolvedResource { path: development_override, source: ResourceSource::DevelopmentOverride }));
         locations.development_override = None;
         assert_eq!(resolve_pack_backed(name, &locations), Err(format!("Resource {name} is unavailable.")));
-        drop(original_path);
+        drop(env);
         let _ = fs::remove_dir_all(root);
     }
 

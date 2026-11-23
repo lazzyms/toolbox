@@ -1573,10 +1573,6 @@ mod tests {
             RunPacks::new(Ok(app_data.to_path_buf()), "1.0.14", Ok(catalog))
         }
 
-        fn set_font_dir(value: Option<&Path>) {
-            match value { Some(value) => std::env::set_var("TOOLBOX_SCRIPT_FONT_DIR", value), None => std::env::remove_var("TOOLBOX_SCRIPT_FONT_DIR") }
-        }
-
         /// The PDF's text as Poppler extracts it, with the bidi marks it adds around right-to-left runs removed.
         fn extracted_text(path: &Path) -> String {
             let tool = std::env::var_os("TOOLBOX_PDFTOTEXT_PATH").unwrap_or_else(|| "pdftotext".into());
@@ -1624,8 +1620,7 @@ mod tests {
 
         #[test]
         fn another_script_without_its_pack_is_refused_with_a_pointer_before_anything_is_written() {
-            let _guard = crate::kit::lock_process_env();
-            set_font_dir(None);
+            let _env = crate::kit::EnvOverride::new().remove("TOOLBOX_SCRIPT_FONT_DIR");
             let root = sandbox("script_missing");
             let packs = packs(&root.join("app-data"));
             let pointer = Some(OutcomePointer::Pack { pack_id: PACK_ID.into(), name: PACK_NAME.into(), reason: PackNeed::NotInstalled });
@@ -1658,18 +1653,17 @@ mod tests {
 
         #[test]
         fn with_the_test_pack_script_text_is_drawn_with_its_font_and_extracts() {
-            let _guard = crate::kit::lock_process_env();
             let root = sandbox("script_pack");
             let font_dir = root.join("dev-fonts");
             fs::create_dir_all(font_dir.join("fonts")).unwrap();
             fs::write(font_dir.join("fonts/Arabic.ttf"), crate::kit::images::tools::INCLUDED_WATERMARK_FONT).unwrap();
-            set_font_dir(Some(&font_dir));
+            let env = crate::kit::EnvOverride::new().set("TOOLBOX_SCRIPT_FONT_DIR", &font_dir);
             let packs = packs(&root.join("app-data"));
             let path = root.join("Receipt.pdf");
             let request = with_band(request(json!([{ "kind": "heading1", "text": "Receipt" }, paragraph(&format!("Paid {ARABIC} 2026")), paragraph(BASE_LINE)]), &path), ARABIC);
             let outcome = create_with(&request, &fonts(), &packs);
             let preview = preview_with_packs(&request, &packs);
-            set_font_dir(None);
+            drop(env);
             assert!(outcome.error().is_none(), "{:?}", outcome.error());
             assert_eq!(outcome.output_paths(), [path.clone()]);
             assert_eq!(preview.map(|preview| preview.page_count), Ok(1), "the preview draws with the pack");

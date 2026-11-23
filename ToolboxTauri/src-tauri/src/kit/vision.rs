@@ -1479,6 +1479,8 @@ mod tests {
     use crate::kit::common::limits::HelperDeadline;
     use crate::packs::uninstall::RunPacks;
     use crate::kit::common::OutputLocation;
+    #[cfg(unix)]
+    use crate::kit::EnvOverride;
     use crate::kit::contracts::{ErrorKind, LimitKind, OutcomePointer, PackNeed};
     use image::{Rgba, RgbaImage};
     use lopdf::{dictionary, Document, Object, Stream};
@@ -1522,30 +1524,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    /// Sets environment variables for one test and puts the old values back when dropped.
-    struct Env(Vec<(&'static str, Option<std::ffi::OsString>)>);
-
-    #[cfg(unix)]
-    impl Env {
-        fn set(values: &[(&'static str, Option<&Path>)]) -> Self {
-            let old = values.iter().map(|(name, _)| (*name, std::env::var_os(name))).collect();
-            for (name, value) in values {
-                match value { Some(value) => std::env::set_var(name, value), None => std::env::remove_var(name) }
-            }
-            Self(old)
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for Env {
-        fn drop(&mut self) {
-            for (name, value) in &self.0 {
-                match value { Some(value) => std::env::set_var(name, value), None => std::env::remove_var(name) }
-            }
-        }
-    }
-
-    #[cfg(unix)]
     struct MixedBatch {
         root: PathBuf,
         english: PathBuf,
@@ -1581,15 +1559,14 @@ mod tests {
         fn run_reading(&self, app_data: &Path, app_version: &str, language_dir: Option<&Path>, hindi_languages: &[&str]) -> Vec<crate::kit::common::JobOutcome> {
             let originals = [fs::read(&self.english).unwrap(), fs::read(&self.hindi).unwrap()];
             let outcomes = {
-                let _guard = crate::kit::lock_process_env();
-                let _env = Env::set(&[
-                    // A staged bundle would win over the stand-in helpers, so there is none here.
-                    ("TOOLBOX_RESOURCE_ROOT", Some(&self.root.join("no-bundle"))),
-                    ("TOOLBOX_TESSERACT_PATH", Some(&self.root.join("engine.sh"))),
-                    ("TOOLBOX_PDFTOPPM_PATH", Some(&self.root.join("renderer.sh"))),
-                    ("TOOLBOX_TESSDATA_PATH", Some(&self.root.join("eng/eng.traineddata"))),
-                    (super::OCR_LANGUAGE_DIR_ENV, language_dir),
-                ]);
+                let env = EnvOverride::new()
+                    .set("TOOLBOX_TESSERACT_PATH", self.root.join("engine.sh"))
+                    .set("TOOLBOX_PDFTOPPM_PATH", self.root.join("renderer.sh"))
+                    .set("TOOLBOX_TESSDATA_PATH", self.root.join("eng/eng.traineddata"));
+                let _env = match language_dir {
+                    Some(dir) => env.set(super::OCR_LANGUAGE_DIR_ENV, dir),
+                    None => env.remove(super::OCR_LANGUAGE_DIR_ENV),
+                };
                 let request = OcrRequest {
                     paths: vec![self.english.clone(), self.hindi.clone()],
                     page_range: None,
@@ -1848,7 +1825,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn selected_ocr_page_cannot_process_an_excluded_page() {
-        let _guard = crate::kit::lock_process_env();
+        let env = EnvOverride::new();
         let input = path("selected-pages.pdf");
         let output_root = path("selected-pages-output");
         make_pdf(&input, 2);
@@ -1857,8 +1834,7 @@ mod tests {
         let engine = fake_ocr_engine(false);
         let tessdata = path("selected-eng.traineddata");
         fs::write(&tessdata, b"fake tessdata").unwrap();
-        let no_bundle = path("no-bundle");
-        let env = Env::set(&[("TOOLBOX_RESOURCE_ROOT", Some(&no_bundle)), ("TOOLBOX_TESSERACT_PATH", Some(&engine)), ("TOOLBOX_TESSDATA_PATH", Some(&tessdata))]);
+        let env = env.set("TOOLBOX_TESSERACT_PATH", &engine).set("TOOLBOX_TESSDATA_PATH", &tessdata);
 
         let outcome = ocr_pdf(&run_of(ocr_request(&input, Some("1"), &output_root)), input.clone());
         let text = outcome.output_paths().first().and_then(|path| fs::read_to_string(path).ok());
@@ -1880,7 +1856,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_selected_ocr_cleans_private_workspace_and_reserved_output() {
-        let _guard = crate::kit::lock_process_env();
+        let env = EnvOverride::new();
         let input = path("failed-selected-pages.pdf");
         let output_root = path("failed-selected-pages-output");
         make_pdf(&input, 2);
@@ -1890,8 +1866,7 @@ mod tests {
         let tessdata = path("failed-eng.traineddata");
         fs::write(&tessdata, b"fake tessdata").unwrap();
         let before_workspaces = ocr_workspaces();
-        let no_bundle = path("no-bundle");
-        let env = Env::set(&[("TOOLBOX_RESOURCE_ROOT", Some(&no_bundle)), ("TOOLBOX_TESSERACT_PATH", Some(&engine)), ("TOOLBOX_TESSDATA_PATH", Some(&tessdata))]);
+        let env = env.set("TOOLBOX_TESSERACT_PATH", &engine).set("TOOLBOX_TESSDATA_PATH", &tessdata);
 
         let outcome = ocr_pdf(&run_of(ocr_request(&input, Some("2"), &output_root)), input.clone());
         let after_workspaces = ocr_workspaces();
@@ -2077,7 +2052,7 @@ mod tests {
         renderer: PathBuf,
         engine: PathBuf,
         tessdata: PathBuf,
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        _env: EnvOverride,
     }
 
     #[cfg(unix)]
@@ -2092,21 +2067,14 @@ mod tests {
             for helper in [&renderer, &engine] {
                 fs::set_permissions(helper, fs::Permissions::from_mode(0o755)).unwrap();
             }
-            let saved = ["TOOLBOX_RESOURCE_ROOT", "TOOLBOX_PDFTOPPM_PATH", "TOOLBOX_TESSERACT_PATH", "TOOLBOX_TESSDATA_PATH"].into_iter().map(|key| (key, std::env::var_os(key))).collect();
-            std::env::set_var("TOOLBOX_RESOURCE_ROOT", path("no-bundle"));
-            std::env::set_var("TOOLBOX_PDFTOPPM_PATH", &renderer);
-            std::env::set_var("TOOLBOX_TESSERACT_PATH", &engine);
-            std::env::set_var("TOOLBOX_TESSDATA_PATH", &tessdata);
-            Self { renderer, engine, tessdata, saved }
+            let env = EnvOverride::new().set("TOOLBOX_PDFTOPPM_PATH", &renderer).set("TOOLBOX_TESSERACT_PATH", &engine).set("TOOLBOX_TESSDATA_PATH", &tessdata);
+            Self { renderer, engine, tessdata, _env: env }
         }
     }
 
     #[cfg(unix)]
     impl Drop for TimedOcrHelpers {
         fn drop(&mut self) {
-            for (key, value) in self.saved.drain(..) {
-                match value { Some(value) => std::env::set_var(key, value), None => std::env::remove_var(key) }
-            }
             for file in [&self.renderer, &self.engine, &self.tessdata] { let _ = fs::remove_file(file); }
         }
     }
@@ -2114,7 +2082,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_multi_page_file_gets_a_budget_for_every_page() {
-        let _guard = crate::kit::lock_process_env();
         let input = path("per-page-budget.pdf");
         let output_root = path("per-page-budget-output");
         make_pdf(&input, 3);
@@ -2138,14 +2105,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_page_that_passes_its_budget_fails_the_file_with_a_time_limit() {
-        let _guard = crate::kit::lock_process_env();
         let input = path("page-over-budget.pdf");
         let output_root = path("page-over-budget-output");
         make_pdf(&input, 2);
         let original = fs::read(&input).unwrap();
         fs::create_dir_all(&output_root).unwrap();
-        let before_workspaces = ocr_workspaces();
         let helpers = TimedOcrHelpers::install("page-over-budget", ":", "case \"$1\" in *page-2.png) exec sleep 30 ;; esac\nprintf 'page one\\n'");
+        let before_workspaces = ocr_workspaces();
 
         let started = Instant::now();
         let outcome = ocr_pdf_within(&run_of(ocr_request(&input, None, &output_root)), input.clone(), HelperDeadline { per_file: Duration::from_secs(1), per_page: Duration::from_secs(3) });
@@ -2170,7 +2136,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_file_that_runs_out_of_its_shared_budget_says_which_page_it_reached() {
-        let _guard = crate::kit::lock_process_env();
         let input = path("file-over-budget.pdf");
         let output_root = path("file-over-budget-output");
         make_pdf(&input, 3);

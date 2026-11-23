@@ -1823,7 +1823,7 @@ pub(crate) mod tests {
     fn pdf_to_images_keeps_twelve_pages_in_numeric_order() {
         use std::os::unix::fs::PermissionsExt;
 
-        let _guard = crate::kit::lock_process_env();
+        let env = crate::kit::EnvOverride::new();
         let root = split_fixture_root("numeric-images");
         let input = root.join("document.pdf");
         let output_folder = root.join("outputs");
@@ -1834,18 +1834,14 @@ pub(crate) mod tests {
         let mut permissions = fs::metadata(&renderer).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&renderer, permissions).unwrap();
-        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
-        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", &renderer);
+        let env = env.set("TOOLBOX_PDFTOPPM_PATH", &renderer);
 
         let outcome = to_images(&PdfToImagesRequest {
             paths: vec![input.clone()], dpi: 72, format: "png".to_string(), page_range: None, pages: None, picks: Vec::new(),
             output_location: OutputLocation::CustomFolder(output_folder.clone()),
         }, input.clone());
 
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
-            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
-        }
+        drop(env);
         assert!(outcome.error().is_none(), "numeric image export failed: {:?}", outcome.error());
         assert_eq!(outcome.output_paths().len(), 12);
         for (index, output) in outcome.output_paths().iter().enumerate() {
@@ -3383,18 +3379,14 @@ pub(crate) mod tests {
     #[cfg(unix)]
     fn with_qpdf_stalling_on<T>(root: &Path, marker: &str, run: impl FnOnce() -> T) -> Option<T> {
         use std::os::unix::fs::PermissionsExt;
-        let _guard = crate::kit::lock_process_env();
+        let env = crate::kit::EnvOverride::new();
         let Ok(real) = qpdf() else { eprintln!("skipping: qpdf not available"); return None };
         let script = root.join("qpdf");
         fs::write(&script, format!("#!/bin/sh\ncase \"$*\" in *'{marker}'*) for last; do :; done; printf partial > \"$last\"; printf %s \"$last\" > '{}'; exec sleep 30;; esac\nexec '{}' \"$@\"\n", root.join("stalled-output").display(), real.display())).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
-        std::env::set_var("TOOLBOX_QPDF_PATH", &script);
+        let env = env.set("TOOLBOX_QPDF_PATH", &script);
         let result = run();
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
-            None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
-        }
+        drop(env);
         Some(result)
     }
 
@@ -3835,7 +3827,7 @@ pub(crate) mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let _split = SPLIT_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _guard = crate::kit::lock_process_env();
+        let env = crate::kit::EnvOverride::new();
         let root = split_fixture_root("slow-renderer");
         let input = root.join("document.pdf");
         let output_folder = root.join("outputs");
@@ -3846,8 +3838,7 @@ pub(crate) mod tests {
         let mut permissions = fs::metadata(&renderer).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&renderer, permissions).unwrap();
-        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
-        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", &renderer);
+        let env = env.set("TOOLBOX_PDFTOPPM_PATH", &renderer);
 
         let outcomes = [None, Some(vec![0, 2])].map(|pages| {
             let started = Instant::now();
@@ -3858,10 +3849,7 @@ pub(crate) mod tests {
             (outcome, started.elapsed())
         });
 
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
-            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
-        }
+        drop(env);
         for (outcome, elapsed) in outcomes {
             let error = outcome.error().expect("a renderer past its deadline fails the file");
             assert_eq!(error.kind, crate::kit::contracts::ErrorKind::LimitExceeded { limit: LimitKind::Time }, "{}", error.message);
