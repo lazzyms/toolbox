@@ -20,3 +20,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: Check the output reservation model
         run: cargo test --locked --manifest-path ToolboxTauri/models/output-reservation/Cargo.toml
+
+  env-overrides:
+    name: Test environment overrides
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check that tests change process environment only through EnvOverride
+        run: node ToolboxTauri/scripts/check-env-overrides.mjs

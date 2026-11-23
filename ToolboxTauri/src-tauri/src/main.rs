@@ -782,6 +782,7 @@ mod command_tests {
     use crate::kit::compress::CompressLevel;
     use crate::kit::pdf::remaining::{ImagesToPdfRequest, MergePdfRequest, PageSelectionRequest, PdfToImagesRequest, RepairPdfRequest, RotatePdfRequest, ComparePdfsRequest, ExtractFromPdfRequest, ExtractMode, SplitMode, SplitPdfRequest};
     use crate::kit::vision::{OcrRequest, VisionRequest};
+    use crate::kit::EnvOverride;
 
     fn no_packs() -> RunPacks { RunPacks::new(Err("No packs in this test.".into()), "0.0.0", Err("No catalog in this test.".into())) }
 
@@ -2566,10 +2567,9 @@ mod command_tests {
 
     #[test]
     fn ocr_command_rejects_bad_languages_modes_and_ranges_before_any_helper_runs() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-boundary");
         // A valid request must still run nothing here, so the engine is made missing on purpose.
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-resources"))), ("TOOLBOX_TESSERACT_PATH", Some(root.join("missing-tesseract")))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-resources")).set("TOOLBOX_TESSERACT_PATH", root.join("missing-tesseract"));
         let input = root.join("scan.pdf");
         make_pdf(&input, 1);
         let request = |change: fn(&mut vision::OcrRequest)| {
@@ -2595,28 +2595,6 @@ mod command_tests {
         assert!(valid[0].error().is_some_and(|error| matches!(error.kind, crate::kit::contracts::ErrorKind::Unavailable)));
         assert!(!root.join("ocr").read_dir().is_ok_and(|mut entries| entries.next().is_some()));
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    /// Sets process variables for one test and puts the old values back when dropped.
-    /// Hold `lock_process_env` for as long as this lives.
-    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
-
-    impl EnvGuard {
-        fn set(values: &[(&'static str, Option<PathBuf>)]) -> Self {
-            let saved = values.iter().map(|(key, _)| (*key, std::env::var_os(key))).collect();
-            for (key, value) in values {
-                match value { Some(value) => std::env::set_var(key, value), None => std::env::remove_var(key) }
-            }
-            Self(saved)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, value) in self.0.drain(..) {
-                match value { Some(value) => std::env::set_var(key, value), None => std::env::remove_var(key) }
-            }
-        }
     }
 
     /// A white letter page at 150 pixels per inch with `lines` inked in black from the
@@ -2702,12 +2680,13 @@ mod command_tests {
     /// renderer come from PATH and the English data is the copy committed with the app.
     /// Returns None, so the caller can skip, only when no engine exists and
     /// TOOLBOX_REQUIRE_OCR_RESOURCES is unset.
-    fn real_ocr_engine() -> Option<EnvGuard> {
+    fn real_ocr_engine() -> Option<EnvOverride> {
+        let env = EnvOverride::new();
         let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources");
-        if resources.join("ocr/manifest.json").is_file() { return Some(EnvGuard::set(&[])); }
+        if resources.join("ocr/manifest.json").is_file() { return Some(env); }
         let runs = |program: &str, flag: &str| std::process::Command::new(program).arg(flag).output().is_ok_and(|result| result.status.success());
         if runs("tesseract", "--version") && runs("pdftoppm", "-v") {
-            return Some(EnvGuard::set(&[("TOOLBOX_TESSDATA_PATH", Some(resources.join("ocr/tessdata/eng.traineddata")))]));
+            return Some(env.set("TOOLBOX_RESOURCE_ROOT", &resources).set("TOOLBOX_TESSDATA_PATH", resources.join("ocr/tessdata/eng.traineddata")));
         }
         assert!(std::env::var_os("TOOLBOX_REQUIRE_OCR_RESOURCES").is_none(), "OCR resources are required but neither a staged bundle nor tesseract and pdftoppm on PATH were found");
         eprintln!("skipping: no OCR engine is staged or on PATH");
@@ -2720,7 +2699,6 @@ mod command_tests {
 
     #[test]
     fn ocr_reads_an_image_only_scan_into_page_ordered_text_and_repeats_it_byte_for_byte() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-scan");
         let input = root.join("scan.pdf");
@@ -2751,8 +2729,7 @@ mod command_tests {
 
     #[test]
     fn ocr_reads_english_and_a_development_override_language_together_through_the_real_engine() {
-        let _guard = crate::kit::lock_process_env();
-        let Some(_engine) = real_ocr_engine() else { return };
+        let Some(engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-two-languages");
         let input = root.join("scan.pdf");
         scanned_pdf(&input, &[&["Quarterly invoice summary", "Northwind shipping ledger"]]);
@@ -2762,7 +2739,7 @@ mod command_tests {
         std::fs::create_dir_all(&languages).unwrap();
         let english = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/ocr/tessdata/eng.traineddata");
         std::fs::copy(&english, languages.join("hin.traineddata")).unwrap();
-        let _override = EnvGuard::set(&[("TOOLBOX_OCR_LANGUAGE_DIR", Some(languages))]);
+        let _engine = engine.set("TOOLBOX_OCR_LANGUAGE_DIR", languages);
         let folder = location(&root, "ocr");
         let run = |folder: OutputLocation| {
             let mut request = ocr_text_request(vec![input.clone()], folder);
@@ -2787,7 +2764,6 @@ mod command_tests {
 
     #[test]
     fn ocr_reports_locked_and_blank_scans_beside_a_readable_one() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-batch");
         let locked = root.join("locked.pdf");
@@ -3186,7 +3162,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_names_the_missing_engine_renderer_or_english_data_for_every_file() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-missing");
         let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
         let missing = root.join("missing");
@@ -3199,11 +3174,9 @@ mod command_tests {
         ];
         let run = |name: &str| tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(inputs.clone(), location(&root, name)), no_packs()));
         for (variable, message) in cases {
-            let values = [("TOOLBOX_PDFTOPPM_PATH", &renderer), ("TOOLBOX_TESSERACT_PATH", &engine), ("TOOLBOX_TESSDATA_PATH", &tessdata)]
-                .map(|(key, value)| (key, Some(if key == variable { missing.clone() } else { value.clone() })));
-            let mut values = values.to_vec();
-            values.push(("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))));
-            let env = EnvGuard::set(&values);
+            let env = [("TOOLBOX_PDFTOPPM_PATH", &renderer), ("TOOLBOX_TESSERACT_PATH", &engine), ("TOOLBOX_TESSDATA_PATH", &tessdata)]
+                .into_iter()
+                .fold(EnvOverride::new(), |env, (key, value)| env.set(key, if key == variable { &missing } else { value }));
             let outcomes = run(variable);
             drop(env);
             assert_eq!(outcomes.len(), 2, "{variable}");
@@ -3215,7 +3188,7 @@ mod command_tests {
             }
             assert_eq!(std::fs::read_dir(root.join(variable)).unwrap().count(), 0, "{variable} left an output behind");
         }
-        let env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
         let restored = run("restored");
         drop(env);
         let _ = std::fs::remove_dir_all(&root);
@@ -3225,10 +3198,9 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_fails_only_the_locked_file_in_a_batch() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-locked");
         let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
         let first = root.join("first.pdf");
         let locked = root.join("locked.pdf");
         let last = root.join("last.pdf");
@@ -3256,7 +3228,7 @@ mod command_tests {
     /// one. A HUGE input renders a page past the rendered-page limit. Every other page
     /// reads "recognized words".
     #[cfg(unix)]
-    fn marked_ocr_helpers(root: &PathBuf) -> EnvGuard {
+    fn marked_ocr_helpers(root: &PathBuf) -> EnvOverride {
         use std::os::unix::fs::PermissionsExt;
         let renderer = root.join("marked-pdftoppm");
         let engine = root.join("marked-tesseract");
@@ -3265,7 +3237,7 @@ mod command_tests {
         std::fs::write(&engine, "#!/bin/sh\nif grep -q STALL \"$1\" 2>/dev/null; then exec sleep 30; fi\nif grep -q WORDY \"$1\" 2>/dev/null; then head -c 6000000 /dev/zero | tr '\\0' a; exit 0; fi\nprintf 'recognized words\\n'\n").unwrap();
         std::fs::write(&tessdata, b"fake tessdata").unwrap();
         for helper in [&renderer, &engine] { std::fs::set_permissions(helper, std::fs::Permissions::from_mode(0o755)).unwrap(); }
-        EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))])
+        EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata)
     }
 
     fn names_in(folder: &std::path::Path) -> Vec<String> {
@@ -3277,7 +3249,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_writes_next_to_the_original_or_into_the_chosen_folder_and_numbers_a_second_run() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-destination");
         let _env = marked_ocr_helpers(&root);
         let inputs = root.join("inputs");
@@ -3319,7 +3290,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_holds_each_file_to_its_recorded_limits_alone() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-limits");
         let _env = marked_ocr_helpers(&root);
 
@@ -3357,7 +3327,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_stops_a_stalled_page_or_file_at_its_deadline_and_finishes_the_others() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-deadlines");
         let _env = marked_ocr_helpers(&root);
         let stalled = root.join("STALL.pdf");
@@ -3390,7 +3359,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn an_ocr_batch_fails_one_file_skips_one_and_finishes_the_rest_without_touching_originals() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-mixed");
         let _env = marked_ocr_helpers(&root);
         let first = root.join("first.pdf");
@@ -3425,7 +3393,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_streams_page_progress_for_a_multi_page_file() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-progress");
         let _env = marked_ocr_helpers(&root);
         let single = root.join("single.pdf");
@@ -3484,7 +3451,6 @@ mod command_tests {
 
     #[test]
     fn searchable_pdf_keeps_the_scan_and_title_gives_back_its_words_and_repeats_byte_for_byte() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-searchable");
         let input = root.join("scan.pdf");
@@ -3520,27 +3486,26 @@ mod command_tests {
 
     /// Fake helpers whose engine prints the same TSV word boxes for every page.
     #[cfg(unix)]
-    fn word_box_ocr_helpers(root: &PathBuf, words: &[(&str, u32, u32)]) -> EnvGuard {
+    fn word_box_ocr_helpers(root: &PathBuf, words: &[(&str, u32, u32)]) -> EnvOverride {
         word_box_ocr_helpers_on(root, (1700, 2200), words)
     }
 
     /// Fake helpers whose engine reports a `width` by `height` pixel page with one line of
     /// `words`, each a text, left and width, 300 pixels down and 80 tall.
     #[cfg(unix)]
-    fn word_box_ocr_helpers_on(root: &PathBuf, (width, height): (u32, u32), words: &[(&str, u32, u32)]) -> EnvGuard {
+    fn word_box_ocr_helpers_on(root: &PathBuf, (width, height): (u32, u32), words: &[(&str, u32, u32)]) -> EnvOverride {
         let [renderer, engine, tessdata] = fake_ocr_helpers(root);
         let mut tsv = format!("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n1\t1\t0\t0\t0\t0\t0\t0\t{width}\t{height}\t-1\t\n4\t1\t1\t1\t1\t0\t200\t300\t1200\t80\t-1\t\n");
         for (index, (word, left, width)) in words.iter().enumerate() {
             tsv.push_str(&format!("5\t1\t1\t1\t1\t{}\t{left}\t300\t{width}\t80\t95.0\t{word}\n", index + 1));
         }
         std::fs::write(&engine, format!("#!/bin/sh\ncat <<'TSV'\n{tsv}TSV\n")).unwrap();
-        EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))])
+        EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata)
     }
 
     #[cfg(unix)]
     #[test]
     fn searchable_pdf_fails_only_the_file_whose_output_fails_its_check_while_a_rotated_page_succeeds() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-searchable-batch");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
         let [first, broken, rotated, last] = ["first", "broken", "rotated", "last"].map(|name| root.join(format!("{name}.pdf")));
@@ -3580,7 +3545,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn searchable_pdf_round_trips_non_latin_words_through_the_embedded_font() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-searchable-unicode");
         let _env = word_box_ocr_helpers(&root, &[("Привет", 200, 420), ("κόσμε", 700, 380), ("café", 1150, 300)]);
         let input = root.join("letter.pdf");
@@ -3630,7 +3594,6 @@ mod command_tests {
 
     #[test]
     fn ocr_reads_png_and_jpeg_scans_and_keeps_their_pixels_in_the_searchable_pdf() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-images");
         let (raster, _) = scanned_page(&["Quarterly invoice summary", "Northwind shipping ledger"]);
@@ -3670,7 +3633,6 @@ mod command_tests {
 
     #[test]
     fn ocr_reads_a_jpeg_the_way_its_orientation_tag_shows_it() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-image-orientation");
         let (raster, _) = scanned_page(&["Quarterly invoice summary", "Northwind shipping ledger"]);
@@ -3702,11 +3664,10 @@ mod command_tests {
     #[test]
     fn ocr_holds_each_image_to_the_pixel_and_decompression_limits_on_its_own() {
         use crate::kit::common::limits::fixtures::png_header;
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-image-limits");
         let [_, engine, tessdata] = fake_ocr_helpers(&root);
         // An image needs no page renderer, so a missing one fails nothing here.
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(root.join("missing"))), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", root.join("missing")).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
         let [first, many_pixels, huge, last] = ["first", "many-pixels", "huge", "last"].map(|name| root.join(format!("{name}.png")));
         write_png(&first, 32, 10);
         std::fs::write(&many_pixels, png_header(8000, 6000)).unwrap();
@@ -3736,7 +3697,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_gives_one_output_per_file_in_a_batch_of_pdfs_and_every_image_type() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-image-batch");
         let scan = root.join("scan.pdf");
         let png = root.join("page.png");
@@ -3756,7 +3716,7 @@ mod command_tests {
         let pdfs = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), searchable_pdf_request(paths.clone(), location(&root, "pdf")), no_packs()));
         drop(env);
         let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
-        let env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
         let texts = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(paths.clone(), location(&root, "text")), no_packs()));
         drop(env);
         let pdf_names = pdfs.iter().map(|outcome| outcome.output_paths().iter().map(|path| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>()).collect::<Vec<_>>();
@@ -3785,7 +3745,6 @@ mod command_tests {
     #[test]
     fn ocr_notes_a_high_bit_depth_image_saved_as_8_bit_and_skips_an_image_a_range_leaves_empty() {
         use crate::kit::contracts::WarningKind;
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-image-precision");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
         let deep = root.join("deep.png");
@@ -3841,7 +3800,6 @@ mod command_tests {
 
     #[test]
     fn ocr_reads_a_multi_page_tiff_frame_by_frame_into_text_and_one_searchable_page_per_frame() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-tiff-pages");
         let frames: [&[&str]; 3] = [&["Quarterly invoice summary"], &["Northwind shipping ledger"], &["Closing remarks attached"]];
@@ -3889,7 +3847,6 @@ mod command_tests {
 
     #[test]
     fn ocr_recognises_group_four_fax_and_jpeg_compressed_tiff_scans() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-tiff-compressions");
         let (raster, _) = scanned_page(&["Quarterly invoice summary", "Northwind shipping ledger"]);
@@ -3924,7 +3881,6 @@ mod command_tests {
     fn ocr_keeps_group_three_fax_tiff_pages_pixel_for_pixel_in_the_searchable_pdf() {
         const WHITE: [&str; 9] = ["00110101", "000111", "0111", "1000", "1011", "1100", "1110", "1111", "10011"];
         const BLACK: [&str; 9] = ["0000110111", "010", "11", "10", "011", "0011", "0010", "00011", "000101"];
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-tiff-g3");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
         let rows: [&[usize]; 5] = [&[8], &[2, 3, 3], &[0, 8], &[1, 1, 1, 1, 1, 1, 1, 1], &[5, 2, 1]];
@@ -3961,7 +3917,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_applies_the_page_range_to_tiff_frames_in_order_and_skips_a_tiff_it_leaves_empty() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-tiff-range");
         let input = root.join("flatbed-scan.tiff");
         // Each frame is a different width, so the PDF shows which frames it holds.
@@ -3973,7 +3928,7 @@ mod command_tests {
         let pdf = ranged("2-", searchable_pdf_request(vec![input.clone()], location(&root, "pdf")));
         drop(env);
         let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
         let text = ranged("3, 2", ocr_text_request(vec![input.clone()], location(&root, "text")));
         let clamped = ranged("1, 9", ocr_text_request(vec![input.clone()], location(&root, "clamped")));
         let skipped = ranged("4-", ocr_text_request(vec![input.clone()], location(&root, "skipped")));
@@ -4003,10 +3958,9 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_holds_each_tiff_page_and_all_its_pages_together_to_the_pixel_limits_on_their_own() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-tiff-limits");
         let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
         let [first, big_page, many_pages, last] = ["first.tiff", "big-page.tiff", "many-pages.tif", "last.png"].map(|name| root.join(name));
         let small = || gray_tiff_page(8, 4, 1, vec![200; 32]);
         std::fs::write(&first, raw_tiff(&[small(), small()])).unwrap();
@@ -4077,7 +4031,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn searchable_pdf_places_each_word_where_it_shows_on_rotated_and_cropped_pages() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-searchable-turned");
         // The crop shows 459 by 594 points; the engine reports a picture twice that size.
         let crop = [0.125, 0.125, 0.75, 0.75];
@@ -4105,7 +4058,6 @@ mod command_tests {
 
     #[test]
     fn searchable_pdf_puts_recognized_words_over_their_ink_on_rotated_and_cropped_scans() {
-        let _guard = crate::kit::lock_process_env();
         let Some(_engine) = real_ocr_engine() else { return };
         let root = sandbox("ocr-searchable-turned-scan");
         let crop = [0.05, 0.05, 0.9, 0.5];
@@ -4133,7 +4085,6 @@ mod command_tests {
     #[test]
     fn ocr_of_a_signed_pdf_removes_the_signature_and_warns_only_in_searchable_mode() {
         use crate::kit::contracts::{OutcomeWarning, WarningKind};
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-signed");
         let signed = root.join("signed-contract.pdf");
         drawn_pdf(&signed, 1);
@@ -4148,7 +4099,7 @@ mod command_tests {
         };
         let text = {
             let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
-            let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+            let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
             tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![signed.clone()], location(&root, "text")), no_packs())).remove(0)
         };
         let copy = searchable.output_paths().first().map(|path| lopdf::Document::load(path).unwrap());
@@ -4194,10 +4145,9 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_text_reads_only_pages_without_text_and_adds_the_rest_as_they_are_in_page_order() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-existing-text");
         let [renderer, engine, tessdata] = fake_ocr_helpers(&root);
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata);
         let input = root.join("mixed.pdf");
         mixed_text_pdf(&input);
         let original = std::fs::read(&input).unwrap();
@@ -4227,7 +4177,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn searchable_pdf_skips_pages_with_text_and_force_replaces_only_an_earlier_invisible_layer() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-searchable-existing-text");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
         let input = root.join("mixed.pdf");
@@ -4272,7 +4221,6 @@ mod command_tests {
     #[test]
     fn ocr_skips_a_file_whose_pages_all_keep_their_text_and_force_redoes_only_an_earlier_layer() {
         use crate::kit::contracts::SkipCode;
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-whole-file-text");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
         let invisible = |number| format!("{} BT 3 Tr /F1 24 Tf 72 720 Td (Earlier layer {number}) Tj ET", drawn_page(number));
@@ -4315,10 +4263,10 @@ mod command_tests {
     /// Fake helpers whose engine reads each rendered page back as "page N", so a text
     /// file shows which pages were recognized and in what order.
     #[cfg(unix)]
-    fn page_number_ocr_helpers(root: &PathBuf) -> EnvGuard {
+    fn page_number_ocr_helpers(root: &PathBuf) -> EnvOverride {
         let [renderer, engine, tessdata] = fake_ocr_helpers(root);
         std::fs::write(&engine, "#!/bin/sh\nn=${1##*page-}\nprintf 'page %s\\n' \"${n%.png}\"\n").unwrap();
-        EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-bundle"))), ("TOOLBOX_PDFTOPPM_PATH", Some(renderer)), ("TOOLBOX_TESSERACT_PATH", Some(engine)), ("TOOLBOX_TESSDATA_PATH", Some(tessdata))])
+        EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-bundle")).set("TOOLBOX_PDFTOPPM_PATH", renderer).set("TOOLBOX_TESSERACT_PATH", engine).set("TOOLBOX_TESSDATA_PATH", tessdata)
     }
 
     fn ranged_ocr_request(mode: &str, range: &str, paths: Vec<PathBuf>, output_location: OutputLocation) -> vision::OcrRequest {
@@ -4334,7 +4282,6 @@ mod command_tests {
     #[cfg(unix)]
     #[test]
     fn ocr_range_runs_in_page_order_copies_pages_outside_it_and_leaves_them_out_of_a_text_file() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-range-scope");
         let input = root.join("scan.pdf");
         drawn_pdf(&input, 4);
@@ -4372,7 +4319,6 @@ mod command_tests {
     #[test]
     fn ocr_clamps_one_range_to_each_file_and_skips_the_file_with_no_pages_left() {
         use crate::kit::contracts::SkipCode;
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-range-batch");
         let (long, medium, short) = (root.join("long.pdf"), root.join("medium.pdf"), root.join("short.pdf"));
         drawn_pdf(&long, 10); drawn_pdf(&medium, 3); drawn_pdf(&short, 1);
@@ -4418,7 +4364,6 @@ mod command_tests {
     #[test]
     fn ocr_range_over_only_text_pages_is_skipped_and_one_with_a_scanned_page_succeeds() {
         use crate::kit::contracts::SkipCode;
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-range-mixed");
         let _env = word_box_ocr_helpers(&root, &[("Searchable", 200, 500), ("words", 750, 400)]);
         let input = root.join("mixed.pdf");
@@ -4630,9 +4575,8 @@ mod command_tests {
 
     #[test]
     fn release_strictness_fails_the_ocr_check_on_unavailable_while_local_runs_without_resources_accept_it() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("ocr-strict");
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(root.join("no-resources"))), ("TOOLBOX_TESSERACT_PATH", Some(root.join("missing-tesseract")))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", root.join("no-resources")).set("TOOLBOX_TESSERACT_PATH", root.join("missing-tesseract"));
         let scan = root.join("scan.pdf");
         make_pdf(&scan, 1);
         let outcomes = tauri::async_runtime::block_on(run_ocr_pdf(RunEvents::silent(), ocr_text_request(vec![scan], location(&root, "ocr")), no_packs()));
@@ -4658,11 +4602,7 @@ mod command_tests {
             eprintln!("skipping: TOOLBOX_OCR_RELEASE_ROOT and TOOLBOX_OCR_RELEASE_OUT are not set");
             return;
         };
-        let _guard = crate::kit::lock_process_env();
-        let _env = EnvGuard::set(&[
-            ("TOOLBOX_RESOURCE_ROOT", Some(artifact.clone())),
-            ("TOOLBOX_TESSERACT_PATH", None), ("TOOLBOX_TESSDATA_PATH", None), ("TOOLBOX_PDFTOPPM_PATH", None), ("TOOLBOX_OCR_LANGUAGE_DIR", None),
-        ]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", artifact.clone()).remove("TOOLBOX_TESSERACT_PATH").remove("TOOLBOX_TESSDATA_PATH").remove("TOOLBOX_PDFTOPPM_PATH").remove("TOOLBOX_OCR_LANGUAGE_DIR");
         assert!(["ocr/manifest.json", "resources/ocr/manifest.json"].iter().any(|path| artifact.join(path).is_file()), "the artifact at {} has no OCR resource manifest", artifact.display());
         let rasterizer = if cfg!(windows) { "pdftoppm.exe" } else { "pdftoppm" };
         assert!(["pdf-bin", "resources", ""].iter().any(|folder| artifact.join(folder).join(rasterizer).is_file()), "the artifact at {} has no PDF rasterizer", artifact.display());
@@ -4705,8 +4645,7 @@ mod command_tests {
             eprintln!("skipping: TOOLBOX_CONVERT_RELEASE_ROOT and TOOLBOX_CONVERT_RELEASE_OUT are not set");
             return;
         };
-        let _guard = crate::kit::lock_process_env();
-        let _env = EnvGuard::set(&[("TOOLBOX_RESOURCE_ROOT", Some(artifact.clone()))]);
+        let _env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", artifact.clone());
         let bundled = BundledFonts::discover_installed().unwrap_or_else(|error| panic!("the artifact at {} has no usable fallback fonts: {error:?}", artifact.display()));
 
         let root = sandbox("convert-release");
@@ -8279,15 +8218,14 @@ mod command_tests {
     fn locking_keeps_every_password_out_of_qpdf_arguments_and_environment() {
         use crate::kit::common::fake_helper::{secret_exposure, Exposure, FakeHelper};
         use crate::kit::{TEST_OVERRIDE_PASSWORD, TEST_PASSWORD};
-        let _guard = crate::kit::lock_process_env();
+        let env = EnvOverride::new();
         let real = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
         let root = sandbox("protect-files-fake-qpdf");
         let inputs = ["first", "own", "last"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
         for input in &inputs { make_pdf(input, 1); }
         let helper = FakeHelper::install(&root, "qpdf", Some(&real));
 
-        let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
-        std::env::set_var("TOOLBOX_QPDF_PATH", &helper.script);
+        let env = env.set("TOOLBOX_RESOURCE_ROOT", concat!(env!("CARGO_MANIFEST_DIR"), "/resources")).set("TOOLBOX_QPDF_PATH", &helper.script);
         // One worker, as in the cancel test: on hosted macOS runners, parallel first runs of the
         // freshly written fake script hung before it started. This test checks where passwords go,
         // and the parallel batch is covered with the real helper elsewhere.
@@ -8298,10 +8236,7 @@ mod command_tests {
             password_overrides: overrides(&[(&inputs[1], TEST_OVERRIDE_PASSWORD)]),
             output_location: location(&root, "locked"),
         })));
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
-            None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
-        }
+        drop(env);
         // Tests that do not take the env lock may reach the fake while it is installed, so keep only this run's calls.
         let calls = helper
             .invocations()
@@ -8340,7 +8275,7 @@ mod command_tests {
         use crate::kit::common::batch_runner::{cancel_run, CANCELLED_BEFORE_START};
         use crate::kit::common::fake_helper::FakeHelper;
         use crate::kit::contracts::{ErrorKind, SkipCode};
-        let _guard = crate::kit::lock_process_env();
+        let env = EnvOverride::new();
         let real = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF).expect("qpdf is required for the native suite");
         let root = sandbox("cancel-mid-batch");
         let inputs = ["first", "second", "stalls", "fourth", "fifth"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
@@ -8349,8 +8284,7 @@ mod command_tests {
         let helper = std::sync::Arc::new(FakeHelper::install_stalling_on(&root, "qpdf", Some(&real), "stalls.pdf"));
         let output = location(&root, "locked");
 
-        let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
-        std::env::set_var("TOOLBOX_QPDF_PATH", &helper.script);
+        let env = env.set("TOOLBOX_RESOURCE_ROOT", concat!(env!("CARGO_MANIFEST_DIR"), "/resources")).set("TOOLBOX_QPDF_PATH", &helper.script);
         let run_id = format!("cancel-test-{}", std::process::id());
         let canceller = {
             let (helper, run_id) = (helper.clone(), run_id.clone());
@@ -8371,10 +8305,7 @@ mod command_tests {
             RunEvents::for_run(run_id.clone(), move |event| sink.lock().unwrap().push(event)),
             PasswordRequest { paths: inputs.clone(), password: crate::kit::TEST_PASSWORD.into(), password_overrides: Default::default(), output_location: output.clone() },
         )));
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
-            None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
-        }
+        drop(env);
         let cancelled_at = canceller.join().unwrap();
 
         assert!(cancelled_at.elapsed() < std::time::Duration::from_millis(1500), "the stalled helper is ended, not waited out");
@@ -9646,6 +9577,7 @@ mod command_tests {
 
     #[test]
     fn compress_files_repeats_pdf_jpeg_png_and_webp_byte_for_byte_at_every_level() {
+        let _env = crate::kit::lock_process_env();
         let root = sandbox("compress-determinism-all");
         let inputs = vec![root.join("survey.pdf"), root.join("photo.jpg"), root.join("poster.png"), root.join("banner.webp")];
         make_photo_pdf(&inputs[0]);
@@ -11184,21 +11116,16 @@ mod command_tests {
     }
 
     fn run_pdf_to_images_with_renderer(renderer: &std::path::Path, paths: Vec<PathBuf>, output_location: OutputLocation) -> Vec<JobOutcome> {
-        let previous = std::env::var_os("TOOLBOX_PDFTOPPM_PATH");
-        std::env::set_var("TOOLBOX_PDFTOPPM_PATH", renderer);
+        let env = EnvOverride::new().set("TOOLBOX_RESOURCE_ROOT", concat!(env!("CARGO_MANIFEST_DIR"), "/resources")).set("TOOLBOX_PDFTOPPM_PATH", renderer);
         let outcomes = tauri::async_runtime::block_on(pdf_to_images(RunEvents::silent(), PdfToImagesRequest {
             paths, dpi: 72, format: "png".into(), page_range: None, pages: None, picks: Vec::new(), output_location,
         }));
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_PDFTOPPM_PATH", value),
-            None => std::env::remove_var("TOOLBOX_PDFTOPPM_PATH"),
-        }
+        drop(env);
         outcomes
     }
 
     #[test]
     fn pdf_to_images_fails_each_file_as_unavailable_when_the_renderer_override_points_nowhere() {
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("pdf-to-images-no-renderer");
         let inputs = ["first", "second"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();
         for input in &inputs { make_pdf(input, 2); }
@@ -11228,7 +11155,6 @@ mod command_tests {
     fn pdf_to_images_fails_protected_and_damaged_pdfs_alone_while_the_rest_render() {
         use crate::kit::contracts::OutcomePointer;
         let _split = crate::kit::pdf::remaining::tests::SPLIT_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _guard = crate::kit::lock_process_env();
         let root = sandbox("pdf-to-images-mixed-batch");
         let renderer = fake_pdf_renderer(&root);
         let inputs = ["first", "locked", "damaged", "last"].map(|stem| root.join(format!("{stem}.pdf"))).to_vec();

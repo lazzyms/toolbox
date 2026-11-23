@@ -552,11 +552,10 @@ mod tests {
         std::fs::write(elsewhere.join("hin.traineddata"), b"a model on PATH").unwrap();
 
         let outcomes: Vec<JobOutcome> = {
-            let _env = crate::kit::lock_process_env();
-            let original = std::env::var_os("PATH");
+            let env = crate::kit::EnvOverride::new();
             let mut search = vec![elsewhere.clone(), elsewhere.join("tessdata")];
-            search.extend(original.iter().flat_map(std::env::split_paths));
-            std::env::set_var("PATH", std::env::join_paths(search).unwrap());
+            search.extend(std::env::var_os("PATH").iter().flat_map(std::env::split_paths));
+            let _env = env.set("PATH", std::env::join_paths(search).unwrap());
             let mut run = PackHolds::default();
             // Each input the run would process with the resource fails on its own.
             let outcomes = ["first.pdf", "second.pdf"].into_iter().map(|input| {
@@ -565,7 +564,6 @@ mod tests {
                     Err(error) => JobOutcome::failure(PathBuf::from(input), error),
                 }
             }).collect();
-            match original { Some(value) => std::env::set_var("PATH", value), None => std::env::remove_var("PATH") }
             outcomes
         };
         assert_eq!(outcomes.len(), 2);

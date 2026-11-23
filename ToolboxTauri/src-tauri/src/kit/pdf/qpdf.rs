@@ -134,6 +134,7 @@ mod tests {
         }
 
         fn real_qpdf() -> Option<PathBuf> {
+            let _env = crate::kit::lock_process_env();
             match crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF) {
                 Ok(qpdf) => Some(qpdf),
                 Err(_) if std::env::var_os("TOOLBOX_REQUIRE_QPDF").is_some() => panic!("qpdf is required for this test run"),
@@ -146,14 +147,10 @@ mod tests {
 
         /// Runs `body` with qpdf resolved through the Development override pointing at `helper`.
         fn with_override<T>(helper: &FakeHelper, body: impl FnOnce(PathBuf) -> T) -> T {
-            let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
-            std::env::set_var("TOOLBOX_QPDF_PATH", &helper.script);
+            let env = crate::kit::EnvOverride::new().set("TOOLBOX_QPDF_PATH", &helper.script);
             let resolved = crate::kit::resources::resolve_helper(&crate::kit::resources::QPDF);
             let result = resolved.map(body);
-            match previous {
-                Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
-                None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
-            }
+            drop(env);
             result.expect("the Development override resolves to the fake helper")
         }
 
@@ -190,7 +187,6 @@ mod tests {
 
         #[test]
         fn encrypting_rewriting_and_decrypting_keep_every_password_out_of_qpdf_arguments_environment_and_disk() {
-            let _guard = crate::kit::lock_process_env();
             let Some(real) = real_qpdf() else { return };
             let root = sandbox("round-trip");
             let plain = root.join("plain.pdf");
@@ -228,7 +224,6 @@ mod tests {
 
         #[test]
         fn a_failed_qpdf_call_never_carries_the_password_in_its_error_text() {
-            let _guard = crate::kit::lock_process_env();
             let root = sandbox("echoed");
             // qpdf echoes an unrecognized argument back, password and all; this helper echoes every one.
             // Other calls go to the real qpdf, so tests that do not take the env lock keep working.
@@ -253,7 +248,6 @@ mod tests {
 
         #[test]
         fn protect_reports_a_failed_qpdf_call_without_the_password() {
-            let _guard = crate::kit::lock_process_env();
             let root = sandbox("protect-echoed");
             let input = root.join("echoes.pdf");
             crate::kit::pdf::tests::make_pdf(&input);
@@ -277,7 +271,6 @@ mod tests {
 
         #[test]
         fn a_qpdf_call_stopped_at_its_deadline_leaves_no_password_behind() {
-            let _guard = crate::kit::lock_process_env();
             let Some(real) = real_qpdf() else { return };
             let root = sandbox("deadline");
             let input = root.join("stalls.pdf");
@@ -301,7 +294,6 @@ mod tests {
 
         #[test]
         fn a_refused_password_never_starts_qpdf() {
-            let _guard = crate::kit::lock_process_env();
             let root = sandbox("refused");
             let helper = FakeHelper::install(&root, "qpdf", None);
             with_override(&helper, |qpdf| {

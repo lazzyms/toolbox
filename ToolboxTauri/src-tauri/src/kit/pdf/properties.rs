@@ -969,18 +969,14 @@ mod tests {
     #[test]
     fn the_qpdf_call_that_keeps_the_password_reads_it_from_standard_input_only() {
         use crate::kit::common::fake_helper::{secret_exposure, Exposure, FakeHelper};
-        let _guard = crate::kit::lock_process_env();
+        let env = crate::kit::EnvOverride::new();
         let Some(qpdf) = real_qpdf() else { return };
         let sandbox = Sandbox::new("qpdf-call");
         let helper = FakeHelper::install(&sandbox.0, "qpdf", Some(&qpdf));
         let locked = sandbox.file("locked.pdf", &pdf(None, None, Some(("owner-secret", crate::kit::TEST_PASSWORD))));
-        let previous = std::env::var_os("TOOLBOX_QPDF_PATH");
-        std::env::set_var("TOOLBOX_QPDF_PATH", &helper.script);
+        let env = env.set("TOOLBOX_QPDF_PATH", &helper.script);
         let outcomes = run_with(&[locked.clone()], patch(set("Final"), FieldEdit::Keep, FieldEdit::Keep), passwords(crate::kit::TEST_PASSWORD, &[]));
-        match previous {
-            Some(value) => std::env::set_var("TOOLBOX_QPDF_PATH", value),
-            None => std::env::remove_var("TOOLBOX_QPDF_PATH"),
-        }
+        drop(env);
 
         assert!(outcomes[0].error().is_none(), "{:?}", outcomes[0]);
         let calls = helper.invocations().into_iter().filter(|call| call.arguments.iter().any(|argument| argument.contains(&locked.display().to_string()))).collect::<Vec<_>>();

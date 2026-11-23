@@ -609,10 +609,9 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn the_development_override_supplies_the_fixture_catalog() {
-        let _guard = crate::kit::lock_process_env();
-        std::env::set_var(CATALOG_OVERRIDE_ENV, FIXTURE_CATALOG);
+        let env = crate::kit::EnvOverride::new().set(CATALOG_OVERRIDE_ENV, FIXTURE_CATALOG);
         let overridden = load_catalog();
-        std::env::remove_var(CATALOG_OVERRIDE_ENV);
+        drop(env);
         assert_eq!(overridden.unwrap().packs.len(), 5);
         assert_eq!(load_catalog().unwrap().packs.len(), parse_catalog(BUILT_IN_CATALOG).unwrap().packs.len());
     }

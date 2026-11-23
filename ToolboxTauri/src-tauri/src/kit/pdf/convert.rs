@@ -2983,10 +2983,6 @@ mod tests {
             run_with(&RunEvents::silent(), json!({ "paths": paths, "outputLocation": "alongsideInput" }), fonts, packs, limits::convert_to_pdf)
         }
 
-        fn set_font_dir(value: Option<&Path>) {
-            match value { Some(value) => std::env::set_var("TOOLBOX_SCRIPT_FONT_DIR", value), None => std::env::remove_var("TOOLBOX_SCRIPT_FONT_DIR") }
-        }
-
         /// The output's text as the local Poppler extracts it, when it is installed.
         fn extracted_text(path: &Path) -> Option<String> {
             let output = std::process::Command::new("pdftotext").args(["-enc", "UTF-8"]).arg(path).arg("-").output().ok()?;
@@ -3014,8 +3010,7 @@ mod tests {
 
         #[test]
         fn script_text_without_the_pack_fails_alone_with_a_pointer_and_saves_nothing() {
-            let _guard = crate::kit::lock_process_env();
-            set_font_dir(None);
+            let _env = crate::kit::EnvOverride::new().remove("TOOLBOX_SCRIPT_FONT_DIR");
             let root = sandbox("script_pack_missing");
             let arabic = root.join("arabic.txt");
             fs::write(&arabic, ARABIC_LINE).unwrap();
@@ -3047,18 +3042,17 @@ mod tests {
 
         #[test]
         fn with_the_development_font_script_text_is_embedded_as_a_subset_and_extracts_in_reading_order() {
-            let _guard = crate::kit::lock_process_env();
             let root = sandbox("script_pack_override");
             let font_dir = root.join("dev-fonts");
             fs::create_dir_all(font_dir.join("fonts")).unwrap();
             fs::write(font_dir.join("fonts/Arabic.ttf"), crate::kit::images::tools::INCLUDED_WATERMARK_FONT).unwrap();
-            set_font_dir(Some(&font_dir));
+            let env = crate::kit::EnvOverride::new().set("TOOLBOX_SCRIPT_FONT_DIR", &font_dir);
             let input = root.join("receipt.txt");
             let text = format!("{ARABIC_LINE}\nПривет κόσμε");
             fs::write(&input, &text).unwrap();
             let first = convert_with(&[&input], packs(&root.join("app-data")));
             let second = convert_with(&[&input], packs(&root.join("app-data")));
-            set_font_dir(None);
+            drop(env);
             assert!(succeeded(&first[0]), "{:?}", first[0]);
             assert!(succeeded(&second[0]), "{:?}", second[0]);
             let output = root.join("receipt.pdf");
