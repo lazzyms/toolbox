@@ -991,6 +991,7 @@ struct ImageCandidate {
     height: i64,
 }
 
+/// Form XObjects nested deeper than this are not searched.
 const MAX_FORM_DEPTH: usize = 16;
 
 /// Lists the images of the selected one-based pages in page order. Within a page, the image XObjects in its

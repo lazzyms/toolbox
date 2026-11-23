@@ -32,6 +32,7 @@ struct BatchProgress<'a> {
     event: &'a FileEvent,
 }
 
+// Callers that send no runId keep the old silent behavior.
 impl<'de> tauri::ipc::CommandArg<'de, tauri::Wry> for RunEvents {
     fn from_command(command: tauri::ipc::CommandItem<'de, tauri::Wry>) -> Result<Self, tauri::ipc::InvokeError> {
         let webview = command.message.webview();
