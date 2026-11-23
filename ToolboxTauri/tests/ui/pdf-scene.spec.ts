@@ -11,6 +11,9 @@ test.beforeEach(async ({ page }) => {
     w.sceneTextWaiting = [];
     w.releaseSceneText = () => { w.sceneTextHeld.clear(); for (const resolve of w.sceneTextWaiting.splice(0)) resolve(); };
     w.sceneTextResponses = {};
+    w.previewsHeld = false;
+    w.previewsWaiting = [];
+    w.releasePreviews = () => { w.previewsHeld = false; for (const resolve of w.previewsWaiting.splice(0)) resolve(); };
     w.dialogNext = null;
     w.scriptPacks = [];
     const callbacks = new Map<number, (event: unknown) => void>();
@@ -59,7 +62,7 @@ test.beforeEach(async ({ page }) => {
         if (command === 'render_pdf_source_thumbnails') return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, thumbnail: { dataUrl: svg, width: 247, height: 320 }, error: null }));
         if (command === 'preview_pdf_scene_pages') {
           if (w.previewFailure) throw new Error(w.previewFailureMessage ?? 'Renderer unavailable');
-          if (w.previewDelay) await new Promise(resolve => setTimeout(resolve, w.previewDelay));
+          if (w.previewsHeld) await new Promise(resolve => w.previewsWaiting.push(resolve));
           return args.request.pageIndices.map((pageIndex: number) => ({ pageIndex, preview: { dataUrl: svg, width: 612, height: 792 } }));
         }
         if (command === 'install_pack') return { packs: [], installedCount: 1, totalBytes: 0 };
@@ -419,7 +422,7 @@ test('page numbers follow the page order after a reorder, in the preview and the
   await addPageNumbers(page);
   await page.getByRole('radio', { name: 'Skip the first page' }).click();
   await expect(pageNumberHit(page)).toHaveCount(0);
-  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.evaluate(() => { (window as any).previewsHeld = true; });
   await page.getByRole('button', { name: 'Move page later' }).click();
   await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toHaveAttribute('aria-current', 'page');
   // The draft shows the resolved number before the rendered preview arrives.
@@ -431,7 +434,7 @@ test('page numbers follow the page order after a reorder, in the preview and the
   await expect(pageNumberHit(page)).toHaveAccessibleName('Page number Page 3 of 3');
   await expect(page.getByRole('button', { name: 'Page 1', exact: true })).not.toContainText('marks');
   await expect(page.getByRole('button', { name: 'Page 2', exact: true })).toContainText('1 marks');
-  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  await page.evaluate(() => (window as any).releasePreviews());
   const scene = await exported(page);
   expect(scene.pages.map((item: any) => item.sourceIndex)).toEqual([1, 0, 2]);
   expect(scene.pages.map((item: any) => item.objects.map((object: any) => object.kind))).toEqual([[], ['pageNumbers'], []]);
@@ -599,9 +602,10 @@ test('Cmd+O opens a PDF in the editor and Cmd+Enter exports only once there is a
 test('scene rejects stale and failed previews without exposing an unverified export', async ({ page }) => {
   await openEditor(page);
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
-  await page.evaluate(() => { (window as any).previewDelay = 350; });
+  await page.evaluate(() => { (window as any).previewsHeld = true; });
   await draw(page, 'Text', .2);
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
+  await page.evaluate(() => (window as any).releasePreviews());
   await expect.poll(() => page.locator('.scene-canvas image').evaluateAll((images) => images.map((image) => image.getAttribute('href')))).toContain(svg);
   await page.getByRole('button', { name: /^Undo \(/ }).click();
   await expect(page.locator('.scene-object-hit')).toHaveCount(0);
@@ -1311,7 +1315,7 @@ const blankBand = { left: '', center: '', right: '' };
 
 test('header and footer text uses token tags, and every option is sent exactly to preview and export', async ({ page }) => {
   await openEditor(page);
-  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.evaluate(() => { (window as any).previewsHeld = true; });
   await addHeaderFooter(page);
   const sent = async () => (await previewScene(page)).pages[0].objects[0];
   await expect.poll(sent).toMatchObject({
@@ -1352,7 +1356,7 @@ test('header and footer text uses token tags, and every option is sent exactly t
   await page.getByRole('button', { name: 'Page 2', exact: true }).click();
   await expect(headerFooterPart(page, 'footer-center')).toHaveText('2 of 3');
   await expect(headerFooterPart(page, 'header-right')).toHaveText('Draft 2');
-  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  await page.evaluate(() => (window as any).releasePreviews());
 
   const scene = await exported(page);
   expect(scene.pages[0].objects).toHaveLength(1);
@@ -1369,7 +1373,7 @@ test('header and footer text uses token tags, and every option is sent exactly t
 test('header and footer first-page and even-page text apply by final page, and overlaps with page text are flagged', async ({ page }) => {
   await openEditor(page);
   await addHeaderFooter(page);
-  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.evaluate(() => { (window as any).previewsHeld = true; });
   await page.getByRole('checkbox', { name: 'Different first page' }).click();
   await expect(page.getByRole('radio', { name: 'First page', exact: true })).toHaveAttribute('aria-checked', 'true');
   await tokenField(page, 'Footer left').click();
@@ -1400,7 +1404,7 @@ test('header and footer first-page and even-page text apply by final page, and o
   await expect(overlap).toBeVisible();
   await page.getByRole('combobox', { name: 'Distance from edge' }).selectOption('36');
   await expect(overlap).toHaveCount(0);
-  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  await page.evaluate(() => (window as any).releasePreviews());
 
   let scene = await exported(page);
   expect(scene.pages[0].objects[0].headerFooter).toMatchObject({
@@ -1478,14 +1482,14 @@ test('a range-applied watermark shows and edits on every affected page only', as
   await expect(page.getByRole('button', { name: 'Page 3', exact: true })).toContainText('1 marks');
   await page.getByRole('button', { name: 'Page 2', exact: true }).click();
   await expect(watermarkHit(page)).toHaveCount(0);
-  await page.evaluate(() => { (window as any).previewDelay = 60_000; });
+  await page.evaluate(() => { (window as any).previewsHeld = true; });
   await page.getByRole('button', { name: 'Page 3', exact: true }).click();
   await expect(watermarkHit(page)).toHaveCount(1);
   await watermarkHit(page).focus();
   await page.getByRole('textbox', { name: 'Text', exact: true }).fill('COPY');
   // The draft follows the shared placement geometry until the rendered preview is ready.
   await expect(page.locator('.scene-canvas text', { hasText: 'COPY' })).toHaveCount(1);
-  await page.evaluate(() => { (window as any).previewDelay = 0; });
+  await page.evaluate(() => (window as any).releasePreviews());
   await page.getByRole('button', { name: 'Page 2', exact: true }).click();
   const scene = await exported(page);
   expect(scene.pages[0].objects).toHaveLength(1);
@@ -1675,12 +1679,13 @@ test('Export stays off with a reason until there is a change and the preview sho
   const reason = page.getByRole('status').filter({ hasText: 'Nothing to export yet' });
   await expect(reason).toBeVisible();
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toHaveAttribute('aria-describedby', 'scene-export-reason');
-  await page.evaluate(() => { (window as any).previewDelay = 1500; });
+  await page.evaluate(() => { (window as any).previewsHeld = true; });
   await draw(page, 'Shape', .4);
   await expect(page.getByRole('status').filter({ hasText: 'Updating the preview' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Export As…', exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled({ timeout: 5000 });
+  await page.evaluate(() => (window as any).releasePreviews());
+  await expect(page.getByRole('button', { name: 'Export PDF', exact: true })).toBeEnabled();
   await expect(page.locator('#scene-export-reason')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).calls.some((c: any) => c.command === 'export_pdf_scene'))).toBe(false);
 });
