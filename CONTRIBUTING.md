@@ -30,7 +30,11 @@ git config core.hooksPath .githooks
 ```
 
 The pre-commit hook runs the GitGuardian secret scan on staged changes, then the
-Playwright suite. The scan runs only when ggshield is installed and signed in:
+whole test suite (`npm run test:all`), and blocks the commit if anything fails.
+CI only builds the app and runs no tests, so the hook is the only test gate: do
+not commit with `--no-verify`. The suite needs `qpdf`, `poppler` and `tesseract`
+(`brew install qpdf poppler tesseract`) and tests only the platform you commit
+from. The scan runs only when ggshield is installed and signed in:
 
 ```bash
 brew install ggshield   # or: pipx install ggshield

@@ -10,5 +10,26 @@ else
   echo "pre-commit: skipping the GitGuardian secret scan; install ggshield and run 'ggshield auth login' to enable it." >&2
 fi
 
+# CI only builds the app, so this hook is the only place the tests run. The
+# native tests need the same helpers CI used to install; without them they
+# would skip instead of fail.
+for tool in cargo qpdf pdftotext pdftoppm tesseract; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "pre-commit: $tool is not installed, so the test suite cannot run. On macOS: brew install qpdf poppler tesseract, and install Rust from https://rustup.rs." >&2
+    exit 1
+  fi
+done
+
+export TOOLBOX_REQUIRE_QPDF=1
+# pdftotext is never found on PATH; native tests use the Development override.
+export TOOLBOX_PDFTOTEXT_PATH="${TOOLBOX_PDFTOTEXT_PATH:-$(command -v pdftotext)}"
+
+# Worktrees share the main checkout's Rust build directory. Each would
+# otherwise compile from scratch into its own multi-gigabyte target.
+if [ -z "${CARGO_TARGET_DIR:-}" ]; then
+  main_checkout=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+  export CARGO_TARGET_DIR="$main_checkout/ToolboxTauri/src-tauri/target"
+fi
+
 cd "$repository_root/ToolboxTauri"
-npm run test:ui
+npm run test:all

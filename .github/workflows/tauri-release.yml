@@ -159,16 +159,6 @@ jobs:
           cache-dependency-path: ToolboxTauri/package-lock.json
       - run: npm ci
         working-directory: ToolboxTauri
-      - name: Install Playwright browser
-        run: npx playwright install chromium
-        working-directory: ToolboxTauri
-      - name: Run UI automation
-        run: npm run test:ui
-        working-directory: ToolboxTauri
-
-      - name: Run analytics tests
-        run: npm run test:analytics
-        working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -251,8 +241,6 @@ jobs:
       - name: Stage offline OCR resources
         run: npm run stage:ocr -- ${{ matrix.target }}
         working-directory: ToolboxTauri
-      - run: cargo test -- --test-threads=1
-        working-directory: ToolboxTauri/src-tauri
       - name: Stage offline vision adapter
         run: npm run stage:vision -- ${{ matrix.target }}
         working-directory: ToolboxTauri
