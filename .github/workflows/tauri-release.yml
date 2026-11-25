@@ -3,6 +3,16 @@ name: Tauri Release
 on:
   push:
     branches: [main]
+    # A push that changes nothing outside these paths ships no app change, so
+    # it publishes no release; the next app push releases it. Keep in step
+    # with Tauri Build's list.
+    paths-ignore:
+      - 'docs/**'
+      - '.agents/**'
+      - '.claude/skills/**'
+      - 'skills/**'
+      - 'scripts/product-demo/**'
+      - '*.md'
   workflow_dispatch:
     inputs:
       version:
@@ -138,24 +148,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # Keyed by target, apart from Tauri Build's host builds. Microsoft Store
+      # builds the same x86_64 target and restores this entry.
       - uses: swatinem/rust-cache@v2
-        with: {workspaces: ToolboxTauri/src-tauri}
+        with: {workspaces: ToolboxTauri/src-tauri, shared-key: "release-${{ matrix.target }}"}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: ToolboxTauri/package-lock.json
       - run: npm ci
-        working-directory: ToolboxTauri
-      - name: Install Playwright browser
-        run: npx playwright install chromium
-        working-directory: ToolboxTauri
-      - name: Run UI automation
-        run: npm run test:ui
-        working-directory: ToolboxTauri
-
-      - name: Run analytics tests
-        run: npm run test:analytics
         working-directory: ToolboxTauri
       - name: Install qpdf (macOS)
         if: runner.os == 'macOS'
@@ -238,11 +240,6 @@ jobs:
         run: printf '{"version":"%s"}\n' "$VERSION" > release-config.json
       - name: Stage offline OCR resources
         run: npm run stage:ocr -- ${{ matrix.target }}
-        working-directory: ToolboxTauri
-      - run: cargo test -- --test-threads=1
-        working-directory: ToolboxTauri/src-tauri
-      - name: Run native E2E matrix
-        run: npm run test:native:e2e
         working-directory: ToolboxTauri
       - name: Stage offline vision adapter
         run: npm run stage:vision -- ${{ matrix.target }}

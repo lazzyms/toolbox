@@ -10,6 +10,7 @@ explicitly targets it.
 ```bash
 cd ToolboxTauri
 npm ci
+npm run test:all
 npm run test:ui
 npm run test:analytics
 npm run test:native:e2e
@@ -17,6 +18,9 @@ npm run check:release
 npm run build
 npm run tauri build
 ```
+
+`npm run test:all` is the whole suite. The pre-commit hook runs it, and CI runs
+no tests: the workflows only build the app.
 
 Native tests can be run with:
 

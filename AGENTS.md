@@ -15,6 +15,7 @@ Swift package files, Swift sources, or the Swift release workflow here. Keep
 
 Run from `ToolboxTauri/`:
 
+- `npm run test:all` — the whole suite; the pre-commit hook runs it and CI runs no tests
 - `npm run test:ui` — all Playwright UI tests
 - `npm run test:analytics` — install analytics unit tests
 - `npm run test:native:e2e` — native command matrix with isolated fixtures
