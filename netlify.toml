@@ -1,0 +1,6 @@
+[build]
+  command = "node scripts/prepare-netlify-docs.mjs"
+  publish = ".netlify/publish"
+
+[build.environment]
+  NODE_VERSION = "22"

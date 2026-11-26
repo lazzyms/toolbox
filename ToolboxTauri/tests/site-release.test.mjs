@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { site } from '../../docs/landing-pages.mjs';
 import { siteReleaseFiles, siteRoot, syncSiteRelease } from '../scripts/sync-site-release.mjs';
 
 const { version } = JSON.parse(readFileSync(resolve(siteRoot, '../tauri-latest.json'), 'utf8'));
@@ -32,8 +33,8 @@ test('syncing the site rewrites pinned links and the release note only', () => {
   ].join('\n'));
 });
 
-test('every canonical and social URL uses the custom domain GitHub Pages serves', () => {
-  const domain = readFileSync(resolve(siteRoot, 'CNAME'), 'utf8').trim();
+test('every canonical and social URL uses the custom domain Netlify serves', () => {
+  const domain = new URL(site).host;
   const pages = siteReleaseFiles().filter((file) => file.endsWith('.html')).map((file) => readFileSync(file, 'utf8'));
   const urls = pages.flatMap((source) => [...source.matchAll(/<(?:link rel="canonical" href|meta (?:property|name)="(?:og:url|og:image|twitter:image)" content)="([^"]+)"/g)].map((match) => match[1]));
   assert.equal(urls.length, pages.length * 4, 'Each page needs canonical, og:url, og:image and twitter:image');

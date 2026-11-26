@@ -1,4 +1,5 @@
 .build/
+.netlify/
 dist/
 .firebase/
 .verification/
