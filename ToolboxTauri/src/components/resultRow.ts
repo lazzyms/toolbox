@@ -82,7 +82,7 @@ const spokenKinds: Record<ErrorKind, string> = {
     cancelled: "Failed, cancelled while it was running",
 };
 
-export const wrongPasswordDetail = "The password didn't open this file. Check it, or try the password this file was sent with.";
+export const wrongPasswordDetail = "Wrong password. Check it, or try the password this file was sent with.";
 
 /** A tool's `signatureRemovedNote` replaces the shared signature wording on its rows. */
 export const warningText = (warning: OutcomeWarning, signatureRemovedNote?: string): string => {

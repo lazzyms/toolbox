@@ -122,7 +122,7 @@ test.beforeEach(async ({ page }) => {
         if (command === "inspect_pdf_privacy") {
           const { paths, password, passwordOverrides } = args.request;
           return paths.map((inputPath: string) => inputPath === lockedPath && (passwordOverrides?.[inputPath] || password) !== lockedPassword
-            ? { inputPath, outputPaths: [], state: "failed", detail: "", failure: { kind: "wrongPassword", message: "The password didn't open this file.", pointer: null }, reason: null, warnings: [] }
+            ? { inputPath, outputPaths: [], state: "failed", detail: "", failure: { kind: "wrongPassword", message: "Wrong password.", pointer: null }, reason: null, warnings: [] }
             : inputPath === lockedPath
             ? { inputPath, outputPaths: [], state: "succeeded", detail: JSON.stringify({ ...cleanReport, encryption: { openPassword: true, version: 4, revision: 4, keyBits: 128, encryptsMetadata: true, allowed: [], denied: [] } }), failure: null, reason: null, warnings: [] }
             : reports[inputPath]
@@ -393,7 +393,7 @@ test("A wrong password fails only that file, and retrying sends only that file w
 
   await expect(page.getByRole("status").filter({ hasText: "Done." })).toHaveText("Done. 2 reports, 1 failedNothing was changed in any PDF.");
   const locked = report(page, "locked.pdf");
-  await expect(locked.getByRole("alert")).toHaveText("Failed: The password didn't open this file. Check it, or try the password this file was sent with.");
+  await expect(locked.getByRole("alert")).toHaveText("Failed: Wrong password. Check it, or try the password this file was sent with.");
   await expect(locked.getByRole("list", { name: "Report categories" })).toHaveCount(0);
   await expect(report(page, "clean.pdf").getByRole("alert")).toHaveCount(0);
   await expect(report(page, "lease.pdf").getByRole("alert")).toHaveCount(0);
@@ -426,7 +426,7 @@ test("PDFs that need no password are checked without one, and clearing the list 
   await page.getByRole("button", { name: /^Check 2 PDFs/ }).click();
   expect((await calls(page, "inspect_pdf_privacy"))[0].args.request).toEqual({ paths: [cleanPath, lockedPath], password: "", passwordOverrides: {} });
   await expect(report(page, "clean.pdf").getByRole("alert")).toHaveCount(0);
-  await expect(report(page, "locked.pdf").getByRole("alert")).toHaveText("Failed: The password didn't open this file. Check it, or try the password this file was sent with.");
+  await expect(report(page, "locked.pdf").getByRole("alert")).toHaveText("Failed: Wrong password. Check it, or try the password this file was sent with.");
 
   await page.getByLabel("Open password for all files", { exact: true }).fill("batch-secret");
   await setOwnPassword(page, "locked.pdf", lockedPassword);

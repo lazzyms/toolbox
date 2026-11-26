@@ -251,7 +251,7 @@ test("every result state and warning has a spoken label, and the privacy note is
         - listitem:
           - text: open.pdf This file has no password. Skipped
         - listitem:
-          - text: wrong.pdf The password didn't open this file. Check it, or try the password this file was sent with. Failed, wrong password
+          - text: wrong.pdf Wrong password. Check it, or try the password this file was sent with. Failed, wrong password
         - listitem:
           - text: broken.pdf This PDF is damaged. Failed while processing
         - listitem:
