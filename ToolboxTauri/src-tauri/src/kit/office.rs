@@ -471,7 +471,7 @@ fn map_modern_decrypt_error(error: office_crypto::DecryptError) -> OfficeError {
 type CfbFile = CompoundFile<Cursor<Vec<u8>>>;
 
 fn open_cfb(raw: &[u8]) -> Result<CfbFile, OfficeError> {
-    CompoundFile::open(Cursor::new(raw.to_vec()))
+    super::office_agile::open_compound_file(raw)
         .map_err(|error| invalid(format!("The Office compound file is malformed: {error}")))
 }
 
@@ -595,7 +595,7 @@ fn md5_digest(data: &[u8]) -> [u8; 16] {
 }
 
 fn sha1_digest(data: &[u8]) -> [u8; 20] {
-    let digest = Sha1::digest(data);
+    let digest = <Sha1 as sha1::Digest>::digest(data);
     let mut output = [0u8; 20];
     output.copy_from_slice(&digest);
     output
@@ -1644,6 +1644,40 @@ pub(crate) mod tests {
         ));
         std::fs::create_dir_all(&directory).unwrap();
         directory
+    }
+
+    #[test]
+    fn removes_the_password_from_an_xlsx_another_writer_locked_and_names_a_wrong_password() {
+        let directory = test_directory("other-writer");
+        let output_directory = directory.join("output");
+        std::fs::create_dir_all(&output_directory).unwrap();
+        let original = minimal_ooxml_package("xlsx");
+        let input = directory.join("statement.xlsx");
+        std::fs::write(&input, crate::kit::office_agile::test_encrypt_like_other_writers(&original, "secret")).unwrap();
+        let locked_before = std::fs::read(&input).unwrap();
+
+        let wrong_password = OfficeProcessor::remove_password(
+            input.clone(),
+            "wrong",
+            &OutputLocation::CustomFolder(output_directory.clone()),
+        );
+        let error = wrong_password.error().expect("a wrong password fails");
+        assert_eq!(error.kind, crate::kit::contracts::ErrorKind::WrongPassword);
+        assert_eq!(error.message, WRONG_PASSWORD);
+        assert!(wrong_password.output_paths().is_empty());
+        assert_eq!(std::fs::read_dir(&output_directory).unwrap().count(), 0);
+
+        let unlocked = OfficeProcessor::remove_password(
+            input.clone(),
+            "secret",
+            &OutputLocation::CustomFolder(output_directory.clone()),
+        );
+        assert!(unlocked.error().is_none(), "{}", unlocked.error().cloned().unwrap_or_default());
+        assert_eq!(unlocked.output_paths().len(), 1);
+        assert_eq!(std::fs::read(&unlocked.output_paths()[0]).unwrap(), original);
+        assert_eq!(std::fs::read(&input).unwrap(), locked_before);
+
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]

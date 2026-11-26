@@ -1,22 +1,31 @@
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
-use aes::Aes256;
+use aes::{Aes128, Aes192, Aes256};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use cfb::CompoundFile;
 use hmac::{Hmac, KeyInit, Mac};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader as XmlReader, XmlVersion};
-use sha2::{Digest, Sha512};
+use sha1::Sha1;
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use std::io::{Cursor, Read, Write};
 
 const BLOCK_SIZE: usize = 16;
-const HASH_SIZE: usize = 64;
 const KEY_DATA_SALT_SIZE: usize = 16;
 const PACKAGE_KEY_SIZE: usize = 32;
 const SEGMENT_SIZE: usize = 4096;
 const SPIN_COUNT: u32 = 100_000;
+/// ECMA-376 caps the Agile password spin count at ten million.
+const MAX_SPIN_COUNT: u32 = 10_000_000;
 const AGILE_ENCRYPTION_INFO_VERSION: [u8; 4] = [0x04, 0x00, 0x04, 0x00];
 const AGILE_ENCRYPTION_INFO_FLAGS: u32 = 0x40;
+
+const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+const CFB_HEADER_DIFAT_ENTRIES: usize = 109;
+const CFB_FREE_SECTOR: u32 = 0xFFFF_FFFF;
+const CFB_END_OF_CHAIN: u32 = 0xFFFF_FFFE;
+const CFB_MAX_REGULAR_SECTOR: u32 = 0xFFFF_FFFA;
+const CFB_MINI_SECTOR_LEN: u64 = 64;
 
 const VERIFIER_HASH_INPUT_BLOCK_KEY: [u8; 8] = [
     0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79,
@@ -34,8 +43,228 @@ const INTEGRITY_VALUE_BLOCK_KEY: [u8; 8] = [
     0xA0, 0x67, 0x7F, 0x02, 0xB2, 0x2C, 0x84, 0x33,
 ];
 
-type Aes256CbcEncryptor = cbc::Encryptor<Aes256>;
-type Aes256CbcDecryptor = cbc::Decryptor<Aes256>;
+/// The hash algorithms an Agile `keyData` or `encryptedKey` element can name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgileHash {
+    Sha1,
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+impl AgileHash {
+    fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            "SHA1" | "SHA-1" => Ok(Self::Sha1),
+            "SHA256" | "SHA-256" => Ok(Self::Sha256),
+            "SHA384" | "SHA-384" => Ok(Self::Sha384),
+            "SHA512" | "SHA-512" => Ok(Self::Sha512),
+            other => Err(format!("The Agile hash algorithm {other} is unsupported.")),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Sha1 => "SHA1",
+            Self::Sha256 => "SHA256",
+            Self::Sha384 => "SHA384",
+            Self::Sha512 => "SHA512",
+        }
+    }
+
+    fn size(self) -> usize {
+        match self {
+            Self::Sha1 => 20,
+            Self::Sha256 => 32,
+            Self::Sha384 => 48,
+            Self::Sha512 => 64,
+        }
+    }
+
+    fn digest(self, parts: &[&[u8]]) -> Vec<u8> {
+        fn run<D: Digest>(parts: &[&[u8]]) -> Vec<u8> {
+            let mut hasher = D::new();
+            for part in parts {
+                hasher.update(part);
+            }
+            hasher.finalize().to_vec()
+        }
+        match self {
+            Self::Sha1 => run::<Sha1>(parts),
+            Self::Sha256 => run::<Sha256>(parts),
+            Self::Sha384 => run::<Sha384>(parts),
+            Self::Sha512 => run::<Sha512>(parts),
+        }
+    }
+
+    fn hmac(self, key: &[u8], data: &[u8]) -> Vec<u8> {
+        fn run<M: Mac + KeyInit>(key: &[u8], data: &[u8]) -> Vec<u8> {
+            let mut mac = <M as KeyInit>::new_from_slice(key).expect("HMAC accepts keys of any length");
+            mac.update(data);
+            mac.finalize().into_bytes().to_vec()
+        }
+        match self {
+            Self::Sha1 => run::<Hmac<Sha1>>(key, data),
+            Self::Sha256 => run::<Hmac<Sha256>>(key, data),
+            Self::Sha384 => run::<Hmac<Sha384>>(key, data),
+            Self::Sha512 => run::<Hmac<Sha512>>(key, data),
+        }
+    }
+}
+
+/// The cipher settings of one Agile `keyData` or `encryptedKey` element. Agile
+/// always uses AES-CBC with 16-byte blocks; the hash and key size vary by writer.
+struct AgileCipher {
+    hash: AgileHash,
+    key_len: usize,
+    salt: Vec<u8>,
+}
+
+impl AgileCipher {
+    fn toolbox(salt: &[u8]) -> Self {
+        Self { hash: AgileHash::Sha512, key_len: PACKAGE_KEY_SIZE, salt: salt.to_vec() }
+    }
+
+    /// The password hash after `spin_count` rounds of H(iterator ‖ previous hash).
+    fn password_hash(&self, password: &str, spin_count: u32) -> Vec<u8> {
+        let password_bytes: Vec<u8> = password.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let mut hash = self.hash.digest(&[&self.salt, &password_bytes]);
+        for iterator in 0..spin_count {
+            hash = self.hash.digest(&[&iterator.to_le_bytes(), &hash]);
+        }
+        hash
+    }
+
+    fn derive_key(&self, password_hash: &[u8], block_key: &[u8; 8]) -> Vec<u8> {
+        fit(self.hash.digest(&[password_hash, block_key]), self.key_len)
+    }
+
+    fn xml_attributes(&self) -> String {
+        format!(
+            "saltSize=\"{}\" blockSize=\"{BLOCK_SIZE}\" keyBits=\"{}\" hashSize=\"{}\" cipherAlgorithm=\"AES\" cipherChaining=\"ChainingModeCBC\" hashAlgorithm=\"{}\" saltValue=\"{}\"",
+            self.salt.len(),
+            self.key_len * 8,
+            self.hash.size(),
+            self.hash.name(),
+            BASE64.encode(&self.salt),
+        )
+    }
+
+    fn salt_iv(&self) -> Vec<u8> {
+        fit(self.salt.clone(), BLOCK_SIZE)
+    }
+
+    fn derive_iv(&self, block_key: &[u8]) -> Vec<u8> {
+        fit(self.hash.digest(&[&self.salt, block_key]), BLOCK_SIZE)
+    }
+}
+
+/// Truncate, or pad with 0x36, to the length the spec asks for.
+fn fit(mut bytes: Vec<u8>, length: usize) -> Vec<u8> {
+    bytes.resize(length, 0x36);
+    bytes
+}
+
+/// Open a Compound File from bytes, tolerating one writer quirk the cfb crate
+/// rejects: FAT entries past the end of the file, and MiniFAT entries past the
+/// end of the mini stream, marked end-of-chain instead of free. No sector exists there, so freeing them changes no stream. The caller's
+/// bytes are left as they are.
+pub(crate) fn open_compound_file(raw: &[u8]) -> std::io::Result<CompoundFile<Cursor<Vec<u8>>>> {
+    let mut bytes = raw.to_vec();
+    free_fat_entries_past_end(&mut bytes);
+    CompoundFile::open(Cursor::new(bytes))
+}
+
+fn free_fat_entries_past_end(bytes: &mut [u8]) {
+    fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+        Some(u32::from_le_bytes(bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?))
+    }
+    if bytes.len() < 512 || bytes[..8] != CFB_MAGIC {
+        return;
+    }
+    let sector_len = match u16::from_le_bytes([bytes[30], bytes[31]]) {
+        9 => 512usize,
+        12 => 4096usize,
+        _ => return,
+    };
+    if bytes.len() < sector_len {
+        return;
+    }
+    let num_sectors = (bytes.len() + sector_len - 1) / sector_len - 1;
+    let entries_per_sector = sector_len / 4;
+    let sector_offset = |sector: u32| (sector as usize + 1).checked_mul(sector_len);
+    let Some(num_fat_sectors) = read_u32(bytes, 44) else { return };
+
+    let mut fat_sectors = Vec::new();
+    for index in 0..CFB_HEADER_DIFAT_ENTRIES {
+        match read_u32(bytes, 76 + index * 4) {
+            Some(sector) if sector <= CFB_MAX_REGULAR_SECTOR => fat_sectors.push(sector),
+            _ => break,
+        }
+    }
+    let mut difat_sector = read_u32(bytes, 68).unwrap_or(CFB_END_OF_CHAIN);
+    let mut difat_sectors_left = read_u32(bytes, 72).unwrap_or(0) as usize;
+    while difat_sectors_left > 0 && (difat_sector as usize) < num_sectors {
+        let Some(base) = sector_offset(difat_sector) else { return };
+        for index in 0..entries_per_sector - 1 {
+            match read_u32(bytes, base + index * 4) {
+                Some(sector) if sector <= CFB_MAX_REGULAR_SECTOR => fat_sectors.push(sector),
+                _ => break,
+            }
+        }
+        difat_sector = read_u32(bytes, base + (entries_per_sector - 1) * 4).unwrap_or(CFB_END_OF_CHAIN);
+        difat_sectors_left -= 1;
+    }
+    fat_sectors.truncate(num_fat_sectors as usize);
+
+    for (position, &fat_sector) in fat_sectors.iter().enumerate() {
+        let first_entry = position * entries_per_sector;
+        if first_entry + entries_per_sector <= num_sectors {
+            continue;
+        }
+        let Some(base) = sector_offset(fat_sector) else { continue };
+        if (fat_sector as usize) >= num_sectors {
+            continue;
+        }
+        free_end_of_chain_entries(bytes, base, num_sectors.saturating_sub(first_entry), entries_per_sector);
+    }
+
+    // The same writers pad the MiniFAT the same way, past the last mini sector
+    // the root entry's mini stream holds.
+    let fat_entry = |bytes: &[u8], sector: u32| -> Option<u32> {
+        let fat_sector = *fat_sectors.get(sector as usize / entries_per_sector)?;
+        read_u32(bytes, sector_offset(fat_sector)? + (sector as usize % entries_per_sector) * 4)
+    };
+    let Some(root_entry) = read_u32(bytes, 48).and_then(sector_offset) else { return };
+    let Some(root_stream_len) = bytes
+        .get(root_entry + 120..root_entry + 128)
+        .map(|length| u64::from_le_bytes(length.try_into().expect("eight bytes")))
+    else {
+        return;
+    };
+    let num_mini_sectors = usize::try_from(root_stream_len.div_ceil(CFB_MINI_SECTOR_LEN)).unwrap_or(usize::MAX);
+    let mut minifat_sector = read_u32(bytes, 60).unwrap_or(CFB_END_OF_CHAIN);
+    let mut position = 0usize;
+    while minifat_sector <= CFB_MAX_REGULAR_SECTOR && (minifat_sector as usize) < num_sectors && position < num_sectors {
+        let first_entry = position * entries_per_sector;
+        if first_entry + entries_per_sector > num_mini_sectors {
+            let Some(base) = sector_offset(minifat_sector) else { return };
+            free_end_of_chain_entries(bytes, base, num_mini_sectors.saturating_sub(first_entry), entries_per_sector);
+        }
+        minifat_sector = fat_entry(bytes, minifat_sector).unwrap_or(CFB_END_OF_CHAIN);
+        position += 1;
+    }
+}
+
+/// Mark end-of-chain entries `from..to` of the allocation table sector at `base` free.
+fn free_end_of_chain_entries(bytes: &mut [u8], base: usize, from: usize, to: usize) {
+    for index in from..to {
+        let offset = base + index * 4;
+        if bytes.get(offset..offset + 4) == Some(CFB_END_OF_CHAIN.to_le_bytes().as_slice()) {
+            bytes[offset..offset + 4].copy_from_slice(&CFB_FREE_SECTOR.to_le_bytes());
+        }
+    }
+}
 
 /// Encrypt an OOXML package using ECMA-376 Agile encryption.
 ///
@@ -43,50 +272,66 @@ type Aes256CbcDecryptor = cbc::Decryptor<Aes256>;
 /// and the returned bytes are a Compound File containing the streams and
 /// DataSpaces hierarchy used by encrypted OOXML documents.
 pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, String> {
+    encrypt_ooxml_with(
+        package,
+        password,
+        &AgileCipher::toolbox(&random_bytes(KEY_DATA_SALT_SIZE)?),
+        &AgileCipher::toolbox(&random_bytes(KEY_DATA_SALT_SIZE)?),
+        SPIN_COUNT,
+    )
+}
+
+/// Encrypt with explicit cipher settings. Toolbox always locks with SHA-512 and
+/// AES-256; tests use other settings to stand in for files other writers made.
+fn encrypt_ooxml_with(
+    package: &[u8],
+    password: &str,
+    password_cipher: &AgileCipher,
+    key_data: &AgileCipher,
+    spin_count: u32,
+) -> Result<Vec<u8>, String> {
     let package_length = u32::try_from(package.len())
         .map_err(|_| "The OOXML package is too large to encrypt.".to_string())?;
-    let password_salt = random_bytes::<KEY_DATA_SALT_SIZE>()?;
-    let key_data_salt = random_bytes::<KEY_DATA_SALT_SIZE>()?;
-    let package_key = random_bytes::<PACKAGE_KEY_SIZE>()?;
-    let verifier_hash_input = random_bytes::<BLOCK_SIZE>()?;
-    let integrity_salt = random_bytes::<KEY_DATA_SALT_SIZE>()?;
+    let package_key = random_bytes(key_data.key_len)?;
+    let verifier_hash_input = random_bytes(password_cipher.salt.len())?;
+    let integrity_salt = random_bytes(KEY_DATA_SALT_SIZE)?;
 
-    let password_hash = iterated_password_hash(&password_salt, password);
-    let encrypted_verifier_hash_input = encrypt_aes_cbc(
-        &derive_key(&password_hash, &VERIFIER_HASH_INPUT_BLOCK_KEY),
-        &password_salt,
-        &verifier_hash_input,
+    let password_hash = password_cipher.password_hash(password, spin_count);
+    let password_iv = password_cipher.salt_iv();
+    let encrypted_verifier_hash_input = aes_cbc_encrypt(
+        &password_cipher.derive_key(&password_hash, &VERIFIER_HASH_INPUT_BLOCK_KEY),
+        &password_iv,
+        &pad_to_block(verifier_hash_input.clone()),
     )?;
-    let verifier_hash = Sha512::digest(verifier_hash_input);
-    let encrypted_verifier_hash_value = encrypt_aes_cbc(
-        &derive_key(&password_hash, &VERIFIER_HASH_VALUE_BLOCK_KEY),
-        &password_salt,
-        &verifier_hash,
+    let encrypted_verifier_hash_value = aes_cbc_encrypt(
+        &password_cipher.derive_key(&password_hash, &VERIFIER_HASH_VALUE_BLOCK_KEY),
+        &password_iv,
+        &pad_to_block(password_cipher.hash.digest(&[&verifier_hash_input])),
     )?;
-    let encrypted_key_value = encrypt_aes_cbc(
-        &derive_key(&password_hash, &ENCRYPTED_KEY_VALUE_BLOCK_KEY),
-        &password_salt,
-        &package_key,
+    let encrypted_key_value = aes_cbc_encrypt(
+        &password_cipher.derive_key(&password_hash, &ENCRYPTED_KEY_VALUE_BLOCK_KEY),
+        &password_iv,
+        &pad_to_block(package_key.clone()),
     )?;
 
-    let encrypted_package = encrypt_package(package, package_length, &package_key, &key_data_salt)?;
-    let integrity_value = hmac_sha512(&integrity_salt, &encrypted_package)?;
-    let encrypted_integrity_key = encrypt_aes_cbc(
+    let encrypted_package = encrypt_package(package, package_length, &package_key, key_data)?;
+    let integrity_value = key_data.hash.hmac(&integrity_salt, &encrypted_package);
+    let encrypted_integrity_key = aes_cbc_encrypt(
         &package_key,
-        &derive_iv(&key_data_salt, &INTEGRITY_KEY_BLOCK_KEY),
+        &key_data.derive_iv(&INTEGRITY_KEY_BLOCK_KEY),
         &integrity_salt,
     )?;
-    let encrypted_integrity_value = encrypt_aes_cbc(
+    let encrypted_integrity_value = aes_cbc_encrypt(
         &package_key,
-        &derive_iv(&key_data_salt, &INTEGRITY_VALUE_BLOCK_KEY),
-        &integrity_value,
+        &key_data.derive_iv(&INTEGRITY_VALUE_BLOCK_KEY),
+        &pad_to_block(integrity_value),
     )?;
-
     let encryption_info = encryption_info_xml(
-        &key_data_salt,
+        key_data,
         &encrypted_integrity_key,
         &encrypted_integrity_value,
-        &password_salt,
+        password_cipher,
+        spin_count,
         &encrypted_verifier_hash_input,
         &encrypted_verifier_hash_value,
         &encrypted_key_value,
@@ -136,8 +381,36 @@ pub(crate) fn encrypt_ooxml(package: &[u8], password: &str) -> Result<Vec<u8>, S
     Ok(compound.into_inner().into_inner())
 }
 
+/// A package locked the way some other writers lock: SHA-1 and AES-128, a 32-byte
+/// password salt, and FAT and MiniFAT entries past the end marked end-of-chain.
+#[cfg(test)]
+pub(crate) fn test_encrypt_like_other_writers(package: &[u8], password: &str) -> Vec<u8> {
+    let password_cipher = AgileCipher { hash: AgileHash::Sha1, key_len: 16, salt: random_bytes(32).unwrap() };
+    let key_data = AgileCipher { hash: AgileHash::Sha1, key_len: 16, salt: random_bytes(16).unwrap() };
+    let mut encrypted = encrypt_ooxml_with(package, password, &password_cipher, &key_data, SPIN_COUNT).unwrap();
+    let sector_len = 1usize << u16::from_le_bytes([encrypted[30], encrypted[31]]);
+    let num_sectors = encrypted.len().div_ceil(sector_len) - 1;
+    let first_fat_sector = u32::from_le_bytes(encrypted[76..80].try_into().unwrap()) as usize;
+    let base = (first_fat_sector + 1) * sector_len;
+    let mark = |encrypted: &mut [u8], base: usize, from: usize| {
+        assert!(from < sector_len / 4, "the fixture must leave table entries past the end");
+        for index in from..sector_len / 4 {
+            let entry = &mut encrypted[base + index * 4..base + index * 4 + 4];
+            if *entry == CFB_FREE_SECTOR.to_le_bytes() {
+                entry.copy_from_slice(&CFB_END_OF_CHAIN.to_le_bytes());
+            }
+        }
+    };
+    mark(&mut encrypted, base, num_sectors);
+    let root_entry = (u32::from_le_bytes(encrypted[48..52].try_into().unwrap()) as usize + 1) * sector_len;
+    let root_stream_len = u64::from_le_bytes(encrypted[root_entry + 120..root_entry + 128].try_into().unwrap());
+    let minifat_base = (u32::from_le_bytes(encrypted[60..64].try_into().unwrap()) as usize + 1) * sector_len;
+    mark(&mut encrypted, minifat_base, root_stream_len.div_ceil(CFB_MINI_SECTOR_LEN) as usize);
+    encrypted
+}
+
 pub(crate) fn is_agile_ooxml(encrypted: &[u8]) -> Result<bool, String> {
-    let mut compound = CompoundFile::open(Cursor::new(encrypted.to_vec()))
+    let mut compound = open_compound_file(encrypted)
         .map_err(|error| format!("Could not open the encrypted Office container: {error}"))?;
     if !compound.is_stream("/EncryptionInfo") {
         return Ok(false);
@@ -167,7 +440,7 @@ impl std::fmt::Display for AgileDecryptError {
 }
 
 pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>, AgileDecryptError> {
-    let mut compound = CompoundFile::open(Cursor::new(encrypted.to_vec())).map_err(|error| {
+    let mut compound = open_compound_file(encrypted).map_err(|error| {
         AgileDecryptError::Damaged(format!("Could not open the encrypted Office container: {error}"))
     })?;
     let encryption_info =
@@ -181,39 +454,48 @@ pub(crate) fn decrypt_ooxml(encrypted: &[u8], password: &str) -> Result<Vec<u8>,
     decrypt_package(&parameters, &package_key, &encrypted_package).map_err(AgileDecryptError::Damaged)
 }
 
+/// Check the password against the verifier before touching the key, so a wrong
+/// password is always reported as one, then return the package key.
 fn verified_package_key(
     parameters: &ParsedAgileParameters,
     password: &str,
-) -> Result<Option<[u8; PACKAGE_KEY_SIZE]>, String> {
-    let password_hash = iterated_password_hash(&parameters.password_salt, password);
-    let package_key: [u8; PACKAGE_KEY_SIZE] = decrypt_aes_cbc(
-        &derive_key(&password_hash, &ENCRYPTED_KEY_VALUE_BLOCK_KEY),
-        &parameters.password_salt,
-        &parameters.encrypted_key_value,
-    )?
-    .try_into()
-    .map_err(|_| "The Agile package key has an invalid length.".to_string())?;
+) -> Result<Option<Vec<u8>>, String> {
+    let cipher = &parameters.password;
+    let password_hash = cipher.password_hash(password, parameters.spin_count);
+    let iv = cipher.salt_iv();
 
-    let verifier_hash_input = decrypt_aes_cbc(
-        &derive_key(&password_hash, &VERIFIER_HASH_INPUT_BLOCK_KEY),
-        &parameters.password_salt,
+    let verifier_hash_input = aes_cbc_decrypt(
+        &cipher.derive_key(&password_hash, &VERIFIER_HASH_INPUT_BLOCK_KEY),
+        &iv,
         &parameters.encrypted_verifier_hash_input,
     )?;
-    let verifier_hash_value = decrypt_aes_cbc(
-        &derive_key(&password_hash, &VERIFIER_HASH_VALUE_BLOCK_KEY),
-        &parameters.password_salt,
+    let verifier_hash_value = aes_cbc_decrypt(
+        &cipher.derive_key(&password_hash, &VERIFIER_HASH_VALUE_BLOCK_KEY),
+        &iv,
         &parameters.encrypted_verifier_hash_value,
     )?;
-    let expected_verifier_hash: [u8; HASH_SIZE] = Sha512::digest(&verifier_hash_input).into();
-    if verifier_hash_value != expected_verifier_hash {
+    let verifier_hash_input = verifier_hash_input
+        .get(..cipher.salt.len())
+        .ok_or_else(|| "The Agile verifier input is shorter than its salt.".to_string())?;
+    let expected_verifier_hash = cipher.hash.digest(&[verifier_hash_input]);
+    if verifier_hash_value.get(..expected_verifier_hash.len()) != Some(expected_verifier_hash.as_slice()) {
         return Ok(None);
     }
-    Ok(Some(package_key))
+
+    let package_key = aes_cbc_decrypt(
+        &cipher.derive_key(&password_hash, &ENCRYPTED_KEY_VALUE_BLOCK_KEY),
+        &iv,
+        &parameters.encrypted_key_value,
+    )?;
+    package_key
+        .get(..parameters.key_data.key_len)
+        .map(|key| Some(key.to_vec()))
+        .ok_or_else(|| "The Agile package key has an invalid length.".to_string())
 }
 
 fn decrypt_package(
     parameters: &ParsedAgileParameters,
-    package_key: &[u8; PACKAGE_KEY_SIZE],
+    package_key: &[u8],
     encrypted_package: &[u8],
 ) -> Result<Vec<u8>, String> {
     if encrypted_package.len() < 8 {
@@ -234,6 +516,7 @@ fn decrypt_package(
         return Err("The EncryptedPackage stream has an invalid ciphertext length.".to_string());
     }
 
+    let key_data = &parameters.key_data;
     let mut plaintext = Vec::with_capacity(package_length);
     let mut remaining = package_length;
     let mut encrypted_offset = 8usize;
@@ -248,13 +531,8 @@ fn decrypt_package(
             .get(encrypted_offset..ciphertext_end)
             .ok_or_else(|| "The EncryptedPackage stream ended before its declared length.".to_string())?;
 
-        let mut iv_input = Vec::with_capacity(KEY_DATA_SALT_SIZE + std::mem::size_of::<u32>());
-        iv_input.extend_from_slice(&parameters.key_data_salt);
-        iv_input.extend_from_slice(&segment_index.to_le_bytes());
-        let segment_iv: [u8; BLOCK_SIZE] = Sha512::digest(iv_input)[..BLOCK_SIZE]
-            .try_into()
-            .map_err(|_| "The Agile segment IV has an invalid length.".to_string())?;
-        let decrypted_segment = decrypt_aes_cbc(package_key, &segment_iv, ciphertext)?;
+        let decrypted_segment =
+            aes_cbc_decrypt(package_key, &key_data.derive_iv(&segment_index.to_le_bytes()), ciphertext)?;
         plaintext.extend_from_slice(&decrypted_segment[..segment_length]);
 
         encrypted_offset = ciphertext_end;
@@ -264,20 +542,21 @@ fn decrypt_package(
             .ok_or_else(|| "The OOXML package has too many encryption segments.".to_string())?;
     }
 
-    let integrity_key: [u8; KEY_DATA_SALT_SIZE] = decrypt_aes_cbc(
+    let integrity_key = aes_cbc_decrypt(
         package_key,
-        &derive_iv(&parameters.key_data_salt, &INTEGRITY_KEY_BLOCK_KEY),
+        &key_data.derive_iv(&INTEGRITY_KEY_BLOCK_KEY),
         &parameters.encrypted_hmac_key,
-    )?
-    .try_into()
-    .map_err(|_| "The Agile integrity key has an invalid length.".to_string())?;
-    let integrity_value = decrypt_aes_cbc(
+    )?;
+    let integrity_value = aes_cbc_decrypt(
         package_key,
-        &derive_iv(&parameters.key_data_salt, &INTEGRITY_VALUE_BLOCK_KEY),
+        &key_data.derive_iv(&INTEGRITY_VALUE_BLOCK_KEY),
         &parameters.encrypted_hmac_value,
     )?;
-    let computed_integrity = hmac_sha512(&integrity_key, encrypted_package)?;
-    if integrity_value != computed_integrity {
+    // The HMAC key is hashSize bytes, padded to the block size when encrypted.
+    // Packages Toolbox locked use a 16-byte key, which is kept whole.
+    let integrity_key = &integrity_key[..integrity_key.len().min(key_data.hash.size())];
+    let computed_integrity = key_data.hash.hmac(integrity_key, encrypted_package);
+    if integrity_value.get(..computed_integrity.len()) != Some(computed_integrity.as_slice()) {
         return Err("The Agile package integrity HMAC did not match.".to_string());
     }
 
@@ -330,91 +609,63 @@ fn padded_segment_length(segment_length: usize) -> Result<usize, String> {
         .ok_or_else(|| "The EncryptedPackage stream length overflowed.".to_string())
 }
 
-fn random_bytes<const N: usize>() -> Result<[u8; N], String> {
-    let mut bytes = [0_u8; N];
+fn random_bytes(length: usize) -> Result<Vec<u8>, String> {
+    let mut bytes = vec![0_u8; length];
     getrandom::fill(&mut bytes).map_err(|error| format!("Could not generate encryption randomness: {error}"))?;
     Ok(bytes)
 }
 
-fn iterated_password_hash(password_salt: &[u8; KEY_DATA_SALT_SIZE], password: &str) -> [u8; HASH_SIZE] {
-    let mut password_bytes = Vec::with_capacity(password.encode_utf16().count() * 2);
-    for code_unit in password.encode_utf16() {
-        password_bytes.extend_from_slice(&code_unit.to_le_bytes());
+/// Zero-pad a value to the AES block size before it is encrypted.
+fn pad_to_block(mut bytes: Vec<u8>) -> Vec<u8> {
+    bytes.resize(bytes.len().div_ceil(BLOCK_SIZE) * BLOCK_SIZE, 0);
+    bytes
+}
+
+fn aes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    fn run<C: BlockEncryptMut + KeyIvInit>(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let mut ciphertext = vec![0_u8; plaintext.len()];
+        C::new_from_slices(key, iv)
+            .map_err(|_| "The Agile AES key or IV has an invalid length.".to_string())?
+            .encrypt_padded_b2b_mut::<NoPadding>(plaintext, &mut ciphertext)
+            .map_err(|_| "Could not encrypt an Agile OOXML value.".to_string())?;
+        Ok(ciphertext)
     }
-
-    let mut initial = Vec::with_capacity(password_salt.len() + password_bytes.len());
-    initial.extend_from_slice(password_salt);
-    initial.extend_from_slice(&password_bytes);
-    let mut hash = sha512(&initial);
-
-    for iterator in 0..SPIN_COUNT {
-        let mut input = Vec::with_capacity(std::mem::size_of::<u32>() + hash.len());
-        input.extend_from_slice(&iterator.to_le_bytes());
-        input.extend_from_slice(&hash);
-        hash = sha512(&input);
-    }
-
-    hash
-}
-
-fn sha512(input: &[u8]) -> [u8; HASH_SIZE] {
-    Sha512::digest(input).into()
-}
-
-fn derive_key(hash: &[u8; HASH_SIZE], block_key: &[u8; 8]) -> [u8; PACKAGE_KEY_SIZE] {
-    let mut input = Vec::with_capacity(hash.len() + block_key.len());
-    input.extend_from_slice(hash);
-    input.extend_from_slice(block_key);
-    let digest = Sha512::digest(input);
-    digest[..PACKAGE_KEY_SIZE].try_into().expect("SHA-512 has at least 32 bytes")
-}
-
-fn derive_iv(salt: &[u8; KEY_DATA_SALT_SIZE], block_key: &[u8; 8]) -> [u8; BLOCK_SIZE] {
-    let mut input = Vec::with_capacity(salt.len() + block_key.len());
-    input.extend_from_slice(salt);
-    input.extend_from_slice(block_key);
-    Sha512::digest(input)[..BLOCK_SIZE]
-        .try_into()
-        .expect("SHA-512 has at least 16 bytes")
-}
-
-fn encrypt_aes_cbc(
-    key: &[u8; PACKAGE_KEY_SIZE],
-    iv: &[u8; BLOCK_SIZE],
-    plaintext: &[u8],
-) -> Result<Vec<u8>, String> {
     if plaintext.len() % BLOCK_SIZE != 0 {
         return Err("Agile AES plaintext must be block aligned.".to_string());
     }
-
-    let mut ciphertext = vec![0_u8; plaintext.len()];
-    let encrypted = Aes256CbcEncryptor::new(key.into(), iv.into())
-        .encrypt_padded_b2b_mut::<NoPadding>(plaintext, &mut ciphertext)
-        .map_err(|_| "Could not encrypt an Agile OOXML value.".to_string())?;
-    Ok(encrypted.to_vec())
+    match key.len() {
+        16 => run::<cbc::Encryptor<Aes128>>(key, iv, plaintext),
+        24 => run::<cbc::Encryptor<Aes192>>(key, iv, plaintext),
+        32 => run::<cbc::Encryptor<Aes256>>(key, iv, plaintext),
+        _ => Err("The Agile AES key has an invalid length.".to_string()),
+    }
 }
 
-fn decrypt_aes_cbc(
-    key: &[u8; PACKAGE_KEY_SIZE],
-    iv: &[u8; BLOCK_SIZE],
-    ciphertext: &[u8],
-) -> Result<Vec<u8>, String> {
+fn aes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+    fn run<C: BlockDecryptMut + KeyIvInit>(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+        let mut plaintext = vec![0_u8; ciphertext.len()];
+        C::new_from_slices(key, iv)
+            .map_err(|_| "The Agile AES key or IV has an invalid length.".to_string())?
+            .decrypt_padded_b2b_mut::<NoPadding>(ciphertext, &mut plaintext)
+            .map_err(|_| "Could not decrypt an Agile OOXML value.".to_string())?;
+        Ok(plaintext)
+    }
     if ciphertext.len() % BLOCK_SIZE != 0 {
         return Err("Agile AES ciphertext must be block aligned.".to_string());
     }
-
-    let mut plaintext = vec![0_u8; ciphertext.len()];
-    let decrypted = Aes256CbcDecryptor::new(key.into(), iv.into())
-        .decrypt_padded_b2b_mut::<NoPadding>(ciphertext, &mut plaintext)
-        .map_err(|_| "Could not decrypt an Agile OOXML value.".to_string())?;
-    Ok(decrypted.to_vec())
+    match key.len() {
+        16 => run::<cbc::Decryptor<Aes128>>(key, iv, ciphertext),
+        24 => run::<cbc::Decryptor<Aes192>>(key, iv, ciphertext),
+        32 => run::<cbc::Decryptor<Aes256>>(key, iv, ciphertext),
+        _ => Err("The Agile AES key has an invalid length.".to_string()),
+    }
 }
 
 fn encrypt_package(
     package: &[u8],
     package_length: u32,
-    package_key: &[u8; PACKAGE_KEY_SIZE],
-    key_data_salt: &[u8; KEY_DATA_SALT_SIZE],
+    package_key: &[u8],
+    key_data: &AgileCipher,
 ) -> Result<Vec<u8>, String> {
     let mut encrypted_package = Vec::new();
     encrypted_package.extend_from_slice(&package_length.to_le_bytes());
@@ -427,15 +678,9 @@ fn encrypt_package(
 
         let segment_index = u32::try_from(segment_index)
             .map_err(|_| "The OOXML package has too many encryption segments.".to_string())?;
-        let mut iv_input = Vec::with_capacity(key_data_salt.len() + std::mem::size_of::<u32>());
-        iv_input.extend_from_slice(key_data_salt);
-        iv_input.extend_from_slice(&segment_index.to_le_bytes());
-        let iv: [u8; BLOCK_SIZE] = Sha512::digest(iv_input)[..BLOCK_SIZE]
-            .try_into()
-            .expect("SHA-512 has at least 16 bytes");
-        encrypted_package.extend_from_slice(&encrypt_aes_cbc(
+        encrypted_package.extend_from_slice(&aes_cbc_encrypt(
             package_key,
-            &iv,
+            &key_data.derive_iv(&segment_index.to_le_bytes()),
             &padded_segment,
         )?);
     }
@@ -443,29 +688,23 @@ fn encrypt_package(
     Ok(encrypted_package)
 }
 
-fn hmac_sha512(key: &[u8; KEY_DATA_SALT_SIZE], data: &[u8]) -> Result<[u8; HASH_SIZE], String> {
-    let mut mac = Hmac::<Sha512>::new_from_slice(key)
-        .map_err(|_| "Could not initialize the Agile integrity HMAC.".to_string())?;
-    mac.update(data);
-    Ok(mac.finalize().into_bytes().into())
-}
-
 fn encryption_info_xml(
-    key_data_salt: &[u8; KEY_DATA_SALT_SIZE],
+    key_data: &AgileCipher,
     encrypted_integrity_key: &[u8],
     encrypted_integrity_value: &[u8],
-    password_salt: &[u8; KEY_DATA_SALT_SIZE],
+    password_cipher: &AgileCipher,
+    spin_count: u32,
     encrypted_verifier_hash_input: &[u8],
     encrypted_verifier_hash_value: &[u8],
     encrypted_key_value: &[u8],
 ) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<encryption xmlns=\"http://schemas.microsoft.com/office/2006/encryption\" xmlns:p=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\">\n  <keyData saltSize=\"16\" blockSize=\"16\" keyBits=\"256\" hashSize=\"64\" cipherAlgorithm=\"AES\" cipherChaining=\"ChainingModeCBC\" hashAlgorithm=\"SHA512\" saltValue=\"{}\"/>\n  <dataIntegrity encryptedHmacKey=\"{}\" encryptedHmacValue=\"{}\"/>\n  <keyEncryptors>\n    <keyEncryptor uri=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\">\n      <p:encryptedKey spinCount=\"{}\" saltSize=\"16\" blockSize=\"16\" keyBits=\"256\" hashSize=\"64\" cipherAlgorithm=\"AES\" cipherChaining=\"ChainingModeCBC\" hashAlgorithm=\"SHA512\" saltValue=\"{}\" encryptedVerifierHashInput=\"{}\" encryptedVerifierHashValue=\"{}\" encryptedKeyValue=\"{}\"/>\n    </keyEncryptor>\n  </keyEncryptors>\n</encryption>",
-        BASE64.encode(key_data_salt),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<encryption xmlns=\"http://schemas.microsoft.com/office/2006/encryption\" xmlns:p=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\">\n  <keyData {}/>\n  <dataIntegrity encryptedHmacKey=\"{}\" encryptedHmacValue=\"{}\"/>\n  <keyEncryptors>\n    <keyEncryptor uri=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\">\n      <p:encryptedKey spinCount=\"{}\" {} encryptedVerifierHashInput=\"{}\" encryptedVerifierHashValue=\"{}\" encryptedKeyValue=\"{}\"/>\n    </keyEncryptor>\n  </keyEncryptors>\n</encryption>",
+        key_data.xml_attributes(),
         BASE64.encode(encrypted_integrity_key),
         BASE64.encode(encrypted_integrity_value),
-        SPIN_COUNT,
-        BASE64.encode(password_salt),
+        spin_count,
+        password_cipher.xml_attributes(),
         BASE64.encode(encrypted_verifier_hash_input),
         BASE64.encode(encrypted_verifier_hash_value),
         BASE64.encode(encrypted_key_value),
@@ -588,27 +827,21 @@ fn read_compound_stream(
 
 #[derive(Default)]
 struct AgileParameters {
-    key_data_salt: Option<[u8; KEY_DATA_SALT_SIZE]>,
-    encrypted_hmac_key: Option<[u8; KEY_DATA_SALT_SIZE]>,
-    encrypted_hmac_value: Option<[u8; HASH_SIZE]>,
+    key_data: Option<AgileCipher>,
+    encrypted_hmac_key: Option<Vec<u8>>,
+    encrypted_hmac_value: Option<Vec<u8>>,
     spin_count: Option<u32>,
-    password_salt: Option<[u8; KEY_DATA_SALT_SIZE]>,
-    encrypted_verifier_hash_input: Option<[u8; BLOCK_SIZE]>,
-    encrypted_verifier_hash_value: Option<[u8; HASH_SIZE]>,
-    encrypted_key_value: Option<[u8; PACKAGE_KEY_SIZE]>,
+    password: Option<AgileCipher>,
+    encrypted_verifier_hash_input: Option<Vec<u8>>,
+    encrypted_verifier_hash_value: Option<Vec<u8>>,
+    encrypted_key_value: Option<Vec<u8>>,
 }
 
 fn parse_encryption_info(encryption_info: &[u8]) -> Result<ParsedAgileParameters, String> {
     if encryption_info.len() <= 8 {
         return Err("The EncryptionInfo stream is incomplete.".to_string());
     }
-    if encryption_info[..4] != [0x04, 0x00, 0x04, 0x00]
-        || u32::from_le_bytes(
-            encryption_info[4..8]
-                .try_into()
-                .expect("the EncryptionInfo header is four bytes"),
-        ) != 0x40
-    {
+    if !is_agile_encryption_info(encryption_info) {
         return Err("The EncryptionInfo stream is not an Agile encryption header.".to_string());
     }
 
@@ -669,23 +902,23 @@ fn parse_encryption_info(encryption_info: &[u8]) -> Result<ParsedAgileParameters
     if !root_seen || !root_closed || depth != 0 {
         return Err("The EncryptionInfo XML is incomplete.".to_string());
     }
-    parameters
-        .spin_count
-        .ok_or_else(|| "The EncryptionInfo XML has no password spin count.".to_string())?;
 
     Ok(ParsedAgileParameters {
-        key_data_salt: parameters
-            .key_data_salt
-            .ok_or_else(|| "The EncryptionInfo XML has no keyData salt.".to_string())?,
+        key_data: parameters
+            .key_data
+            .ok_or_else(|| "The EncryptionInfo XML has no keyData element.".to_string())?,
         encrypted_hmac_key: parameters
             .encrypted_hmac_key
             .ok_or_else(|| "The EncryptionInfo XML has no encrypted HMAC key.".to_string())?,
         encrypted_hmac_value: parameters
             .encrypted_hmac_value
             .ok_or_else(|| "The EncryptionInfo XML has no encrypted HMAC value.".to_string())?,
-        password_salt: parameters
-            .password_salt
-            .ok_or_else(|| "The EncryptionInfo XML has no password salt.".to_string())?,
+        spin_count: parameters
+            .spin_count
+            .ok_or_else(|| "The EncryptionInfo XML has no password spin count.".to_string())?,
+        password: parameters
+            .password
+            .ok_or_else(|| "The EncryptionInfo XML has no password key encryptor.".to_string())?,
         encrypted_verifier_hash_input: parameters.encrypted_verifier_hash_input.ok_or_else(|| {
             "The EncryptionInfo XML has no encrypted verifier input.".to_string()
         })?,
@@ -699,13 +932,14 @@ fn parse_encryption_info(encryption_info: &[u8]) -> Result<ParsedAgileParameters
 }
 
 struct ParsedAgileParameters {
-    key_data_salt: [u8; KEY_DATA_SALT_SIZE],
-    encrypted_hmac_key: [u8; KEY_DATA_SALT_SIZE],
-    encrypted_hmac_value: [u8; HASH_SIZE],
-    password_salt: [u8; KEY_DATA_SALT_SIZE],
-    encrypted_verifier_hash_input: [u8; BLOCK_SIZE],
-    encrypted_verifier_hash_value: [u8; HASH_SIZE],
-    encrypted_key_value: [u8; PACKAGE_KEY_SIZE],
+    key_data: AgileCipher,
+    encrypted_hmac_key: Vec<u8>,
+    encrypted_hmac_value: Vec<u8>,
+    spin_count: u32,
+    password: AgileCipher,
+    encrypted_verifier_hash_input: Vec<u8>,
+    encrypted_verifier_hash_value: Vec<u8>,
+    encrypted_key_value: Vec<u8>,
 }
 
 fn parse_agile_element(
@@ -714,10 +948,10 @@ fn parse_agile_element(
 ) -> Result<(), String> {
     match element.local_name().as_ref() {
         b"keyData" => {
-            if parameters.key_data_salt.is_some() {
+            if parameters.key_data.is_some() {
                 return Err("The EncryptionInfo XML has duplicate keyData elements.".to_string());
             }
-            parameters.key_data_salt = Some(read_base64_attribute(element, b"saltValue")?);
+            parameters.key_data = Some(read_agile_cipher(element)?);
         }
         b"dataIntegrity" => {
             if parameters.encrypted_hmac_key.is_some() || parameters.encrypted_hmac_value.is_some() {
@@ -733,11 +967,11 @@ fn parse_agile_element(
             let spin_count = read_xml_attribute(element, b"spinCount")?
                 .parse::<u32>()
                 .map_err(|error| format!("The Agile spin count is invalid: {error}"))?;
-            if spin_count != SPIN_COUNT {
+            if spin_count > MAX_SPIN_COUNT {
                 return Err("The Agile encryption spin count is unsupported.".to_string());
             }
             parameters.spin_count = Some(spin_count);
-            parameters.password_salt = Some(read_base64_attribute(element, b"saltValue")?);
+            parameters.password = Some(read_agile_cipher(element)?);
             parameters.encrypted_verifier_hash_input =
                 Some(read_base64_attribute(element, b"encryptedVerifierHashInput")?);
             parameters.encrypted_verifier_hash_value =
@@ -748,6 +982,30 @@ fn parse_agile_element(
         _ => {}
     }
     Ok(())
+}
+
+fn read_agile_cipher(element: &BytesStart<'_>) -> Result<AgileCipher, String> {
+    if read_xml_attribute(element, b"cipherAlgorithm")? != "AES" {
+        return Err("Only AES Agile encryption is supported.".to_string());
+    }
+    if read_xml_attribute(element, b"cipherChaining")? != "ChainingModeCBC" {
+        return Err("Only CBC Agile encryption is supported.".to_string());
+    }
+    if read_xml_attribute(element, b"blockSize")? != BLOCK_SIZE.to_string() {
+        return Err("The Agile block size is unsupported.".to_string());
+    }
+    let key_len = match read_xml_attribute(element, b"keyBits")?.as_str() {
+        "128" => 16,
+        "192" => 24,
+        "256" => 32,
+        _ => return Err("The Agile key size is unsupported.".to_string()),
+    };
+    let hash = AgileHash::parse(&read_xml_attribute(element, b"hashAlgorithm")?)?;
+    let salt = read_base64_attribute(element, b"saltValue")?;
+    if salt.is_empty() {
+        return Err("The Agile salt is empty.".to_string());
+    }
+    Ok(AgileCipher { hash, key_len, salt })
 }
 
 fn read_xml_attribute(element: &BytesStart<'_>, name: &[u8]) -> Result<String, String> {
@@ -777,21 +1035,11 @@ fn read_xml_attribute(element: &BytesStart<'_>, name: &[u8]) -> Result<String, S
     })
 }
 
-fn read_base64_attribute<const N: usize>(
-    element: &BytesStart<'_>,
-    name: &[u8],
-) -> Result<[u8; N], String> {
+fn read_base64_attribute(element: &BytesStart<'_>, name: &[u8]) -> Result<Vec<u8>, String> {
     let encoded = read_xml_attribute(element, name)?;
-    let decoded = BASE64
+    BASE64
         .decode(encoded.as_bytes())
-        .map_err(|error| format!("The Agile {} attribute is not base64: {error}", String::from_utf8_lossy(name)))?;
-    decoded.try_into().map_err(|decoded: Vec<u8>| {
-        format!(
-            "The Agile {} attribute has an invalid length: expected {N}, got {}.",
-            String::from_utf8_lossy(name),
-            decoded.len()
-        )
-    })
+        .map_err(|error| format!("The Agile {} attribute is not base64: {error}", String::from_utf8_lossy(name)))
 }
 
 #[cfg(test)]
@@ -799,7 +1047,10 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
     use cfb::CompoundFile;
-    use super::{encrypt_ooxml, verify_ooxml};
+    use super::{
+        decrypt_ooxml, encrypt_ooxml, encrypt_ooxml_with, is_agile_ooxml, random_bytes,
+        test_encrypt_like_other_writers, verify_ooxml, AgileCipher, AgileDecryptError, AgileHash,
+    };
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use zip::{write::SimpleFileOptions, ZipWriter};
 
@@ -1108,5 +1359,38 @@ mod tests {
         let encrypted = encrypt_ooxml(&package, "päss🔐文").unwrap();
         let decrypted = office_crypto::decrypt_from_bytes(encrypted, "päss🔐文").unwrap();
         assert_eq!(decrypted, package);
+    }
+
+    #[test]
+    fn unlocks_packages_locked_with_other_hashes_key_sizes_and_salt_sizes() {
+        let package = minimal_ooxml_package("xlsx", false);
+        for (hash, key_len, salt_len) in [
+            (AgileHash::Sha1, 16, 16),
+            (AgileHash::Sha1, 16, 32),
+            (AgileHash::Sha256, 24, 16),
+            (AgileHash::Sha384, 32, 16),
+            (AgileHash::Sha512, 32, 32),
+        ] {
+            let cipher = || AgileCipher { hash, key_len, salt: random_bytes(salt_len).unwrap() };
+            let encrypted = encrypt_ooxml_with(&package, "secret", &cipher(), &cipher(), 1_000).unwrap();
+            assert_eq!(decrypt_ooxml(&encrypted, "secret").unwrap(), package, "{hash:?} {key_len} {salt_len}");
+            assert!(
+                matches!(decrypt_ooxml(&encrypted, "wrong"), Err(AgileDecryptError::WrongPassword)),
+                "{hash:?} {key_len} {salt_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn opens_compound_files_whose_fat_marks_entries_past_the_end_as_end_of_chain() {
+        let package = minimal_ooxml_package("xlsx", false);
+        let encrypted = test_encrypt_like_other_writers(&package, "secret");
+        let before = encrypted.clone();
+
+        assert!(CompoundFile::open(Cursor::new(encrypted.clone())).is_err());
+        assert_eq!(is_agile_ooxml(&encrypted), Ok(true));
+        assert_eq!(decrypt_ooxml(&encrypted, "secret").unwrap(), package);
+        assert!(matches!(decrypt_ooxml(&encrypted, "wrong"), Err(AgileDecryptError::WrongPassword)));
+        assert_eq!(encrypted, before);
     }
 }

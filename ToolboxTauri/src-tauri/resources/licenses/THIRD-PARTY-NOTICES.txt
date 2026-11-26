@@ -2641,6 +2641,7 @@ serialize-to-javascript 0.1.2 - MIT OR Apache-2.0 - https://github.com/chippers/
 serialize-to-javascript-impl 0.1.2 - MIT OR Apache-2.0 - https://github.com/chippers/serialize-to-javascript
 servo_arc 0.4.3 - MIT OR Apache-2.0 - https://github.com/servo/stylo
 sha1 0.10.7 - MIT OR Apache-2.0 - https://github.com/RustCrypto/hashes
+sha1 0.11.0 - MIT OR Apache-2.0 - https://github.com/RustCrypto/hashes
 sha2 0.10.9 - MIT OR Apache-2.0 - https://github.com/RustCrypto/hashes
 sha2 0.11.0 - MIT OR Apache-2.0 - https://github.com/RustCrypto/hashes
 simd_helpers 0.1.0 - MIT - https://github.com/lu-zero/simd_helpers
@@ -3074,7 +3075,7 @@ DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------
 
-Used by: aes 0.8.4 (LICENSE-APACHE), aes 0.9.3 (LICENSE-APACHE), block-buffer 0.10.4 (LICENSE-APACHE), block-buffer 0.12.1 (LICENSE-APACHE), block-padding 0.3.3 (LICENSE-APACHE), block-padding 0.4.2 (LICENSE-APACHE), cbc 0.1.2 (LICENSE-APACHE), cbc 0.2.1 (LICENSE-APACHE), chacha20 0.10.2 (LICENSE-APACHE), cipher 0.4.4 (LICENSE-APACHE), cipher 0.5.2 (LICENSE-APACHE), const-oid 0.10.2 (LICENSE-APACHE), cpubits 0.1.1 (LICENSE-APACHE), cpufeatures 0.2.17 (LICENSE-APACHE), cpufeatures 0.3.1 (LICENSE-APACHE), crypto-common 0.1.7 (LICENSE-APACHE), crypto-common 0.2.2 (LICENSE-APACHE), digest 0.10.7 (LICENSE-APACHE), digest 0.11.3 (LICENSE-APACHE), ecb 0.2.1 (LICENSE-APACHE), hmac 0.13.0 (LICENSE-APACHE), hybrid-array 0.4.14 (LICENSE-APACHE), inout 0.1.4 (LICENSE-APACHE), inout 0.2.2 (LICENSE-APACHE), md-5 0.10.6 (LICENSE-APACHE), md-5 0.11.0 (LICENSE-APACHE), rc4 0.1.0 (LICENSE-APACHE), sha1 0.10.7 (LICENSE-APACHE), sha2 0.10.9 (LICENSE-APACHE), sha2 0.11.0 (LICENSE-APACHE)
+Used by: aes 0.8.4 (LICENSE-APACHE), aes 0.9.3 (LICENSE-APACHE), block-buffer 0.10.4 (LICENSE-APACHE), block-buffer 0.12.1 (LICENSE-APACHE), block-padding 0.3.3 (LICENSE-APACHE), block-padding 0.4.2 (LICENSE-APACHE), cbc 0.1.2 (LICENSE-APACHE), cbc 0.2.1 (LICENSE-APACHE), chacha20 0.10.2 (LICENSE-APACHE), cipher 0.4.4 (LICENSE-APACHE), cipher 0.5.2 (LICENSE-APACHE), const-oid 0.10.2 (LICENSE-APACHE), cpubits 0.1.1 (LICENSE-APACHE), cpufeatures 0.2.17 (LICENSE-APACHE), cpufeatures 0.3.1 (LICENSE-APACHE), crypto-common 0.1.7 (LICENSE-APACHE), crypto-common 0.2.2 (LICENSE-APACHE), digest 0.10.7 (LICENSE-APACHE), digest 0.11.3 (LICENSE-APACHE), ecb 0.2.1 (LICENSE-APACHE), hmac 0.13.0 (LICENSE-APACHE), hybrid-array 0.4.14 (LICENSE-APACHE), inout 0.1.4 (LICENSE-APACHE), inout 0.2.2 (LICENSE-APACHE), md-5 0.10.6 (LICENSE-APACHE), md-5 0.11.0 (LICENSE-APACHE), rc4 0.1.0 (LICENSE-APACHE), sha1 0.10.7 (LICENSE-APACHE), sha1 0.11.0 (LICENSE-APACHE), sha2 0.10.9 (LICENSE-APACHE), sha2 0.11.0 (LICENSE-APACHE)
 
 Apache License
                         Version 2.0, January 2004
@@ -11889,7 +11890,7 @@ DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------
 
-Used by: md-5 0.11.0 (LICENSE-MIT), sha2 0.11.0 (LICENSE-MIT)
+Used by: md-5 0.11.0 (LICENSE-MIT), sha1 0.11.0 (LICENSE-MIT), sha2 0.11.0 (LICENSE-MIT)
 
 Copyright (c) 2016-2026 The RustCrypto Project Developers
 Copyright (c) 2016 Artyom Pavlov

@@ -498,7 +498,7 @@ test("a wrong password row retries only that file with the password typed for it
 
     const failedRow = results(page).filter({ hasText: "b.pdf" });
     await expect(failedRow).toHaveAttribute("data-state", "failed");
-    await expect(failedRow).toContainText("The password didn't open this file. Check it, or try the password this file was sent with.");
+    await expect(failedRow).toContainText("Wrong password. Check it, or try the password this file was sent with.");
     await expect(failedRow).toContainText("Failed, wrong password");
     await expect(failedRow).not.toContainText("batch-secret");
     await expect(failedRow.getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
@@ -1182,7 +1182,7 @@ test("Unlock shows each verification and legacy-format failure with its own mess
         "/local/offer.docx": { kind: "unavailable", message: "Uses an encryption type Toolbox can't open. The password may be right." },
         "/local/scan.pdf": { kind: "processing", message: "Not a readable PDF. The file may be damaged or incomplete. Nothing was saved." },
         "/local/report.pdf": { kind: "processing", message: "The unlocked copy didn't pass verification, so nothing was saved." },
-        "/local/payroll.xlsx": { kind: "wrongPassword", message: "The password didn't open this file." },
+        "/local/payroll.xlsx": { kind: "wrongPassword", message: "Wrong password." },
     };
     await open(page, "Lock & Unlock");
     await drop(page, ["/local/budget.xls", "/local/lease.pdf", "/local/memo.doc", "/local/photos.ppt", "/local/offer.docx", "/local/scan.pdf", "/local/minutes.doc", "/local/report.pdf", "/local/payroll.xlsx"]);
@@ -1212,7 +1212,7 @@ test("Unlock shows each verification and legacy-format failure with its own mess
         if (kind === "wrongPassword") {
             await expect(failed).toHaveAttribute("data-tone", "fail");
             await expect(failed).toContainText("Failed, wrong password");
-            await expect(failed).toContainText("The password didn't open this file. Check it, or try the password this file was sent with.");
+            await expect(failed).toContainText("Wrong password. Check it, or try the password this file was sent with.");
         }
     }
 });

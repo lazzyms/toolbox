@@ -82,7 +82,7 @@ fn probe_pdf(bytes: &[u8]) -> Result<ProtectionState, ToolError> {
 pub const ALREADY_PASSWORD_PROTECTED: &str = "Already password-protected. Unlock it first, then lock it again.";
 pub const NOT_PASSWORD_PROTECTED: &str = "Not password-protected. Nothing to unlock, so no copy was made.";
 
-pub const WRONG_PASSWORD: &str = "The password didn't open this file.";
+pub const WRONG_PASSWORD: &str = "Wrong password.";
 pub const UNSUPPORTED_ENCRYPTION: &str = "Uses an encryption type Toolbox can't open. The password may be right.";
 pub const UNSUPPORTED_LEGACY_ENCRYPTION: &str = "Uses an older encryption type Toolbox can't open. The password may be right.";
 pub const LEGACY_PASSWORD_TOO_LONG: &str = "Older Office files only take passwords up to 15 characters, and this one is longer. Toolbox can't try it.";
